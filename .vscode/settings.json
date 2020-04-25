@@ -2,10 +2,13 @@
     "cSpell.words": [
         "CLFU",
         "Kawano",
+        "MSRV",
         "Moka",
         "Ristretto",
         "Tatsuya",
         "clippy",
-        "nocapture"
+        "nocapture",
+        "rustfmt",
+        "toolchain"
     ]
 }
