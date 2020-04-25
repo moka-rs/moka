@@ -1,5 +1,9 @@
 # Moka
 
+[![GitHub Actions](https://github.com/moka-rs/moka/workflows/CI/badge.svg)][gh-actions]
+
+[gh-actions]: https://github.com/moka-rs/moka/actions?query=workflow%3ACI
+
 **Work in Progress**
 
 Moka is (aiming to be) a fast, concurrent cache library for Rust. Moka is inspired
