@@ -5,6 +5,7 @@
         "Moka",
         "Ristretto",
         "Tatsuya",
-        "clippy"
+        "clippy",
+        "nocapture"
     ]
 }
