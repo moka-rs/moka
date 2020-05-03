@@ -1,8 +1,10 @@
 #![warn(clippy::all)]
 #![warn(rust_2018_idioms)]
 
+mod lfu;
 mod naive_lfu;
 
+pub use lfu::LFUCache;
 pub use naive_lfu::NaiveLFUCache;
 
 use std::sync::Arc;
