@@ -8,9 +8,7 @@ use std::{
 };
 
 // Interior mutability (no need for `&mut self`)
-trait ConcurrentCache<K, V> {
-    fn insert(&self, key: K, value: V);
-
+pub trait ConcurrentCache<K, V> {
     fn get(&self, key: &K) -> Option<Arc<V>>;
 
     fn get_or_insert(&self, key: K, default: V) -> Arc<V>;
@@ -18,37 +16,37 @@ trait ConcurrentCache<K, V> {
     fn get_or_insert_with<F>(&self, key: K, default: F) -> Arc<V>
     where
         F: FnOnce() -> V;
+
+    fn insert(&self, key: K, value: V);
+
+    fn remove(&self, key: &K) -> Option<Arc<V>>;
 }
 
-pub struct PoCLFUCache<K, V> {
-    inner: RwLock<Inner<K, V>>,
+pub struct NaiveLFUCache<K, V> {
+    inner: RwLock<NaiveLFUInner<K, V>>,
 }
 
-impl<K, V> PoCLFUCache<K, V>
+impl<K, V> NaiveLFUCache<K, V>
 where
     K: Clone + std::fmt::Debug + Eq + std::hash::Hash,
 {
     pub fn new(capacity: usize) -> Self {
         Self {
-            inner: RwLock::new(Inner::new(capacity)),
+            inner: RwLock::new(NaiveLFUInner::new(capacity)),
         }
     }
 
-    fn inner_mut(&self) -> std::sync::RwLockWriteGuard<'_, Inner<K, V>> {
+    fn inner_mut(&self) -> std::sync::RwLockWriteGuard<'_, NaiveLFUInner<K, V>> {
         self.inner
             .write()
             .expect("Cannot get write lock on the map")
     }
 }
 
-impl<K, V> ConcurrentCache<K, V> for PoCLFUCache<K, V>
+impl<K, V> ConcurrentCache<K, V> for NaiveLFUCache<K, V>
 where
     K: Clone + std::fmt::Debug + Eq + std::hash::Hash,
 {
-    fn insert(&self, key: K, value: V) {
-        self.inner_mut().insert(key, value);
-    }
-
     fn get(&self, key: &K) -> Option<Arc<V>> {
         self.inner_mut().get(key)
     }
@@ -63,22 +61,30 @@ where
     {
         self.inner_mut().get_or_insert_with(key, default)
     }
+
+    fn insert(&self, key: K, value: V) {
+        self.inner_mut().insert(key, value);
+    }
+
+    fn remove(&self, key: &K) -> Option<Arc<V>> {
+        self.inner_mut().remove(key)
+    }
 }
 
-unsafe impl<K, V> Send for PoCLFUCache<K, V> {}
-unsafe impl<K, V> Sync for PoCLFUCache<K, V> {}
+unsafe impl<K, V> Send for NaiveLFUCache<K, V> {}
+unsafe impl<K, V> Sync for NaiveLFUCache<K, V> {}
 
-struct Inner<K, V> {
+pub(crate) struct NaiveLFUInner<K, V> {
     capacity: usize,
     cache: HashMap<K, Arc<V>>,
     frequency_sketch: CountMinSketch8<K>,
 }
 
-impl<K, V> Inner<K, V>
+impl<K, V> NaiveLFUInner<K, V>
 where
     K: Clone + std::fmt::Debug + Eq + std::hash::Hash,
 {
-    fn new(capacity: usize) -> Self {
+    pub(crate) fn new(capacity: usize) -> Self {
         let cache = HashMap::with_capacity(capacity);
         let skt_capacity = usize::max(capacity, 100);
         let frequency_sketch = CountMinSketch8::new(skt_capacity, 0.95, 10.0)
@@ -91,24 +97,7 @@ where
         }
     }
 
-    fn insert(&mut self, key: K, value: V) {
-        println!(
-            "insert() - estimated frequency of {:?}: {}",
-            key,
-            self.frequency_sketch.estimate(&key)
-        );
-        if self.cache.len() < self.capacity {
-            self.cache.insert(key, Arc::new(value));
-        } else {
-            let victim = self.find_cache_victim();
-            if self.admit(&key, &victim) {
-                self.cache.remove(&victim);
-                self.cache.insert(key, Arc::new(value));
-            }
-        }
-    }
-
-    fn get(&mut self, key: &K) -> Option<Arc<V>> {
+    pub(crate) fn get(&mut self, key: &K) -> Option<Arc<V>> {
         self.frequency_sketch.increment(key);
         println!(
             "get()    - estimated frequency of {:?}: {}",
@@ -118,16 +107,54 @@ where
         self.cache.get(key).map(|v| Arc::clone(v))
     }
 
-    fn get_or_insert_with<F>(&mut self, key: K, default: F) -> Arc<V>
+    pub(crate) fn get_or_insert_with<F>(&mut self, key: K, default: F) -> Arc<V>
     where
         F: FnOnce() -> V,
     {
         self.frequency_sketch.increment(&key);
-        let v = self.cache.entry(key).or_insert_with(|| Arc::new(default()));
-        Arc::clone(v)
+
+        // NOTE: We cannot use `Entry::or_insert_with()` here because we must
+        // check if the key has enough reputation for admission.
+        if let Some(v) = self.get(&key) {
+            v
+        } else {
+            let v = Arc::new(default());
+            self.do_insert(key, Arc::clone(&v));
+            v
+        }
     }
 
-    // TODO: Run this in a background thread and push the victim to a queue.
+    pub(crate) fn insert(&mut self, key: K, value: V) {
+        println!(
+            "insert() - estimated frequency of {:?}: {}",
+            key,
+            self.frequency_sketch.estimate(&key)
+        );
+        self.do_insert(key, Arc::new(value));
+    }
+
+    pub(crate) fn remove(&mut self, key: &K) -> Option<Arc<V>> {
+        self.cache.remove(key)
+    }
+
+    fn admit(&self, candidate: &K, victim: &K) -> bool {
+        let skt = &self.frequency_sketch;
+        // TODO: Implement some randomness to mitigate hash DoS.
+        skt.estimate(candidate) > skt.estimate(victim)
+    }
+
+    fn do_insert(&mut self, key: K, value: Arc<V>) {
+        if self.cache.len() < self.capacity {
+            self.cache.insert(key, value);
+        } else {
+            let victim = self.find_cache_victim();
+            if self.admit(&key, &victim) {
+                self.cache.remove(&victim);
+                self.cache.insert(key, value);
+            }
+        }
+    }
+
     fn find_cache_victim(&self) -> K {
         let mut victim = None;
         for key in self.cache.keys() {
@@ -142,22 +169,17 @@ where
         // Maybe the cache map should have <Arc<K>, Arc<V>> instead of <K, Arc<V>>?
         victim.expect("No victim found").1.clone()
     }
-
-    fn admit(&self, candidate: &K, victim: &K) -> bool {
-        let skt = &self.frequency_sketch;
-        skt.estimate(candidate) > skt.estimate(victim)
-    }
 }
 
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
-    use super::{ConcurrentCache, PoCLFUCache};
+    use super::{ConcurrentCache, NaiveLFUCache};
     use std::sync::Arc;
 
     #[test]
-    fn simple() {
-        let cache = PoCLFUCache::new(3);
+    fn naive_basics() {
+        let cache = NaiveLFUCache::new(3);
         cache.insert("a", "alice");
         cache.insert("b", "bob");
 
@@ -184,5 +206,7 @@ mod tests {
         cache.insert("d", "dennis");
         assert_eq!(cache.get(&"d"), Some(Arc::new("dennis")));
         assert_eq!(cache.get(&"c"), None);
+
+        assert_eq!(cache.remove(&"b"), Some(Arc::new("bob")));
     }
 }
