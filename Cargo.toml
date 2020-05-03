@@ -1,10 +1,18 @@
 [package]
 name = "moka"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "A fast and concurrent cache library inspired by Caffeine (Java) and Ristretto (Go)"
+license = "MIT/Apache-2.0"
+# homepage = "https://"
+# documentation = "https://docs.rs/moka/"
+repository = "https://github.com/moka-rs/moka"
+keywords = ["concurrent", "cache"]
+categories = ["concurrency", "caching"]
+readme = "README.md"
+# exclude = []
 
 [dependencies]
 count-min-sketch = "0.1"
