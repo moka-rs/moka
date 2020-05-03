@@ -28,7 +28,13 @@ features are not implemented yet and the API will change very often.
 ## Table of Contents
 
 **TODO**
+-->
 
+## Requirements
+
+- Rust 1.39 or newer.
+
+<!--
 ## Usage
 
 ### Example

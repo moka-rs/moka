@@ -121,14 +121,14 @@ where
     }
 
     fn get_or_insert(&self, _key: K, _default: V) -> Arc<V> {
-        todo!()
+        unimplemented!()  // todo!() was introduced in Rust 1.40.0.
     }
 
     fn get_or_insert_with<F>(&self, _key: K, _default: F) -> Arc<V>
     where
         F: FnOnce() -> V,
     {
-        todo!()
+        unimplemented!()
     }
 
     fn insert(&self, key: K, value: V) {
@@ -184,7 +184,7 @@ where
     // where
     //     F: FnOnce() -> V,
     // {
-    //     todo!()
+    //     unimplemented!()
     // }
 
     // fn insert(&mut self, key: K, value: V) {
