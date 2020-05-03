@@ -12,7 +12,9 @@ repository = "https://github.com/moka-rs/moka"
 keywords = ["concurrent", "cache"]
 categories = ["concurrency", "caching"]
 readme = "README.md"
-# exclude = []
+# exclude = [".github", ".vscode"]
 
 [dependencies]
 count-min-sketch = "0.1"
+crossbeam-channel = "0.4"
+parking_lot = "0.10"

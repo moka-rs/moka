@@ -1,13 +1,11 @@
 use crate::ConcurrentCache;
 
 use count_min_sketch::CountMinSketch8;
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use parking_lot::{Mutex, MutexGuard};
+use std::{collections::HashMap, sync::Arc};
 
 pub struct NaiveLFUCache<K, V> {
-    inner: RwLock<NaiveLFUInner<K, V>>,
+    inner: Mutex<NaiveLFUInner<K, V>>,
 }
 
 impl<K, V> NaiveLFUCache<K, V>
@@ -16,14 +14,12 @@ where
 {
     pub fn new(capacity: usize) -> Self {
         Self {
-            inner: RwLock::new(NaiveLFUInner::new(capacity)),
+            inner: Mutex::new(NaiveLFUInner::new(capacity)),
         }
     }
 
-    fn inner_mut(&self) -> std::sync::RwLockWriteGuard<'_, NaiveLFUInner<K, V>> {
-        self.inner
-            .write()
-            .expect("Cannot get write lock on the map")
+    fn inner_mut(&self) -> MutexGuard<'_, NaiveLFUInner<K, V>> {
+        self.inner.lock()
     }
 }
 
@@ -58,7 +54,7 @@ where
 unsafe impl<K, V> Send for NaiveLFUCache<K, V> {}
 unsafe impl<K, V> Sync for NaiveLFUCache<K, V> {}
 
-pub(crate) struct NaiveLFUInner<K, V> {
+struct NaiveLFUInner<K, V> {
     capacity: usize,
     cache: HashMap<K, Arc<V>>,
     frequency_sketch: CountMinSketch8<K>,
@@ -68,7 +64,7 @@ impl<K, V> NaiveLFUInner<K, V>
 where
     K: Clone + std::fmt::Debug + Eq + std::hash::Hash,
 {
-    pub(crate) fn new(capacity: usize) -> Self {
+    fn new(capacity: usize) -> Self {
         let cache = HashMap::with_capacity(capacity);
         let skt_capacity = usize::max(capacity, 100);
         let frequency_sketch = CountMinSketch8::new(skt_capacity, 0.95, 10.0)
@@ -81,7 +77,7 @@ where
         }
     }
 
-    pub(crate) fn get(&mut self, key: &K) -> Option<Arc<V>> {
+    fn get(&mut self, key: &K) -> Option<Arc<V>> {
         self.frequency_sketch.increment(key);
         println!(
             "get()    - estimated frequency of {:?}: {}",
@@ -91,7 +87,7 @@ where
         self.cache.get(key).map(|v| Arc::clone(v))
     }
 
-    pub(crate) fn get_or_insert_with<F>(&mut self, key: K, default: F) -> Arc<V>
+    fn get_or_insert_with<F>(&mut self, key: K, default: F) -> Arc<V>
     where
         F: FnOnce() -> V,
     {
@@ -108,7 +104,7 @@ where
         }
     }
 
-    pub(crate) fn insert(&mut self, key: K, value: V) {
+    fn insert(&mut self, key: K, value: V) {
         println!(
             "insert() - estimated frequency of {:?}: {}",
             key,
@@ -117,14 +113,14 @@ where
         self.do_insert(key, Arc::new(value));
     }
 
-    pub(crate) fn remove(&mut self, key: &K) -> Option<Arc<V>> {
+    fn remove(&mut self, key: &K) -> Option<Arc<V>> {
         self.cache.remove(key)
     }
 
     fn admit(&self, candidate: &K, victim: &K) -> bool {
-        let skt = &self.frequency_sketch;
+        let freq = &self.frequency_sketch;
         // TODO: Implement some randomness to mitigate hash DoS.
-        skt.estimate(candidate) > skt.estimate(victim)
+        freq.estimate(candidate) > freq.estimate(victim)
     }
 
     fn do_insert(&mut self, key: K, value: Arc<V>) {
