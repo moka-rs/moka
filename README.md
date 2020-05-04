@@ -32,7 +32,11 @@ features are not implemented yet and the API will change very often.
 
 ## Requirements
 
-- Rust 1.39 or newer.
+- Rust 1.41.1 or newer.
+
+<!--
+This is because cht crate requires 1.41.
+-->
 
 <!--
 ## Usage
