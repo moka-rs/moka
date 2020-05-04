@@ -159,6 +159,16 @@ where
     }
 }
 
+impl<K, V, S> Clone for LFUCache<K, V, S> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            read_op_ch: self.read_op_ch.clone(),
+            write_op_ch: self.write_op_ch.clone(),
+        }
+    }
+} 
+
 unsafe impl<K, V, S> Send for LFUCache<K, V, S> {}
 unsafe impl<K, V, S> Sync for LFUCache<K, V, S> {}
 
