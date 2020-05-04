@@ -15,6 +15,9 @@ readme = "README.md"
 # exclude = [".github", ".vscode"]
 
 [dependencies]
+cht = "0.4"
 count-min-sketch = "0.1"
 crossbeam-channel = "0.4"
+# crossbeam-queue = "0.2"
+# hierarchical_hash_wheel_timer = "1.0"
 parking_lot = "0.10"

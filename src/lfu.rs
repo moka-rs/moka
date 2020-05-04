@@ -3,7 +3,7 @@ use crate::ConcurrentCache;
 use count_min_sketch::CountMinSketch8;
 use crossbeam_channel::{Receiver, SendError, Sender};
 use parking_lot::{Mutex, MutexGuard, RwLock};
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 const READ_LOG_SIZE: usize = 64;
 const WRITE_LOG_SIZE: usize = 256;
@@ -15,21 +15,38 @@ enum WriteOp<K, V> {
     Remove(K),
 }
 
-pub struct LFUCache<K, V> {
-    inner: Arc<LFUInner<K, V>>,
+pub struct LFUCache<K, V, S> {
+    inner: Arc<LFUInner<K, V, S>>,
     read_op_ch: Sender<K>,
     write_op_ch: Sender<WriteOp<K, V>>,
 }
 
-impl<K, V> LFUCache<K, V>
+impl<K, V> LFUCache<K, V, std::collections::hash_map::RandomState>
 where
     K: Clone + std::fmt::Debug + Eq + std::hash::Hash,
 {
     pub fn new(capacity: usize) -> Self {
+        let build_hasher = std::collections::hash_map::RandomState::default();
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
         Self {
-            inner: Arc::new(LFUInner::new(capacity, r_rcv, w_rcv)),
+            inner: Arc::new(LFUInner::new(capacity, build_hasher, r_rcv, w_rcv)),
+            read_op_ch: r_snd,
+            write_op_ch: w_snd,
+        }
+    }
+}
+
+impl<K, V, S> LFUCache<K, V, S>
+where
+    K: Clone + std::fmt::Debug + Eq + std::hash::Hash,
+    S: std::hash::BuildHasher,
+{
+    pub fn with_hasher(capacity: usize, build_hasher: S) -> Self {
+        let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
+        let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
+        Self {
+            inner: Arc::new(LFUInner::new(capacity, build_hasher, r_rcv, w_rcv)),
             read_op_ch: r_snd,
             write_op_ch: w_snd,
         }
@@ -67,7 +84,6 @@ where
 
     fn schedule_remove_op(&self, key: &K) -> Result<(), SendError<WriteOp<K, V>>> {
         let ch = &self.write_op_ch;
-        // TODO: Send a hash rather than the key itself so that we can avoid clone().
         // NOTE: This will be blocked if the channel is full.
         ch.send(WriteOp::Remove(key.clone()))?;
         self.apply_reads_writes_if_needed();
@@ -110,9 +126,10 @@ where
     }
 }
 
-impl<K, V> ConcurrentCache<K, V> for LFUCache<K, V>
+impl<K, V, S> ConcurrentCache<K, V> for LFUCache<K, V, S>
 where
     K: Clone + std::fmt::Debug + Eq + std::hash::Hash,
+    S: std::hash::BuildHasher,
 {
     fn get(&self, key: &K) -> Option<Arc<V>> {
         let v = self.inner.get(key);
@@ -142,12 +159,16 @@ where
     }
 }
 
-unsafe impl<K, V> Send for LFUCache<K, V> {}
-unsafe impl<K, V> Sync for LFUCache<K, V> {}
+unsafe impl<K, V, S> Send for LFUCache<K, V, S> {}
+unsafe impl<K, V, S> Sync for LFUCache<K, V, S> {}
 
-struct LFUInner<K, V> {
+type Cache<K, V, S> = cht::HashMap<Arc<K>, Arc<V>, S>;
+type KeySet<K> = std::collections::HashSet<Arc<K>>;
+
+struct LFUInner<K, V, S> {
     capacity: usize,
-    cache: RwLock<HashMap<K, Arc<V>>>,
+    cache: Cache<K, V, S>,
+    keys: RwLock<KeySet<K>>,
     frequency_sketch: RwLock<CountMinSketch8<K>>,
     reads_apply_lock: Mutex<()>,
     writes_apply_lock: Mutex<()>,
@@ -155,19 +176,26 @@ struct LFUInner<K, V> {
     write_op_ch: Receiver<WriteOp<K, V>>,
 }
 
-impl<K, V> LFUInner<K, V>
+impl<K, V, S> LFUInner<K, V, S>
 where
     K: Clone + std::fmt::Debug + Eq + std::hash::Hash,
+    S: std::hash::BuildHasher,
 {
-    fn new(capacity: usize, read_op_ch: Receiver<K>, write_op_ch: Receiver<WriteOp<K, V>>) -> Self {
-        let cache = HashMap::with_capacity(capacity);
+    fn new(
+        capacity: usize,
+        build_hasher: S,
+        read_op_ch: Receiver<K>,
+        write_op_ch: Receiver<WriteOp<K, V>>,
+    ) -> Self {
+        let cache = cht::HashMap::with_capacity_and_hasher(capacity, build_hasher);
         let skt_capacity = usize::max(capacity, 100);
         let frequency_sketch = CountMinSketch8::new(skt_capacity, 0.95, 10.0)
             .expect("Failed to create the frequency sketch");
 
         Self {
             capacity,
-            cache: RwLock::new(cache),
+            cache,
+            keys: RwLock::new(std::collections::HashSet::default()),
             frequency_sketch: RwLock::new(frequency_sketch),
             reads_apply_lock: Mutex::new(()),
             writes_apply_lock: Mutex::new(()),
@@ -177,7 +205,7 @@ where
     }
 
     fn get(&self, key: &K) -> Option<Arc<V>> {
-        self.cache.read().get(key).map(|v| Arc::clone(v))
+        self.cache.get(key)
     }
 
     // fn get_or_insert_with<F>(&mut self, _key: K, _default: F) -> Arc<V>
@@ -211,14 +239,13 @@ where
         use WriteOp::*;
 
         let freq = self.frequency_sketch.read();
-        let mut cache = self.cache.write();
 
         let ch = &self.write_op_ch;
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Insert(key, value)) => self.do_insert(key, Arc::new(value), &mut cache, &freq),
+                Ok(Insert(key, value)) => self.do_insert(key, Arc::new(value), &freq),
                 Ok(Remove(key)) => {
-                    cache.remove(&key);
+                    self.cache.remove(&key);
                 }
                 Err(_) => break,
             };
@@ -230,18 +257,21 @@ where
         freq.estimate(candidate) > freq.estimate(victim)
     }
 
-    fn do_insert(
-        &self,
-        key: K,
-        value: Arc<V>,
-        cache: &mut HashMap<K, Arc<V>>,
-        freq: &CountMinSketch8<K>,
-    ) {
+    fn do_insert(&self, key: K, value: Arc<V>, freq: &CountMinSketch8<K>) {
+        let cache = &self.cache;
         if cache.len() < self.capacity {
+            let key = Arc::new(key);
+            self.keys.write().insert(Arc::clone(&key));
             cache.insert(key, value);
         } else {
-            let victim = self.find_cache_victim(cache, freq);
+            let victim = self.find_cache_victim(freq);
             if self.admit(&key, &victim, freq) {
+                let key = Arc::new(key);
+                {
+                    let mut keys = self.keys.write();
+                    keys.remove(&victim);
+                    keys.insert(Arc::clone(&key));
+                }
                 cache.remove(&victim);
                 cache.insert(key, value);
             }
@@ -249,9 +279,10 @@ where
     }
 
     // TODO: Run this periodically in background.
-    fn find_cache_victim(&self, cache: &HashMap<K, Arc<V>>, freq: &CountMinSketch8<K>) -> K {
+    fn find_cache_victim(&self, freq: &CountMinSketch8<K>) -> Arc<K> {
         let mut victim = None;
-        for key in cache.keys() {
+        let keys = self.keys.read();
+        for key in keys.iter() {
             let freq0 = freq.estimate(key);
             match victim {
                 None => victim = Some((freq0, key)),
