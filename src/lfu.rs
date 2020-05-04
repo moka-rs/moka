@@ -3,7 +3,10 @@ use crate::ConcurrentCache;
 use count_min_sketch::CountMinSketch8;
 use crossbeam_channel::{Receiver, SendError, Sender};
 use parking_lot::{Mutex, MutexGuard, RwLock};
-use std::sync::Arc;
+use std::{
+    hash::{BuildHasher, Hash},
+    sync::Arc,
+};
 
 const READ_LOG_SIZE: usize = 64;
 const WRITE_LOG_SIZE: usize = 256;
@@ -16,21 +19,31 @@ enum WriteOp<K, V> {
 }
 
 pub struct LFUCache<K, V, S> {
-    inner: Arc<LFUInner<K, V, S>>,
+    inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<K>,
     write_op_ch: Sender<WriteOp<K, V>>,
 }
 
+impl<K, V, S> Clone for LFUCache<K, V, S> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            read_op_ch: self.read_op_ch.clone(),
+            write_op_ch: self.write_op_ch.clone(),
+        }
+    }
+}
+
 impl<K, V> LFUCache<K, V, std::collections::hash_map::RandomState>
 where
-    K: Clone + std::fmt::Debug + Eq + std::hash::Hash,
+    K: Clone + Eq + Hash,
 {
     pub fn new(capacity: usize) -> Self {
         let build_hasher = std::collections::hash_map::RandomState::default();
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
         Self {
-            inner: Arc::new(LFUInner::new(capacity, build_hasher, r_rcv, w_rcv)),
+            inner: Arc::new(Inner::new(capacity, build_hasher, r_rcv, w_rcv)),
             read_op_ch: r_snd,
             write_op_ch: w_snd,
         }
@@ -39,19 +52,20 @@ where
 
 impl<K, V, S> LFUCache<K, V, S>
 where
-    K: Clone + std::fmt::Debug + Eq + std::hash::Hash,
-    S: std::hash::BuildHasher,
+    K: Clone + Eq + Hash,
+    S: BuildHasher,
 {
     pub fn with_hasher(capacity: usize, build_hasher: S) -> Self {
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
         Self {
-            inner: Arc::new(LFUInner::new(capacity, build_hasher, r_rcv, w_rcv)),
+            inner: Arc::new(Inner::new(capacity, build_hasher, r_rcv, w_rcv)),
             read_op_ch: r_snd,
             write_op_ch: w_snd,
         }
     }
 
+    // TODO: Call this periodically (e.g. every 100 micro seconds)
     pub fn sync(&self) {
         let r_len = self.read_op_ch.len();
         if r_len > 0 {
@@ -116,20 +130,18 @@ where
     }
 
     fn should_apply_reads(&self, ch_len: usize) -> bool {
-        // TODO: Also check how long past since the last run. (e.g > 100 micro secs)
         ch_len >= READ_LOG_HIGH_WATER_MARK
     }
 
     fn should_apply_writes(&self, ch_len: usize) -> bool {
-        // TODO: Also check how long past since the last run. (e.g > 100 micro secs)
         ch_len >= WRITE_LOG_HIGH_WATER_MARK
     }
 }
 
 impl<K, V, S> ConcurrentCache<K, V> for LFUCache<K, V, S>
 where
-    K: Clone + std::fmt::Debug + Eq + std::hash::Hash,
-    S: std::hash::BuildHasher,
+    K: Clone + Eq + Hash,
+    S: BuildHasher,
 {
     fn get(&self, key: &K) -> Option<Arc<V>> {
         let v = self.inner.get(key);
@@ -159,23 +171,13 @@ where
     }
 }
 
-impl<K, V, S> Clone for LFUCache<K, V, S> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-            read_op_ch: self.read_op_ch.clone(),
-            write_op_ch: self.write_op_ch.clone(),
-        }
-    }
-}
-
 unsafe impl<K, V, S> Send for LFUCache<K, V, S> {}
 unsafe impl<K, V, S> Sync for LFUCache<K, V, S> {}
 
 type Cache<K, V, S> = cht::HashMap<Arc<K>, Arc<V>, S>;
 type KeySet<K> = std::collections::HashSet<Arc<K>>;
 
-struct LFUInner<K, V, S> {
+struct Inner<K, V, S> {
     capacity: usize,
     cache: Cache<K, V, S>,
     keys: Mutex<KeySet<K>>,
@@ -186,10 +188,10 @@ struct LFUInner<K, V, S> {
     write_op_ch: Receiver<WriteOp<K, V>>,
 }
 
-impl<K, V, S> LFUInner<K, V, S>
+impl<K, V, S> Inner<K, V, S>
 where
-    K: Clone + std::fmt::Debug + Eq + std::hash::Hash,
-    S: std::hash::BuildHasher,
+    K: Clone + Eq + Hash,
+    S: BuildHasher,
 {
     fn new(
         capacity: usize,
@@ -217,22 +219,6 @@ where
     fn get(&self, key: &K) -> Option<Arc<V>> {
         self.cache.get(key)
     }
-
-    // fn get_or_insert_with<F>(&mut self, _key: K, _default: F) -> Arc<V>
-    // where
-    //     F: FnOnce() -> V,
-    // {
-    //     todo!()
-    // }
-
-    // fn insert(&mut self, key: K, value: V) {
-    //     println!(
-    //         "insert() - estimated frequency of {:?}: {}",
-    //         key,
-    //         self.frequency_sketch.read().estimate(&key)
-    //     );
-    //     self.do_insert(key, Arc::new(value));
-    // }
 
     fn apply_reads(&self, _lock: MutexGuard<'_, ()>, count: usize) {
         let mut freq = self.frequency_sketch.write();
