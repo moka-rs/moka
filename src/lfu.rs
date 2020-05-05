@@ -13,16 +13,14 @@ const WRITE_LOG_SIZE: usize = 256;
 const READ_LOG_HIGH_WATER_MARK: usize = 48; // 75% of READ_LOG_SIZE
 const WRITE_LOG_HIGH_WATER_MARK: usize = 128; // 50% of WRITE_LOG_SIZE
 
-enum WriteOp<K, V> {
-    Insert(K, V),
-    Remove(K),
-}
-
 pub struct LFUCache<K, V, S> {
     inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<K>,
     write_op_ch: Sender<WriteOp<K, V>>,
 }
+
+unsafe impl<K, V, S> Send for LFUCache<K, V, S> {}
+unsafe impl<K, V, S> Sync for LFUCache<K, V, S> {}
 
 impl<K, V, S> Clone for LFUCache<K, V, S> {
     fn clone(&self) -> Self {
@@ -79,63 +77,6 @@ where
             self.inner.apply_writes(w_lock, l_len);
         }
     }
-
-    fn record_read_op(&self, key: &K) -> Result<(), SendError<K>> {
-        let ch = &self.read_op_ch;
-        // TODO: Send hashes rather than the key itself so that we can avoid clone().
-        let _ = ch.try_send(key.clone()); // Ignore Result<_, _>.
-        self.apply_reads_if_needed();
-        Ok(())
-    }
-
-    fn schedule_insert_op(&self, key: K, value: V) -> Result<(), SendError<WriteOp<K, V>>> {
-        let ch = &self.write_op_ch;
-        // NOTE: This will be blocked if the channel is full.
-        ch.send(WriteOp::Insert(key, value))?;
-        self.apply_reads_writes_if_needed();
-        Ok(())
-    }
-
-    fn schedule_remove_op(&self, key: &K) -> Result<(), SendError<WriteOp<K, V>>> {
-        let ch = &self.write_op_ch;
-        // NOTE: This will be blocked if the channel is full.
-        ch.send(WriteOp::Remove(key.clone()))?;
-        self.apply_reads_writes_if_needed();
-        Ok(())
-    }
-
-    fn apply_reads_if_needed(&self) {
-        let len = self.read_op_ch.len();
-
-        if self.should_apply_reads(len) {
-            if let Some(lock) = self.inner.reads_apply_lock.try_lock() {
-                self.inner.apply_reads(lock, len);
-            }
-        }
-    }
-
-    fn apply_reads_writes_if_needed(&self) {
-        let w_len = self.write_op_ch.len();
-
-        if self.should_apply_writes(w_len) {
-            let r_len = self.read_op_ch.len();
-            if let Some(r_lock) = self.inner.reads_apply_lock.try_lock() {
-                self.inner.apply_reads(r_lock, r_len);
-            }
-
-            if let Some(w_lock) = self.inner.writes_apply_lock.try_lock() {
-                self.inner.apply_writes(w_lock, w_len);
-            }
-        }
-    }
-
-    fn should_apply_reads(&self, ch_len: usize) -> bool {
-        ch_len >= READ_LOG_HIGH_WATER_MARK
-    }
-
-    fn should_apply_writes(&self, ch_len: usize) -> bool {
-        ch_len >= WRITE_LOG_HIGH_WATER_MARK
-    }
 }
 
 impl<K, V, S> ConcurrentCache<K, V> for LFUCache<K, V, S>
@@ -171,8 +112,80 @@ where
     }
 }
 
-unsafe impl<K, V, S> Send for LFUCache<K, V, S> {}
-unsafe impl<K, V, S> Sync for LFUCache<K, V, S> {}
+// private methods
+impl<K, V, S> LFUCache<K, V, S>
+where
+    K: Clone + Eq + Hash,
+    S: BuildHasher,
+{
+    #[inline]
+    fn record_read_op(&self, key: &K) -> Result<(), SendError<K>> {
+        let ch = &self.read_op_ch;
+        let _ = ch.try_send(key.clone()); // Ignore Result<_, _>.
+        self.apply_reads_if_needed();
+        Ok(())
+    }
+
+    #[inline]
+    fn schedule_insert_op(&self, key: K, value: V) -> Result<(), SendError<WriteOp<K, V>>> {
+        let ch = &self.write_op_ch;
+        // NOTE: This will be blocked if the channel is full.
+        ch.send(WriteOp::Insert(key, value))?;
+        self.apply_reads_writes_if_needed();
+        Ok(())
+    }
+
+    #[inline]
+    fn schedule_remove_op(&self, key: &K) -> Result<(), SendError<WriteOp<K, V>>> {
+        let ch = &self.write_op_ch;
+        // NOTE: This will be blocked if the channel is full.
+        ch.send(WriteOp::Remove(key.clone()))?;
+        self.apply_reads_writes_if_needed();
+        Ok(())
+    }
+
+    #[inline]
+    fn apply_reads_if_needed(&self) {
+        let len = self.read_op_ch.len();
+
+        if self.should_apply_reads(len) {
+            if let Some(lock) = self.inner.reads_apply_lock.try_lock() {
+                self.inner.apply_reads(lock, len);
+            }
+        }
+    }
+
+    #[inline]
+    fn apply_reads_writes_if_needed(&self) {
+        let w_len = self.write_op_ch.len();
+
+        if self.should_apply_writes(w_len) {
+            let r_len = self.read_op_ch.len();
+            if let Some(r_lock) = self.inner.reads_apply_lock.try_lock() {
+                self.inner.apply_reads(r_lock, r_len);
+            }
+
+            if let Some(w_lock) = self.inner.writes_apply_lock.try_lock() {
+                self.inner.apply_writes(w_lock, w_len);
+            }
+        }
+    }
+
+    #[inline]
+    fn should_apply_reads(&self, ch_len: usize) -> bool {
+        ch_len >= READ_LOG_HIGH_WATER_MARK
+    }
+
+    #[inline]
+    fn should_apply_writes(&self, ch_len: usize) -> bool {
+        ch_len >= WRITE_LOG_HIGH_WATER_MARK
+    }
+}
+
+enum WriteOp<K, V> {
+    Insert(K, V),
+    Remove(K),
+}
 
 type Cache<K, V, S> = cht::HashMap<Arc<K>, Arc<V>, S>;
 type KeySet<K> = std::collections::HashSet<Arc<K>>;
@@ -188,6 +201,7 @@ struct Inner<K, V, S> {
     write_op_ch: Receiver<WriteOp<K, V>>,
 }
 
+// functions/methods used by LFUCache
 impl<K, V, S> Inner<K, V, S>
 where
     K: Clone + Eq + Hash,
@@ -216,6 +230,7 @@ where
         }
     }
 
+    #[inline]
     fn get(&self, key: &K) -> Option<Arc<V>> {
         self.cache.get(key)
     }
@@ -240,40 +255,30 @@ where
         let ch = &self.write_op_ch;
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Insert(key, value)) => self.do_insert(key, Arc::new(value), &mut keys, &freq),
-                Ok(Remove(key)) => {
-                    keys.remove(&key);
-                    self.cache.remove(&key);
+                Ok(Insert(key, value)) => {
+                    self.handle_insert(key, Arc::new(value), &mut keys, &freq)
                 }
+                Ok(Remove(key)) => self.remove(&Arc::new(key), &mut keys),
                 Err(_) => break,
             };
         }
     }
+}
 
+// private methods
+impl<K, V, S> Inner<K, V, S>
+where
+    K: Clone + Eq + Hash,
+    S: BuildHasher,
+{
+    #[inline]
     fn admit(&self, candidate: &K, victim: &K, freq: &CountMinSketch8<K>) -> bool {
         // TODO: Implement some randomness to mitigate hash DoS.
         freq.estimate(candidate) > freq.estimate(victim)
     }
 
-    fn do_insert(&self, key: K, value: Arc<V>, keys: &mut KeySet<K>, freq: &CountMinSketch8<K>) {
-        let cache = &self.cache;
-        if cache.len() < self.capacity {
-            let key = Arc::new(key);
-            keys.insert(Arc::clone(&key));
-            cache.insert(key, value);
-        } else {
-            let victim = self.find_cache_victim(&keys, freq);
-            if self.admit(&key, &victim, freq) {
-                let key = Arc::new(key);
-                keys.remove(&victim);
-                cache.remove(&victim);
-                keys.insert(Arc::clone(&key));
-                cache.insert(key, value);
-            }
-        }
-    }
-
     // TODO: Maybe run this periodically in background?
+    #[inline]
     fn find_cache_victim(&self, keys: &KeySet<K>, freq: &CountMinSketch8<K>) -> Arc<K> {
         let mut victim = None;
 
@@ -291,6 +296,46 @@ where
 
         let (_, key) = victim.expect("No victim found");
         Arc::clone(key)
+    }
+
+    #[inline]
+    fn handle_insert(
+        &self,
+        key: K,
+        value: Arc<V>,
+        keys: &mut KeySet<K>,
+        freq: &CountMinSketch8<K>,
+    ) {
+        let cache = &self.cache;
+
+        if cache.len() < self.capacity {
+            self.insert(Arc::new(key), value, keys);
+            return;
+        }
+
+        let key = Arc::new(key);
+
+        if keys.contains(&key) {
+            self.insert(key, value, keys);
+        } else {
+            let victim = self.find_cache_victim(&keys, freq);
+            if self.admit(&key, &victim, freq) {
+                self.remove(&victim, keys);
+                self.insert(key, value, keys);
+            }
+        }
+    }
+
+    #[inline]
+    fn insert(&self, key: Arc<K>, value: Arc<V>, keys: &mut KeySet<K>) {
+        keys.insert(Arc::clone(&key));
+        self.cache.insert(key, value);
+    }
+
+    #[inline]
+    fn remove(&self, key: &Arc<K>, keys: &mut KeySet<K>) {
+        keys.remove(key);
+        self.cache.remove(key);
     }
 }
 

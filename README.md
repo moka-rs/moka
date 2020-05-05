@@ -22,7 +22,7 @@ inspired by [Caffeine][caffeine-git] (Java) and [Ristretto][ristretto-git]
 ## Status
 
 Moka is currently in a very early stage of development (design and PoC). Many
-features are not implemented yet and the API will change very often.
+features are not implemented and the API will change very often.
 
 <!--
 ## Table of Contents
@@ -50,7 +50,7 @@ This is because cht crate requires 1.41.
 **TODO**
 -->
 
-### License
+## License
 
 Moka is distributed under the terms of both the MIT license and the Apache
 License (Version 2.0).
