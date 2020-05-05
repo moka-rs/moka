@@ -79,11 +79,11 @@ where
 
     fn get(&mut self, key: &K) -> Option<Arc<V>> {
         self.frequency_sketch.increment(key);
-        println!(
-            "get()    - estimated frequency of {:?}: {}",
-            key,
-            self.frequency_sketch.estimate(&key)
-        );
+        // println!(
+        //     "get()    - estimated frequency of {:?}: {}",
+        //     key,
+        //     self.frequency_sketch.estimate(&key)
+        // );
         self.cache.get(key).map(|v| Arc::clone(v))
     }
 
@@ -105,11 +105,11 @@ where
     }
 
     fn insert(&mut self, key: K, value: V) {
-        println!(
-            "insert() - estimated frequency of {:?}: {}",
-            key,
-            self.frequency_sketch.estimate(&key)
-        );
+        // println!(
+        //     "insert() - estimated frequency of {:?}: {}",
+        //     key,
+        //     self.frequency_sketch.estimate(&key)
+        // );
         self.do_insert(key, Arc::new(value));
     }
 
