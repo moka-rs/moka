@@ -70,7 +70,7 @@ where
         }
     }
 
-    // TODO: Call this periodically (e.g. every 100 micro seconds)
+    // TODO: Call this periodically (e.g. every few seconds)
     pub fn sync(&self) {
         let r_len = self.read_op_ch.len();
         if r_len > 0 {
@@ -118,24 +118,30 @@ where
     fn insert(&self, key: K, value: V) {
         let key = Arc::new(key);
         let value = Arc::new(value);
+        let mut op1 = None;
+        let mut op2 = None;
+
         self.inner.cache.insert_with_or_modify(
             Arc::clone(&key),
             // on_insert
             || {
                 let entry = Arc::new(ValueEntry::new(Arc::clone(&value)));
-                let op = WriteOp::Insert(key, entry.clone());
-                self.schedule_insert_op(op).expect("Failed to insert");
+                op1 = Some(WriteOp::Insert(key, entry.clone()));
                 entry
             },
             // on_modify
             |_k, entry| {
-                let entry = Arc::clone(entry);
                 let entry = Arc::new(entry.replace(Arc::clone(&value)));
-                let op = WriteOp::Update(entry.clone());
-                self.schedule_insert_op(op).expect("Failed to insert");
+                op2 = Some(WriteOp::Update(entry.clone()));
                 entry
             },
         );
+
+        match (op1, op2) {
+            (Some(op), None) => self.schedule_insert_op(op).expect("Failed to insert"),
+            (None, Some(op)) => self.schedule_insert_op(op).expect("Failed to insert"),
+            _ => unreachable!(),
+        }
     }
 
     fn remove(&self, key: &K) -> Option<Arc<V>> {
@@ -471,7 +477,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn naive_basics() {
+    fn basic_single_thread() {
         let cache = LFUCache::new(3);
         cache.insert("a", "alice");
         cache.insert("b", "bob");
@@ -509,5 +515,30 @@ mod tests {
         assert_eq!(cache.get(&"d"), Some(Arc::new("dennis")));
 
         assert_eq!(cache.remove(&"b"), Some(Arc::new("bob")));
+    }
+
+    #[test]
+    fn basic_multi_threads() {
+        let cache = LFUCache::new(100);
+
+        let handles = (0..4)
+            .map(|id| {
+                let cache = cache.clone();
+                std::thread::spawn(move || {
+                    cache.insert(10, format!("{}-100", id));
+                    cache.get(&10);
+                    cache.sync();
+                    cache.insert(20, format!("{}-200", id));
+                    cache.remove(&10);
+                })
+            })
+            .collect::<Vec<_>>();
+
+        handles.into_iter().for_each(|h| h.join().expect("Failed"));
+
+        cache.sync();
+
+        assert!(cache.get(&10).is_none());
+        assert!(cache.get(&20).is_some());
     }
 }
