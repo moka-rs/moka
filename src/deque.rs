@@ -29,25 +29,25 @@ pub(crate) struct Deque<T> {
     marker: PhantomData<Box<DeqNode<T>>>,
 }
 
-// impl<T> Drop for Deque<T> {
-//     fn drop(&mut self) {
-//         struct DropGuard<'a, T>(&'a mut Deque<T>);
+impl<T> Drop for Deque<T> {
+    fn drop(&mut self) {
+        struct DropGuard<'a, T>(&'a mut Deque<T>);
 
-//         impl<'a, T> Drop for DropGuard<'a, T> {
-//             fn drop(&mut self) {
-//                 // Continue the same loop we do below. This only runs when a destructor has
-//                 // panicked. If another one panics this will abort.
-//                 while let Some(_) = self.0.pop_front() {}
-//             }
-//         }
+        impl<'a, T> Drop for DropGuard<'a, T> {
+            fn drop(&mut self) {
+                // Continue the same loop we do below. This only runs when a destructor has
+                // panicked. If another one panics this will abort.
+                while let Some(_) = self.0.pop_front() {}
+            }
+        }
 
-//         while let Some(node) = self.pop_front() {
-//             let guard = DropGuard(self);
-//             drop(node);
-//             std::mem::forget(guard);
-//         }
-//     }
-// }
+        while let Some(node) = self.pop_front() {
+            let guard = DropGuard(self);
+            drop(node);
+            std::mem::forget(guard);
+        }
+    }
+}
 
 impl<T> Deque<T> {
     pub(crate) fn new(region: CacheRegion) -> Self {
@@ -91,23 +91,23 @@ impl<T> Deque<T> {
     }
 
     /// Removes and returns the node at the front of the list.
-    // pub(crate) fn pop_front(&mut self) -> Option<Box<DeqNode<T>>> {
-    //     // This method takes care not to create mutable references to whole nodes,
-    //     // to maintain validity of aliasing pointers into `element`.
-    //     self.head.map(|node| unsafe {
-    //         let node = Box::from_raw(node.as_ptr());
-    //         self.head = node.next;
+    pub(crate) fn pop_front(&mut self) -> Option<Box<DeqNode<T>>> {
+        // This method takes care not to create mutable references to whole nodes,
+        // to maintain validity of aliasing pointers into `element`.
+        self.head.map(|node| unsafe {
+            let node = Box::from_raw(node.as_ptr());
+            self.head = node.next;
 
-    //         match self.head {
-    //             None => self.tail = None,
-    //             // Not creating new mutable (unique!) references overlapping `element`.
-    //             Some(head) => (*head.as_ptr()).prev = None,
-    //         }
+            match self.head {
+                None => self.tail = None,
+                // Not creating new mutable (unique!) references overlapping `element`.
+                Some(head) => (*head.as_ptr()).prev = None,
+            }
 
-    //         self.len -= 1;
-    //         node
-    //     })
-    // }
+            self.len -= 1;
+            node
+        })
+    }
 
     // pub(crate) fn peek_back(&mut self) -> Option<&DeqNode<T>> {
     //     todo!()
