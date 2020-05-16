@@ -37,7 +37,7 @@ impl<K, V> ValueEntry<K, V> {
     pub(crate) fn replace(&self, value: Arc<V>) -> Self {
         Self {
             value,
-            deq_node: UnsafeCell::new(unsafe { (*self.deq_node.get()).clone() }),
+            deq_node: UnsafeCell::new(unsafe { *self.deq_node.get() }),
         }
     }
 }
@@ -144,12 +144,12 @@ impl<T> Deque<T> {
             let node = NonNull::new(Box::into_raw(node)).expect("Got a null ptr");
 
             match self.tail {
-                None => self.head = Some(node.clone()),
+                None => self.head = Some(node),
                 // Not creating new mutable (unique!) references overlapping `element`.
-                Some(tail) => (*tail.as_ptr()).next = Some(node.clone()),
+                Some(tail) => (*tail.as_ptr()).next = Some(node),
             }
 
-            self.tail = Some(node.clone());
+            self.tail = Some(node);
             self.len += 1;
             node
         }
@@ -186,22 +186,18 @@ impl<T> Deque<T> {
             None => self.head = node.next,
         };
 
-        match node.next {
-            Some(next) => {
-                (*next.as_ptr()).prev = node.prev;
-                node.next = None;
-            }
-            // this node is the tail node
-            None => (),
-        };
+        if let Some(next) = node.next {
+            (*next.as_ptr()).prev = node.prev;
+            node.next = None;
+        }
 
         let node = NonNull::from(node);
         match self.tail {
             None => unreachable!(),
             // Not creating new mutable (unique!) references overlapping `element`.
-            Some(tail) => (*tail.as_ptr()).next = Some(node.clone()),
+            Some(tail) => (*tail.as_ptr()).next = Some(node),
         }
-        self.tail = Some(NonNull::from(node));
+        self.tail = Some(node);
     }
 
     /// Unlinks the specified node from the current list.
