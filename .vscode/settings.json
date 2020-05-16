@@ -1,6 +1,8 @@
 {
     "cSpell.words": [
         "CLFU",
+        "Deque",
+        "Deques",
         "Hasher",
         "Kawano",
         "MSRV",
@@ -8,6 +10,7 @@
         "Ristretto",
         "Tatsuya",
         "clippy",
+        "deqs",
         "nocapture",
         "rustfmt",
         "toolchain"

@@ -1,10 +1,14 @@
-use crate::ConcurrentCache;
+use crate::{
+    deque::{CacheArea, DeqNode, Deque, ValueEntry},
+    ConcurrentCache,
+};
 
 use count_min_sketch::CountMinSketch8;
 use crossbeam_channel::{Receiver, SendError, Sender};
-use parking_lot::{Mutex, MutexGuard, RwLock};
+use parking_lot::{Mutex, RwLock};
 use std::{
     hash::{BuildHasher, Hash},
+    ptr::NonNull,
     sync::Arc,
 };
 
@@ -15,7 +19,7 @@ const WRITE_LOG_HIGH_WATER_MARK: usize = 128; // 50% of WRITE_LOG_SIZE
 
 pub struct LFUCache<K, V, S> {
     inner: Arc<Inner<K, V, S>>,
-    read_op_ch: Sender<K>,
+    read_op_ch: Sender<ReadOp<K, V>>,
     write_op_ch: Sender<WriteOp<K, V>>,
 }
 
@@ -36,6 +40,7 @@ impl<K, V> LFUCache<K, V, std::collections::hash_map::RandomState>
 where
     K: Clone + Eq + Hash,
 {
+    // TODO: Instead of taking capacity, take initial_capacity and max_capacity.
     pub fn new(capacity: usize) -> Self {
         let build_hasher = std::collections::hash_map::RandomState::default();
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
@@ -53,6 +58,7 @@ where
     K: Clone + Eq + Hash,
     S: BuildHasher,
 {
+    // TODO: Instead of taking capacity, take initial_capacity and max_capacity.
     pub fn with_hasher(capacity: usize, build_hasher: S) -> Self {
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
@@ -67,14 +73,14 @@ where
     pub fn sync(&self) {
         let r_len = self.read_op_ch.len();
         if r_len > 0 {
-            let r_lock = self.inner.reads_apply_lock.lock();
-            self.inner.apply_reads(r_lock, r_len);
+            let mut deqs = self.inner.deques.lock();
+            self.inner.apply_reads(&mut deqs, r_len);
         }
 
         let l_len = self.write_op_ch.len();
         if l_len > 0 {
-            let w_lock = self.inner.writes_apply_lock.lock();
-            self.inner.apply_writes(w_lock, l_len);
+            let mut deqs = self.inner.deques.lock();
+            self.inner.apply_writes(&mut deqs, l_len);
         }
     }
 }
@@ -85,9 +91,16 @@ where
     S: BuildHasher,
 {
     fn get(&self, key: &K) -> Option<Arc<V>> {
-        let v = self.inner.get(key);
-        self.record_read_op(key).expect("Failed to record a get op");
-        v
+        if let Some(entry) = self.inner.get(key) {
+            let v = Arc::clone(&entry.value);
+            self.record_read_op(key, Some(entry))
+                .expect("Failed to record a get op");
+            Some(v)
+        } else {
+            self.record_read_op(key, None)
+                .expect("Failed to record a get op");
+            None
+        }
     }
 
     fn get_or_insert(&self, _key: K, _default: V) -> Arc<V> {
@@ -102,13 +115,32 @@ where
     }
 
     fn insert(&self, key: K, value: V) {
-        self.schedule_insert_op(key, value)
-            .expect("Failed to insert");
+        let key = Arc::new(key);
+        let value = Arc::new(value);
+        self.inner.cache.insert_with_or_modify(
+            key.clone(),
+            || {
+                let entry = Arc::new(ValueEntry::new(Arc::clone(&value)));
+                let op = WriteOp::Insert(key, entry.clone());
+                self.schedule_insert_op(op).expect("Failed to insert");
+                entry
+            },
+            |_k, entry| {
+                let entry = Arc::clone(entry);
+                let entry = Arc::new(entry.replace(Arc::clone(&value)));
+                let op = WriteOp::Update(entry.clone());
+                self.schedule_insert_op(op).expect("Failed to insert");
+                entry
+            },
+        );
     }
 
     fn remove(&self, key: &K) -> Option<Arc<V>> {
-        self.schedule_remove_op(key).expect("Failed to remove");
-        self.inner.get(key)
+        self.inner.cache.remove(key).map(|entry| {
+            let value = Arc::clone(&entry.value);
+            self.schedule_remove_op(entry).expect("Failed to remove");
+            value
+        })
     }
 }
 
@@ -119,27 +151,39 @@ where
     S: BuildHasher,
 {
     #[inline]
-    fn record_read_op(&self, key: &K) -> Result<(), SendError<K>> {
+    fn record_read_op(
+        &self,
+        key: &K,
+        entry: Option<Arc<ValueEntry<K, V>>>,
+    ) -> Result<(), SendError<K>> {
+        use ReadOp::*;
         let ch = &self.read_op_ch;
-        let _ = ch.try_send(key.clone()); // Ignore Result<_, _>.
+        if let Some(entry) = entry {
+            let _ = ch.try_send(ReadExisting(key.clone(), entry)); // Ignore Result<_, _>.
+        } else {
+            let _ = ch.try_send(ReadNonExisting(key.clone())); // Ignore Result<_, _>.
+        }
         self.apply_reads_if_needed();
         Ok(())
     }
 
     #[inline]
-    fn schedule_insert_op(&self, key: K, value: V) -> Result<(), SendError<WriteOp<K, V>>> {
+    fn schedule_insert_op(&self, op: WriteOp<K, V>) -> Result<(), SendError<WriteOp<K, V>>> {
         let ch = &self.write_op_ch;
         // NOTE: This will be blocked if the channel is full.
-        ch.send(WriteOp::Insert(key, value))?;
+        ch.send(op)?;
         self.apply_reads_writes_if_needed();
         Ok(())
     }
 
     #[inline]
-    fn schedule_remove_op(&self, key: &K) -> Result<(), SendError<WriteOp<K, V>>> {
+    fn schedule_remove_op(
+        &self,
+        entry: Arc<ValueEntry<K, V>>,
+    ) -> Result<(), SendError<WriteOp<K, V>>> {
         let ch = &self.write_op_ch;
         // NOTE: This will be blocked if the channel is full.
-        ch.send(WriteOp::Remove(key.clone()))?;
+        ch.send(WriteOp::Remove(entry))?;
         self.apply_reads_writes_if_needed();
         Ok(())
     }
@@ -149,8 +193,8 @@ where
         let len = self.read_op_ch.len();
 
         if self.should_apply_reads(len) {
-            if let Some(lock) = self.inner.reads_apply_lock.try_lock() {
-                self.inner.apply_reads(lock, len);
+            if let Some(ref mut deqs) = self.inner.deques.try_lock() {
+                self.inner.apply_reads(deqs, len);
             }
         }
     }
@@ -161,12 +205,9 @@ where
 
         if self.should_apply_writes(w_len) {
             let r_len = self.read_op_ch.len();
-            if let Some(r_lock) = self.inner.reads_apply_lock.try_lock() {
-                self.inner.apply_reads(r_lock, r_len);
-            }
-
-            if let Some(w_lock) = self.inner.writes_apply_lock.try_lock() {
-                self.inner.apply_writes(w_lock, w_len);
+            if let Some(ref mut deqs) = self.inner.deques.try_lock() {
+                self.inner.apply_reads(deqs, r_len);
+                self.inner.apply_writes(deqs, w_len);
             }
         }
     }
@@ -182,22 +223,25 @@ where
     }
 }
 
-enum WriteOp<K, V> {
-    Insert(K, V),
-    Remove(K),
+enum ReadOp<K, V> {
+    ReadExisting(K, Arc<ValueEntry<K, V>>),
+    ReadNonExisting(K),
 }
 
-type Cache<K, V, S> = cht::HashMap<Arc<K>, Arc<V>, S>;
-type KeySet<K> = std::collections::HashSet<Arc<K>>;
+enum WriteOp<K, V> {
+    Insert(Arc<K>, Arc<ValueEntry<K, V>>),
+    Update(Arc<ValueEntry<K, V>>),
+    Remove(Arc<ValueEntry<K, V>>),
+}
+
+type Cache<K, V, S> = cht::HashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
 
 struct Inner<K, V, S> {
     capacity: usize,
     cache: Cache<K, V, S>,
-    keys: Mutex<KeySet<K>>,
+    deques: Mutex<Deques<K>>,
     frequency_sketch: RwLock<CountMinSketch8<K>>,
-    reads_apply_lock: Mutex<()>,
-    writes_apply_lock: Mutex<()>,
-    read_op_ch: Receiver<K>,
+    read_op_ch: Receiver<ReadOp<K, V>>,
     write_op_ch: Receiver<WriteOp<K, V>>,
 }
 
@@ -210,7 +254,7 @@ where
     fn new(
         capacity: usize,
         build_hasher: S,
-        read_op_ch: Receiver<K>,
+        read_op_ch: Receiver<ReadOp<K, V>>,
         write_op_ch: Receiver<WriteOp<K, V>>,
     ) -> Self {
         let cache = cht::HashMap::with_capacity_and_hasher(capacity, build_hasher);
@@ -221,44 +265,43 @@ where
         Self {
             capacity,
             cache,
-            keys: Mutex::new(std::collections::HashSet::default()),
+            deques: Mutex::new(Deques::default()),
             frequency_sketch: RwLock::new(frequency_sketch),
-            reads_apply_lock: Mutex::new(()),
-            writes_apply_lock: Mutex::new(()),
             read_op_ch,
             write_op_ch,
         }
     }
 
     #[inline]
-    fn get(&self, key: &K) -> Option<Arc<V>> {
+    fn get(&self, key: &K) -> Option<Arc<ValueEntry<K, V>>> {
         self.cache.get(key)
     }
 
-    fn apply_reads(&self, _lock: MutexGuard<'_, ()>, count: usize) {
+    fn apply_reads(&self, deqs: &mut Deques<K>, count: usize) {
+        use ReadOp::*;
         let mut freq = self.frequency_sketch.write();
         let ch = &self.read_op_ch;
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(key) => freq.increment(&key),
+                Ok(ReadExisting(key, entry)) => {
+                    freq.increment(&key);
+                    deqs.move_to_back(entry)
+                }
+                Ok(ReadNonExisting(key)) => freq.increment(&key),
                 Err(_) => break,
             }
         }
     }
 
-    fn apply_writes(&self, _lock: MutexGuard<'_, ()>, count: usize) {
+    fn apply_writes(&self, deqs: &mut Deques<K>, count: usize) {
         use WriteOp::*;
-
         let freq = self.frequency_sketch.read();
-        let mut keys = self.keys.lock();
-
         let ch = &self.write_op_ch;
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Insert(key, value)) => {
-                    self.handle_insert(key, Arc::new(value), &mut keys, &freq)
-                }
-                Ok(Remove(key)) => self.remove(&Arc::new(key), &mut keys),
+                Ok(Insert(key, entry)) => self.handle_insert(key, entry, deqs, &freq),
+                Ok(Update(entry)) => deqs.move_to_back(entry),
+                Ok(Remove(entry)) => deqs.unlink(entry),
                 Err(_) => break,
             };
         }
@@ -272,70 +315,112 @@ where
     S: BuildHasher,
 {
     #[inline]
-    fn admit(&self, candidate: &K, victim: &K, freq: &CountMinSketch8<K>) -> bool {
+    fn admit(&self, candidate: &K, victim: &DeqNode<K>, freq: &CountMinSketch8<K>) -> bool {
         // TODO: Implement some randomness to mitigate hash DoS.
-        freq.estimate(candidate) > freq.estimate(victim)
+        freq.estimate(candidate) > freq.estimate(&*victim.element)
     }
 
     // TODO: Maybe run this periodically in background?
     #[inline]
-    fn find_cache_victim(&self, keys: &KeySet<K>, freq: &CountMinSketch8<K>) -> Arc<K> {
-        let mut victim = None;
+    fn find_cache_victim<'a>(
+        &self,
+        deqs: &'a mut Deques<K>,
+        _freq: &CountMinSketch8<K>,
+    ) -> &'a DeqNode<K> {
+        deqs.probation.peek_front().expect("No victim found")
+
+        // let mut victim = None;
 
         // Find a key with minimum access frequency in the given set of keys.
         // TODO: Do this on a set of randomly sampled keys rather than doing on
         // the whole set of keys in the cache.
-        for key in keys.iter() {
-            let freq = freq.estimate(key);
-            match victim {
-                None => victim = Some((freq, key)),
-                Some((freq0, _)) if freq < freq0 => victim = Some((freq, key)),
-                Some(_) => (),
-            }
-        }
+        // for key in deqs.probation.iter() {
+        //     let freq = freq.estimate(key);
+        //     match victim {
+        //         None => victim = Some((freq, key)),
+        //         Some((freq0, _)) if freq < freq0 => victim = Some((freq, key)),
+        //         Some(_) => (),
+        //     }
+        // }
 
-        let (_, key) = victim.expect("No victim found");
-        Arc::clone(key)
+        // let (_, key) = victim.expect("No victim found");
+        // Arc::clone(key)
     }
 
     #[inline]
     fn handle_insert(
         &self,
-        key: K,
-        value: Arc<V>,
-        keys: &mut KeySet<K>,
+        key: Arc<K>,
+        entry: Arc<ValueEntry<K, V>>,
+        deqs: &mut Deques<K>,
         freq: &CountMinSketch8<K>,
     ) {
-        let cache = &self.cache;
-
-        if cache.len() < self.capacity {
-            self.insert(Arc::new(key), value, keys);
-            return;
-        }
-
-        let key = Arc::new(key);
-
-        if keys.contains(&key) {
-            self.insert(key, value, keys);
+        if self.cache.len() <= self.capacity {
+            // Add the candidate to the deque.
+            let node = Box::new(DeqNode::new(CacheArea::MainProbation, key));
+            let node = deqs.probation.push_back(node);
+            unsafe { *(entry.deq_node.get()) = Some(node) };
         } else {
-            let victim = self.find_cache_victim(&keys, freq);
-            if self.admit(&key, &victim, freq) {
-                self.remove(&victim, keys);
-                self.insert(key, value, keys);
+            let victim = self.find_cache_victim(deqs, freq);
+            if self.admit(&key, victim, freq) {
+                // Remove the victim from the cache.
+                self.cache.remove(&victim.element);
+                // Remove the victim from the deque.
+                let node = NonNull::from(victim);
+                unsafe { deqs.probation.unlink(node) };
+                // Add the candidate to the deque.
+                let node = Box::new(DeqNode::new(CacheArea::MainProbation, key));
+                let node = deqs.probation.push_back(node);
+                unsafe { *(entry.deq_node.get()) = Some(node) };
+            } else {
+                // Remove the candidate from the cache.
+                self.cache.remove(&key);
+            }
+        }
+    }
+}
+
+struct Deques<K> {
+    window: Deque<K>,
+    probation: Deque<K>,
+    protected: Deque<K>,
+}
+
+impl<K> Default for Deques<K> {
+    fn default() -> Self {
+        Self {
+            window: Deque::new(CacheArea::Window),
+            probation: Deque::new(CacheArea::MainProbation),
+            protected: Deque::new(CacheArea::MainProtected),
+        }
+    }
+}
+
+impl<K> Deques<K> {
+    fn move_to_back<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
+        use CacheArea::*;
+        unsafe {
+            if let Some(node) = *entry.deq_node.get() {
+                match node.as_ref().area {
+                    Window => self.window.move_to_back(node),
+                    MainProbation => self.probation.move_to_back(node),
+                    MainProtected => self.protected.move_to_back(node),
+                }
             }
         }
     }
 
-    #[inline]
-    fn insert(&self, key: Arc<K>, value: Arc<V>, keys: &mut KeySet<K>) {
-        keys.insert(Arc::clone(&key));
-        self.cache.insert(key, value);
-    }
-
-    #[inline]
-    fn remove(&self, key: &Arc<K>, keys: &mut KeySet<K>) {
-        keys.remove(key);
-        self.cache.remove(key);
+    fn unlink<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
+        use CacheArea::*;
+        unsafe {
+            if let Some(node) = *entry.deq_node.get() {
+                match node.as_ref().area {
+                    Window => self.window.unlink(node),
+                    MainProbation => self.probation.unlink(node),
+                    MainProtected => self.protected.unlink(node),
+                }
+            }
+        }
     }
 }
 
@@ -350,22 +435,23 @@ mod tests {
         let cache = LFUCache::new(3);
         cache.insert("a", "alice");
         cache.insert("b", "bob");
+        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
+        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
         cache.sync();
-
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
-        // counts: a -> 2, b -> 2
+        // counts: a -> 1, b -> 1
 
         cache.insert("c", "cindy");
+        assert_eq!(cache.get(&"c"), Some(Arc::new("cindy")));
+        // counts: a -> 1, b -> 1, c -> 1
         cache.sync();
 
-        assert_eq!(cache.get(&"c"), Some(Arc::new("cindy")));
+        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
+        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        cache.sync();
         // counts: a -> 2, b -> 2, c -> 1
 
         // "d" should not be admitted because its frequency is too low.
-        cache.insert("d", "david"); //        count: d -> 0
+        cache.insert("d", "david"); //   count: d -> 0
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //        d -> 1
 
@@ -377,8 +463,10 @@ mod tests {
         // because d's frequency is higher then c's.
         cache.insert("d", "dennis");
         cache.sync();
-        assert_eq!(cache.get(&"d"), Some(Arc::new("dennis")));
+        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
+        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
         assert_eq!(cache.get(&"c"), None);
+        assert_eq!(cache.get(&"d"), Some(Arc::new("dennis")));
 
         assert_eq!(cache.remove(&"b"), Some(Arc::new("bob")));
     }
