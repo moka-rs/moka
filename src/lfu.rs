@@ -1,5 +1,5 @@
 use crate::{
-    deque::{CacheArea, DeqNode, Deque, ValueEntry},
+    deque::{CacheRegion, DeqNode, Deque},
     ConcurrentCache,
 };
 
@@ -7,6 +7,7 @@ use count_min_sketch::CountMinSketch8;
 use crossbeam_channel::{Receiver, SendError, Sender};
 use parking_lot::{Mutex, RwLock};
 use std::{
+    cell::UnsafeCell,
     hash::{BuildHasher, Hash},
     ptr::NonNull,
     sync::Arc,
@@ -103,28 +104,30 @@ where
         }
     }
 
-    fn get_or_insert(&self, _key: K, _default: V) -> Arc<V> {
-        todo!()
-    }
+    // fn get_or_insert(&self, _key: K, _default: V) -> Arc<V> {
+    //     todo!()
+    // }
 
-    fn get_or_insert_with<F>(&self, _key: K, _default: F) -> Arc<V>
-    where
-        F: FnOnce() -> V,
-    {
-        todo!()
-    }
+    // fn get_or_insert_with<F>(&self, _key: K, _default: F) -> Arc<V>
+    // where
+    //     F: FnOnce() -> V,
+    // {
+    //     todo!()
+    // }
 
     fn insert(&self, key: K, value: V) {
         let key = Arc::new(key);
         let value = Arc::new(value);
         self.inner.cache.insert_with_or_modify(
-            key.clone(),
+            Arc::clone(&key),
+            // on_insert
             || {
                 let entry = Arc::new(ValueEntry::new(Arc::clone(&value)));
                 let op = WriteOp::Insert(key, entry.clone());
                 self.schedule_insert_op(op).expect("Failed to insert");
                 entry
             },
+            // on_modify
             |_k, entry| {
                 let entry = Arc::clone(entry);
                 let entry = Arc::new(entry.replace(Arc::clone(&value)));
@@ -234,6 +237,27 @@ enum WriteOp<K, V> {
     Remove(Arc<ValueEntry<K, V>>),
 }
 
+struct ValueEntry<K, V> {
+    pub(crate) value: Arc<V>,
+    pub(crate) deq_node: UnsafeCell<Option<NonNull<DeqNode<K>>>>,
+}
+
+impl<K, V> ValueEntry<K, V> {
+    fn new(value: Arc<V>) -> Self {
+        Self {
+            value,
+            deq_node: UnsafeCell::new(None),
+        }
+    }
+
+    fn replace(&self, value: Arc<V>) -> Self {
+        Self {
+            value,
+            deq_node: UnsafeCell::new(unsafe { *self.deq_node.get() }),
+        }
+    }
+}
+
 type Cache<K, V, S> = cht::HashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
 
 struct Inner<K, V, S> {
@@ -320,7 +344,6 @@ where
         freq.estimate(candidate) > freq.estimate(&*victim.element)
     }
 
-    // TODO: Maybe run this periodically in background?
     #[inline]
     fn find_cache_victim<'a>(
         &self,
@@ -357,21 +380,16 @@ where
     ) {
         if self.cache.len() <= self.capacity {
             // Add the candidate to the deque.
-            let node = Box::new(DeqNode::new(CacheArea::MainProbation, key));
-            let node = deqs.probation.push_back(node);
-            unsafe { *(entry.deq_node.get()) = Some(node) };
+            deqs.push_back(CacheRegion::MainProbation, key, &entry);
         } else {
             let victim = self.find_cache_victim(deqs, freq);
             if self.admit(&key, victim, freq) {
-                // Remove the victim from the cache.
+                // Remove the victim from the cache and deque.
                 self.cache.remove(&victim.element);
-                // Remove the victim from the deque.
-                let node = NonNull::from(victim);
-                unsafe { deqs.probation.unlink(node) };
+                let victim = NonNull::from(victim);
+                deqs.unlink_node(victim);
                 // Add the candidate to the deque.
-                let node = Box::new(DeqNode::new(CacheArea::MainProbation, key));
-                let node = deqs.probation.push_back(node);
-                unsafe { *(entry.deq_node.get()) = Some(node) };
+                deqs.push_back(CacheRegion::MainProbation, key, &entry);
             } else {
                 // Remove the candidate from the cache.
                 self.cache.remove(&key);
@@ -389,19 +407,30 @@ struct Deques<K> {
 impl<K> Default for Deques<K> {
     fn default() -> Self {
         Self {
-            window: Deque::new(CacheArea::Window),
-            probation: Deque::new(CacheArea::MainProbation),
-            protected: Deque::new(CacheArea::MainProtected),
+            window: Deque::new(CacheRegion::Window),
+            probation: Deque::new(CacheRegion::MainProbation),
+            protected: Deque::new(CacheRegion::MainProtected),
         }
     }
 }
 
 impl<K> Deques<K> {
+    fn push_back<V>(&mut self, region: CacheRegion, key: Arc<K>, entry: &Arc<ValueEntry<K, V>>) {
+        use CacheRegion::*;
+        let node = Box::new(DeqNode::new(region, key));
+        let node = match node.as_ref().region {
+            Window => self.window.push_back(node),
+            MainProbation => self.probation.push_back(node),
+            MainProtected => self.protected.push_back(node),
+        };
+        unsafe { *(entry.deq_node.get()) = Some(node) };
+    }
+
     fn move_to_back<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
-        use CacheArea::*;
+        use CacheRegion::*;
         unsafe {
             if let Some(node) = *entry.deq_node.get() {
-                match node.as_ref().area {
+                match node.as_ref().region {
                     Window => self.window.move_to_back(node),
                     MainProbation => self.probation.move_to_back(node),
                     MainProtected => self.protected.move_to_back(node),
@@ -411,14 +440,25 @@ impl<K> Deques<K> {
     }
 
     fn unlink<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
-        use CacheArea::*;
+        use CacheRegion::*;
         unsafe {
             if let Some(node) = *entry.deq_node.get() {
-                match node.as_ref().area {
+                match node.as_ref().region {
                     Window => self.window.unlink(node),
                     MainProbation => self.probation.unlink(node),
                     MainProtected => self.protected.unlink(node),
                 }
+            }
+        }
+    }
+
+    fn unlink_node(&mut self, node: NonNull<DeqNode<K>>) {
+        use CacheRegion::*;
+        unsafe {
+            match node.as_ref().region {
+                Window => self.window.unlink(node),
+                MainProbation => self.probation.unlink(node),
+                MainProtected => self.protected.unlink(node),
             }
         }
     }

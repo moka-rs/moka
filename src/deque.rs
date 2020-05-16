@@ -12,38 +12,17 @@
 // For full authorship information, see the version control history of
 // https://github.com/rust-lang/rust/ or https://thanks.rust-lang.org
 
-use std::{cell::UnsafeCell, marker::PhantomData, ptr::NonNull, sync::Arc};
+use std::{marker::PhantomData, ptr::NonNull, sync::Arc};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CacheArea {
+pub(crate) enum CacheRegion {
     Window,
     MainProbation,
     MainProtected,
 }
 
-pub(crate) struct ValueEntry<K, V> {
-    pub(crate) value: Arc<V>,
-    pub(crate) deq_node: UnsafeCell<Option<NonNull<DeqNode<K>>>>,
-}
-
-impl<K, V> ValueEntry<K, V> {
-    pub(crate) fn new(value: Arc<V>) -> Self {
-        Self {
-            value,
-            deq_node: UnsafeCell::new(None),
-        }
-    }
-
-    pub(crate) fn replace(&self, value: Arc<V>) -> Self {
-        Self {
-            value,
-            deq_node: UnsafeCell::new(unsafe { *self.deq_node.get() }),
-        }
-    }
-}
-
 pub(crate) struct Deque<T> {
-    area: CacheArea,
+    region: CacheRegion,
     len: usize,
     head: Option<NonNull<DeqNode<T>>>,
     tail: Option<NonNull<DeqNode<T>>>,
@@ -71,9 +50,9 @@ pub(crate) struct Deque<T> {
 // }
 
 impl<T> Deque<T> {
-    pub(crate) fn new(area: CacheArea) -> Self {
+    pub(crate) fn new(region: CacheRegion) -> Self {
         Self {
-            area,
+            region,
             head: None,
             tail: None,
             len: 0,
@@ -207,7 +186,7 @@ impl<T> Deque<T> {
     ///
     /// Panics:
     pub(crate) unsafe fn unlink(&mut self, mut node: NonNull<DeqNode<T>>) {
-        assert_eq!(self.area, node.as_ref().area);
+        assert_eq!(self.region, node.as_ref().region);
 
         let node = node.as_mut(); // this one is ours now, we can create an &mut.
 
@@ -229,16 +208,16 @@ impl<T> Deque<T> {
 }
 
 pub(crate) struct DeqNode<T> {
-    pub(crate) area: CacheArea,
+    pub(crate) region: CacheRegion,
     next: Option<NonNull<DeqNode<T>>>,
     prev: Option<NonNull<DeqNode<T>>>,
     pub(crate) element: Arc<T>,
 }
 
 impl<T> DeqNode<T> {
-    pub(crate) fn new(area: CacheArea, element: Arc<T>) -> Self {
+    pub(crate) fn new(region: CacheRegion, element: Arc<T>) -> Self {
         Self {
-            area,
+            region,
             next: None,
             prev: None,
             element,
