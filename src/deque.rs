@@ -37,7 +37,7 @@ impl<T> Drop for Deque<T> {
             fn drop(&mut self) {
                 // Continue the same loop we do below. This only runs when a destructor has
                 // panicked. If another one panics this will abort.
-                while let Some(_) = self.0.pop_front() {}
+                while self.0.pop_front().is_some() {}
             }
         }
 
