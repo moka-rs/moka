@@ -1,16 +1,20 @@
 use crate::{
     deque::{CacheRegion, DeqNode, Deque},
+    thread_pool::{ThreadPool, ThreadPoolRegistry},
     ConcurrentCache,
 };
 
 use count_min_sketch::CountMinSketch8;
 use crossbeam_channel::{Receiver, SendError, Sender};
 use parking_lot::{Mutex, RwLock};
+use scheduled_thread_pool::JobHandle;
 use std::{
     cell::UnsafeCell,
     hash::{BuildHasher, Hash},
+    marker::PhantomData,
     ptr::NonNull,
-    sync::Arc,
+    sync::{Arc, Weak},
+    time::Duration,
 };
 
 const READ_LOG_SIZE: usize = 64;
@@ -22,10 +26,26 @@ pub struct LFUCache<K, V, S> {
     inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
     write_op_ch: Sender<WriteOp<K, V>>,
+    housekeeper: Arc<Housekeeper<K, V, S>>,
 }
 
-unsafe impl<K, V, S> Send for LFUCache<K, V, S> {}
-unsafe impl<K, V, S> Sync for LFUCache<K, V, S> {}
+// TODO: Check if these trait bounds are necessary.
+unsafe impl<K, V, S> Send for LFUCache<K, V, S>
+where
+    K: Send + Sync,
+    V: Send + Sync,
+    S: Send,
+{
+}
+
+// TODO: Check if these trait bounds are necessary.
+unsafe impl<K, V, S> Sync for LFUCache<K, V, S>
+where
+    K: Send + Sync,
+    V: Send + Sync,
+    S: Sync,
+{
+}
 
 impl<K, V, S> Clone for LFUCache<K, V, S> {
     fn clone(&self) -> Self {
@@ -33,6 +53,7 @@ impl<K, V, S> Clone for LFUCache<K, V, S> {
             inner: Arc::clone(&self.inner),
             read_op_ch: self.read_op_ch.clone(),
             write_op_ch: self.write_op_ch.clone(),
+            housekeeper: Arc::clone(&self.housekeeper),
         }
     }
 }
@@ -44,13 +65,7 @@ where
     // TODO: Instead of taking capacity, take initial_capacity and max_capacity.
     pub fn new(capacity: usize) -> Self {
         let build_hasher = std::collections::hash_map::RandomState::default();
-        let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
-        let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
-        Self {
-            inner: Arc::new(Inner::new(capacity, build_hasher, r_rcv, w_rcv)),
-            read_op_ch: r_snd,
-            write_op_ch: w_snd,
-        }
+        Self::with_hasher(capacity, build_hasher)
     }
 }
 
@@ -63,25 +78,13 @@ where
     pub fn with_hasher(capacity: usize, build_hasher: S) -> Self {
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
+        let inner = Arc::new(Inner::new(capacity, build_hasher, r_rcv, w_rcv));
+
         Self {
-            inner: Arc::new(Inner::new(capacity, build_hasher, r_rcv, w_rcv)),
+            inner: Arc::clone(&inner),
             read_op_ch: r_snd,
             write_op_ch: w_snd,
-        }
-    }
-
-    // TODO: Call this periodically (e.g. every few seconds)
-    pub fn sync(&self) {
-        let r_len = self.read_op_ch.len();
-        if r_len > 0 {
-            let mut deqs = self.inner.deques.lock();
-            self.inner.apply_reads(&mut deqs, r_len);
-        }
-
-        let l_len = self.write_op_ch.len();
-        if l_len > 0 {
-            let mut deqs = self.inner.deques.lock();
-            self.inner.apply_writes(&mut deqs, l_len);
+            housekeeper: Arc::new(Housekeeper::new(Arc::downgrade(&inner))),
         }
     }
 }
@@ -150,6 +153,10 @@ where
             self.schedule_remove_op(entry).expect("Failed to remove");
             value
         })
+    }
+
+    fn sync(&self) {
+        self.inner.sync();
     }
 }
 
@@ -336,6 +343,20 @@ where
             };
         }
     }
+
+    fn sync(&self) {
+        let r_len = self.read_op_ch.len();
+        if r_len > 0 {
+            let mut deqs = self.deques.lock();
+            self.apply_reads(&mut deqs, r_len);
+        }
+
+        let l_len = self.write_op_ch.len();
+        if l_len > 0 {
+            let mut deqs = self.deques.lock();
+            self.apply_writes(&mut deqs, l_len);
+        }
+    }
 }
 
 // private methods
@@ -346,7 +367,8 @@ where
 {
     #[inline]
     fn admit(&self, candidate: &K, victim: &DeqNode<K>, freq: &CountMinSketch8<K>) -> bool {
-        // TODO: Implement some randomness to mitigate hash DoS.
+        // TODO: Implement some randomness to mitigate hash DoS attack.
+        // See Caffeine's implementation.
         freq.estimate(candidate) > freq.estimate(&*victim.element)
     }
 
@@ -356,24 +378,9 @@ where
         deqs: &'a mut Deques<K>,
         _freq: &CountMinSketch8<K>,
     ) -> &'a DeqNode<K> {
+        // TODO: Check its frequency. If it is not very low, maybe we should
+        // check frequencies of next few others and pick from them.
         deqs.probation.peek_front().expect("No victim found")
-
-        // let mut victim = None;
-
-        // Find a key with minimum access frequency in the given set of keys.
-        // TODO: Do this on a set of randomly sampled keys rather than doing on
-        // the whole set of keys in the cache.
-        // for key in deqs.probation.iter() {
-        //     let freq = freq.estimate(key);
-        //     match victim {
-        //         None => victim = Some((freq, key)),
-        //         Some((freq0, _)) if freq < freq0 => victim = Some((freq, key)),
-        //         Some(_) => (),
-        //     }
-        // }
-
-        // let (_, key) = victim.expect("No victim found");
-        // Arc::clone(key)
     }
 
     #[inline]
@@ -391,6 +398,12 @@ where
             let victim = self.find_cache_victim(deqs, freq);
             if self.admit(&key, victim, freq) {
                 // Remove the victim from the cache and deque.
+                //
+                // TODO: Check if the selected victim was actually removed. If not,
+                // maybe we should find another victim. This can happen because it
+                // could have been already removed from the cache but the removal
+                // from the deque is still on the write operations queue and is not
+                // yet executed.
                 self.cache.remove(&victim.element);
                 let victim = NonNull::from(victim);
                 deqs.unlink_node(victim);
@@ -405,9 +418,9 @@ where
 }
 
 struct Deques<K> {
-    window: Deque<K>,
+    window: Deque<K>, //    Not yet used.
     probation: Deque<K>,
-    protected: Deque<K>,
+    protected: Deque<K>, // Not yet used.
 }
 
 impl<K> Default for Deques<K> {
@@ -466,6 +479,117 @@ impl<K> Deques<K> {
                 MainProbation => self.probation.unlink(node),
                 MainProtected => self.protected.unlink(node),
             }
+        }
+    }
+}
+
+struct Housekeeper<K, V, S> {
+    inner: UnsafeWeakPointer,
+    thread_pool: Arc<ThreadPool>,
+    housekeeper: Option<JobHandle>,
+    _marker: PhantomData<(K, V, S)>,
+}
+
+impl<K, V, S> Drop for Housekeeper<K, V, S> {
+    fn drop(&mut self) {
+        if let Some(j) = self.housekeeper.as_ref() {
+            j.cancel()
+        }
+        ThreadPoolRegistry::release_pool(&self.thread_pool);
+        std::mem::forget(unsafe { self.inner.as_weak_arc::<K, V, S>() });
+    }
+}
+
+impl<K, V, S> Housekeeper<K, V, S> {
+    fn new(inner: Weak<Inner<K, V, S>>) -> Self
+    where
+        K: Clone + Eq + Hash,
+        S: BuildHasher,
+    {
+        let thread_pool = ThreadPoolRegistry::acquire_default_pool();
+
+        let inner_ptr = UnsafeWeakPointer::from_weak_arc(inner);
+        let initial_delay = Duration::from_secs(1);
+        let rate = Duration::from_millis(3017);
+
+        // This clone will be moved into the housekeeper closure.
+        let inner_ptr_clone = inner_ptr.clone();
+
+        let housekeeper_closure = move || {
+            let weak = unsafe { inner_ptr_clone.as_weak_arc::<K, V, S>() };
+            if let Some(inner) = weak.upgrade() {
+                // TODO: Protect this call with catch_unwind().
+                inner.sync();
+                UnsafeWeakPointer::forget_arc(inner);
+            } else {
+                UnsafeWeakPointer::forget_weak_arc(weak);
+            }
+        };
+
+        let job = thread_pool
+            .pool
+            .execute_at_fixed_rate(initial_delay, rate, housekeeper_closure);
+
+        Self {
+            inner: inner_ptr,
+            thread_pool,
+            housekeeper: Some(job),
+            _marker: PhantomData::default(),
+        }
+    }
+}
+
+/// WARNING: Do not use this struct unless you are absolutely sure
+/// what you are doing. Using this struct is unsafe and may cause
+/// memory related crashes and/or security vulnerabilities.
+///
+/// This struct exists with the sole purpose of avoiding compile
+/// errors relevant to the thread pool usages. The thread pool
+/// requires that the generic parameters on the `LFUCache` and `Inner`
+/// structs to have trait bounds `Send`, `Sync` and `'static`. This
+/// will be unacceptable for many cache usages.
+///
+/// This struct avoids the trait bounds by transmuting a pointer
+/// between `std::sync::Weak<Inner<K, V, S>>` and `usize`.
+///
+/// If you know a better solution than this, we would love te hear it.
+struct UnsafeWeakPointer {
+    // This is a std::sync::Weak pointer to Inner<K, V, S>.
+    raw_ptr: usize,
+}
+
+impl UnsafeWeakPointer {
+    fn from_weak_arc<K, V, S>(p: Weak<Inner<K, V, S>>) -> Self {
+        Self {
+            raw_ptr: unsafe { std::mem::transmute(p) },
+        }
+    }
+
+    unsafe fn as_weak_arc<K, V, S>(&self) -> Weak<Inner<K, V, S>> {
+        std::mem::transmute(self.raw_ptr)
+    }
+
+    fn forget_arc<K, V, S>(p: Arc<Inner<K, V, S>>) {
+        // Downgrade the Arc to Weak, then forget.
+        let weak = Arc::downgrade(&p);
+        std::mem::forget(weak);
+    }
+
+    fn forget_weak_arc<K, V, S>(p: Weak<Inner<K, V, S>>) {
+        std::mem::forget(p);
+    }
+}
+
+/// `clone()` simply creates a copy of the `raw_ptr`, effectively
+/// creating many copies of the same `Weak` pointer. We are doing this
+/// for a good reason for our use case.
+///
+/// When you want to drop the Weak pointer, ensure that you drop it
+/// only once for the same `raw_ptr` across clones.
+impl Clone for UnsafeWeakPointer {
+    fn clone(&self) -> Self {
+        Self {
+            raw_ptr: self.raw_ptr,
         }
     }
 }

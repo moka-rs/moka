@@ -5,14 +5,14 @@ authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
 
 description = "A fast and concurrent cache library inspired by Caffeine (Java) and Ristretto (Go)"
-license = "MIT/Apache-2.0"
+license = "MIT OR Apache-2.0"
 # homepage = "https://"
-# documentation = "https://docs.rs/moka/"
+documentation = "https://docs.rs/moka/"
 repository = "https://github.com/moka-rs/moka"
 keywords = ["concurrent", "cache"]
 categories = ["concurrency", "caching"]
 readme = "README.md"
-# exclude = [".github", ".vscode"]
+exclude = [".github", ".vscode"]
 
 [dependencies]
 cht = "0.4"
@@ -20,4 +20,6 @@ count-min-sketch = "0.1"
 crossbeam-channel = "0.4"
 # crossbeam-queue = "0.2"
 # hierarchical_hash_wheel_timer = "1.0"
+lazy_static = "1.4"
 parking_lot = "0.10"
+scheduled-thread-pool = "0.2"

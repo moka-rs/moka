@@ -3,6 +3,7 @@
 
 mod deque;
 mod lfu;
+mod thread_pool;
 
 pub use lfu::LFUCache;
 
@@ -21,4 +22,6 @@ pub trait ConcurrentCache<K, V> {
     fn insert(&self, key: K, value: V);
 
     fn remove(&self, key: &K) -> Option<Arc<V>>;
+
+    fn sync(&self);
 }
