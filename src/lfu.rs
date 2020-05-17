@@ -185,9 +185,9 @@ where
         use ReadOp::*;
         let ch = &self.read_op_ch;
         if let Some(entry) = entry {
-            let _ = ch.try_send(ReadExisting(key.clone(), entry)); // Ignore Result<_, _>.
+            let _ = ch.try_send(Hit(key.clone(), entry)); // Ignore Result<_, _>.
         } else {
-            let _ = ch.try_send(ReadNonExisting(key.clone())); // Ignore Result<_, _>.
+            let _ = ch.try_send(Miss(key.clone())); // Ignore Result<_, _>.
         }
         self.apply_reads_if_needed();
         Ok(())
@@ -250,8 +250,8 @@ where
 }
 
 enum ReadOp<K, V> {
-    ReadExisting(K, Arc<ValueEntry<K, V>>),
-    ReadNonExisting(K),
+    Hit(K, Arc<ValueEntry<K, V>>),
+    Miss(K),
 }
 
 enum WriteOp<K, V> {
@@ -330,11 +330,11 @@ where
         let ch = &self.read_op_ch;
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(ReadExisting(key, entry)) => {
+                Ok(Hit(key, entry)) => {
                     freq.increment(&key);
                     deqs.move_to_back(entry)
                 }
-                Ok(ReadNonExisting(key)) => freq.increment(&key),
+                Ok(Miss(key)) => freq.increment(&key),
                 Err(_) => break,
             }
         }
