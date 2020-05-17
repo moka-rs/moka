@@ -506,7 +506,7 @@ impl<K, V, S> Drop for Housekeeper<K, V, S> {
             j.cancel()
         }
         ThreadPoolRegistry::release_pool(&self.thread_pool);
-        std::mem::forget(unsafe { self.inner.as_weak_arc::<K, V, S>() });
+        std::mem::drop(unsafe { self.inner.as_weak_arc::<K, V, S>() });
     }
 }
 
