@@ -26,7 +26,7 @@ pub struct LFUCache<K, V, S> {
     inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
     write_op_ch: Sender<WriteOp<K, V>>,
-    housekeeper: Arc<Housekeeper<K, V, S>>,
+    housekeeper: Arc<Mutex<Housekeeper<K, V, S>>>,
 }
 
 // TODO: Check if these trait bounds are necessary.
@@ -84,7 +84,17 @@ where
             inner: Arc::clone(&inner),
             read_op_ch: r_snd,
             write_op_ch: w_snd,
-            housekeeper: Arc::new(Housekeeper::new(Arc::downgrade(&inner))),
+            housekeeper: Arc::new(Mutex::new(Housekeeper::new(Arc::downgrade(&inner)))),
+        }
+    }
+
+    /// This is used by unit tests to get consistent result.
+    #[allow(dead_code)]
+    pub(crate) fn reconfigure_for_testing(&mut self) {
+        // Stop the housekeeping job that may cause sync() method to return earlier.
+        let mut housekeeper = self.housekeeper.lock();
+        if let Some(job) = housekeeper.job.take() {
+            job.cancel();
         }
     }
 }
@@ -486,13 +496,13 @@ impl<K> Deques<K> {
 struct Housekeeper<K, V, S> {
     inner: UnsafeWeakPointer,
     thread_pool: Arc<ThreadPool>,
-    housekeeper: Option<JobHandle>,
+    job: Option<JobHandle>,
     _marker: PhantomData<(K, V, S)>,
 }
 
 impl<K, V, S> Drop for Housekeeper<K, V, S> {
     fn drop(&mut self) {
-        if let Some(j) = self.housekeeper.as_ref() {
+        if let Some(j) = self.job.as_ref() {
             j.cancel()
         }
         ThreadPoolRegistry::release_pool(&self.thread_pool);
@@ -513,15 +523,18 @@ impl<K, V, S> Housekeeper<K, V, S> {
         let rate = Duration::from_millis(3017);
 
         // This clone will be moved into the housekeeper closure.
-        let inner_ptr_clone = inner_ptr.clone();
+        let unsafe_weak_ptr = inner_ptr.clone();
 
         let housekeeper_closure = move || {
-            let weak = unsafe { inner_ptr_clone.as_weak_arc::<K, V, S>() };
+            // Restore the Weak pointer to Inner<K, V, S>.
+            let weak = unsafe { unsafe_weak_ptr.as_weak_arc::<K, V, S>() };
             if let Some(inner) = weak.upgrade() {
                 // TODO: Protect this call with catch_unwind().
                 inner.sync();
+                // Avoid to drop the Arc<Inner<K, V, S>.
                 UnsafeWeakPointer::forget_arc(inner);
             } else {
+                // Avoid to drop the Weak<Inner<K, V, S>.
                 UnsafeWeakPointer::forget_weak_arc(weak);
             }
         };
@@ -533,7 +546,7 @@ impl<K, V, S> Housekeeper<K, V, S> {
         Self {
             inner: inner_ptr,
             thread_pool,
-            housekeeper: Some(job),
+            job: Some(job),
             _marker: PhantomData::default(),
         }
     }
@@ -602,7 +615,12 @@ mod tests {
 
     #[test]
     fn basic_single_thread() {
-        let cache = LFUCache::new(3);
+        let mut cache = LFUCache::new(3);
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
         cache.insert("a", "alice");
         cache.insert("b", "bob");
         assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
@@ -643,7 +661,11 @@ mod tests {
 
     #[test]
     fn basic_multi_threads() {
-        let cache = LFUCache::new(100);
+        let mut cache = LFUCache::new(100);
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
 
         let handles = (0..4)
             .map(|id| {
