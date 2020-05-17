@@ -29,28 +29,28 @@ impl Default for ThreadPoolRegistry {
 
 impl ThreadPoolRegistry {
     pub(crate) fn acquire_default_pool() -> Arc<ThreadPool> {
-        let found = REGISTRY.pools.read().contains_key(DEFAULT_POOL_NAME);
-
         // Maybe it is enough to use Mutex and the entry API `get_or_else()`.
         // Or just use cht crate.
-        if !found {
-            let mut pools = REGISTRY.pools.write();
-            if !pools.contains_key(DEFAULT_POOL_NAME) {
-                // Get the number of processor cores and use it for the worker count.
-                let pool = ScheduledThreadPool::with_name("default-{}", 4);
-                let t_pool = ThreadPool {
-                    name: DEFAULT_POOL_NAME.to_string(),
-                    pool,
-                };
-                pools.insert(DEFAULT_POOL_NAME.to_string(), Arc::new(t_pool));
+        loop {
+            {
+                let pools = REGISTRY.pools.read();
+                if let Some(pool) = pools.get(DEFAULT_POOL_NAME) {
+                    return Arc::clone(pool);
+                }
+            }
+            {
+                let mut pools = REGISTRY.pools.write();
+                if !pools.contains_key(DEFAULT_POOL_NAME) {
+                    // Get the number of processor cores and use it for the worker count.
+                    let pool = ScheduledThreadPool::with_name("default-{}", 4);
+                    let t_pool = ThreadPool {
+                        name: DEFAULT_POOL_NAME.to_string(),
+                        pool,
+                    };
+                    pools.insert(DEFAULT_POOL_NAME.to_string(), Arc::new(t_pool));
+                }
             }
         }
-
-        let pools = REGISTRY.pools.read();
-        let pool = pools
-            .get(DEFAULT_POOL_NAME)
-            .expect("Cannot find the default pool");
-        Arc::clone(pool)
     }
 
     pub(crate) fn release_pool(pool: &Arc<ThreadPool>) {
