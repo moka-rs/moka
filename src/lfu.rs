@@ -13,7 +13,10 @@ use std::{
     hash::{BuildHasher, Hash},
     marker::PhantomData,
     ptr::NonNull,
-    sync::{Arc, Weak},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Weak,
+    },
     time::Duration,
 };
 
@@ -26,10 +29,9 @@ pub struct LFUCache<K, V, S> {
     inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
     write_op_ch: Sender<WriteOp<K, V>>,
-    housekeeper: Arc<Mutex<Housekeeper<K, V, S>>>,
+    housekeeper: Arc<Housekeeper<K, V, S>>,
 }
 
-// TODO: Check if these trait bounds are necessary.
 unsafe impl<K, V, S> Send for LFUCache<K, V, S>
 where
     K: Send + Sync,
@@ -38,7 +40,6 @@ where
 {
 }
 
-// TODO: Check if these trait bounds are necessary.
 unsafe impl<K, V, S> Sync for LFUCache<K, V, S>
 where
     K: Send + Sync,
@@ -79,12 +80,13 @@ where
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
         let inner = Arc::new(Inner::new(capacity, build_hasher, r_rcv, w_rcv));
+        let housekeeper = Housekeeper::new(Arc::downgrade(&inner));
 
         Self {
             inner: Arc::clone(&inner),
             read_op_ch: r_snd,
             write_op_ch: w_snd,
-            housekeeper: Arc::new(Mutex::new(Housekeeper::new(Arc::downgrade(&inner)))),
+            housekeeper: Arc::new(housekeeper),
         }
     }
 
@@ -92,8 +94,8 @@ where
     #[allow(dead_code)]
     pub(crate) fn reconfigure_for_testing(&mut self) {
         // Stop the housekeeping job that may cause sync() method to return earlier.
-        let mut housekeeper = self.housekeeper.lock();
-        if let Some(job) = housekeeper.job.take() {
+        let mut job = self.housekeeper.job.lock();
+        if let Some(job) = job.take() {
             job.cancel();
         }
     }
@@ -144,7 +146,7 @@ where
             },
             // on_modify
             |_k, entry| {
-                let entry = Arc::new(entry.replace(Arc::clone(&value)));
+                let entry = Arc::new(entry.replaced(Arc::clone(&value)));
                 op2 = Some(WriteOp::Update(entry.clone()));
                 entry
             },
@@ -219,9 +221,10 @@ where
         let len = self.read_op_ch.len();
 
         if self.should_apply_reads(len) {
-            if let Some(ref mut deqs) = self.inner.deques.try_lock() {
-                self.inner.apply_reads(deqs, len);
-            }
+            // if let Some(ref mut deqs) = self.inner.deques.try_lock() {
+            //     self.inner.apply_reads(deqs, len);
+            // }
+            self.housekeeper.try_schedule_to_sync();
         }
     }
 
@@ -230,11 +233,12 @@ where
         let w_len = self.write_op_ch.len();
 
         if self.should_apply_writes(w_len) {
-            let r_len = self.read_op_ch.len();
-            if let Some(ref mut deqs) = self.inner.deques.try_lock() {
-                self.inner.apply_reads(deqs, r_len);
-                self.inner.apply_writes(deqs, w_len);
-            }
+            // let r_len = self.read_op_ch.len();
+            // if let Some(ref mut deqs) = self.inner.deques.try_lock() {
+            //     self.inner.apply_reads(deqs, r_len);
+            //     self.inner.apply_writes(deqs, w_len);
+            // }
+            self.housekeeper.try_schedule_to_sync();
         }
     }
 
@@ -273,7 +277,7 @@ impl<K, V> ValueEntry<K, V> {
         }
     }
 
-    fn replace(&self, value: Arc<V>) -> Self {
+    fn replaced(&self, value: Arc<V>) -> Self {
         Self {
             value,
             deq_node: UnsafeCell::new(unsafe { *self.deq_node.get() }),
@@ -469,14 +473,9 @@ impl<K> Deques<K> {
     }
 
     fn unlink<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
-        use CacheRegion::*;
         unsafe {
-            if let Some(node) = *entry.deq_node.get() {
-                match node.as_ref().region {
-                    Window => self.window.unlink(node),
-                    MainProbation => self.probation.unlink(node),
-                    MainProtected => self.protected.unlink(node),
-                }
+            if let Some(node) = (*entry.deq_node.get()).take() {
+                self.unlink_node(node);
             }
         }
     }
@@ -494,51 +493,44 @@ impl<K> Deques<K> {
 }
 
 struct Housekeeper<K, V, S> {
-    inner: UnsafeWeakPointer,
+    inner: Arc<Mutex<UnsafeWeakPointer>>,
     thread_pool: Arc<ThreadPool>,
-    job: Option<JobHandle>,
+    job: Mutex<Option<JobHandle>>,
+    sync_scheduled: Arc<AtomicBool>,
     _marker: PhantomData<(K, V, S)>,
 }
 
 impl<K, V, S> Drop for Housekeeper<K, V, S> {
     fn drop(&mut self) {
-        if let Some(j) = self.job.as_ref() {
+        if let Some(j) = self.job.lock().as_ref() {
             j.cancel()
         }
         ThreadPoolRegistry::release_pool(&self.thread_pool);
-        std::mem::drop(unsafe { self.inner.as_weak_arc::<K, V, S>() });
+        std::mem::drop(unsafe { self.inner.lock().as_weak_arc::<K, V, S>() });
     }
 }
 
-impl<K, V, S> Housekeeper<K, V, S> {
-    fn new(inner: Weak<Inner<K, V, S>>) -> Self
-    where
-        K: Clone + Eq + Hash,
-        S: BuildHasher,
-    {
+// functions/methods used by LFUCache
+impl<K, V, S> Housekeeper<K, V, S>
+where
+    K: Clone + Eq + Hash,
+    S: BuildHasher,
+{
+    fn new(inner: Weak<Inner<K, V, S>>) -> Self {
         let thread_pool = ThreadPoolRegistry::acquire_default_pool();
 
-        let inner_ptr = UnsafeWeakPointer::from_weak_arc(inner);
+        let inner_ptr = Arc::new(Mutex::new(UnsafeWeakPointer::from_weak_arc(inner)));
         let initial_delay = Duration::from_secs(1);
         let rate = Duration::from_millis(3017);
 
         // This clone will be moved into the housekeeper closure.
-        let unsafe_weak_ptr = inner_ptr.clone();
+        let unsafe_weak_ptr = Arc::clone(&inner_ptr);
 
         let housekeeper_closure = move || {
-            // Restore the Weak pointer to Inner<K, V, S>.
-            let weak = unsafe { unsafe_weak_ptr.as_weak_arc::<K, V, S>() };
-            if let Some(inner) = weak.upgrade() {
-                // TODO: Protect this call with catch_unwind().
-                inner.sync();
-                // Avoid to drop the Arc<Inner<K, V, S>.
-                UnsafeWeakPointer::forget_arc(inner);
-            } else {
-                // Avoid to drop the Weak<Inner<K, V, S>.
-                UnsafeWeakPointer::forget_weak_arc(weak);
-            }
+            Self::call_sync(&unsafe_weak_ptr);
         };
 
+        // Execute a task in a worker thread.
         let job = thread_pool
             .pool
             .execute_at_fixed_rate(initial_delay, rate, housekeeper_closure);
@@ -546,8 +538,56 @@ impl<K, V, S> Housekeeper<K, V, S> {
         Self {
             inner: inner_ptr,
             thread_pool,
-            job: Some(job),
+            job: Mutex::new(Some(job)),
+            sync_scheduled: Arc::new(AtomicBool::new(false)),
             _marker: PhantomData::default(),
+        }
+    }
+
+    fn try_schedule_to_sync(&self) -> bool {
+        // TODO: Check if the `Orderings` are correct.
+        //
+        // Try to flip the value of sync_scheduled from false to true.
+        // compare_and_swap() (CAS) returns the previous value:
+        // - if true  => this CAS operation has failed.    (true  -> unchanged)
+        // - if false => this CAS operation has succeeded. (false -> true)
+        let prev = self
+            .sync_scheduled
+            .compare_and_swap(false, true, Ordering::Acquire);
+
+        if prev {
+            false
+        } else {
+            let unsafe_weak_ptr = Arc::clone(&self.inner);
+            let sync_scheduled = Arc::clone(&self.sync_scheduled);
+            // Execute a task in a worker thread.
+            self.thread_pool.pool.execute(move || {
+                Self::call_sync(&unsafe_weak_ptr);
+                sync_scheduled.store(false, Ordering::Release);
+            });
+            true
+        }
+    }
+}
+
+// private functions/methods
+impl<K, V, S> Housekeeper<K, V, S>
+where
+    K: Clone + Eq + Hash,
+    S: BuildHasher,
+{
+    fn call_sync(unsafe_weak_ptr: &Arc<Mutex<UnsafeWeakPointer>>) {
+        let lock = unsafe_weak_ptr.lock();
+        // Restore the Weak pointer to Inner<K, V, S>.
+        let weak = unsafe { lock.as_weak_arc::<K, V, S>() };
+        if let Some(inner) = weak.upgrade() {
+            // TODO: Protect this call with catch_unwind().
+            inner.sync();
+            // Avoid to drop the Arc<Inner<K, V, S>.
+            UnsafeWeakPointer::forget_arc(inner);
+        } else {
+            // Avoid to drop the Weak<Inner<K, V, S>.
+            UnsafeWeakPointer::forget_weak_arc(weak);
         }
     }
 }
