@@ -13,8 +13,9 @@ use std::{
     hash::{BuildHasher, Hash},
     marker::PhantomData,
     ptr::NonNull,
+    rc::Rc,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         Arc, Weak,
     },
     time::Duration,
@@ -133,6 +134,9 @@ where
     fn insert(&self, key: K, value: V) {
         let key = Arc::new(key);
         let value = Arc::new(value);
+
+        let op_cnt1 = Rc::new(AtomicU8::new(0));
+        let op_cnt2 = Rc::clone(&op_cnt1);
         let mut op1 = None;
         let mut op2 = None;
 
@@ -141,22 +145,44 @@ where
             // on_insert
             || {
                 let entry = Arc::new(ValueEntry::new(Arc::clone(&value)));
-                op1 = Some(WriteOp::Insert(key, entry.clone()));
+                let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
+                op1 = Some((cnt, WriteOp::Insert(key, entry.clone())));
                 entry
             },
             // on_modify
             |_k, entry| {
                 let entry = Arc::new(entry.replaced(Arc::clone(&value)));
-                op2 = Some(WriteOp::Update(entry.clone()));
+                let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
+                op2 = Some((cnt, WriteOp::Update(entry.clone())));
                 entry
             },
         );
 
         match (op1, op2) {
-            (Some(op), None) => self.schedule_insert_op(op).expect("Failed to insert"),
-            (None, Some(op)) => self.schedule_insert_op(op).expect("Failed to insert"),
-            _ => unreachable!(),
+            (Some((0, op)), None) => self.schedule_insert_op(op),
+            (Some((cnt, op)), None) => {
+                eprintln!("insert - got non zero op counter for on_insert: {}", cnt);
+                self.schedule_insert_op(op)
+            }
+            (None, Some((0, op))) => self.schedule_insert_op(op),
+            (None, Some((cnt, op))) => {
+                eprintln!("insert - got non zero op counter for on_update: {}", cnt);
+                self.schedule_insert_op(op)
+            }
+            (Some((cnt1, op1)), Some((cnt2, op2))) => {
+                eprintln!(
+                    "insert - got non zero op counters for both on_insert: {} and on_update: {}",
+                    cnt1, cnt2
+                );
+                if cnt1 > cnt2 {
+                    self.schedule_insert_op(op1)
+                } else {
+                    self.schedule_insert_op(op2)
+                }
+            }
+            (None, None) => unreachable!(),
         }
+        .expect("Failed to insert")
     }
 
     fn remove(&self, key: &K) -> Option<Arc<V>> {
