@@ -489,10 +489,18 @@ impl<K> Deques<K> {
         use CacheRegion::*;
         unsafe {
             if let Some(node) = *entry.deq_node.get() {
-                match node.as_ref().region {
-                    Window => self.window.move_to_back(node),
-                    MainProbation => self.probation.move_to_back(node),
-                    MainProtected => self.protected.move_to_back(node),
+                let p = node.as_ref();
+                match &p.region {
+                    Window if self.window.is_member(p) => self.window.move_to_back(node),
+                    MainProbation if self.probation.is_member(p) => {
+                        self.probation.move_to_back(node)
+                    }
+                    MainProtected if self.protected.is_member(p) => {
+                        self.protected.move_to_back(node)
+                    }
+                    region => {
+                        eprintln!("move_to_back - node is not a member of {:?} deque", region)
+                    }
                 }
             }
         }
@@ -509,10 +517,12 @@ impl<K> Deques<K> {
     fn unlink_node(&mut self, node: NonNull<DeqNode<K>>) {
         use CacheRegion::*;
         unsafe {
-            match node.as_ref().region {
-                Window => self.window.unlink(node),
-                MainProbation => self.probation.unlink(node),
-                MainProtected => self.protected.unlink(node),
+            let p = node.as_ref();
+            match &p.region {
+                Window if self.window.is_member(p) => self.window.unlink(node),
+                MainProbation if self.probation.is_member(p) => self.probation.unlink(node),
+                MainProtected if self.protected.is_member(p) => self.protected.unlink(node),
+                region => eprintln!("unlink_node - node is not a member of {:?} deque", region),
             }
         }
     }

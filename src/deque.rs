@@ -64,6 +64,10 @@ impl<T> Deque<T> {
     //     self.len
     // }
 
+    pub(crate) fn is_member(&self, node: &DeqNode<T>) -> bool {
+        self.region == node.region && (node.prev.is_some() || node.next.is_some())
+    }
+
     /// Adds the given node to the front of the list.
     // pub(crate) fn push_front(&mut self, mut node: Box<DeqNode<T>>) {
     //     // This method takes care not to create mutable references to whole nodes,
@@ -202,6 +206,9 @@ impl<T> Deque<T> {
             // this node is the tail node
             None => self.tail = node.prev,
         };
+
+        node.prev = None;
+        node.next = None;
 
         self.len -= 1;
     }
