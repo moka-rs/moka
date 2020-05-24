@@ -1,4 +1,4 @@
-// Licence and Copyright Notice:
+// License and Copyright Notice:
 //
 // Some of the code and doc comments in this module were copied from
 // `std::collections::LinkedList` in the Rust standard library.
@@ -411,20 +411,20 @@ mod tests {
     #[test]
     fn drop() {
         use std::{
+            cell::RefCell,
             rc::Rc,
-            sync::atomic::{AtomicU32, Ordering},
         };
 
-        struct X(u32, Rc<AtomicU32>);
+        struct X(u32, Rc<RefCell<Vec<u32>>>);
 
         impl Drop for X {
             fn drop(&mut self) {
-                self.1.fetch_add(self.0, Ordering::Relaxed);
+                self.1.borrow_mut().push(self.0)
             }
         }
 
         let mut deque: Deque<X> = Deque::new(MainProbation);
-        let dropped = Rc::new(AtomicU32::new(0));
+        let dropped = Rc::new(RefCell::new(Vec::default()));
 
         let node1 = DeqNode::new(MainProbation, Arc::new(X(1, Rc::clone(&dropped))));
         let node2 = DeqNode::new(MainProbation, Arc::new(X(2, Rc::clone(&dropped))));
@@ -438,6 +438,6 @@ mod tests {
 
         std::mem::drop(deque);
 
-        assert_eq!(dropped.load(Ordering::Relaxed), (1..=4).sum());
+        assert_eq!(*dropped.borrow(), &[1, 2, 3, 4]);
     }
 }
