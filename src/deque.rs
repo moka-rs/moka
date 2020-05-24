@@ -259,10 +259,10 @@ impl<T> Deque<T> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CacheRegion::{MainProbation, Window},
+        CacheRegion::MainProbation,
         DeqNode, Deque,
     };
-    use std::{ptr::NonNull, sync::Arc};
+    use std::sync::Arc;
 
     #[test]
     fn basics() {
@@ -411,6 +411,7 @@ mod tests {
         assert!(tail_e.is_none());
     }
 
+    #[test]
     fn drop() {
         use std::{
             rc::Rc,
