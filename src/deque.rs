@@ -258,10 +258,7 @@ impl<T> Deque<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        CacheRegion::MainProbation,
-        DeqNode, Deque,
-    };
+    use super::{CacheRegion::MainProbation, DeqNode, Deque};
     use std::sync::Arc;
 
     #[test]
