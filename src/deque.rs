@@ -21,6 +21,25 @@ pub(crate) enum CacheRegion {
     MainProtected,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct DeqNode<T> {
+    pub(crate) region: CacheRegion,
+    next: Option<NonNull<DeqNode<T>>>,
+    prev: Option<NonNull<DeqNode<T>>>,
+    pub(crate) element: Arc<T>,
+}
+
+impl<T> DeqNode<T> {
+    pub(crate) fn new(region: CacheRegion, element: Arc<T>) -> Self {
+        Self {
+            region,
+            next: None,
+            prev: None,
+            element,
+        }
+    }
+}
+
 pub(crate) struct Deque<T> {
     region: CacheRegion,
     len: usize,
@@ -49,6 +68,7 @@ impl<T> Drop for Deque<T> {
     }
 }
 
+// Inner crate public function/methods
 impl<T> Deque<T> {
     pub(crate) fn new(region: CacheRegion) -> Self {
         Self {
@@ -60,12 +80,12 @@ impl<T> Deque<T> {
         }
     }
 
-    // pub(crate) fn len(&self) -> usize {
-    //     self.len
-    // }
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
 
     pub(crate) fn is_member(&self, node: &DeqNode<T>) -> bool {
-        self.region == node.region && (node.prev.is_some() || node.next.is_some())
+        self.region == node.region && (node.prev.is_some() || self.is_head(node))
     }
 
     /// Adds the given node to the front of the list.
@@ -88,7 +108,7 @@ impl<T> Deque<T> {
     //     }
     // }
 
-    pub(crate) fn peek_front(&mut self) -> Option<&DeqNode<T>> {
+    pub(crate) fn peek_front(&self) -> Option<&DeqNode<T>> {
         // This method takes care not to create mutable references to whole nodes,
         // to maintain validity of aliasing pointers into `element`.
         self.head.as_ref().map(|node| unsafe { node.as_ref() })
@@ -113,9 +133,12 @@ impl<T> Deque<T> {
         })
     }
 
-    // pub(crate) fn peek_back(&mut self) -> Option<&DeqNode<T>> {
-    //     todo!()
-    // }
+    #[cfg(test)]
+    fn peek_back(&mut self) -> Option<&DeqNode<T>> {
+        // This method takes care not to create mutable references to whole nodes,
+        // to maintain validity of aliasing pointers into `element`.
+        self.tail.as_ref().map(|node| unsafe { node.as_ref() })
+    }
 
     /// Adds the given node to the back of the list.
     pub(crate) fn push_back(&mut self, mut node: Box<DeqNode<T>>) -> NonNull<DeqNode<T>> {
@@ -159,6 +182,11 @@ impl<T> Deque<T> {
 
     /// Panics:
     pub(crate) unsafe fn move_to_back(&mut self, mut node: NonNull<DeqNode<T>>) {
+        // noop when this node is the only one in this deque.
+        if self.len() == 1 {
+            return;
+        }
+
         let node = node.as_mut(); // this one is ours now, we can create an &mut.
 
         // Not creating new mutable (unique!) references overlapping `element`.
@@ -174,11 +202,14 @@ impl<T> Deque<T> {
             node.next = None;
         }
 
-        let node = NonNull::from(node);
+        let mut node = NonNull::from(node);
         match self.tail {
             None => unreachable!(),
             // Not creating new mutable (unique!) references overlapping `element`.
-            Some(tail) => (*tail.as_ptr()).next = Some(node),
+            Some(tail) => {
+                node.as_mut().prev = Some(tail);
+                (*tail.as_ptr()).next = Some(node)
+            }
         }
         self.tail = Some(node);
     }
@@ -214,20 +245,201 @@ impl<T> Deque<T> {
     }
 }
 
-pub(crate) struct DeqNode<T> {
-    pub(crate) region: CacheRegion,
-    next: Option<NonNull<DeqNode<T>>>,
-    prev: Option<NonNull<DeqNode<T>>>,
-    pub(crate) element: Arc<T>,
+// Private function/methods
+impl<T> Deque<T> {
+    fn is_head(&self, node: &DeqNode<T>) -> bool {
+        if let Some(head) = self.head {
+            std::ptr::eq(unsafe { head.as_ref() }, node)
+        } else {
+            false
+        }
+    }
 }
 
-impl<T> DeqNode<T> {
-    pub(crate) fn new(region: CacheRegion, element: Arc<T>) -> Self {
-        Self {
-            region,
-            next: None,
-            prev: None,
-            element,
+#[cfg(test)]
+mod tests {
+    use super::{
+        CacheRegion::{MainProbation, Window},
+        DeqNode, Deque,
+    };
+    use std::{ptr::NonNull, sync::Arc};
+
+    #[test]
+    fn basics() {
+        let mut deque: Deque<String> = Deque::new(MainProbation);
+        assert_eq!(deque.len(), 0);
+        assert_eq!(deque.peek_front(), None);
+
+        // push_back(node1)
+        let node1 = DeqNode::new(MainProbation, Arc::new("a".into()));
+        assert!(!deque.is_member(&node1));
+        let node1 = Box::new(node1);
+        let node1_ptr = deque.push_back(node1);
+        assert_eq!(deque.len(), 1);
+
+        // peek_front() -> node1
+        let head_a = deque.peek_front();
+        assert!(head_a.is_some());
+        let head_a = head_a.unwrap();
+        assert!(deque.is_member(&head_a));
+        assert_eq!(head_a.element, Arc::new("a".into()));
+
+        // move_to_back(node1)
+        unsafe { deque.move_to_back(node1_ptr.clone()) };
+        assert_eq!(deque.len(), 1);
+
+        // peek_front() -> node1
+        let head_b = deque.peek_front();
+        assert!(head_b.is_some());
+        assert!(std::ptr::eq(head_b.unwrap(), unsafe { node1_ptr.as_ref() }));
+
+        // push_back(node2)
+        let node2 = DeqNode::new(MainProbation, Arc::new("b".into()));
+        assert!(!deque.is_member(&node2));
+        let node2_ptr = deque.push_back(Box::new(node2));
+        assert_eq!(deque.len(), 2);
+
+        // peek_front() -> node1
+        let head_c = deque.peek_front();
+        assert!(head_c.is_some());
+        assert!(std::ptr::eq(head_c.unwrap(), unsafe { node1_ptr.as_ref() }));
+
+        // move_to_back(node2)
+        unsafe { deque.move_to_back(node2_ptr.clone()) };
+        assert_eq!(deque.len(), 2);
+
+        // peek_front() -> node1
+        let head_d = deque.peek_front();
+        assert!(head_d.is_some());
+        assert!(std::ptr::eq(head_d.unwrap(), unsafe { node1_ptr.as_ref() }));
+
+        // peek_back() -> node2
+        let tail_a = deque.peek_back();
+        assert!(tail_a.is_some());
+        assert!(std::ptr::eq(tail_a.unwrap(), unsafe { node2_ptr.as_ref() }));
+        assert_eq!(tail_a.unwrap().element, Arc::new("b".into()));
+
+        // move_to_back(node1)
+        unsafe { deque.move_to_back(node1_ptr.clone()) };
+        assert_eq!(deque.len(), 2);
+
+        // peek_front() -> node2
+        let head_e = deque.peek_front();
+        assert!(head_e.is_some());
+        assert!(std::ptr::eq(head_e.unwrap(), unsafe { node2_ptr.as_ref() }));
+
+        // peek_back() -> node1
+        let tail_b = deque.peek_back();
+        assert!(tail_b.is_some());
+        assert!(std::ptr::eq(tail_b.unwrap(), unsafe { node1_ptr.as_ref() }));
+
+        // push_back(node3)
+        let node3 = DeqNode::new(MainProbation, Arc::new("c".into()));
+        assert!(!deque.is_member(&node3));
+        let node3_ptr = deque.push_back(Box::new(node3));
+        assert_eq!(deque.len(), 3);
+
+        // peek_front() -> node2
+        let head_f = deque.peek_front();
+        assert!(head_f.is_some());
+        assert!(std::ptr::eq(head_f.unwrap(), unsafe { node2_ptr.as_ref() }));
+
+        // peek_back() -> node3
+        let tail_c = deque.peek_back();
+        assert!(tail_c.is_some());
+        assert!(std::ptr::eq(tail_c.unwrap(), unsafe { node3_ptr.as_ref() }));
+        assert_eq!(tail_c.unwrap().element, Arc::new("c".into()));
+
+        // move_to_back(node1)
+        unsafe { deque.move_to_back(node1_ptr.clone()) };
+        assert_eq!(deque.len(), 3);
+
+        // peek_front() -> node2
+        let head_g = deque.peek_front();
+        assert!(head_g.is_some());
+        assert!(std::ptr::eq(head_g.unwrap(), unsafe { node2_ptr.as_ref() }));
+
+        // peek_back() -> node1
+        let tail_d = deque.peek_back();
+        assert!(tail_d.is_some());
+        assert!(std::ptr::eq(tail_d.unwrap(), unsafe { node1_ptr.as_ref() }));
+
+        // unlink(node3)
+        unsafe { deque.unlink(node3_ptr) };
+        assert_eq!(deque.len(), 2);
+        assert!(!deque.is_member(unsafe { node3_ptr.as_ref() }));
+        std::mem::drop(node3_ptr);
+
+        // peek_front() -> node2
+        let head_h = deque.peek_front();
+        assert!(head_h.is_some());
+        assert!(std::ptr::eq(head_h.unwrap(), unsafe { node2_ptr.as_ref() }));
+
+        // peek_back() -> node1
+        let tail_e = deque.peek_back();
+        assert!(tail_e.is_some());
+        assert!(std::ptr::eq(tail_e.unwrap(), unsafe { node1_ptr.as_ref() }));
+
+        // unlink(node2)
+        unsafe { deque.unlink(node2_ptr) };
+        assert_eq!(deque.len(), 1);
+        assert!(!deque.is_member(unsafe { node2_ptr.as_ref() }));
+        std::mem::drop(node2_ptr);
+
+        // peek_front() -> node1
+        let head_h = deque.peek_front();
+        assert!(head_h.is_some());
+        assert!(std::ptr::eq(head_h.unwrap(), unsafe { node1_ptr.as_ref() }));
+
+        // peek_back() -> node1
+        let tail_e = deque.peek_back();
+        assert!(tail_e.is_some());
+        assert!(std::ptr::eq(tail_e.unwrap(), unsafe { node1_ptr.as_ref() }));
+
+        // unlink(node1)
+        unsafe { deque.unlink(node1_ptr) };
+        assert_eq!(deque.len(), 0);
+        assert!(!deque.is_member(unsafe { node1_ptr.as_ref() }));
+        std::mem::drop(node1_ptr);
+
+        // peek_front() -> node1
+        let head_h = deque.peek_front();
+        assert!(head_h.is_none());
+
+        // peek_back() -> node1
+        let tail_e = deque.peek_back();
+        assert!(tail_e.is_none());
+    }
+
+    fn drop() {
+        use std::{
+            rc::Rc,
+            sync::atomic::{AtomicU32, Ordering},
+        };
+
+        struct X(u32, Rc<AtomicU32>);
+
+        impl Drop for X {
+            fn drop(&mut self) {
+                self.1.fetch_add(self.0, Ordering::Relaxed);
+            }
         }
+
+        let mut deque: Deque<X> = Deque::new(MainProbation);
+        let dropped = Rc::new(AtomicU32::new(0));
+
+        let node1 = DeqNode::new(MainProbation, Arc::new(X(1, Rc::clone(&dropped))));
+        let node2 = DeqNode::new(MainProbation, Arc::new(X(2, Rc::clone(&dropped))));
+        let node3 = DeqNode::new(MainProbation, Arc::new(X(3, Rc::clone(&dropped))));
+        let node4 = DeqNode::new(MainProbation, Arc::new(X(4, Rc::clone(&dropped))));
+        deque.push_back(Box::new(node1));
+        deque.push_back(Box::new(node2));
+        deque.push_back(Box::new(node3));
+        deque.push_back(Box::new(node4));
+        assert_eq!(deque.len(), 4);
+
+        std::mem::drop(deque);
+
+        assert_eq!(dropped.load(Ordering::Relaxed), (1..=4).sum());
     }
 }
