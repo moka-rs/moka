@@ -410,10 +410,7 @@ mod tests {
 
     #[test]
     fn drop() {
-        use std::{
-            cell::RefCell,
-            rc::Rc,
-        };
+        use std::{cell::RefCell, rc::Rc};
 
         struct X(u32, Rc<RefCell<Vec<u32>>>);
 
