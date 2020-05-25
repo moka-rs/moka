@@ -30,7 +30,14 @@ pub struct LFUCache<K, V, S> {
     inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
     write_op_ch: Sender<WriteOp<K, V>>,
-    housekeeper: Arc<Housekeeper<K, V, S>>,
+    housekeeper: Option<Arc<Housekeeper<K, V, S>>>,
+}
+
+impl<K, V, S> Drop for LFUCache<K, V, S> {
+    fn drop(&mut self) {
+        // The housekeeper needs to be dropped before the inner is dropped.
+        std::mem::drop(self.housekeeper.take());
+    }
 }
 
 unsafe impl<K, V, S> Send for LFUCache<K, V, S>
@@ -55,7 +62,7 @@ impl<K, V, S> Clone for LFUCache<K, V, S> {
             inner: Arc::clone(&self.inner),
             read_op_ch: self.read_op_ch.clone(),
             write_op_ch: self.write_op_ch.clone(),
-            housekeeper: Arc::clone(&self.housekeeper),
+            housekeeper: self.housekeeper.as_ref().map(|h| Arc::clone(&h)),
         }
     }
 }
@@ -76,7 +83,10 @@ where
     K: Clone + Eq + Hash,
     S: BuildHasher,
 {
-    // TODO: Instead of taking capacity, take initial_capacity and max_capacity.
+    // TODO: Instead of taking the capacity as an argument, take the followings:
+    // - initial_capacity of the cache (hashmap)
+    // - max_capacity of the cache (hashmap)
+    // - estimated_max_unique_keys (for the frequency sketch)
     pub fn with_hasher(capacity: usize, build_hasher: S) -> Self {
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
@@ -87,17 +97,19 @@ where
             inner: Arc::clone(&inner),
             read_op_ch: r_snd,
             write_op_ch: w_snd,
-            housekeeper: Arc::new(housekeeper),
+            housekeeper: Some(Arc::new(housekeeper)),
         }
     }
 
     /// This is used by unit tests to get consistent result.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn reconfigure_for_testing(&mut self) {
         // Stop the housekeeping job that may cause sync() method to return earlier.
-        let mut job = self.housekeeper.job.lock();
-        if let Some(job) = job.take() {
-            job.cancel();
+        if let Some(housekeeper) = &self.housekeeper {
+            let mut job = housekeeper.periodical_sync_job.lock();
+            if let Some(job) = job.take() {
+                job.cancel();
+            }
         }
     }
 }
@@ -166,12 +178,12 @@ where
             }
             (None, Some((0, op))) => self.schedule_insert_op(op),
             (None, Some((cnt, op))) => {
-                eprintln!("insert - got non zero op counter for on_update: {}", cnt);
+                eprintln!("insert - got non zero op counter for on_modify: {}", cnt);
                 self.schedule_insert_op(op)
             }
             (Some((cnt1, op1)), Some((cnt2, op2))) => {
                 eprintln!(
-                    "insert - got non zero op counters for both on_insert: {} and on_update: {}",
+                    "insert - got non zero op counters for both on_insert: {} and on_modify: {}",
                     cnt1, cnt2
                 );
                 if cnt1 > cnt2 {
@@ -250,7 +262,9 @@ where
             // if let Some(ref mut deqs) = self.inner.deques.try_lock() {
             //     self.inner.apply_reads(deqs, len);
             // }
-            self.housekeeper.try_schedule_to_sync();
+            if let Some(h) = &self.housekeeper {
+                h.try_schedule_to_sync();
+            }
         }
     }
 
@@ -264,7 +278,9 @@ where
             //     self.inner.apply_reads(deqs, r_len);
             //     self.inner.apply_writes(deqs, w_len);
             // }
-            self.housekeeper.try_schedule_to_sync();
+            if let Some(h) = &self.housekeeper {
+                h.try_schedule_to_sync();
+            }
         }
     }
 
@@ -334,7 +350,10 @@ where
         read_op_ch: Receiver<ReadOp<K, V>>,
         write_op_ch: Receiver<WriteOp<K, V>>,
     ) -> Self {
-        let cache = cht::HashMap::with_capacity_and_hasher(capacity, build_hasher);
+        // TODO: Make this much smaller.
+        let initial_capacity = ((capacity as f64) * 1.4) as usize;
+
+        let cache = cht::HashMap::with_capacity_and_hasher(initial_capacity, build_hasher);
         let skt_capacity = usize::max(capacity, 100);
         let frequency_sketch = CountMinSketch8::new(skt_capacity, 0.95, 10.0)
             .expect("Failed to create the frequency sketch");
@@ -431,9 +450,12 @@ where
         deqs: &mut Deques<K>,
         freq: &CountMinSketch8<K>,
     ) {
+        // use std::io::{self, Write};
         if self.cache.len() <= self.capacity {
             // Add the candidate to the deque.
             deqs.push_back(CacheRegion::MainProbation, key, &entry);
+        // print!("*");
+        // io::stdout().flush().unwrap();
         } else {
             let victim = self.find_cache_victim(deqs, freq);
             if self.admit(&key, victim, freq) {
@@ -449,9 +471,13 @@ where
                 deqs.unlink_node(victim);
                 // Add the candidate to the deque.
                 deqs.push_back(CacheRegion::MainProbation, key, &entry);
+            // print!("+");
+            // io::stdout().flush().unwrap();
             } else {
                 // Remove the candidate from the cache.
                 self.cache.remove(&key);
+                // print!("-");
+                // io::stdout().flush().unwrap();
             }
         }
     }
@@ -500,7 +526,11 @@ impl<K> Deques<K> {
                     }
                     region => {
                         eprintln!("move_to_back - node is not a member of {:?} deque", region)
-                    }
+                    } // _ => {
+                      //     print!("X");
+                      //     use std::io::Write;
+                      //     std::io::stdout().flush().unwrap()
+                      // }
                 }
             }
         }
@@ -523,6 +553,11 @@ impl<K> Deques<K> {
                 MainProbation if self.probation.is_member(p) => self.probation.unlink(node),
                 MainProtected if self.protected.is_member(p) => self.protected.unlink(node),
                 region => eprintln!("unlink_node - node is not a member of {:?} deque", region),
+                // _ => {
+                //     print!("@");
+                //     use std::io::Write;
+                //     std::io::stdout().flush().unwrap()
+                // }
             }
         }
     }
@@ -531,16 +566,33 @@ impl<K> Deques<K> {
 struct Housekeeper<K, V, S> {
     inner: Arc<Mutex<UnsafeWeakPointer>>,
     thread_pool: Arc<ThreadPool>,
-    job: Mutex<Option<JobHandle>>,
-    sync_scheduled: Arc<AtomicBool>,
+    is_shutting_down: Arc<AtomicBool>,
+    periodical_sync_job: Mutex<Option<JobHandle>>,
+    periodical_sync_running: Arc<Mutex<()>>,
+    on_demand_sync_scheduled: Arc<AtomicBool>,
     _marker: PhantomData<(K, V, S)>,
 }
 
 impl<K, V, S> Drop for Housekeeper<K, V, S> {
     fn drop(&mut self) {
-        if let Some(j) = self.job.lock().as_ref() {
+        // Disallow to create and/or run sync jobs by now.
+        self.is_shutting_down.store(true, Ordering::Release);
+
+        // Cancel the periodical sync job. (This will not abort the job if it is
+        // already running)
+        if let Some(j) = self.periodical_sync_job.lock().take() {
             j.cancel()
         }
+
+        // Wait for the periodical sync job to finish.
+        let _ = self.periodical_sync_running.lock();
+
+        // Wait for the on-demand sync job to finish.
+        while self.on_demand_sync_scheduled.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
+        // All sync jobs should have been finished by now. Clean up other stuff.
         ThreadPoolRegistry::release_pool(&self.thread_pool);
         std::mem::drop(unsafe { self.inner.lock().as_weak_arc::<K, V, S>() });
     }
@@ -556,14 +608,23 @@ where
         let thread_pool = ThreadPoolRegistry::acquire_default_pool();
 
         let inner_ptr = Arc::new(Mutex::new(UnsafeWeakPointer::from_weak_arc(inner)));
+        let is_shutting_down = Arc::new(AtomicBool::new(false));
+        let periodical_sync_running = Arc::new(Mutex::new(()));
+
         let initial_delay = Duration::from_secs(1);
-        let rate = Duration::from_millis(3017);
+        let rate = Duration::from_millis(317);
 
         // This clone will be moved into the housekeeper closure.
         let unsafe_weak_ptr = Arc::clone(&inner_ptr);
+        let shutting_down = Arc::clone(&is_shutting_down);
+        let sync_running = Arc::clone(&periodical_sync_running);
 
         let housekeeper_closure = move || {
-            Self::call_sync(&unsafe_weak_ptr);
+            // If shutting down, do not schedule the task.
+            if !shutting_down.load(Ordering::Acquire) {
+                let _lock = sync_running.lock();
+                Self::call_sync(&unsafe_weak_ptr);
+            }
         };
 
         // Execute a task in a worker thread.
@@ -574,28 +635,35 @@ where
         Self {
             inner: inner_ptr,
             thread_pool,
-            job: Mutex::new(Some(job)),
-            sync_scheduled: Arc::new(AtomicBool::new(false)),
+            is_shutting_down,
+            periodical_sync_job: Mutex::new(Some(job)),
+            periodical_sync_running,
+            on_demand_sync_scheduled: Arc::new(AtomicBool::new(false)),
             _marker: PhantomData::default(),
         }
     }
 
     fn try_schedule_to_sync(&self) -> bool {
-        // TODO: Check if the `Orderings` are correct.
-        //
+        // TODO: Check if these `Orderings` are correct.
+
+        // If shutting down, do not schedule the task.
+        if self.is_shutting_down.load(Ordering::Acquire) {
+            return false;
+        }
+
         // Try to flip the value of sync_scheduled from false to true.
         // compare_and_swap() (CAS) returns the previous value:
         // - if true  => this CAS operation has failed.    (true  -> unchanged)
         // - if false => this CAS operation has succeeded. (false -> true)
         let prev = self
-            .sync_scheduled
+            .on_demand_sync_scheduled
             .compare_and_swap(false, true, Ordering::Acquire);
 
         if prev {
             false
         } else {
             let unsafe_weak_ptr = Arc::clone(&self.inner);
-            let sync_scheduled = Arc::clone(&self.sync_scheduled);
+            let sync_scheduled = Arc::clone(&self.on_demand_sync_scheduled);
             // Execute a task in a worker thread.
             self.thread_pool.pool.execute(move || {
                 Self::call_sync(&unsafe_weak_ptr);
@@ -619,10 +687,10 @@ where
         if let Some(inner) = weak.upgrade() {
             // TODO: Protect this call with catch_unwind().
             inner.sync();
-            // Avoid to drop the Arc<Inner<K, V, S>.
+            // Avoid to drop the Arc<Inner<K, V, S>>.
             UnsafeWeakPointer::forget_arc(inner);
         } else {
-            // Avoid to drop the Weak<Inner<K, V, S>.
+            // Avoid to drop the Weak<Inner<K, V, S>>.
             UnsafeWeakPointer::forget_weak_arc(weak);
         }
     }
