@@ -193,25 +193,25 @@ impl<T> Deque<T> {
         match node.prev {
             Some(prev) if node.next.is_some() => (*prev.as_ptr()).next = node.next,
             Some(..) => (),
-            // this node is the head node
+            // This node is the head node.
             None => self.head = node.next,
         };
 
-        if let Some(next) = node.next {
+        // This node is not the tail node.
+        if let Some(next) = node.next.take() {
             (*next.as_ptr()).prev = node.prev;
-            node.next = None;
-        }
 
-        let mut node = NonNull::from(node);
-        match self.tail {
-            None => unreachable!(),
-            // Not creating new mutable (unique!) references overlapping `element`.
-            Some(tail) => {
-                node.as_mut().prev = Some(tail);
-                (*tail.as_ptr()).next = Some(node)
+            let mut node = NonNull::from(node);
+            match self.tail {
+                // Not creating new mutable (unique!) references overlapping `element`.
+                Some(tail) => {
+                    node.as_mut().prev = Some(tail);
+                    (*tail.as_ptr()).next = Some(node)
+                }
+                None => unreachable!(),
             }
+            self.tail = Some(node);
         }
-        self.tail = Some(node);
     }
 
     /// Unlinks the specified node from the current list.
@@ -315,6 +315,7 @@ mod tests {
         assert!(tail_a.is_some());
         assert!(std::ptr::eq(tail_a.unwrap(), unsafe { node2_ptr.as_ref() }));
         assert_eq!(tail_a.unwrap().element, Arc::new("b".into()));
+        assert_eq!(tail_a.unwrap().next, None);
 
         // move_to_back(node1)
         unsafe { deque.move_to_back(node1_ptr.clone()) };
