@@ -162,8 +162,13 @@ where
                 entry
             },
             // on_modify
-            |_k, entry| {
-                let entry = Arc::new(entry.replaced(Arc::clone(&value)));
+            |_k, old_entry| {
+                // Create a copy of the old entry with its value replaced.
+                let entry = Arc::new(old_entry.replaced(Arc::clone(&value)));
+                // Clear the deq_node of the old entry. This is needed as an Arc pointer
+                // to the old (stale) entry might be in the read op queue.
+                unsafe { (*old_entry.deq_node.get()) = None };
+
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((cnt, WriteOp::Update(entry.clone())));
                 entry
@@ -171,21 +176,9 @@ where
         );
 
         match (op1, op2) {
-            (Some((0, op)), None) => self.schedule_insert_op(op),
-            (Some((cnt, op)), None) => {
-                eprintln!("insert - got non zero op counter for on_insert: {}", cnt);
-                self.schedule_insert_op(op)
-            }
-            (None, Some((0, op))) => self.schedule_insert_op(op),
-            (None, Some((cnt, op))) => {
-                eprintln!("insert - got non zero op counter for on_modify: {}", cnt);
-                self.schedule_insert_op(op)
-            }
+            (Some((_cnt, op)), None) => self.schedule_insert_op(op),
+            (None, Some((_cnt, op))) => self.schedule_insert_op(op),
             (Some((cnt1, op1)), Some((cnt2, op2))) => {
-                eprintln!(
-                    "insert - got non zero op counters for both on_insert: {} and on_modify: {}",
-                    cnt1, cnt2
-                );
                 if cnt1 > cnt2 {
                     self.schedule_insert_op(op1)
                 } else {
@@ -327,7 +320,7 @@ impl<K, V> ValueEntry<K, V> {
     }
 }
 
-type Cache<K, V, S> = cht::HashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
+type Cache<K, V, S> = cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
 
 struct Inner<K, V, S> {
     capacity: usize,
@@ -352,9 +345,13 @@ where
     ) -> Self {
         // TODO: Make this much smaller.
         let initial_capacity = ((capacity as f64) * 1.4) as usize;
-
-        let cache = cht::HashMap::with_capacity_and_hasher(initial_capacity, build_hasher);
-        let skt_capacity = usize::max(capacity, 100);
+        let num_segments = 64;
+        let cache = cht::SegmentedHashMap::with_num_segments_capacity_and_hasher(
+            num_segments,
+            initial_capacity,
+            build_hasher,
+        );
+        let skt_capacity = usize::max(capacity * 20, 100);
         let frequency_sketch = CountMinSketch8::new(skt_capacity, 0.95, 10.0)
             .expect("Failed to create the frequency sketch");
 
@@ -466,9 +463,12 @@ where
                 // could have been already removed from the cache but the removal
                 // from the deque is still on the write operations queue and is not
                 // yet executed.
-                self.cache.remove(&victim.element);
-                let victim = NonNull::from(victim);
-                deqs.unlink_node(victim);
+                if let Some(vic_entry) = self.cache.remove(&victim.element) {
+                    deqs.unlink(vic_entry);
+                } else {
+                    let victim = NonNull::from(victim);
+                    deqs.unlink_node(victim)
+                }
                 // Add the candidate to the deque.
                 deqs.push_back(CacheRegion::MainProbation, key, &entry);
             // print!("+");
@@ -524,13 +524,10 @@ impl<K> Deques<K> {
                     MainProtected if self.protected.is_member(p) => {
                         self.protected.move_to_back(node)
                     }
-                    region => {
-                        eprintln!("move_to_back - node is not a member of {:?} deque", region)
-                    } // _ => {
-                      //     print!("X");
-                      //     use std::io::Write;
-                      //     std::io::stdout().flush().unwrap()
-                      // }
+                    region => eprintln!(
+                        "move_to_back - node is not a member of {:?} deque. {:?}",
+                        region, p
+                    ),
                 }
             }
         }
@@ -552,12 +549,10 @@ impl<K> Deques<K> {
                 Window if self.window.is_member(p) => self.window.unlink(node),
                 MainProbation if self.probation.is_member(p) => self.probation.unlink(node),
                 MainProtected if self.protected.is_member(p) => self.protected.unlink(node),
-                region => eprintln!("unlink_node - node is not a member of {:?} deque", region),
-                // _ => {
-                //     print!("@");
-                //     use std::io::Write;
-                //     std::io::stdout().flush().unwrap()
-                // }
+                region => eprintln!(
+                    "unlink_node - node is not a member of {:?} deque. {:?}",
+                    region, p
+                ),
             }
         }
     }
@@ -611,21 +606,20 @@ where
         let is_shutting_down = Arc::new(AtomicBool::new(false));
         let periodical_sync_running = Arc::new(Mutex::new(()));
 
-        let initial_delay = Duration::from_secs(1);
-        let rate = Duration::from_millis(317);
-
-        // This clone will be moved into the housekeeper closure.
+        // The following Arc clones will be moved into the housekeeper closure.
         let unsafe_weak_ptr = Arc::clone(&inner_ptr);
         let shutting_down = Arc::clone(&is_shutting_down);
         let sync_running = Arc::clone(&periodical_sync_running);
 
         let housekeeper_closure = move || {
-            // If shutting down, do not schedule the task.
             if !shutting_down.load(Ordering::Acquire) {
                 let _lock = sync_running.lock();
                 Self::call_sync(&unsafe_weak_ptr);
             }
         };
+
+        let initial_delay = Duration::from_secs(1);
+        let rate = Duration::from_millis(317);
 
         // Execute a task in a worker thread.
         let job = thread_pool
@@ -785,11 +779,11 @@ mod tests {
         // "d" should not be admitted because its frequency is too low.
         cache.insert("d", "david"); //   count: d -> 0
         cache.sync();
-        assert_eq!(cache.get(&"d"), None); //        d -> 1
+        assert_eq!(cache.get(&"d"), None); //   d -> 1
 
         cache.insert("d", "david");
         cache.sync();
-        assert_eq!(cache.get(&"d"), None); //        d -> 2
+        assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher then c's.
