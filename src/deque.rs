@@ -321,7 +321,7 @@ mod tests {
         assert!(std::ptr::eq(tail_a, unsafe { node1_ptr.as_ref() }));
         assert!(tail_a.prev.is_none());
         assert!(tail_a.next.is_none());
-                
+
         // push_back(node2)
         let node2 = DeqNode::new(MainProbation, Arc::new("b".into()));
         assert!(!deque.is_member(&node2));
