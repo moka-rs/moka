@@ -152,23 +152,32 @@ where
         let mut op1 = None;
         let mut op2 = None;
 
+        // Since the cache (cht::SegmentedHashMap) employs optimistic locking
+        // strategy, insert_with_or_modify() may get an insert/modify operation
+        // conflicted with other concurrent hash table operations. In that case,
+        // it has to retry the insertion or modification, so on_insert and/or
+        // on_modify closures can be executed more than once. In order to
+        // identify the last call of these closures, we use a shared counter
+        // (op_cnt{1,2}) here to record a serial number on a WriteOp, and
+        // consider the WriteOp with the largest serial number is the one  made
+        // by the last call of the closures.
         self.inner.cache.insert_with_or_modify(
             Arc::clone(&key),
             // on_insert
             || {
-                let entry = Arc::new(ValueEntry::new(Arc::clone(&value)));
+                let entry = Arc::new(ValueEntry::new(Arc::clone(&value), None));
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((cnt, WriteOp::Insert(key, entry.clone())));
                 entry
             },
             // on_modify
             |_k, old_entry| {
-                // Create a copy of the old entry with its value replaced.
-                let entry = Arc::new(old_entry.replaced(Arc::clone(&value)));
-                // Clear the deq_node of the old entry. This is needed as an Arc pointer
-                // to the old (stale) entry might be in the read op queue.
-                unsafe { (*old_entry.deq_node.get()) = None };
-
+                // Clear the deq_node of the old_entry. This is needed as an Arc
+                // pointer to the old (stale) entry might be in the read op queue.
+                let deq_node = unsafe { (*old_entry.deq_node.get()).take() };
+                // Create a new entry using the new value and the deq_node taken
+                // from the old_entry.
+                let entry = Arc::new(ValueEntry::new(Arc::clone(&value), deq_node));
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((cnt, WriteOp::Update(entry.clone())));
                 entry
@@ -300,22 +309,15 @@ enum WriteOp<K, V> {
 }
 
 struct ValueEntry<K, V> {
-    pub(crate) value: Arc<V>,
-    pub(crate) deq_node: UnsafeCell<Option<NonNull<DeqNode<K>>>>,
+    value: Arc<V>,
+    deq_node: UnsafeCell<Option<NonNull<DeqNode<K>>>>,
 }
 
 impl<K, V> ValueEntry<K, V> {
-    fn new(value: Arc<V>) -> Self {
+    fn new(value: Arc<V>, deq_node: Option<NonNull<DeqNode<K>>>) -> Self {
         Self {
             value,
-            deq_node: UnsafeCell::new(None),
-        }
-    }
-
-    fn replaced(&self, value: Arc<V>) -> Self {
-        Self {
-            value,
-            deq_node: UnsafeCell::new(unsafe { *self.deq_node.get() }),
+            deq_node: UnsafeCell::new(deq_node),
         }
     }
 }
@@ -517,11 +519,11 @@ impl<K> Deques<K> {
             if let Some(node) = *entry.deq_node.get() {
                 let p = node.as_ref();
                 match &p.region {
-                    Window if self.window.is_member(p) => self.window.move_to_back(node),
-                    MainProbation if self.probation.is_member(p) => {
+                    Window if self.window.contains(p) => self.window.move_to_back(node),
+                    MainProbation if self.probation.contains(p) => {
                         self.probation.move_to_back(node)
                     }
-                    MainProtected if self.protected.is_member(p) => {
+                    MainProtected if self.protected.contains(p) => {
                         self.protected.move_to_back(node)
                     }
                     region => eprintln!(
@@ -546,9 +548,9 @@ impl<K> Deques<K> {
         unsafe {
             let p = node.as_ref();
             match &p.region {
-                Window if self.window.is_member(p) => self.window.unlink(node),
-                MainProbation if self.probation.is_member(p) => self.probation.unlink(node),
-                MainProtected if self.protected.is_member(p) => self.protected.unlink(node),
+                Window if self.window.contains(p) => self.window.unlink(node),
+                MainProbation if self.probation.contains(p) => self.probation.unlink(node),
+                MainProtected if self.protected.contains(p) => self.protected.unlink(node),
                 region => eprintln!(
                     "unlink_node - node is not a member of {:?} deque. {:?}",
                     region, p
@@ -582,12 +584,12 @@ impl<K, V, S> Drop for Housekeeper<K, V, S> {
         // Wait for the periodical sync job to finish.
         let _ = self.periodical_sync_running.lock();
 
-        // Wait for the on-demand sync job to finish.
+        // Wait for the on-demand sync job to finish. (busy loop)
         while self.on_demand_sync_scheduled.load(Ordering::Acquire) {
             std::thread::sleep(Duration::from_millis(1));
         }
 
-        // All sync jobs should have been finished by now. Clean up other stuff.
+        // All sync jobs should have been finished by now. Clean other stuff up.
         ThreadPoolRegistry::release_pool(&self.thread_pool);
         std::mem::drop(unsafe { self.inner.lock().as_weak_arc::<K, V, S>() });
     }
