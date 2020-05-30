@@ -405,7 +405,7 @@ where
 
     // Returns a bool indicating we should call this again.
     fn sync(&self, max_repeats: usize) -> bool {
-        if self.read_op_ch.len() == 0 && self.write_op_ch.len() == 0 {
+        if self.read_op_ch.is_empty() && self.write_op_ch.is_empty() {
             return false;
         }
 
