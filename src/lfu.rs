@@ -6,7 +6,7 @@ use crate::{
 
 use count_min_sketch::CountMinSketch8;
 use crossbeam_channel::{Receiver, SendError, Sender};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Mutex, MutexGuard, RwLock};
 use scheduled_thread_pool::JobHandle;
 use std::{
     cell::UnsafeCell,
@@ -21,10 +21,11 @@ use std::{
     time::Duration,
 };
 
-const READ_LOG_SIZE: usize = 64;
-const WRITE_LOG_SIZE: usize = 256;
-const READ_LOG_HIGH_WATER_MARK: usize = 48; // 75% of READ_LOG_SIZE
-const WRITE_LOG_HIGH_WATER_MARK: usize = 128; // 50% of WRITE_LOG_SIZE
+const MAX_SYNC_REPEATS: usize = 4;
+const READ_LOG_HIGH_WATER_MARK: usize = 512;
+const WRITE_LOG_HIGH_WATER_MARK: usize = 512;
+const READ_LOG_SIZE: usize = READ_LOG_HIGH_WATER_MARK * (MAX_SYNC_REPEATS + 2);
+const WRITE_LOG_SIZE: usize = WRITE_LOG_HIGH_WATER_MARK * (MAX_SYNC_REPEATS + 2);
 
 pub struct LFUCache<K, V, S> {
     inner: Arc<Inner<K, V, S>>,
@@ -208,7 +209,7 @@ where
     }
 
     fn sync(&self) {
-        self.inner.sync();
+        self.inner.sync(MAX_SYNC_REPEATS);
     }
 }
 
@@ -265,7 +266,7 @@ where
             //     self.inner.apply_reads(deqs, len);
             // }
             if let Some(h) = &self.housekeeper {
-                h.try_schedule_to_sync();
+                h.try_schedule_sync();
             }
         }
     }
@@ -281,7 +282,7 @@ where
             //     self.inner.apply_writes(deqs, w_len);
             // }
             if let Some(h) = &self.housekeeper {
-                h.try_schedule_to_sync();
+                h.try_schedule_sync();
             }
         }
     }
@@ -353,7 +354,7 @@ where
             initial_capacity,
             build_hasher,
         );
-        let skt_capacity = usize::max(capacity * 20, 100);
+        let skt_capacity = usize::max(capacity * 32, 100);
         let frequency_sketch = CountMinSketch8::new(skt_capacity, 0.95, 10.0)
             .expect("Failed to create the frequency sketch");
 
@@ -402,18 +403,14 @@ where
         }
     }
 
-    fn sync(&self) {
-        let r_len = self.read_op_ch.len();
-        if r_len > 0 {
-            let mut deqs = self.deques.lock();
-            self.apply_reads(&mut deqs, r_len);
+    // Returns a bool indicating we should call this again.
+    fn sync(&self, max_repeats: usize) -> bool {
+        if self.read_op_ch.len() == 0 && self.write_op_ch.len() == 0 {
+            return false;
         }
 
-        let l_len = self.write_op_ch.len();
-        if l_len > 0 {
-            let mut deqs = self.deques.lock();
-            self.apply_writes(&mut deqs, l_len);
-        }
+        let deqs = self.deques.lock();
+        self.do_sync(deqs, max_repeats)
     }
 }
 
@@ -428,6 +425,30 @@ where
         // TODO: Implement some randomness to mitigate hash DoS attack.
         // See Caffeine's implementation.
         freq.estimate(candidate) > freq.estimate(&*victim.element)
+    }
+
+    // Returns a bool indicating we should call this again.
+    fn do_sync(&self, mut deqs: MutexGuard<'_, Deques<K>>, max_repeats: usize) -> bool {
+        let mut calls = 0;
+        let mut should_sync = true;
+
+        while should_sync && calls <= max_repeats {
+            let r_len = self.read_op_ch.len();
+            if r_len > 0 {
+                self.apply_reads(&mut deqs, r_len);
+            }
+
+            let w_len = self.write_op_ch.len();
+            if w_len > 0 {
+                self.apply_writes(&mut deqs, w_len);
+            }
+
+            calls += 1;
+            should_sync = self.should_apply_reads(self.read_op_ch.len())
+                || self.should_apply_writes(self.write_op_ch.len());
+        }
+
+        should_sync
     }
 
     #[inline]
@@ -482,6 +503,16 @@ where
                 // io::stdout().flush().unwrap();
             }
         }
+    }
+
+    #[inline]
+    fn should_apply_reads(&self, ch_len: usize) -> bool {
+        ch_len >= READ_LOG_HIGH_WATER_MARK
+    }
+
+    #[inline]
+    fn should_apply_writes(&self, ch_len: usize) -> bool {
+        ch_len >= WRITE_LOG_HIGH_WATER_MARK
     }
 }
 
@@ -639,7 +670,7 @@ where
         }
     }
 
-    fn try_schedule_to_sync(&self) -> bool {
+    fn try_schedule_sync(&self) -> bool {
         // TODO: Check if these `Orderings` are correct.
 
         // If shutting down, do not schedule the task.
@@ -682,7 +713,7 @@ where
         let weak = unsafe { lock.as_weak_arc::<K, V, S>() };
         if let Some(inner) = weak.upgrade() {
             // TODO: Protect this call with catch_unwind().
-            inner.sync();
+            inner.sync(MAX_SYNC_REPEATS);
             // Avoid to drop the Arc<Inner<K, V, S>>.
             UnsafeWeakPointer::forget_arc(inner);
         } else {
