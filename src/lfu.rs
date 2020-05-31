@@ -22,10 +22,21 @@ use std::{
 };
 
 const MAX_SYNC_REPEATS: usize = 4;
-const READ_LOG_HIGH_WATER_MARK: usize = 512;
-const WRITE_LOG_HIGH_WATER_MARK: usize = 512;
-const READ_LOG_SIZE: usize = READ_LOG_HIGH_WATER_MARK * (MAX_SYNC_REPEATS + 2);
-const WRITE_LOG_SIZE: usize = WRITE_LOG_HIGH_WATER_MARK * (MAX_SYNC_REPEATS + 2);
+
+const READ_LOG_FLUSH_POINT: usize = 512;
+const READ_LOG_SIZE: usize = READ_LOG_FLUSH_POINT * (MAX_SYNC_REPEATS + 2);
+
+const WRITE_LOG_FLUSH_POINT: usize = 512;
+const WRITE_LOG_LOW_WATER_MARK: usize = WRITE_LOG_FLUSH_POINT / 2;
+const WRITE_LOG_HIGH_WATER_MARK: usize = WRITE_LOG_FLUSH_POINT * (MAX_SYNC_REPEATS - 1);
+const WRITE_LOG_SIZE: usize = WRITE_LOG_FLUSH_POINT * (MAX_SYNC_REPEATS + 2);
+
+const WRITE_THROTTLE_MICROS: u64 = 15;
+const WRITE_RETRY_INTERVAL_MICROS: u64 = 50;
+
+const PERIODICAL_SYNC_INITIAL_DELAY_MILLIS: u64 = 1_000;
+const PERIODICAL_SYNC_NORMAL_PACE_MICROS: u64 = 300_000;
+const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 
 pub struct LFUCache<K, V, S> {
     inner: Arc<Inner<K, V, S>>,
@@ -145,6 +156,8 @@ where
     // }
 
     fn insert(&self, key: K, value: V) {
+        self.throttle_write_pace();
+
         let key = Arc::new(key);
         let value = Arc::new(value);
 
@@ -197,10 +210,11 @@ where
             }
             (None, None) => unreachable!(),
         }
-        .expect("Failed to insert")
+        .expect("Failed to insert");
     }
 
     fn remove(&self, key: &K) -> Option<Arc<V>> {
+        self.throttle_write_pace();
         self.inner.cache.remove(key).map(|entry| {
             let value = Arc::clone(&entry.value);
             self.schedule_remove_op(entry).expect("Failed to remove");
@@ -226,22 +240,32 @@ where
         entry: Option<Arc<ValueEntry<K, V>>>,
     ) -> Result<(), SendError<K>> {
         use ReadOp::*;
+        self.apply_reads_if_needed();
         let ch = &self.read_op_ch;
         if let Some(entry) = entry {
             let _ = ch.try_send(Hit(key.clone(), entry)); // Ignore Result<_, _>.
         } else {
             let _ = ch.try_send(Miss(key.clone())); // Ignore Result<_, _>.
         }
-        self.apply_reads_if_needed();
         Ok(())
     }
 
     #[inline]
     fn schedule_insert_op(&self, op: WriteOp<K, V>) -> Result<(), SendError<WriteOp<K, V>>> {
         let ch = &self.write_op_ch;
-        // NOTE: This will be blocked if the channel is full.
-        ch.send(op)?;
-        self.apply_reads_writes_if_needed();
+
+        // NOTES:
+        // - This will block when the channel is full.
+        // - We are doing a busy-loop here. We were originally calling `ch.send(op)?`,
+        //   but we got a notable performance degradation.
+        loop {
+            self.apply_reads_writes_if_needed();
+            match ch.try_send(op.clone()) {
+                Ok(()) => break,
+                // TODO: Return an error when the channel is closed.
+                Err(_) => std::thread::sleep(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS)),
+            }
+        }
         Ok(())
     }
 
@@ -251,9 +275,20 @@ where
         entry: Arc<ValueEntry<K, V>>,
     ) -> Result<(), SendError<WriteOp<K, V>>> {
         let ch = &self.write_op_ch;
-        // NOTE: This will be blocked if the channel is full.
-        ch.send(WriteOp::Remove(entry))?;
-        self.apply_reads_writes_if_needed();
+        let op = WriteOp::Remove(entry);
+
+        // NOTES:
+        // - This will block when the channel is full.
+        // - For the reason why we are doing a busy-loop here, the comments in
+        //   `schedule_insert_op()`.
+        loop {
+            self.apply_reads_writes_if_needed();
+            match ch.try_send(op.clone()) {
+                Ok(()) => break,
+                // TODO: Return an error when the channel is closed.
+                Err(_) => std::thread::sleep(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS)),
+            }
+        }
         Ok(())
     }
 
@@ -289,12 +324,19 @@ where
 
     #[inline]
     fn should_apply_reads(&self, ch_len: usize) -> bool {
-        ch_len >= READ_LOG_HIGH_WATER_MARK
+        ch_len >= READ_LOG_FLUSH_POINT
     }
 
     #[inline]
     fn should_apply_writes(&self, ch_len: usize) -> bool {
-        ch_len >= WRITE_LOG_HIGH_WATER_MARK
+        ch_len >= WRITE_LOG_FLUSH_POINT
+    }
+
+    #[inline]
+    fn throttle_write_pace(&self) {
+        if self.write_op_ch.len() >= WRITE_LOG_HIGH_WATER_MARK {
+            std::thread::sleep(Duration::from_micros(WRITE_THROTTLE_MICROS))
+        }
     }
 }
 
@@ -307,6 +349,18 @@ enum WriteOp<K, V> {
     Insert(Arc<K>, Arc<ValueEntry<K, V>>),
     Update(Arc<ValueEntry<K, V>>),
     Remove(Arc<ValueEntry<K, V>>),
+}
+
+// We need an explicit Clone impl because #[derive(Clone)] requires K and V are Clone.
+impl<K, V> Clone for WriteOp<K, V> {
+    fn clone(&self) -> Self {
+        use WriteOp::*;
+        match self {
+            Insert(k, ent) => Insert(Arc::clone(k), Arc::clone(ent)),
+            Update(ent) => Update(Arc::clone(ent)),
+            Remove(ent) => Remove(Arc::clone(ent)),
+        }
+    }
 }
 
 struct ValueEntry<K, V> {
@@ -403,10 +457,9 @@ where
         }
     }
 
-    // Returns a bool indicating we should call this again.
-    fn sync(&self, max_repeats: usize) -> bool {
+    fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
         if self.read_op_ch.is_empty() && self.write_op_ch.is_empty() {
-            return false;
+            return None;
         }
 
         let deqs = self.deques.lock();
@@ -427,8 +480,7 @@ where
         freq.estimate(candidate) > freq.estimate(&*victim.element)
     }
 
-    // Returns a bool indicating we should call this again.
-    fn do_sync(&self, mut deqs: MutexGuard<'_, Deques<K>>, max_repeats: usize) -> bool {
+    fn do_sync(&self, mut deqs: MutexGuard<'_, Deques<K>>, max_repeats: usize) -> Option<SyncPace> {
         let mut calls = 0;
         let mut should_sync = true;
 
@@ -444,11 +496,18 @@ where
             }
 
             calls += 1;
-            should_sync = self.should_apply_reads(self.read_op_ch.len())
-                || self.should_apply_writes(self.write_op_ch.len());
+            should_sync = self.read_op_ch.len() >= READ_LOG_FLUSH_POINT
+                || self.write_op_ch.len() >= WRITE_LOG_FLUSH_POINT;
         }
 
-        should_sync
+        if should_sync {
+            Some(SyncPace::Fast)
+        } else if self.write_op_ch.len() <= WRITE_LOG_LOW_WATER_MARK {
+            Some(SyncPace::Normal)
+        } else {
+            // Keep the current pace.
+            None
+        }
     }
 
     #[inline]
@@ -470,12 +529,9 @@ where
         deqs: &mut Deques<K>,
         freq: &CountMinSketch8<K>,
     ) {
-        // use std::io::{self, Write};
         if self.cache.len() <= self.capacity {
             // Add the candidate to the deque.
             deqs.push_back(CacheRegion::MainProbation, key, &entry);
-        // print!("*");
-        // io::stdout().flush().unwrap();
         } else {
             let victim = self.find_cache_victim(deqs, freq);
             if self.admit(&key, victim, freq) {
@@ -494,25 +550,11 @@ where
                 }
                 // Add the candidate to the deque.
                 deqs.push_back(CacheRegion::MainProbation, key, &entry);
-            // print!("+");
-            // io::stdout().flush().unwrap();
             } else {
                 // Remove the candidate from the cache.
                 self.cache.remove(&key);
-                // print!("-");
-                // io::stdout().flush().unwrap();
             }
         }
-    }
-
-    #[inline]
-    fn should_apply_reads(&self, ch_len: usize) -> bool {
-        ch_len >= READ_LOG_HIGH_WATER_MARK
-    }
-
-    #[inline]
-    fn should_apply_writes(&self, ch_len: usize) -> bool {
-        ch_len >= WRITE_LOG_HIGH_WATER_MARK
     }
 }
 
@@ -591,6 +633,22 @@ impl<K> Deques<K> {
     }
 }
 
+#[derive(PartialEq, Eq)]
+enum SyncPace {
+    Normal,
+    Fast,
+}
+
+impl SyncPace {
+    fn make_duration(&self) -> Duration {
+        use SyncPace::*;
+        match self {
+            Normal => Duration::from_micros(PERIODICAL_SYNC_NORMAL_PACE_MICROS),
+            Fast => Duration::from_nanos(PERIODICAL_SYNC_FAST_PACE_NANOS),
+        }
+    }
+}
+
 struct Housekeeper<K, V, S> {
     inner: Arc<Mutex<UnsafeWeakPointer>>,
     thread_pool: Arc<ThreadPool>,
@@ -638,26 +696,37 @@ where
         let inner_ptr = Arc::new(Mutex::new(UnsafeWeakPointer::from_weak_arc(inner)));
         let is_shutting_down = Arc::new(AtomicBool::new(false));
         let periodical_sync_running = Arc::new(Mutex::new(()));
+        let periodical_sync_pace = Arc::new(Mutex::new(SyncPace::Normal));
 
-        // The following Arc clones will be moved into the housekeeper closure.
-        let unsafe_weak_ptr = Arc::clone(&inner_ptr);
-        let shutting_down = Arc::clone(&is_shutting_down);
-        let sync_running = Arc::clone(&periodical_sync_running);
+        let housekeeper_closure = {
+            // The following Arc clones will be moved into the housekeeper closure.
+            let unsafe_weak_ptr = Arc::clone(&inner_ptr);
+            let shutting_down = Arc::clone(&is_shutting_down);
+            let sync_running = Arc::clone(&periodical_sync_running);
+            let sync_pace = Arc::clone(&periodical_sync_pace);
 
-        let housekeeper_closure = move || {
-            if !shutting_down.load(Ordering::Acquire) {
-                let _lock = sync_running.lock();
-                Self::call_sync(&unsafe_weak_ptr);
+            move || {
+                // To avoid dead-locking with other thread, acquire the lock at very beginning.
+                let mut sync_pace = sync_pace.lock();
+                if !shutting_down.load(Ordering::Acquire) {
+                    let _lock = sync_running.lock();
+                    if let Some(new_pace) = Self::call_sync(&unsafe_weak_ptr) {
+                        if *sync_pace != new_pace {
+                            *sync_pace = new_pace
+                        }
+                    }
+                }
+                // TODO: Check what would happen if the closure returns None.
+                Some(sync_pace.make_duration())
             }
         };
 
-        let initial_delay = Duration::from_secs(1);
-        let rate = Duration::from_millis(317);
+        let initial_delay = Duration::from_millis(PERIODICAL_SYNC_INITIAL_DELAY_MILLIS);
 
         // Execute a task in a worker thread.
         let job = thread_pool
             .pool
-            .execute_at_fixed_rate(initial_delay, rate, housekeeper_closure);
+            .execute_with_dynamic_delay(initial_delay, housekeeper_closure);
 
         Self {
             inner: inner_ptr,
@@ -707,18 +776,20 @@ where
     K: Clone + Eq + Hash,
     S: BuildHasher,
 {
-    fn call_sync(unsafe_weak_ptr: &Arc<Mutex<UnsafeWeakPointer>>) {
+    fn call_sync(unsafe_weak_ptr: &Arc<Mutex<UnsafeWeakPointer>>) -> Option<SyncPace> {
         let lock = unsafe_weak_ptr.lock();
         // Restore the Weak pointer to Inner<K, V, S>.
         let weak = unsafe { lock.as_weak_arc::<K, V, S>() };
         if let Some(inner) = weak.upgrade() {
             // TODO: Protect this call with catch_unwind().
-            inner.sync(MAX_SYNC_REPEATS);
+            let sync_pace = inner.sync(MAX_SYNC_REPEATS);
             // Avoid to drop the Arc<Inner<K, V, S>>.
             UnsafeWeakPointer::forget_arc(inner);
+            sync_pace
         } else {
             // Avoid to drop the Weak<Inner<K, V, S>>.
             UnsafeWeakPointer::forget_weak_arc(weak);
+            None
         }
     }
 }
