@@ -1,11 +1,11 @@
 #![warn(clippy::all)]
 #![warn(rust_2018_idioms)]
 
+mod cache;
 mod deque;
-mod lfu;
 mod thread_pool;
 
-pub use lfu::LFUCache;
+pub use cache::Cache;
 
 use std::sync::Arc;
 

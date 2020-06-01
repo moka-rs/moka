@@ -38,21 +38,21 @@ const PERIODICAL_SYNC_INITIAL_DELAY_MILLIS: u64 = 1_000;
 const PERIODICAL_SYNC_NORMAL_PACE_MICROS: u64 = 300_000;
 const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 
-pub struct LFUCache<K, V, S> {
+pub struct Cache<K, V, S> {
     inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
     write_op_ch: Sender<WriteOp<K, V>>,
     housekeeper: Option<Arc<Housekeeper<K, V, S>>>,
 }
 
-impl<K, V, S> Drop for LFUCache<K, V, S> {
+impl<K, V, S> Drop for Cache<K, V, S> {
     fn drop(&mut self) {
         // The housekeeper needs to be dropped before the inner is dropped.
         std::mem::drop(self.housekeeper.take());
     }
 }
 
-unsafe impl<K, V, S> Send for LFUCache<K, V, S>
+unsafe impl<K, V, S> Send for Cache<K, V, S>
 where
     K: Send + Sync,
     V: Send + Sync,
@@ -60,7 +60,7 @@ where
 {
 }
 
-unsafe impl<K, V, S> Sync for LFUCache<K, V, S>
+unsafe impl<K, V, S> Sync for Cache<K, V, S>
 where
     K: Send + Sync,
     V: Send + Sync,
@@ -68,7 +68,7 @@ where
 {
 }
 
-impl<K, V, S> Clone for LFUCache<K, V, S> {
+impl<K, V, S> Clone for Cache<K, V, S> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -79,18 +79,21 @@ impl<K, V, S> Clone for LFUCache<K, V, S> {
     }
 }
 
-impl<K, V> LFUCache<K, V, std::collections::hash_map::RandomState>
+impl<K, V> Cache<K, V, std::collections::hash_map::RandomState>
 where
     K: Clone + Eq + Hash,
 {
-    // TODO: Instead of taking capacity, take initial_capacity and max_capacity.
+    // TODO: Instead of taking the capacity as an argument, take the followings:
+    // - initial_capacity of the cache (hashmap)
+    // - max_capacity of the cache (hashmap)
+    // - estimated_max_unique_keys (for the frequency sketch)
     pub fn new(capacity: usize) -> Self {
         let build_hasher = std::collections::hash_map::RandomState::default();
         Self::with_hasher(capacity, build_hasher)
     }
 }
 
-impl<K, V, S> LFUCache<K, V, S>
+impl<K, V, S> Cache<K, V, S>
 where
     K: Clone + Eq + Hash,
     S: BuildHasher,
@@ -106,7 +109,7 @@ where
         let housekeeper = Housekeeper::new(Arc::downgrade(&inner));
 
         Self {
-            inner: Arc::clone(&inner),
+            inner,
             read_op_ch: r_snd,
             write_op_ch: w_snd,
             housekeeper: Some(Arc::new(housekeeper)),
@@ -126,7 +129,7 @@ where
     }
 }
 
-impl<K, V, S> ConcurrentCache<K, V> for LFUCache<K, V, S>
+impl<K, V, S> ConcurrentCache<K, V> for Cache<K, V, S>
 where
     K: Clone + Eq + Hash,
     S: BuildHasher,
@@ -228,7 +231,7 @@ where
 }
 
 // private methods
-impl<K, V, S> LFUCache<K, V, S>
+impl<K, V, S> Cache<K, V, S>
 where
     K: Clone + Eq + Hash,
     S: BuildHasher,
@@ -377,18 +380,18 @@ impl<K, V> ValueEntry<K, V> {
     }
 }
 
-type Cache<K, V, S> = cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
+type CacheStore<K, V, S> = cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
 
 struct Inner<K, V, S> {
     capacity: usize,
-    cache: Cache<K, V, S>,
+    cache: CacheStore<K, V, S>,
     deques: Mutex<Deques<K>>,
     frequency_sketch: RwLock<CountMinSketch8<K>>,
     read_op_ch: Receiver<ReadOp<K, V>>,
     write_op_ch: Receiver<WriteOp<K, V>>,
 }
 
-// functions/methods used by LFUCache
+// functions/methods used by Cache
 impl<K, V, S> Inner<K, V, S>
 where
     K: Clone + Eq + Hash,
@@ -852,12 +855,12 @@ impl Clone for UnsafeWeakPointer {
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
-    use super::{ConcurrentCache, LFUCache};
+    use super::{Cache, ConcurrentCache};
     use std::sync::Arc;
 
     #[test]
     fn basic_single_thread() {
-        let mut cache = LFUCache::new(3);
+        let mut cache = Cache::new(3);
         cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.
@@ -903,7 +906,7 @@ mod tests {
 
     #[test]
     fn basic_multi_threads() {
-        let mut cache = LFUCache::new(100);
+        let mut cache = Cache::new(100);
         cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.
