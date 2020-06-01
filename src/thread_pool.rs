@@ -41,8 +41,8 @@ impl ThreadPoolRegistry {
             {
                 let mut pools = REGISTRY.pools.write();
                 if !pools.contains_key(DEFAULT_POOL_NAME) {
-                    // Get the number of processor cores and use it for the worker count.
-                    let pool = ScheduledThreadPool::with_name("moka-default-{}", 4);
+                    let logical_cpu_cores = num_cpus::get();
+                    let pool = ScheduledThreadPool::with_name("moka-default-{}", logical_cpu_cores);
                     let t_pool = ThreadPool {
                         name: DEFAULT_POOL_NAME.to_string(),
                         pool,
