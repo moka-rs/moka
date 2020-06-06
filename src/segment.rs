@@ -65,7 +65,9 @@ where
     ///
     /// Panics if `num_segments` is 0.
     pub fn with_hasher(capacity: usize, num_segments: usize, build_hasher: S) -> Self {
-        Self { inner: Arc::new(Inner::new(capacity, num_segments, build_hasher)) }
+        Self {
+            inner: Arc::new(Inner::new(capacity, num_segments, build_hasher)),
+        }
     }
 
     /// This is used by unit tests to get consistent result.
@@ -163,7 +165,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{SegmentedCache, ConcurrentCache};
+    use super::{ConcurrentCache, SegmentedCache};
     use std::sync::Arc;
 
     #[test]
