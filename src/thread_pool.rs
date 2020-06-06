@@ -10,12 +10,13 @@ lazy_static! {
     static ref REGISTRY: ThreadPoolRegistry = ThreadPoolRegistry::default();
 }
 
-pub struct ThreadPool {
-    pub name: String,
-    pub pool: ScheduledThreadPool,
+pub(crate) struct ThreadPool {
+    pub(crate) name: String,
+    pub(crate) pool: ScheduledThreadPool,
+    // pub(crate) num_threads: usize,
 }
 
-pub struct ThreadPoolRegistry {
+pub(crate) struct ThreadPoolRegistry {
     pools: RwLock<HashMap<String, Arc<ThreadPool>>>,
 }
 
@@ -41,11 +42,12 @@ impl ThreadPoolRegistry {
             {
                 let mut pools = REGISTRY.pools.write();
                 if !pools.contains_key(DEFAULT_POOL_NAME) {
-                    let logical_cpu_cores = num_cpus::get();
-                    let pool = ScheduledThreadPool::with_name("moka-default-{}", logical_cpu_cores);
+                    let num_threads = num_cpus::get();
+                    let pool = ScheduledThreadPool::with_name("moka-default-{}", num_threads);
                     let t_pool = ThreadPool {
                         name: DEFAULT_POOL_NAME.to_string(),
                         pool,
+                        // num_threads,
                     };
                     pools.insert(DEFAULT_POOL_NAME.to_string(), Arc::new(t_pool));
                 }

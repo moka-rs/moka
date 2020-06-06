@@ -3,9 +3,11 @@
 
 mod cache;
 mod deque;
+mod segment;
 mod thread_pool;
 
 pub use cache::Cache;
+pub use segment::SegmentedCache;
 
 use std::sync::Arc;
 

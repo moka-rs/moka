@@ -905,13 +905,15 @@ mod tests {
 
     #[test]
     fn basic_multi_threads() {
+        let num_threads = 4;
+
         let mut cache = Cache::new(100);
         cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.
         let cache = cache;
 
-        let handles = (0..4)
+        let handles = (0..num_threads)
             .map(|id| {
                 let cache = cache.clone();
                 std::thread::spawn(move || {
