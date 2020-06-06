@@ -5,7 +5,7 @@ use crate::{
 };
 
 use count_min_sketch::CountMinSketch8;
-use crossbeam_channel::{Receiver, SendError, Sender};
+use crossbeam_channel::{Receiver, Sender, TrySendError};
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use scheduled_thread_pool::JobHandle;
 use std::{
@@ -34,8 +34,8 @@ const WRITE_LOG_SIZE: usize = WRITE_LOG_FLUSH_POINT * (MAX_SYNC_REPEATS + 2);
 const WRITE_THROTTLE_MICROS: u64 = 15;
 const WRITE_RETRY_INTERVAL_MICROS: u64 = 50;
 
-const PERIODICAL_SYNC_INITIAL_DELAY_MILLIS: u64 = 1_000;
-const PERIODICAL_SYNC_NORMAL_PACE_MICROS: u64 = 300_000;
+const PERIODICAL_SYNC_INITIAL_DELAY_MILLIS: u64 = 500;
+const PERIODICAL_SYNC_NORMAL_PACE_MILLIS: u64 = 300;
 const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 
 pub struct Cache<K, V, S> {
@@ -176,7 +176,7 @@ where
         // on_modify closures can be executed more than once. In order to
         // identify the last call of these closures, we use a shared counter
         // (op_cnt{1,2}) here to record a serial number on a WriteOp, and
-        // consider the WriteOp with the largest serial number is the one  made
+        // consider the WriteOp with the largest serial number is the one made
         // by the last call of the closures.
         self.inner.cache.insert_with_or_modify(
             Arc::clone(&key),
@@ -241,21 +241,26 @@ where
         &self,
         key: &K,
         entry: Option<Arc<ValueEntry<K, V>>>,
-    ) -> Result<(), SendError<K>> {
+    ) -> Result<(), TrySendError<ReadOp<K, V>>> {
         use ReadOp::*;
         self.apply_reads_if_needed();
         let ch = &self.read_op_ch;
-        if let Some(entry) = entry {
-            let _ = ch.try_send(Hit(key.clone(), entry)); // Ignore Result<_, _>.
+        let op = if let Some(entry) = entry {
+            Hit(key.clone(), entry)
         } else {
-            let _ = ch.try_send(Miss(key.clone())); // Ignore Result<_, _>.
+            Miss(key.clone())
+        };
+        match ch.try_send(op) {
+            // Discard the ReadOp when the channel is full.
+            Ok(()) | Err(TrySendError::Full(_)) => Ok(()),
+            Err(e @ TrySendError::Disconnected(_)) => Err(e),
         }
-        Ok(())
     }
 
     #[inline]
-    fn schedule_insert_op(&self, op: WriteOp<K, V>) -> Result<(), SendError<WriteOp<K, V>>> {
+    fn schedule_insert_op(&self, op: WriteOp<K, V>) -> Result<(), TrySendError<WriteOp<K, V>>> {
         let ch = &self.write_op_ch;
+        let mut op = op;
 
         // NOTES:
         // - This will block when the channel is full.
@@ -263,10 +268,13 @@ where
         //   but we got a notable performance degradation.
         loop {
             self.apply_reads_writes_if_needed();
-            match ch.try_send(op.clone()) {
+            match ch.try_send(op) {
                 Ok(()) => break,
-                // TODO: Return an error when the channel is closed.
-                Err(_) => std::thread::sleep(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS)),
+                Err(TrySendError::Full(op1)) => {
+                    op = op1;
+                    std::thread::sleep(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS));
+                }
+                Err(e @ TrySendError::Disconnected(_)) => return Err(e),
             }
         }
         Ok(())
@@ -276,9 +284,9 @@ where
     fn schedule_remove_op(
         &self,
         entry: Arc<ValueEntry<K, V>>,
-    ) -> Result<(), SendError<WriteOp<K, V>>> {
+    ) -> Result<(), TrySendError<WriteOp<K, V>>> {
         let ch = &self.write_op_ch;
-        let op = WriteOp::Remove(entry);
+        let mut op = WriteOp::Remove(entry);
 
         // NOTES:
         // - This will block when the channel is full.
@@ -286,10 +294,13 @@ where
         //   `schedule_insert_op()`.
         loop {
             self.apply_reads_writes_if_needed();
-            match ch.try_send(op.clone()) {
+            match ch.try_send(op) {
                 Ok(()) => break,
-                // TODO: Return an error when the channel is closed.
-                Err(_) => std::thread::sleep(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS)),
+                Err(TrySendError::Full(op1)) => {
+                    op = op1;
+                    std::thread::sleep(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS));
+                }
+                Err(e @ TrySendError::Disconnected(_)) => return Err(e),
             }
         }
         Ok(())
@@ -352,18 +363,6 @@ enum WriteOp<K, V> {
     Insert(Arc<K>, Arc<ValueEntry<K, V>>),
     Update(Arc<ValueEntry<K, V>>),
     Remove(Arc<ValueEntry<K, V>>),
-}
-
-// We need an explicit Clone impl because #[derive(Clone)] requires K and V are Clone.
-impl<K, V> Clone for WriteOp<K, V> {
-    fn clone(&self) -> Self {
-        use WriteOp::*;
-        match self {
-            Insert(k, ent) => Insert(Arc::clone(k), Arc::clone(ent)),
-            Update(ent) => Update(Arc::clone(ent)),
-            Remove(ent) => Remove(Arc::clone(ent)),
-        }
-    }
 }
 
 struct ValueEntry<K, V> {
@@ -646,7 +645,7 @@ impl SyncPace {
     fn make_duration(&self) -> Duration {
         use SyncPace::*;
         match self {
-            Normal => Duration::from_micros(PERIODICAL_SYNC_NORMAL_PACE_MICROS),
+            Normal => Duration::from_millis(PERIODICAL_SYNC_NORMAL_PACE_MILLIS),
             Fast => Duration::from_nanos(PERIODICAL_SYNC_FAST_PACE_NANOS),
         }
     }
