@@ -32,10 +32,11 @@ features are not implemented and the API will change very often.
 
 ## Requirements
 
-- Rust 1.41.1 or newer.
+- Rust 1.43.1 or newer.
 
 <!--
-This is because cht crate requires 1.41.
+- aHash 0.5 requires 1.43.
+- cht requires 1.41.
 -->
 
 <!--
