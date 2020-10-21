@@ -12,7 +12,7 @@ repository = "https://github.com/moka-rs/moka"
 keywords = ["concurrent", "cache"]
 categories = ["concurrency", "caching"]
 readme = "README.md"
-exclude = [".github", ".vscode"]
+exclude = [".devcontainer", ".github", ".vscode"]
 
 [dependencies]
 cht = "0.4"
