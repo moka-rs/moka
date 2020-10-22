@@ -70,14 +70,14 @@ where
         }
     }
 
-    /// This is used by unit tests to get consistent result.
-    #[cfg(test)]
-    pub(crate) fn reconfigure_for_testing(&mut self) {
+    // /// This is used by unit tests to get consistent result.
+    // #[cfg(test)]
+    // pub(crate) fn reconfigure_for_testing(&mut self) {
         // Stop the housekeeping job that may cause sync() method to return earlier.
         // for segment in self.inner.segments.iter_mut() {
         //     segment.reconfigure_for_testing()
         // }
-    }
+    // }
 }
 
 impl<K, V, S> ConcurrentCache<K, V> for SegmentedCache<K, V, S>
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn basic_single_thread() {
-        let mut cache = SegmentedCache::new(3, 1);
+        let cache = SegmentedCache::new(3, 1);
         // cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.
@@ -218,7 +218,7 @@ mod tests {
     fn basic_multi_threads() {
         let num_threads = 4;
 
-        let mut cache = SegmentedCache::new(100, num_threads);
+        let cache = SegmentedCache::new(100, num_threads);
         // cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.
