@@ -73,10 +73,10 @@ where
     // /// This is used by unit tests to get consistent result.
     // #[cfg(test)]
     // pub(crate) fn reconfigure_for_testing(&mut self) {
-        // Stop the housekeeping job that may cause sync() method to return earlier.
-        // for segment in self.inner.segments.iter_mut() {
-        //     segment.reconfigure_for_testing()
-        // }
+    //     // Stop the housekeeping job that may cause sync() method to return earlier.
+    //     for segment in self.inner.segments.iter_mut() {
+    //         segment.reconfigure_for_testing()
+    //     }
     // }
 }
 
