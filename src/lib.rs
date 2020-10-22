@@ -1,6 +1,10 @@
 #![warn(clippy::all)]
 #![warn(rust_2018_idioms)]
 
+//! Moka is (aiming to be) a fast, concurrent cache library for Rust.
+//! Moka is inspired by [Caffeine][caffeine-git] (Java) and
+//! [Ristretto][ristretto-git] (Go).
+//!
 //! This crate provides in-memory concurrent cache implementations
 //! [`Cache`][cache-struct] and [`SegmentedCache`][seg-cache-struct].
 //! They support full concurrency of retrievals and a high expected
@@ -19,13 +23,20 @@
 //! However, `SegmentedCache` has little overheads on
 //! retrievals/updates for managing multiple internal segments.
 //!
+//! [caffeine-git]: https://github.com/ben-manes/caffeine
+//! [ristretto-git]: https://github.com/dgraph-io/ristretto
 //! [cache-struct]: ./struct.Cache.html
 //! [seg-cache-struct]: ./struct.SegmentedCache.html
 //! [cht-crate]: https://crates.io/crates/cht
 //!
+//! ## Status
+//!
+//! Moka is currently in a very early stage of development (design and PoC). Many
+//! features are not implemented and the API will change very often.
+//!
 //! ## Example
 //!
-//!
+//! TODO
 //!
 //! ## Concurrency
 //!
