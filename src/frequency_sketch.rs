@@ -84,10 +84,8 @@ impl FrequencySketch {
         let table_mask = 0.max(table_size - 1);
         let sample_size = if cap == 0 {
             10
-        } else if let Some(n) = maximum.checked_mul(10) {
-            n
         } else {
-            i32::MAX as usize
+            maximum.saturating_mul(10).min(i32::MAX as usize)
         };
         Self {
             sample_size,
