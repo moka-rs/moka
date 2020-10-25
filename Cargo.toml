@@ -23,3 +23,6 @@ lazy_static = "1.4"
 num_cpus = "1.13"
 parking_lot = "0.10"
 scheduled-thread-pool = "0.2"
+
+[dev-dependencies]
+getrandom = "0.2"

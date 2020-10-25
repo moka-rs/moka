@@ -686,7 +686,7 @@ impl<K, V, S> Drop for Housekeeper<K, V, S> {
     }
 }
 
-// functions/methods used by LFUCache
+// functions/methods used by Cache
 impl<K, V, S> Housekeeper<K, V, S>
 where
     K: Clone + Eq + Hash,
@@ -801,7 +801,7 @@ where
 ///
 /// This struct exists with the sole purpose of avoiding compile
 /// errors relevant to the thread pool usages. The thread pool
-/// requires that the generic parameters on the `LFUCache` and `Inner`
+/// requires that the generic parameters on the `Cache` and `Inner`
 /// structs to have trait bounds `Send`, `Sync` and `'static`. This
 /// will be unacceptable for many cache usages.
 ///

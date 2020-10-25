@@ -124,6 +124,7 @@
 
 mod cache;
 mod deque;
+mod frequency_sketch;
 mod segment;
 mod thread_pool;
 
