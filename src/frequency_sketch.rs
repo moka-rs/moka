@@ -54,17 +54,17 @@ pub(crate) struct FrequencySketch {
 // A mixture of seeds from FNV-1a, CityHash, and Murmur3. (Taken from Caffeine)
 #[allow(dead_code)]
 static SEED: [u64; 4] = [
-    0xc3a5c85c97cb3127,
-    0xb492b66fbe98f273,
-    0x9ae16a3b2f90404f,
-    0xcbf29ce484222325,
+    0xc3a5_c85c_97cb_3127,
+    0xb492_b66f_be98_f273,
+    0x9ae1_6a3b_2f90_404f,
+    0xcbf2_9ce4_8422_2325,
 ];
 
 #[allow(dead_code)]
-static RESET_MASK: u64 = 0x7777777777777777;
+static RESET_MASK: u64 = 0x7777_7777_7777_7777;
 
 #[allow(dead_code)]
-static ONE_MASK: u64 = 0x1111111111111111;
+static ONE_MASK: u64 = 0x1111_1111_1111_1111;
 
 impl FrequencySketch {
     /// Creates a frequency sketch with the capacity.
@@ -157,7 +157,7 @@ impl FrequencySketch {
     /// Returns the table index for the counter at the specified depth.
     fn index_of(&self, hash: u64, depth: u8) -> usize {
         let i = depth as usize;
-        let mut hash = (hash.wrapping_add(SEED[i])).wrapping_mul(SEED[i]);
+        let mut hash = hash.wrapping_add(SEED[i]).wrapping_mul(SEED[i]);
         hash += hash >> 32;
         hash as usize & self.table_mask
     }
