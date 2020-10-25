@@ -14,7 +14,6 @@
 /// A probabilistic multi-set for estimating the popularity of an element within
 /// a time window. The maximum frequency of an element is limited to 15 (4-bits)
 /// and an aging process periodically halves the popularity of all elements.
-#[allow(dead_code)]
 pub(crate) struct FrequencySketch {
     sample_size: usize,
     table_mask: usize,
@@ -23,7 +22,6 @@ pub(crate) struct FrequencySketch {
 }
 
 // A mixture of seeds from FNV-1a, CityHash, and Murmur3. (Taken from Caffeine)
-#[allow(dead_code)]
 static SEED: [u64; 4] = [
     0xc3a5_c85c_97cb_3127,
     0xb492_b66f_be98_f273,
@@ -31,10 +29,8 @@ static SEED: [u64; 4] = [
     0xcbf2_9ce4_8422_2325,
 ];
 
-#[allow(dead_code)]
 static RESET_MASK: u64 = 0x7777_7777_7777_7777;
 
-#[allow(dead_code)]
 static ONE_MASK: u64 = 0x1111_1111_1111_1111;
 
 // -------------------------------------------------------------------------------
@@ -72,7 +68,6 @@ static ONE_MASK: u64 = 0x1111_1111_1111_1111;
 
 impl FrequencySketch {
     /// Creates a frequency sketch with the capacity.
-    #[allow(dead_code)]
     pub(crate) fn with_capacity(cap: usize) -> Self {
         let maximum = cap.min((i32::MAX >> 1) as usize);
         let table_size = if maximum == 0 {
@@ -97,7 +92,6 @@ impl FrequencySketch {
 
     /// Takes the hash value of an element, and returns the estimated number of
     /// occurrences of the element, up to the maximum (15).
-    #[allow(dead_code)]
     pub(crate) fn frequency(&self, hash: u64) -> u8 {
         let start = ((hash & 3) << 2) as u8;
         let mut frequency = std::u8::MAX;
@@ -114,7 +108,6 @@ impl FrequencySketch {
     /// elements will be periodically down sampled when the observed events
     /// exceeds a threshold. This process provides a frequency aging to allow
     /// expired long term entries to fade away.
-    #[allow(dead_code)]
     pub(crate) fn increment(&mut self, hash: u64) {
         let start = ((hash & 3) << 2) as u8;
         let mut added = false;

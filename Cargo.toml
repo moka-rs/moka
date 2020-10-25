@@ -16,7 +16,6 @@ exclude = [".devcontainer", ".github", ".vscode"]
 
 [dependencies]
 cht = "0.4"
-count-min-sketch = "0.1"
 crossbeam-channel = "0.4"
 # hierarchical_hash_wheel_timer = "1.0"
 lazy_static = "1.4"

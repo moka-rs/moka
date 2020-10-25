@@ -35,7 +35,7 @@ impl<K, V, S> Clone for SegmentedCache<K, V, S> {
 
 impl<K, V> SegmentedCache<K, V, std::collections::hash_map::RandomState>
 where
-    K: Clone + Eq + Hash,
+    K: Eq + Hash,
 {
     // TODO: Instead of taking the capacity as an argument, take the followings:
     // - initial_capacity of the cache (hashmap)
@@ -53,7 +53,7 @@ where
 
 impl<K, V, S> SegmentedCache<K, V, S>
 where
-    K: Clone + Eq + Hash,
+    K: Eq + Hash,
     S: BuildHasher + Clone,
 {
     // TODO: Instead of taking the capacity as an argument, take the followings:
@@ -82,19 +82,22 @@ where
 
 impl<K, V, S> ConcurrentCache<K, V> for SegmentedCache<K, V, S>
 where
-    K: Clone + Eq + Hash,
+    K: Eq + Hash,
     S: BuildHasher + Clone,
 {
     fn get(&self, key: &K) -> Option<Arc<V>> {
-        self.inner.select(key).get(key)
+        let hash = self.inner.hash(key);
+        self.inner.select(hash).get_with_hash(key, hash)
     }
 
     fn insert(&self, key: K, value: V) {
-        self.inner.select(&key).insert(key, value)
+        let hash = self.inner.hash(&key);
+        self.inner.select(hash).insert_with_hash(key, hash, value)
     }
 
     fn remove(&self, key: &K) -> Option<Arc<V>> {
-        self.inner.select(key).remove(key)
+        let hash = self.inner.hash(key);
+        self.inner.select(hash).remove(key)
     }
 
     fn sync(&self) {
@@ -112,7 +115,7 @@ struct Inner<K, V, S> {
 
 impl<K, V, S> Inner<K, V, S>
 where
-    K: Clone + Eq + Hash,
+    K: Eq + Hash,
     S: BuildHasher + Clone,
 {
     /// # Panics
@@ -147,8 +150,7 @@ where
     }
 
     #[inline]
-    fn select(&self, key: &K) -> &Cache<K, V, S> {
-        let hash = self.hash(key);
+    fn select(&self, hash: u64) -> &Cache<K, V, S> {
         let index = self.segment_index_from_hash(hash);
         &self.segments[index]
     }
