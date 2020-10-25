@@ -11,7 +11,40 @@
 // For full authorship information, see the version control history of
 // https://github.com/ben-manes/caffeine/
 
-// This class maintains a 4-bit CountMinSketch [1] with periodic aging to
+
+/// A probabilistic multi-set for estimating the popularity of an element within
+/// a time window. The maximum frequency of an element is limited to 15 (4-bits)
+/// and an aging process periodically halves the popularity of all elements.
+#[allow(dead_code)]
+pub(crate) struct FrequencySketch {
+    sample_size: usize,
+    table_mask: usize,
+    table: Vec<u64>,
+    size: usize,
+}
+
+// A mixture of seeds from FNV-1a, CityHash, and Murmur3. (Taken from Caffeine)
+#[allow(dead_code)]
+static SEED: [u64; 4] = [
+    0xc3a5_c85c_97cb_3127,
+    0xb492_b66f_be98_f273,
+    0x9ae1_6a3b_2f90_404f,
+    0xcbf2_9ce4_8422_2325,
+];
+
+#[allow(dead_code)]
+static RESET_MASK: u64 = 0x7777_7777_7777_7777;
+
+#[allow(dead_code)]
+static ONE_MASK: u64 = 0x1111_1111_1111_1111;
+
+// -------------------------------------------------------------------------------
+// Some of the code and doc comments in this module were ported or copied from
+// a Java class `com.github.benmanes.caffeine.cache.FrequencySketch` of Caffeine.
+// https://github.com/ben-manes/caffeine/blob/master/caffeine/src/main/java/com/github/benmanes/caffeine/cache/FrequencySketch.java
+// -------------------------------------------------------------------------------
+//
+// FrequencySketch maintains a 4-bit CountMinSketch [1] with periodic aging to
 // provide the popularity history for the TinyLfu admission policy [2].
 // The time and space efficiency of the sketch allows it to cheaply estimate the
 // frequency of an entry in a stream of cache access events.
@@ -35,36 +68,8 @@
 //     http://dimacs.rutgers.edu/~graham/pubs/papers/cm-full.pdf
 // [2] TinyLFU: A Highly Efficient Cache Admission Policy
 //     https://dl.acm.org/citation.cfm?id=3149371
-
-/// A probabilistic multi-set for estimating the popularity of an element within
-/// a time window. The maximum frequency of an element is limited to 15 (4-bits)
-/// and an aging process periodically halves the popularity of all elements.
-#[allow(dead_code)]
-pub(crate) struct FrequencySketch {
-    // int sampleSize;
-    sample_size: usize,
-    // int tableMask;
-    table_mask: usize,
-    // long[] table;
-    table: Vec<u64>,
-    // int size;
-    size: usize,
-}
-
-// A mixture of seeds from FNV-1a, CityHash, and Murmur3. (Taken from Caffeine)
-#[allow(dead_code)]
-static SEED: [u64; 4] = [
-    0xc3a5_c85c_97cb_3127,
-    0xb492_b66f_be98_f273,
-    0x9ae1_6a3b_2f90_404f,
-    0xcbf2_9ce4_8422_2325,
-];
-
-#[allow(dead_code)]
-static RESET_MASK: u64 = 0x7777_7777_7777_7777;
-
-#[allow(dead_code)]
-static ONE_MASK: u64 = 0x1111_1111_1111_1111;
+//
+// -------------------------------------------------------------------------------
 
 impl FrequencySketch {
     /// Creates a frequency sketch with the capacity.
