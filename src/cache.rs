@@ -750,24 +750,23 @@ where
         }
 
         // Try to flip the value of sync_scheduled from false to true.
-        // compare_and_swap() (CAS) returns the previous value:
-        // - if true  => this CAS operation has failed.    (true  -> unchanged)
-        // - if false => this CAS operation has succeeded. (false -> true)
-        let prev = self
-            .on_demand_sync_scheduled
-            .compare_and_swap(false, true, Ordering::Acquire);
-
-        if prev {
-            false
-        } else {
-            let unsafe_weak_ptr = Arc::clone(&self.inner);
-            let sync_scheduled = Arc::clone(&self.on_demand_sync_scheduled);
-            // Execute a task in a worker thread.
-            self.thread_pool.pool.execute(move || {
-                Self::call_sync(&unsafe_weak_ptr);
-                sync_scheduled.store(false, Ordering::Release);
-            });
-            true
+        match self.on_demand_sync_scheduled.compare_exchange(
+            false,
+            true,
+            Ordering::Acquire,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => {
+                let unsafe_weak_ptr = Arc::clone(&self.inner);
+                let sync_scheduled = Arc::clone(&self.on_demand_sync_scheduled);
+                // Execute a task in a worker thread.
+                self.thread_pool.pool.execute(move || {
+                    Self::call_sync(&unsafe_weak_ptr);
+                    sync_scheduled.store(false, Ordering::Release);
+                });
+                true
+            }
+            Err(_) => false,
         }
     }
 }
