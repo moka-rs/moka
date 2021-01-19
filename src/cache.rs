@@ -155,7 +155,7 @@ where
             || {
                 let entry = Arc::new(ValueEntry::new(Arc::clone(&value), None));
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
-                op1 = Some((cnt, WriteOp::Insert(key, hash, entry.clone())));
+                op1 = Some((cnt, WriteOp::Insert(KeyHash::new(key, hash), entry.clone())));
                 entry
             },
             // on_modify
@@ -363,18 +363,29 @@ where
     }
 }
 
+struct KeyHash<K> {
+    key: Arc<K>,
+    hash: u64,
+}
+
+impl<K> KeyHash<K> {
+    fn new(key: Arc<K>, hash: u64) -> Self {
+        Self { key, hash }
+    }
+}
+
 enum ReadOp<K, V> {
     Hit(u64, Arc<ValueEntry<K, V>>),
     Miss(u64),
 }
 
 enum WriteOp<K, V> {
-    Insert(Arc<K>, u64, Arc<ValueEntry<K, V>>),
+    Insert(KeyHash<K>, Arc<ValueEntry<K, V>>),
     Update(Arc<ValueEntry<K, V>>),
     Remove(Arc<ValueEntry<K, V>>),
 }
 
-type KeyDeqNode<K> = Option<NonNull<DeqNode<(Arc<K>, u64)>>>;
+type KeyDeqNode<K> = Option<NonNull<DeqNode<KeyHash<K>>>>;
 
 struct ValueEntry<K, V> {
     value: Arc<V>,
@@ -469,7 +480,7 @@ where
         let ch = &self.write_op_ch;
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Insert(key, hash, entry)) => self.handle_insert(key, hash, entry, deqs, &freq),
+                Ok(Insert(kh, entry)) => self.handle_insert(kh, entry, deqs, &freq),
                 Ok(Update(entry)) => deqs.move_to_back(entry),
                 Ok(Remove(entry)) => deqs.unlink(entry),
                 Err(_) => break,
@@ -496,13 +507,13 @@ where
     #[inline]
     fn admit(
         &self,
-        candidate: u64,
-        victim: &DeqNode<(Arc<K>, u64)>,
+        candidate_hash: u64,
+        victim: &DeqNode<KeyHash<K>>,
         freq: &FrequencySketch,
     ) -> bool {
         // TODO: Implement some randomness to mitigate hash DoS attack.
         // See Caffeine's implementation.
-        freq.frequency(candidate) > freq.frequency(victim.element.1)
+        freq.frequency(candidate_hash) > freq.frequency(victim.element.hash)
     }
 
     fn do_sync(&self, mut deqs: MutexGuard<'_, Deques<K>>, max_repeats: usize) -> Option<SyncPace> {
@@ -540,7 +551,7 @@ where
         &self,
         deqs: &'a mut Deques<K>,
         _freq: &FrequencySketch,
-    ) -> &'a DeqNode<(Arc<K>, u64)> {
+    ) -> &'a DeqNode<KeyHash<K>> {
         // TODO: Check its frequency. If it is not very low, maybe we should
         // check frequencies of next few others and pick from them.
         deqs.probation.peek_front().expect("No victim found")
@@ -549,18 +560,17 @@ where
     #[inline]
     fn handle_insert(
         &self,
-        key: Arc<K>,
-        hash: u64,
+        kh: KeyHash<K>,
         entry: Arc<ValueEntry<K, V>>,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
     ) {
         if self.cache.len() <= self.capacity {
             // Add the candidate to the deque.
-            deqs.push_back(CacheRegion::MainProbation, key, hash, &entry);
+            deqs.push_back(CacheRegion::MainProbation, kh, &entry);
         } else {
             let victim = self.find_cache_victim(deqs, freq);
-            if self.admit(hash, victim, freq) {
+            if self.admit(kh.hash, victim, freq) {
                 // Remove the victim from the cache and deque.
                 //
                 // TODO: Check if the selected victim was actually removed. If not,
@@ -568,26 +578,26 @@ where
                 // could have been already removed from the cache but the removal
                 // from the deque is still on the write operations queue and is not
                 // yet executed.
-                if let Some(vic_entry) = self.cache.remove(&victim.element.0) {
+                if let Some(vic_entry) = self.cache.remove(&victim.element.key) {
                     deqs.unlink(vic_entry);
                 } else {
                     let victim = NonNull::from(victim);
                     deqs.unlink_node(victim)
                 }
                 // Add the candidate to the deque.
-                deqs.push_back(CacheRegion::MainProbation, key, hash, &entry);
+                deqs.push_back(CacheRegion::MainProbation, kh, &entry);
             } else {
                 // Remove the candidate from the cache.
-                self.cache.remove(&key);
+                self.cache.remove(&kh.key);
             }
         }
     }
 }
 
 struct Deques<K> {
-    window: Deque<(Arc<K>, u64)>, //    Not yet used.
-    probation: Deque<(Arc<K>, u64)>,
-    protected: Deque<(Arc<K>, u64)>, // Not yet used.
+    window: Deque<KeyHash<K>>, //    Not yet used.
+    probation: Deque<KeyHash<K>>,
+    protected: Deque<KeyHash<K>>, // Not yet used.
 }
 
 impl<K> Default for Deques<K> {
@@ -601,15 +611,9 @@ impl<K> Default for Deques<K> {
 }
 
 impl<K> Deques<K> {
-    fn push_back<V>(
-        &mut self,
-        region: CacheRegion,
-        key: Arc<K>,
-        hash: u64,
-        entry: &Arc<ValueEntry<K, V>>,
-    ) {
+    fn push_back<V>(&mut self, region: CacheRegion, kh: KeyHash<K>, entry: &Arc<ValueEntry<K, V>>) {
         use CacheRegion::*;
-        let node = Box::new(DeqNode::new(region, (key, hash)));
+        let node = Box::new(DeqNode::new(region, kh));
         let node = match node.as_ref().region {
             Window => self.window.push_back(node),
             MainProbation => self.probation.push_back(node),
@@ -648,7 +652,7 @@ impl<K> Deques<K> {
         }
     }
 
-    fn unlink_node(&mut self, node: NonNull<DeqNode<(Arc<K>, u64)>>) {
+    fn unlink_node(&mut self, node: NonNull<DeqNode<KeyHash<K>>>) {
         use CacheRegion::*;
         unsafe {
             let p = node.as_ref();
