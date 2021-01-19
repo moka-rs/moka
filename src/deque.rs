@@ -12,7 +12,7 @@
 // For full authorship information, see the version control history of
 // https://github.com/rust-lang/rust/ or https://thanks.rust-lang.org
 
-use std::{marker::PhantomData, ptr::NonNull, sync::Arc};
+use std::{marker::PhantomData, ptr::NonNull};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CacheRegion {
@@ -26,7 +26,7 @@ pub(crate) struct DeqNode<T> {
     pub(crate) region: CacheRegion,
     next: Option<NonNull<DeqNode<T>>>,
     prev: Option<NonNull<DeqNode<T>>>,
-    pub(crate) element: Arc<T>,
+    pub(crate) element: T,
 }
 
 impl<T> std::fmt::Debug for DeqNode<T> {
@@ -40,7 +40,7 @@ impl<T> std::fmt::Debug for DeqNode<T> {
 }
 
 impl<T> DeqNode<T> {
-    pub(crate) fn new(region: CacheRegion, element: Arc<T>) -> Self {
+    pub(crate) fn new(region: CacheRegion, element: T) -> Self {
         Self {
             region,
             next: None,
@@ -277,7 +277,6 @@ impl<T> Deque<T> {
 #[cfg(test)]
 mod tests {
     use super::{CacheRegion::MainProbation, DeqNode, Deque};
-    use std::sync::Arc;
 
     #[test]
     #[allow(clippy::cognitive_complexity)]
@@ -288,7 +287,7 @@ mod tests {
         assert!(deque.peek_back().is_none());
 
         // push_back(node1)
-        let node1 = DeqNode::new(MainProbation, Arc::new("a".into()));
+        let node1 = DeqNode::new(MainProbation, "a".to_string());
         assert!(!deque.contains(&node1));
         let node1 = Box::new(node1);
         let node1_ptr = deque.push_back(node1);
@@ -299,7 +298,7 @@ mod tests {
         assert!(deque.contains(&head_a));
         assert!(deque.is_head(&head_a));
         assert!(deque.is_tail(&head_a));
-        assert_eq!(head_a.element, Arc::new("a".into()));
+        assert_eq!(head_a.element, "a".to_string());
 
         // move_to_back(node1)
         unsafe { deque.move_to_back(node1_ptr.clone()) };
@@ -324,7 +323,7 @@ mod tests {
         assert!(tail_a.next.is_none());
 
         // push_back(node2)
-        let node2 = DeqNode::new(MainProbation, Arc::new("b".into()));
+        let node2 = DeqNode::new(MainProbation, "b".to_string());
         assert!(!deque.contains(&node2));
         let node2_ptr = deque.push_back(Box::new(node2));
         assert_eq!(deque.len(), 2);
@@ -367,7 +366,7 @@ mod tests {
             unsafe { tail_b.prev.unwrap().as_ref() },
             unsafe { node1_ptr.as_ref() }
         ));
-        assert_eq!(tail_b.element, Arc::new("b".into()));
+        assert_eq!(tail_b.element, "b".to_string());
         assert!(tail_b.next.is_none());
 
         // move_to_back(node1)
@@ -399,7 +398,7 @@ mod tests {
         assert!(tail_c.next.is_none());
 
         // push_back(node3)
-        let node3 = DeqNode::new(MainProbation, Arc::new("c".into()));
+        let node3 = DeqNode::new(MainProbation, "c".to_string());
         assert!(!deque.contains(&node3));
         let node3_ptr = deque.push_back(Box::new(node3));
         assert_eq!(deque.len(), 3);
@@ -419,7 +418,7 @@ mod tests {
         // peek_back() -> node3
         let tail_d = deque.peek_back().unwrap();
         assert!(std::ptr::eq(tail_d, unsafe { node3_ptr.as_ref() }));
-        assert_eq!(tail_d.element, Arc::new("c".into()));
+        assert_eq!(tail_d.element, "c".to_string());
         assert!(deque.contains(&tail_d));
         assert!(!deque.is_head(&tail_d));
         assert!(deque.is_tail(&tail_d));
@@ -555,10 +554,10 @@ mod tests {
         let mut deque: Deque<X> = Deque::new(MainProbation);
         let dropped = Rc::new(RefCell::new(Vec::default()));
 
-        let node1 = DeqNode::new(MainProbation, Arc::new(X(1, Rc::clone(&dropped))));
-        let node2 = DeqNode::new(MainProbation, Arc::new(X(2, Rc::clone(&dropped))));
-        let node3 = DeqNode::new(MainProbation, Arc::new(X(3, Rc::clone(&dropped))));
-        let node4 = DeqNode::new(MainProbation, Arc::new(X(4, Rc::clone(&dropped))));
+        let node1 = DeqNode::new(MainProbation, X(1, Rc::clone(&dropped)));
+        let node2 = DeqNode::new(MainProbation, X(2, Rc::clone(&dropped)));
+        let node3 = DeqNode::new(MainProbation, X(3, Rc::clone(&dropped)));
+        let node4 = DeqNode::new(MainProbation, X(4, Rc::clone(&dropped)));
         deque.push_back(Box::new(node1));
         deque.push_back(Box::new(node2));
         deque.push_back(Box::new(node3));

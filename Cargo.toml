@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.1.0-alpha.1"
+version = "0.1.0-alpha.2"
 authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
 
@@ -16,10 +16,12 @@ exclude = [".devcontainer", ".github", ".vscode"]
 
 [dependencies]
 cht = "0.4"
-count-min-sketch = "0.1"
 crossbeam-channel = "0.4"
 # hierarchical_hash_wheel_timer = "1.0"
 lazy_static = "1.4"
 num_cpus = "1.13"
 parking_lot = "0.10"
 scheduled-thread-pool = "0.2"
+
+[dev-dependencies]
+getrandom = "0.2"

@@ -1,16 +1,16 @@
 use crate::{
     deque::{CacheRegion, DeqNode, Deque},
+    frequency_sketch::FrequencySketch,
     thread_pool::{ThreadPool, ThreadPoolRegistry},
     ConcurrentCache,
 };
 
-use count_min_sketch::CountMinSketch8;
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use scheduled_thread_pool::JobHandle;
 use std::{
     cell::UnsafeCell,
-    hash::{BuildHasher, Hash},
+    hash::{BuildHasher, Hash, Hasher},
     marker::PhantomData,
     ptr::NonNull,
     rc::Rc,
@@ -81,7 +81,7 @@ impl<K, V, S> Clone for Cache<K, V, S> {
 
 impl<K, V> Cache<K, V, std::collections::hash_map::RandomState>
 where
-    K: Clone + Eq + Hash,
+    K: Eq + Hash,
 {
     // TODO: Instead of taking the capacity as an argument, take the followings:
     // - initial_capacity of the cache (hashmap)
@@ -95,8 +95,8 @@ where
 
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Clone + Eq + Hash,
-    S: BuildHasher,
+    K: Eq + Hash,
+    S: BuildHasher + Clone,
 {
     // TODO: Instead of taking the capacity as an argument, take the followings:
     // - initial_capacity of the cache (hashmap)
@@ -116,49 +116,20 @@ where
         }
     }
 
-    /// This is used by unit tests to get consistent result.
-    #[cfg(test)]
-    pub(crate) fn reconfigure_for_testing(&mut self) {
-        // Stop the housekeeping job that may cause sync() method to return earlier.
-        if let Some(housekeeper) = &self.housekeeper {
-            let mut job = housekeeper.periodical_sync_job.lock();
-            if let Some(job) = job.take() {
-                job.cancel();
-            }
-        }
-    }
-}
-
-impl<K, V, S> ConcurrentCache<K, V> for Cache<K, V, S>
-where
-    K: Clone + Eq + Hash,
-    S: BuildHasher,
-{
-    fn get(&self, key: &K) -> Option<Arc<V>> {
+    pub(crate) fn get_with_hash(&self, key: &K, hash: u64) -> Option<Arc<V>> {
         if let Some(entry) = self.inner.get(key) {
             let v = Arc::clone(&entry.value);
-            self.record_read_op(key, Some(entry))
+            self.record_read_op(hash, Some(entry))
                 .expect("Failed to record a get op");
             Some(v)
         } else {
-            self.record_read_op(key, None)
+            self.record_read_op(hash, None)
                 .expect("Failed to record a get op");
             None
         }
     }
 
-    // fn get_or_insert(&self, _key: K, _default: V) -> Arc<V> {
-    //     todo!()
-    // }
-
-    // fn get_or_insert_with<F>(&self, _key: K, _default: F) -> Arc<V>
-    // where
-    //     F: FnOnce() -> V,
-    // {
-    //     todo!()
-    // }
-
-    fn insert(&self, key: K, value: V) {
+    pub(crate) fn insert_with_hash(&self, key: K, hash: u64, value: V) {
         self.throttle_write_pace();
 
         let key = Arc::new(key);
@@ -184,7 +155,7 @@ where
             || {
                 let entry = Arc::new(ValueEntry::new(Arc::clone(&value), None));
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
-                op1 = Some((cnt, WriteOp::Insert(key, entry.clone())));
+                op1 = Some((cnt, WriteOp::Insert(KeyHash::new(key, hash), entry.clone())));
                 entry
             },
             // on_modify
@@ -215,6 +186,32 @@ where
         }
         .expect("Failed to insert");
     }
+}
+
+impl<K, V, S> ConcurrentCache<K, V> for Cache<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher + Clone,
+{
+    fn get(&self, key: &K) -> Option<Arc<V>> {
+        self.get_with_hash(key, self.inner.hash(key))
+    }
+
+    // fn get_or_insert(&self, _key: K, _default: V) -> Arc<V> {
+    //     todo!()
+    // }
+
+    // fn get_or_insert_with<F>(&self, _key: K, _default: F) -> Arc<V>
+    // where
+    //     F: FnOnce() -> V,
+    // {
+    //     todo!()
+    // }
+
+    fn insert(&self, key: K, value: V) {
+        let hash = self.inner.hash(&key);
+        self.insert_with_hash(key, hash, value)
+    }
 
     fn remove(&self, key: &K) -> Option<Arc<V>> {
         self.throttle_write_pace();
@@ -233,22 +230,22 @@ where
 // private methods
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Clone + Eq + Hash,
-    S: BuildHasher,
+    K: Eq + Hash,
+    S: BuildHasher + Clone,
 {
     #[inline]
     fn record_read_op(
         &self,
-        key: &K,
+        hash: u64,
         entry: Option<Arc<ValueEntry<K, V>>>,
     ) -> Result<(), TrySendError<ReadOp<K, V>>> {
         use ReadOp::*;
         self.apply_reads_if_needed();
         let ch = &self.read_op_ch;
         let op = if let Some(entry) = entry {
-            Hit(key.clone(), entry)
+            Hit(hash, entry)
         } else {
-            Miss(key.clone())
+            Miss(hash)
         };
         match ch.try_send(op) {
             // Discard the ReadOp when the channel is full.
@@ -352,26 +349,51 @@ where
             std::thread::sleep(Duration::from_micros(WRITE_THROTTLE_MICROS))
         }
     }
+
+    /// This is used by unit tests to get consistent result.
+    #[cfg(test)]
+    fn reconfigure_for_testing(&mut self) {
+        // Stop the housekeeping job that may cause sync() method to return earlier.
+        if let Some(housekeeper) = &self.housekeeper {
+            let mut job = housekeeper.periodical_sync_job.lock();
+            if let Some(job) = job.take() {
+                job.cancel();
+            }
+        }
+    }
+}
+
+struct KeyHash<K> {
+    key: Arc<K>,
+    hash: u64,
+}
+
+impl<K> KeyHash<K> {
+    fn new(key: Arc<K>, hash: u64) -> Self {
+        Self { key, hash }
+    }
 }
 
 enum ReadOp<K, V> {
-    Hit(K, Arc<ValueEntry<K, V>>),
-    Miss(K),
+    Hit(u64, Arc<ValueEntry<K, V>>),
+    Miss(u64),
 }
 
 enum WriteOp<K, V> {
-    Insert(Arc<K>, Arc<ValueEntry<K, V>>),
+    Insert(KeyHash<K>, Arc<ValueEntry<K, V>>),
     Update(Arc<ValueEntry<K, V>>),
     Remove(Arc<ValueEntry<K, V>>),
 }
 
+type KeyDeqNode<K> = Option<NonNull<DeqNode<KeyHash<K>>>>;
+
 struct ValueEntry<K, V> {
     value: Arc<V>,
-    deq_node: UnsafeCell<Option<NonNull<DeqNode<K>>>>,
+    deq_node: UnsafeCell<KeyDeqNode<K>>,
 }
 
 impl<K, V> ValueEntry<K, V> {
-    fn new(value: Arc<V>, deq_node: Option<NonNull<DeqNode<K>>>) -> Self {
+    fn new(value: Arc<V>, deq_node: KeyDeqNode<K>) -> Self {
         Self {
             value,
             deq_node: UnsafeCell::new(deq_node),
@@ -384,8 +406,9 @@ type CacheStore<K, V, S> = cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, 
 struct Inner<K, V, S> {
     capacity: usize,
     cache: CacheStore<K, V, S>,
+    build_hasher: S,
     deques: Mutex<Deques<K>>,
-    frequency_sketch: RwLock<CountMinSketch8<K>>,
+    frequency_sketch: RwLock<FrequencySketch>,
     read_op_ch: Receiver<ReadOp<K, V>>,
     write_op_ch: Receiver<WriteOp<K, V>>,
 }
@@ -393,8 +416,8 @@ struct Inner<K, V, S> {
 // functions/methods used by Cache
 impl<K, V, S> Inner<K, V, S>
 where
-    K: Clone + Eq + Hash,
-    S: BuildHasher,
+    K: Eq + Hash,
+    S: BuildHasher + Clone,
 {
     fn new(
         capacity: usize,
@@ -408,20 +431,26 @@ where
         let cache = cht::SegmentedHashMap::with_num_segments_capacity_and_hasher(
             num_segments,
             initial_capacity,
-            build_hasher,
+            build_hasher.clone(),
         );
         let skt_capacity = usize::max(capacity * 32, 100);
-        let frequency_sketch = CountMinSketch8::new(skt_capacity, 0.95, 10.0)
-            .expect("Failed to create the frequency sketch");
-
+        let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
         Self {
             capacity,
             cache,
+            build_hasher,
             deques: Mutex::new(Deques::default()),
             frequency_sketch: RwLock::new(frequency_sketch),
             read_op_ch,
             write_op_ch,
         }
+    }
+
+    #[inline]
+    fn hash(&self, key: &K) -> u64 {
+        let mut hasher = self.build_hasher.build_hasher();
+        key.hash(&mut hasher);
+        hasher.finish()
     }
 
     #[inline]
@@ -435,11 +464,11 @@ where
         let ch = &self.read_op_ch;
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Hit(key, entry)) => {
-                    freq.increment(&key);
+                Ok(Hit(hash, entry)) => {
+                    freq.increment(hash);
                     deqs.move_to_back(entry)
                 }
-                Ok(Miss(key)) => freq.increment(&key),
+                Ok(Miss(hash)) => freq.increment(hash),
                 Err(_) => break,
             }
         }
@@ -451,7 +480,7 @@ where
         let ch = &self.write_op_ch;
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Insert(key, entry)) => self.handle_insert(key, entry, deqs, &freq),
+                Ok(Insert(kh, entry)) => self.handle_insert(kh, entry, deqs, &freq),
                 Ok(Update(entry)) => deqs.move_to_back(entry),
                 Ok(Remove(entry)) => deqs.unlink(entry),
                 Err(_) => break,
@@ -472,14 +501,19 @@ where
 // private methods
 impl<K, V, S> Inner<K, V, S>
 where
-    K: Clone + Eq + Hash,
-    S: BuildHasher,
+    K: Eq + Hash,
+    S: BuildHasher + Clone,
 {
     #[inline]
-    fn admit(&self, candidate: &K, victim: &DeqNode<K>, freq: &CountMinSketch8<K>) -> bool {
+    fn admit(
+        &self,
+        candidate_hash: u64,
+        victim: &DeqNode<KeyHash<K>>,
+        freq: &FrequencySketch,
+    ) -> bool {
         // TODO: Implement some randomness to mitigate hash DoS attack.
         // See Caffeine's implementation.
-        freq.estimate(candidate) > freq.estimate(&*victim.element)
+        freq.frequency(candidate_hash) > freq.frequency(victim.element.hash)
     }
 
     fn do_sync(&self, mut deqs: MutexGuard<'_, Deques<K>>, max_repeats: usize) -> Option<SyncPace> {
@@ -516,8 +550,8 @@ where
     fn find_cache_victim<'a>(
         &self,
         deqs: &'a mut Deques<K>,
-        _freq: &CountMinSketch8<K>,
-    ) -> &'a DeqNode<K> {
+        _freq: &FrequencySketch,
+    ) -> &'a DeqNode<KeyHash<K>> {
         // TODO: Check its frequency. If it is not very low, maybe we should
         // check frequencies of next few others and pick from them.
         deqs.probation.peek_front().expect("No victim found")
@@ -526,17 +560,17 @@ where
     #[inline]
     fn handle_insert(
         &self,
-        key: Arc<K>,
+        kh: KeyHash<K>,
         entry: Arc<ValueEntry<K, V>>,
         deqs: &mut Deques<K>,
-        freq: &CountMinSketch8<K>,
+        freq: &FrequencySketch,
     ) {
         if self.cache.len() <= self.capacity {
             // Add the candidate to the deque.
-            deqs.push_back(CacheRegion::MainProbation, key, &entry);
+            deqs.push_back(CacheRegion::MainProbation, kh, &entry);
         } else {
             let victim = self.find_cache_victim(deqs, freq);
-            if self.admit(&key, victim, freq) {
+            if self.admit(kh.hash, victim, freq) {
                 // Remove the victim from the cache and deque.
                 //
                 // TODO: Check if the selected victim was actually removed. If not,
@@ -544,26 +578,26 @@ where
                 // could have been already removed from the cache but the removal
                 // from the deque is still on the write operations queue and is not
                 // yet executed.
-                if let Some(vic_entry) = self.cache.remove(&victim.element) {
+                if let Some(vic_entry) = self.cache.remove(&victim.element.key) {
                     deqs.unlink(vic_entry);
                 } else {
                     let victim = NonNull::from(victim);
                     deqs.unlink_node(victim)
                 }
                 // Add the candidate to the deque.
-                deqs.push_back(CacheRegion::MainProbation, key, &entry);
+                deqs.push_back(CacheRegion::MainProbation, kh, &entry);
             } else {
                 // Remove the candidate from the cache.
-                self.cache.remove(&key);
+                self.cache.remove(&kh.key);
             }
         }
     }
 }
 
 struct Deques<K> {
-    window: Deque<K>, //    Not yet used.
-    probation: Deque<K>,
-    protected: Deque<K>, // Not yet used.
+    window: Deque<KeyHash<K>>, //    Not yet used.
+    probation: Deque<KeyHash<K>>,
+    protected: Deque<KeyHash<K>>, // Not yet used.
 }
 
 impl<K> Default for Deques<K> {
@@ -577,9 +611,9 @@ impl<K> Default for Deques<K> {
 }
 
 impl<K> Deques<K> {
-    fn push_back<V>(&mut self, region: CacheRegion, key: Arc<K>, entry: &Arc<ValueEntry<K, V>>) {
+    fn push_back<V>(&mut self, region: CacheRegion, kh: KeyHash<K>, entry: &Arc<ValueEntry<K, V>>) {
         use CacheRegion::*;
-        let node = Box::new(DeqNode::new(region, key));
+        let node = Box::new(DeqNode::new(region, kh));
         let node = match node.as_ref().region {
             Window => self.window.push_back(node),
             MainProbation => self.probation.push_back(node),
@@ -618,7 +652,7 @@ impl<K> Deques<K> {
         }
     }
 
-    fn unlink_node(&mut self, node: NonNull<DeqNode<K>>) {
+    fn unlink_node(&mut self, node: NonNull<DeqNode<KeyHash<K>>>) {
         use CacheRegion::*;
         unsafe {
             let p = node.as_ref();
@@ -686,11 +720,11 @@ impl<K, V, S> Drop for Housekeeper<K, V, S> {
     }
 }
 
-// functions/methods used by LFUCache
+// functions/methods used by Cache
 impl<K, V, S> Housekeeper<K, V, S>
 where
-    K: Clone + Eq + Hash,
-    S: BuildHasher,
+    K: Eq + Hash,
+    S: BuildHasher + Clone,
 {
     fn new(inner: Weak<Inner<K, V, S>>) -> Self {
         let thread_pool = ThreadPoolRegistry::acquire_default_pool();
@@ -774,8 +808,8 @@ where
 // private functions/methods
 impl<K, V, S> Housekeeper<K, V, S>
 where
-    K: Clone + Eq + Hash,
-    S: BuildHasher,
+    K: Eq + Hash,
+    S: BuildHasher + Clone,
 {
     fn call_sync(unsafe_weak_ptr: &Arc<Mutex<UnsafeWeakPointer>>) -> Option<SyncPace> {
         let lock = unsafe_weak_ptr.lock();
@@ -801,7 +835,7 @@ where
 ///
 /// This struct exists with the sole purpose of avoiding compile
 /// errors relevant to the thread pool usages. The thread pool
-/// requires that the generic parameters on the `LFUCache` and `Inner`
+/// requires that the generic parameters on the `Cache` and `Inner`
 /// structs to have trait bounds `Send`, `Sync` and `'static`. This
 /// will be unacceptable for many cache usages.
 ///
