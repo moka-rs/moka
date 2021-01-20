@@ -18,8 +18,8 @@ exclude = [".devcontainer", ".github", ".vscode"]
 cht = "0.4"
 crossbeam-channel = "0.5"
 # hierarchical_hash_wheel_timer = "1.0"
-lazy_static = "1.4"
 num_cpus = "1.13"
+once_cell = "1.5"
 parking_lot = "0.11"
 scheduled-thread-pool = "0.2"
 
