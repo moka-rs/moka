@@ -90,7 +90,7 @@ where
         self.inner.select(hash).get_with_hash(key, hash)
     }
 
-    fn insert(&self, key: K, value: V) {
+    fn insert(&self, key: K, value: V)  -> Arc<V> {
         let hash = self.inner.hash(&key);
         self.inner.select(hash).insert_with_hash(key, hash, value)
     }
@@ -178,14 +178,14 @@ mod tests {
         // Make the cache exterior immutable.
         let cache = cache;
 
-        cache.insert("a", "alice");
-        cache.insert("b", "bob");
+        assert_eq!(cache.insert("a", "alice"), Arc::new("alice"));
+        assert_eq!(cache.insert("b", "bob"), Arc::new("bob"));
         assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
         assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
         cache.sync();
         // counts: a -> 1, b -> 1
 
-        cache.insert("c", "cindy");
+        assert_eq!(cache.insert("c", "cindy"), Arc::new("cindy"));
         assert_eq!(cache.get(&"c"), Some(Arc::new("cindy")));
         // counts: a -> 1, b -> 1, c -> 1
         cache.sync();
@@ -196,17 +196,17 @@ mod tests {
         // counts: a -> 2, b -> 2, c -> 1
 
         // "d" should not be admitted because its frequency is too low.
-        cache.insert("d", "david"); //   count: d -> 0
+        assert_eq!(cache.insert("d", "david"), Arc::new("david")); //   count: d -> 0
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 1
 
-        cache.insert("d", "david");
+        assert_eq!(cache.insert("d", "david"), Arc::new("david"));
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher then c's.
-        cache.insert("d", "dennis");
+        assert_eq!(cache.insert("d", "dennis"), Arc::new("dennis"));
         cache.sync();
         assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
         assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));

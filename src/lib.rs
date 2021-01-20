@@ -143,7 +143,7 @@ pub trait ConcurrentCache<K, V> {
     // where
     //     F: FnOnce() -> V;
 
-    fn insert(&self, key: K, value: V);
+    fn insert(&self, key: K, value: V) -> Arc<V>;
 
     fn remove(&self, key: &K) -> Option<Arc<V>>;
 
