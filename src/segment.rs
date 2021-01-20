@@ -90,7 +90,7 @@ where
         self.inner.select(hash).get_with_hash(key, hash)
     }
 
-    fn insert(&self, key: K, value: V)  -> Arc<V> {
+    fn insert(&self, key: K, value: V) -> Arc<V> {
         let hash = self.inner.hash(&key);
         self.inner.select(hash).insert_with_hash(key, hash, value)
     }
