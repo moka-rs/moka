@@ -244,7 +244,7 @@ mod tests {
     // This test was ported from Caffeine.
     #[test]
     fn heavy_hitters() {
-        let mut sketch = FrequencySketch::with_capacity(1024);
+        let mut sketch = FrequencySketch::with_capacity(2048);
         let hasher = hasher();
 
         for i in 100..100_000 {
