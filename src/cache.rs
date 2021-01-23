@@ -2,7 +2,7 @@ use crate::{
     deque::{CacheRegion, DeqNode, Deque},
     frequency_sketch::FrequencySketch,
     thread_pool::{ThreadPool, ThreadPoolRegistry},
-    ConcurrentCache,
+    ConcurrentCache, ConcurrentCacheExt,
 };
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
@@ -11,6 +11,7 @@ use quanta::Instant;
 use scheduled_thread_pool::JobHandle;
 use std::{
     cell::UnsafeCell,
+    collections::hash_map::RandomState,
     hash::{BuildHasher, Hash, Hasher},
     marker::PhantomData,
     ptr::NonNull,
@@ -39,7 +40,7 @@ const PERIODICAL_SYNC_INITIAL_DELAY_MILLIS: u64 = 500;
 const PERIODICAL_SYNC_NORMAL_PACE_MILLIS: u64 = 300;
 const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 
-pub struct Cache<K, V, S> {
+pub struct Cache<K, V, S = RandomState> {
     inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
     write_op_ch: Sender<WriteOp<K, V>>,
@@ -80,16 +81,12 @@ impl<K, V, S> Clone for Cache<K, V, S> {
     }
 }
 
-impl<K, V> Cache<K, V, std::collections::hash_map::RandomState>
+impl<K, V> Cache<K, V, RandomState>
 where
     K: Eq + Hash,
 {
-    // TODO: Instead of taking the capacity as an argument, take the followings:
-    // - initial_capacity of the cache (hashmap)
-    // - max_capacity of the cache (hashmap)
-    // - estimated_max_unique_keys (for the frequency sketch)
     pub fn new(capacity: usize) -> Self {
-        let build_hasher = std::collections::hash_map::RandomState::default();
+        let build_hasher = RandomState::default();
         Self::with_hasher(capacity, build_hasher)
     }
 }
@@ -99,14 +96,20 @@ where
     K: Eq + Hash,
     S: BuildHasher + Clone,
 {
+    pub fn with_hasher(capacity: usize, build_hasher: S) -> Self {
+        Self::with_everything(capacity, build_hasher, None, None)
+    }
+
     // TODO: Instead of taking the capacity as an argument, take the followings:
     // - initial_capacity of the cache (hashmap)
     // - max_capacity of the cache (hashmap)
     // - estimated_max_unique_keys (for the frequency sketch)
-    pub fn with_hasher(capacity: usize, build_hasher: S) -> Self {
-        let time_to_live = None;
-        let time_to_idle = Some(Duration::from_secs(60));
-
+    pub(crate) fn with_everything(
+        capacity: usize,
+        build_hasher: S,
+        time_to_live: Option<Duration>,
+        time_to_idle: Option<Duration>,
+    ) -> Self {
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
         let inner = Arc::new(Inner::new(
@@ -129,7 +132,7 @@ where
 
     pub(crate) fn get_with_hash(&self, key: &K, hash: u64) -> Option<Arc<V>> {
         if let Some(entry) = self.inner.get(key) {
-            match self.is_expired(&entry) {
+            match self.is_expired_entry(&entry) {
                 // Expired
                 (true, maybe_now) => {
                     self.record_read_op(hash, Some(entry), maybe_now)
@@ -149,45 +152,6 @@ where
                 .expect("Failed to record a get op");
             None
         }
-    }
-
-    fn is_expired(&self, entry: &Arc<ValueEntry<K, V>>) -> (bool, Option<Instant>) {
-        let mut maybe_now = None;
-        if let Some(time_to_idle) = self.inner.time_to_idle {
-            let maybe_timestamp =
-                unsafe { (*entry.deq_node.get()).map(|node| node.as_ref().element.timestamp) };
-            if let Some(last_accessed) = maybe_timestamp {
-                let now = Instant::now();
-                dbg!(last_accessed);
-                dbg!(now);
-                maybe_now = Some(now);
-                if last_accessed + time_to_idle <= now {
-                    return (true, Some(now));
-                }
-            }
-        }
-        if let Some(_time_to_live) = self.inner.time_to_live {
-            // let now;
-            // if let Some(n) = &maybe_now {
-            //     now = *n;
-            // } else {
-            //     now = Instant::now();
-            //     maybe_now = Some(_now);
-            // }
-
-            // TODO: Use the deq_node for the write order queue.
-
-            // let maybe_timestamp = unsafe { (*entry.deq_node.get()).map(|node| node.as_ref().element.timestamp) };
-            // if let Some(last_modified) = maybe_timestamp {
-            //     let now = Instant::now();
-            //     maybe_now = Some(now);
-            //     if last_modified + time_to_live <= now {
-            //         return (true, Some(now));
-            //     }
-            // }
-            todo!();
-        }
-        (false, maybe_now)
     }
 
     pub(crate) fn insert_with_hash(&self, key: K, hash: u64, value: V) -> Arc<V> {
@@ -285,6 +249,28 @@ where
         })
     }
 
+    fn capacity(&self) -> usize {
+        self.inner.capacity
+    }
+
+    fn time_to_live(&self) -> Option<Duration> {
+        self.inner.time_to_live
+    }
+
+    fn time_to_idle(&self) -> Option<Duration> {
+        self.inner.time_to_idle
+    }
+
+    fn num_segments(&self) -> usize {
+        1
+    }
+}
+
+impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher + Clone,
+{
     fn sync(&self) {
         self.inner.sync(MAX_SYNC_REPEATS);
     }
@@ -296,6 +282,37 @@ where
     K: Eq + Hash,
     S: BuildHasher + Clone,
 {
+    #[inline]
+    fn is_expired_entry(&self, entry: &Arc<ValueEntry<K, V>>) -> (bool, Option<Instant>) {
+        let mut maybe_now = None;
+
+        // Time-to-idle
+        if let Some(time_to_idle) = self.inner.time_to_idle {
+            if let Some(last_accessed) = entry.last_accessed() {
+                maybe_now = Some(Instant::now());
+                if last_accessed + time_to_idle <= maybe_now.unwrap() {
+                    return (true, maybe_now);
+                }
+            }
+        }
+
+        // Time-to-live
+        // if let Some(time_to_live) = self.inner.time_to_live {
+        //     if maybe_now.is_none() {
+        //         maybe_now = Some(Instant::now());
+        //     }
+
+        //     if let Some(last_modified) = entry.last_modified() {
+        //         if last_modified + time_to_live <= maybe_now.unwrap() {
+        //             return (true, maybe_now);
+        //         }
+        //     }
+        // }
+
+        // Not expired
+        (false, maybe_now)
+    }
+
     #[inline]
     fn record_read_op(
         &self,
@@ -463,6 +480,23 @@ impl<K, V> ValueEntry<K, V> {
             deq_node: UnsafeCell::new(deq_node),
         }
     }
+
+    #[inline]
+    fn last_accessed(&self) -> Option<Instant> {
+        unsafe { (*self.deq_node.get()).map(|node| node.as_ref().element.timestamp) }
+    }
+
+    // #[inline]
+    // fn last_modified(&self) -> Option<Instant> {
+    //     todo!()
+    // }
+
+    #[inline]
+    unsafe fn set_last_accessed(&self, timestamp: Instant) {
+        if let Some(mut node) = *self.deq_node.get() {
+            node.as_mut().element.timestamp = timestamp;
+        }
+    }
 }
 
 type CacheStore<K, V, S> = cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
@@ -536,14 +570,9 @@ where
             match ch.try_recv() {
                 Ok(Hit(hash, entry, timestamp)) => {
                     freq.increment(hash);
-
                     if let Some(ts) = timestamp {
-                        unsafe {
-                            (*entry.deq_node.get())
-                                .map(|mut node| node.as_mut().element.timestamp = ts)
-                        };
+                        unsafe { entry.set_last_accessed(ts) };
                     }
-
                     deqs.move_to_back(entry)
                 }
                 Ok(Miss(hash)) => freq.increment(hash),
@@ -1008,7 +1037,7 @@ impl Clone for UnsafeWeakPointer {
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
-    use super::{Cache, ConcurrentCache};
+    use super::{Cache, ConcurrentCache, ConcurrentCacheExt};
     use std::sync::Arc;
 
     #[test]
