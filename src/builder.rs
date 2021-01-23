@@ -7,19 +7,17 @@ use std::{
     time::Duration,
 };
 
-pub struct Builder<C, S = RandomState> {
+pub struct Builder<C> {
     capacity: usize,
     num_segments: Option<usize>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     cache_type: PhantomData<C>,
-    build_hasher_type: PhantomData<S>,
 }
 
-impl<K, V, S> Builder<Cache<K, V, S>>
+impl<K, V> Builder<Cache<K, V, RandomState>>
 where
     K: Eq + Hash,
-    S: BuildHasher + Clone,
 {
     pub fn new(capacity: usize) -> Self {
         Self {
@@ -28,30 +26,19 @@ where
             time_to_live: None,
             time_to_idle: None,
             cache_type: PhantomData::default(),
-            build_hasher_type: PhantomData::default(),
         }
     }
 
-    pub fn segment(self, num_segments: usize) -> Builder<SegmentedCache<K, V, S>> {
+    pub fn segment(self, num_segments: usize) -> Builder<SegmentedCache<K, V, RandomState>> {
         Builder {
             capacity: self.capacity,
             num_segments: Some(num_segments),
             time_to_live: self.time_to_live,
             time_to_idle: self.time_to_idle,
             cache_type: PhantomData::default(),
-            build_hasher_type: PhantomData::default(),
         }
     }
 
-    pub fn build_with_hasher(self, hasher: S) -> Cache<K, V, S> {
-        Cache::with_everything(self.capacity, hasher, self.time_to_live, self.time_to_idle)
-    }
-}
-
-impl<K, V> Builder<Cache<K, V, RandomState>>
-where
-    K: Eq + Hash,
-{
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
         Cache::with_everything(
@@ -61,21 +48,12 @@ where
             self.time_to_idle,
         )
     }
-}
 
-impl<K, V, S> Builder<SegmentedCache<K, V, S>>
-where
-    K: Eq + Hash,
-    S: BuildHasher + Clone,
-{
-    pub fn build_with_hasher(self, hasher: S) -> SegmentedCache<K, V, S> {
-        SegmentedCache::with_everything(
-            self.capacity,
-            self.num_segments.unwrap(),
-            hasher,
-            self.time_to_live,
-            self.time_to_idle,
-        )
+    pub fn build_with_hasher<S>(self, hasher: S) -> Cache<K, V, S>
+    where
+        S: BuildHasher + Clone,
+    {
+        Cache::with_everything(self.capacity, hasher, self.time_to_live, self.time_to_idle)
     }
 }
 
@@ -89,6 +67,19 @@ where
             self.capacity,
             self.num_segments.unwrap(),
             build_hasher,
+            self.time_to_live,
+            self.time_to_idle,
+        )
+    }
+
+    pub fn build_with_hasher<S>(self, hasher: S) -> SegmentedCache<K, V, S>
+    where
+        S: BuildHasher + Clone,
+    {
+        SegmentedCache::with_everything(
+            self.capacity,
+            self.num_segments.unwrap(),
+            hasher,
             self.time_to_live,
             self.time_to_idle,
         )
