@@ -7,6 +7,7 @@ use crate::{
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use parking_lot::{Mutex, MutexGuard, RwLock};
+use quanta::Instant;
 use scheduled_thread_pool::JobHandle;
 use std::{
     cell::UnsafeCell,
@@ -103,9 +104,19 @@ where
     // - max_capacity of the cache (hashmap)
     // - estimated_max_unique_keys (for the frequency sketch)
     pub fn with_hasher(capacity: usize, build_hasher: S) -> Self {
+        let time_to_live = None;
+        let time_to_idle = Some(Duration::from_secs(60));
+
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
-        let inner = Arc::new(Inner::new(capacity, build_hasher, r_rcv, w_rcv));
+        let inner = Arc::new(Inner::new(
+            capacity,
+            build_hasher,
+            r_rcv,
+            w_rcv,
+            time_to_live,
+            time_to_idle,
+        ));
         let housekeeper = Housekeeper::new(Arc::downgrade(&inner));
 
         Self {
@@ -118,15 +129,65 @@ where
 
     pub(crate) fn get_with_hash(&self, key: &K, hash: u64) -> Option<Arc<V>> {
         if let Some(entry) = self.inner.get(key) {
-            let v = Arc::clone(&entry.value);
-            self.record_read_op(hash, Some(entry))
-                .expect("Failed to record a get op");
-            Some(v)
+            match self.is_expired(&entry) {
+                // Expired
+                (true, maybe_now) => {
+                    self.record_read_op(hash, Some(entry), maybe_now)
+                        .expect("Failed to record a get op");
+                    None
+                }
+                // Not expired
+                (false, maybe_now) => {
+                    let v = Arc::clone(&entry.value);
+                    self.record_read_op(hash, Some(entry), maybe_now)
+                        .expect("Failed to record a get op");
+                    Some(v)
+                }
+            }
         } else {
-            self.record_read_op(hash, None)
+            self.record_read_op(hash, None, None)
                 .expect("Failed to record a get op");
             None
         }
+    }
+
+    fn is_expired(&self, entry: &Arc<ValueEntry<K, V>>) -> (bool, Option<Instant>) {
+        let mut maybe_now = None;
+        if let Some(time_to_idle) = self.inner.time_to_idle {
+            let maybe_timestamp =
+                unsafe { (*entry.deq_node.get()).map(|node| node.as_ref().element.timestamp) };
+            if let Some(last_accessed) = maybe_timestamp {
+                let now = Instant::now();
+                dbg!(last_accessed);
+                dbg!(now);
+                maybe_now = Some(now);
+                if last_accessed + time_to_idle <= now {
+                    return (true, Some(now));
+                }
+            }
+        }
+        if let Some(_time_to_live) = self.inner.time_to_live {
+            // let now;
+            // if let Some(n) = &maybe_now {
+            //     now = *n;
+            // } else {
+            //     now = Instant::now();
+            //     maybe_now = Some(_now);
+            // }
+
+            // TODO: Use the deq_node for the write order queue.
+
+            // let maybe_timestamp = unsafe { (*entry.deq_node.get()).map(|node| node.as_ref().element.timestamp) };
+            // if let Some(last_modified) = maybe_timestamp {
+            //     let now = Instant::now();
+            //     maybe_now = Some(now);
+            //     if last_modified + time_to_live <= now {
+            //         return (true, Some(now));
+            //     }
+            // }
+            todo!();
+        }
+        (false, maybe_now)
     }
 
     pub(crate) fn insert_with_hash(&self, key: K, hash: u64, value: V) -> Arc<V> {
@@ -240,12 +301,13 @@ where
         &self,
         hash: u64,
         entry: Option<Arc<ValueEntry<K, V>>>,
+        timestamp: Option<Instant>,
     ) -> Result<(), TrySendError<ReadOp<K, V>>> {
         use ReadOp::*;
         self.apply_reads_if_needed();
         let ch = &self.read_op_ch;
         let op = if let Some(entry) = entry {
-            Hit(hash, entry)
+            Hit(hash, entry, timestamp)
         } else {
             Miss(hash)
         };
@@ -377,7 +439,7 @@ impl<K> KeyHash<K> {
 }
 
 enum ReadOp<K, V> {
-    Hit(u64, Arc<ValueEntry<K, V>>),
+    Hit(u64, Arc<ValueEntry<K, V>>, Option<Instant>),
     Miss(u64),
 }
 
@@ -387,7 +449,7 @@ enum WriteOp<K, V> {
     Remove(Arc<ValueEntry<K, V>>),
 }
 
-type KeyDeqNode<K> = Option<NonNull<DeqNode<KeyHash<K>>>>;
+type KeyDeqNode<K> = Option<NonNull<DeqNode<KeyHashDate<K>>>>;
 
 struct ValueEntry<K, V> {
     value: Arc<V>,
@@ -413,6 +475,8 @@ struct Inner<K, V, S> {
     frequency_sketch: RwLock<FrequencySketch>,
     read_op_ch: Receiver<ReadOp<K, V>>,
     write_op_ch: Receiver<WriteOp<K, V>>,
+    time_to_live: Option<Duration>,
+    time_to_idle: Option<Duration>,
 }
 
 // functions/methods used by Cache
@@ -426,6 +490,8 @@ where
         build_hasher: S,
         read_op_ch: Receiver<ReadOp<K, V>>,
         write_op_ch: Receiver<WriteOp<K, V>>,
+        time_to_live: Option<Duration>,
+        time_to_idle: Option<Duration>,
     ) -> Self {
         // TODO: Make this much smaller.
         let initial_capacity = ((capacity as f64) * 1.4) as usize;
@@ -445,6 +511,8 @@ where
             frequency_sketch: RwLock::new(frequency_sketch),
             read_op_ch,
             write_op_ch,
+            time_to_live,
+            time_to_idle,
         }
     }
 
@@ -466,8 +534,16 @@ where
         let ch = &self.read_op_ch;
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Hit(hash, entry)) => {
+                Ok(Hit(hash, entry, timestamp)) => {
                     freq.increment(hash);
+
+                    if let Some(ts) = timestamp {
+                        unsafe {
+                            (*entry.deq_node.get())
+                                .map(|mut node| node.as_mut().element.timestamp = ts)
+                        };
+                    }
+
                     deqs.move_to_back(entry)
                 }
                 Ok(Miss(hash)) => freq.increment(hash),
@@ -480,9 +556,16 @@ where
         use WriteOp::*;
         let freq = self.frequency_sketch.read();
         let ch = &self.write_op_ch;
+
+        let timestamp = if self.has_expiry() {
+            Some(Instant::now())
+        } else {
+            None
+        };
+
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Insert(kh, entry)) => self.handle_insert(kh, entry, deqs, &freq),
+                Ok(Insert(kh, entry)) => self.handle_insert(kh, entry, timestamp, deqs, &freq),
                 Ok(Update(entry)) => deqs.move_to_back(entry),
                 Ok(Remove(entry)) => deqs.unlink(entry),
                 Err(_) => break,
@@ -498,6 +581,11 @@ where
         let deqs = self.deques.lock();
         self.do_sync(deqs, max_repeats)
     }
+
+    #[inline]
+    fn has_expiry(&self) -> bool {
+        self.time_to_live.is_some() || self.time_to_idle.is_some()
+    }
 }
 
 // private methods
@@ -510,7 +598,7 @@ where
     fn admit(
         &self,
         candidate_hash: u64,
-        victim: &DeqNode<KeyHash<K>>,
+        victim: &DeqNode<KeyHashDate<K>>,
         freq: &FrequencySketch,
     ) -> bool {
         // TODO: Implement some randomness to mitigate hash DoS attack.
@@ -553,7 +641,7 @@ where
         &self,
         deqs: &'a mut Deques<K>,
         _freq: &FrequencySketch,
-    ) -> &'a DeqNode<KeyHash<K>> {
+    ) -> &'a DeqNode<KeyHashDate<K>> {
         // TODO: Check its frequency. If it is not very low, maybe we should
         // check frequencies of next few others and pick from them.
         deqs.probation.peek_front().expect("No victim found")
@@ -564,12 +652,17 @@ where
         &self,
         kh: KeyHash<K>,
         entry: Arc<ValueEntry<K, V>>,
+        timestamp: Option<Instant>,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
     ) {
         if self.cache.len() <= self.capacity {
             // Add the candidate to the deque.
-            deqs.push_back(CacheRegion::MainProbation, kh, &entry);
+            deqs.push_back(
+                CacheRegion::MainProbation,
+                KeyHashDate::new(kh, timestamp),
+                &entry,
+            );
         } else {
             let victim = self.find_cache_victim(deqs, freq);
             if self.admit(kh.hash, victim, freq) {
@@ -587,7 +680,11 @@ where
                     deqs.unlink_node(victim)
                 }
                 // Add the candidate to the deque.
-                deqs.push_back(CacheRegion::MainProbation, kh, &entry);
+                deqs.push_back(
+                    CacheRegion::MainProbation,
+                    KeyHashDate::new(kh, timestamp),
+                    &entry,
+                );
             } else {
                 // Remove the candidate from the cache.
                 self.cache.remove(&kh.key);
@@ -596,10 +693,27 @@ where
     }
 }
 
+struct KeyHashDate<K> {
+    key: Arc<K>,
+    hash: u64,
+    // Optional. Instant(0u64) for None.
+    timestamp: Instant,
+}
+
+impl<K> KeyHashDate<K> {
+    fn new(kh: KeyHash<K>, timestamp: Option<Instant>) -> Self {
+        Self {
+            key: kh.key,
+            hash: kh.hash,
+            timestamp: timestamp.unwrap_or_else(|| unsafe { std::mem::transmute(0u64) }),
+        }
+    }
+}
+
 struct Deques<K> {
-    window: Deque<KeyHash<K>>, //    Not yet used.
-    probation: Deque<KeyHash<K>>,
-    protected: Deque<KeyHash<K>>, // Not yet used.
+    window: Deque<KeyHashDate<K>>, //    Not yet used.
+    probation: Deque<KeyHashDate<K>>,
+    protected: Deque<KeyHashDate<K>>, // Not yet used.
 }
 
 impl<K> Default for Deques<K> {
@@ -613,7 +727,12 @@ impl<K> Default for Deques<K> {
 }
 
 impl<K> Deques<K> {
-    fn push_back<V>(&mut self, region: CacheRegion, kh: KeyHash<K>, entry: &Arc<ValueEntry<K, V>>) {
+    fn push_back<V>(
+        &mut self,
+        region: CacheRegion,
+        kh: KeyHashDate<K>,
+        entry: &Arc<ValueEntry<K, V>>,
+    ) {
         use CacheRegion::*;
         let node = Box::new(DeqNode::new(region, kh));
         let node = match node.as_ref().region {
@@ -654,7 +773,7 @@ impl<K> Deques<K> {
         }
     }
 
-    fn unlink_node(&mut self, node: NonNull<DeqNode<KeyHash<K>>>) {
+    fn unlink_node(&mut self, node: NonNull<DeqNode<KeyHashDate<K>>>) {
         use CacheRegion::*;
         unsafe {
             let p = node.as_ref();
