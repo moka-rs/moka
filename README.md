@@ -45,9 +45,10 @@ features are not implemented and the API will change very often.
 
 ## Requirements
 
-- Rust 1.43.1 or newer.
+- Rust 1.45.2 or newer.
 
 <!--
+- quanta requires 1.45.
 - aHash 0.5 requires 1.43.
 - cht requires 1.41.
 -->
