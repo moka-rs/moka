@@ -165,15 +165,14 @@ impl FrequencySketch {
 #[cfg(test)]
 mod tests {
     use super::FrequencySketch;
+    use once_cell::sync::Lazy;
     use std::hash::{BuildHasher, Hash, Hasher};
 
-    lazy_static::lazy_static! {
-        static ref ITEM: u32 = {
-            let mut buf = [0; 4];
-            getrandom::getrandom(&mut buf).unwrap();
-            unsafe { std::mem::transmute::<[u8; 4], u32>(buf) }
-        };
-    }
+    static ITEM: Lazy<u32> = Lazy::new(|| {
+        let mut buf = [0; 4];
+        getrandom::getrandom(&mut buf).unwrap();
+        unsafe { std::mem::transmute::<[u8; 4], u32>(buf) }
+    });
 
     // This test was ported from Caffeine.
     #[test]
@@ -245,7 +244,7 @@ mod tests {
     // This test was ported from Caffeine.
     #[test]
     fn heavy_hitters() {
-        let mut sketch = FrequencySketch::with_capacity(1024);
+        let mut sketch = FrequencySketch::with_capacity(65_536);
         let hasher = hasher();
 
         for i in 100..100_000 {

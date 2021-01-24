@@ -1,8 +1,22 @@
 # Moka
 
-[![GitHub Actions](https://github.com/moka-rs/moka/workflows/CI/badge.svg)][gh-actions]
+[![GitHub Actions][gh-actions-badge]][gh-actions]
+[![crates.io release][release-badge]][crate]
+[![docs][docs-badge]][docs]
+[![dependency status][deps-rs-badge]][deps-rs]
+[![license][license-badge]](#license)
+
+[gh-actions-badge]: https://github.com/moka-rs/moka/workflows/CI/badge.svg
+[release-badge]: https://img.shields.io/crates/v/moka.svg
+[docs-badge]: https://docs.rs/moka/badge.svg
+[deps-rs-badge]: https://deps.rs/repo/github/moka-rs/moka/status.svg
+[license-badge]: https://img.shields.io/crates/l/moka.svg
 
 [gh-actions]: https://github.com/moka-rs/moka/actions?query=workflow%3ACI
+[crate]: https://crates.io/crates/moka
+[docs]: https://docs.rs/moka
+[deps-rs]: https://deps.rs/repo/github/moka-rs/moka
+
 
 **Work in Progress**
 
@@ -31,9 +45,10 @@ features are not implemented and the API will change very often.
 
 ## Requirements
 
-- Rust 1.43.1 or newer.
+- Rust 1.45.2 or newer.
 
 <!--
+- quanta requires 1.45.
 - aHash 0.5 requires 1.43.
 - cht requires 1.41.
 -->

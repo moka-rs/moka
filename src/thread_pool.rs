@@ -1,4 +1,4 @@
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use scheduled_thread_pool::ScheduledThreadPool;
 use std::{collections::HashMap, sync::Arc};
@@ -6,9 +6,7 @@ use std::{collections::HashMap, sync::Arc};
 // TODO: Use enum. e.g. Pool::{Default, Name(String)}.
 const DEFAULT_POOL_NAME: &str = "$$default$$";
 
-lazy_static! {
-    static ref REGISTRY: ThreadPoolRegistry = ThreadPoolRegistry::default();
-}
+static REGISTRY: Lazy<ThreadPoolRegistry> = Lazy::new(ThreadPoolRegistry::default);
 
 pub(crate) struct ThreadPool {
     pub(crate) name: String,

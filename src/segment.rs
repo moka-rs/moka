@@ -1,11 +1,13 @@
-use crate::{cache::Cache, ConcurrentCache};
+use crate::{cache::Cache, ConcurrentCache, ConcurrentCacheExt};
 
 use std::{
+    collections::hash_map::RandomState,
     hash::{BuildHasher, Hash, Hasher},
     sync::Arc,
+    time::Duration,
 };
 
-pub struct SegmentedCache<K, V, S> {
+pub struct SegmentedCache<K, V, S = RandomState> {
     inner: Arc<Inner<K, V, S>>,
 }
 
@@ -33,7 +35,7 @@ impl<K, V, S> Clone for SegmentedCache<K, V, S> {
     }
 }
 
-impl<K, V> SegmentedCache<K, V, std::collections::hash_map::RandomState>
+impl<K, V> SegmentedCache<K, V, RandomState>
 where
     K: Eq + Hash,
 {
@@ -46,8 +48,8 @@ where
     ///
     /// Panics if `num_segments` is 0.
     pub fn new(capacity: usize, num_segments: usize) -> Self {
-        let build_hasher = std::collections::hash_map::RandomState::default();
-        Self::with_hasher(capacity, num_segments, build_hasher)
+        let build_hasher = RandomState::default();
+        Self::with_everything(capacity, num_segments, build_hasher, None, None)
     }
 }
 
@@ -56,6 +58,10 @@ where
     K: Eq + Hash,
     S: BuildHasher + Clone,
 {
+    pub fn with_hasher(capacity: usize, num_segments: usize, build_hasher: S) -> Self {
+        Self::with_everything(capacity, num_segments, build_hasher, None, None)
+    }
+
     // TODO: Instead of taking the capacity as an argument, take the followings:
     // - initial_capacity of the cache (hashmap)
     // - max_capacity of the cache (hashmap)
@@ -64,9 +70,21 @@ where
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
-    pub fn with_hasher(capacity: usize, num_segments: usize, build_hasher: S) -> Self {
+    pub(crate) fn with_everything(
+        capacity: usize,
+        num_segments: usize,
+        build_hasher: S,
+        time_to_live: Option<Duration>,
+        time_to_idle: Option<Duration>,
+    ) -> Self {
         Self {
-            inner: Arc::new(Inner::new(capacity, num_segments, build_hasher)),
+            inner: Arc::new(Inner::new(
+                capacity,
+                num_segments,
+                build_hasher,
+                time_to_live,
+                time_to_idle,
+            )),
         }
     }
 
@@ -100,14 +118,37 @@ where
         self.inner.select(hash).remove(key)
     }
 
+    fn capacity(&self) -> usize {
+        self.inner.desired_capacity
+    }
+
+    fn time_to_live(&self) -> Option<Duration> {
+        self.inner.segments[0].time_to_live()
+    }
+
+    fn time_to_idle(&self) -> Option<Duration> {
+        self.inner.segments[0].time_to_idle()
+    }
+
+    fn num_segments(&self) -> usize {
+        self.inner.segments.len()
+    }
+}
+
+impl<K, V, S> ConcurrentCacheExt<K, V> for SegmentedCache<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher + Clone,
+{
     fn sync(&self) {
         for segment in self.inner.segments.iter() {
-            segment.sync()
+            segment.sync();
         }
     }
 }
 
 struct Inner<K, V, S> {
+    desired_capacity: usize,
     segments: Box<[Cache<K, V, S>]>,
     build_hasher: S,
     segment_shift: u32,
@@ -121,7 +162,13 @@ where
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
-    fn new(capacity: usize, num_segments: usize, build_hasher: S) -> Self {
+    fn new(
+        capacity: usize,
+        num_segments: usize,
+        build_hasher: S,
+        time_to_live: Option<Duration>,
+        time_to_idle: Option<Duration>,
+    ) -> Self {
         assert!(num_segments > 0);
 
         let actual_num_segments = num_segments.next_power_of_two();
@@ -131,10 +178,18 @@ where
         // NOTE: We cannot initialize the segments as `vec![cache; actual_num_segments]`
         // because Cache::clone() does not clone its inner but shares the same inner.
         let segments = (0..num_segments)
-            .map(|_| Cache::with_hasher(seg_capacity, build_hasher.clone()))
+            .map(|_| {
+                Cache::with_everything(
+                    seg_capacity,
+                    build_hasher.clone(),
+                    time_to_live,
+                    time_to_idle,
+                )
+            })
             .collect::<Vec<_>>();
 
         Self {
+            desired_capacity: capacity,
             segments: segments.into_boxed_slice(),
             build_hasher,
             segment_shift,
@@ -167,7 +222,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{ConcurrentCache, SegmentedCache};
+    use super::{ConcurrentCache, ConcurrentCacheExt, SegmentedCache};
     use std::sync::Arc;
 
     #[test]

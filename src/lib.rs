@@ -122,16 +122,18 @@
 //! [timer-wheel]: http://www.cs.columbia.edu/~nahum/w6998/papers/ton97-timing-wheels.pdf
 //!
 
+mod builder;
 mod cache;
 mod deque;
 mod frequency_sketch;
 mod segment;
 mod thread_pool;
 
+pub use builder::Builder;
 pub use cache::Cache;
 pub use segment::SegmentedCache;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 // Interior mutability (no need for `&mut self`)
 pub trait ConcurrentCache<K, V> {
@@ -147,5 +149,15 @@ pub trait ConcurrentCache<K, V> {
 
     fn remove(&self, key: &K) -> Option<Arc<V>>;
 
+    fn capacity(&self) -> usize;
+
+    fn time_to_live(&self) -> Option<Duration>;
+
+    fn time_to_idle(&self) -> Option<Duration>;
+
+    fn num_segments(&self) -> usize;
+}
+
+pub trait ConcurrentCacheExt<K, V> {
     fn sync(&self);
 }
