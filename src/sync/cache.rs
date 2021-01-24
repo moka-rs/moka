@@ -1154,8 +1154,8 @@ impl Clone for UnsafeWeakPointer {
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
-    use crate::sync::Builder;
     use super::{Cache, ConcurrentCache, ConcurrentCacheExt};
+    use crate::sync::Builder;
 
     use quanta::Clock;
     use std::{sync::Arc, time::Duration};
