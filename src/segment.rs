@@ -142,7 +142,7 @@ where
 {
     fn sync(&self) {
         for segment in self.inner.segments.iter() {
-            segment.sync()
+            segment.sync();
         }
     }
 }

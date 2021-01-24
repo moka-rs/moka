@@ -7,7 +7,7 @@ use crate::{
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use parking_lot::{Mutex, MutexGuard, RwLock};
-use quanta::Instant;
+use quanta::{Clock, Instant};
 use scheduled_thread_pool::JobHandle;
 use std::{
     cell::UnsafeCell,
@@ -150,7 +150,7 @@ where
             }
             // Value found, need to check if expired.
             (Some(entry), true) => {
-                let now = Instant::now();
+                let now = self.inner.current_time_from_expiration_clock();
                 if self.inner.is_expired_entry(&entry, now) {
                     // Record this access as a cache miss rather than a hit.
                     record(None, None);
@@ -409,9 +409,15 @@ where
             std::thread::sleep(Duration::from_micros(WRITE_THROTTLE_MICROS))
         }
     }
+}
 
-    /// This is used by unit tests to get consistent result.
-    #[cfg(test)]
+// For unit tests.
+#[cfg(test)]
+impl<K, V, S> Cache<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher + Clone,
+{
     fn reconfigure_for_testing(&mut self) {
         // Stop the housekeeping job that may cause sync() method to return earlier.
         if let Some(housekeeper) = &self.housekeeper {
@@ -419,6 +425,21 @@ where
             if let Some(job) = job.take() {
                 job.cancel();
             }
+        }
+    }
+
+    fn set_expiration_clock(&self, clock: Option<Clock>) {
+        let mut exp_clock = self.inner.expiration_clock.write();
+        if let Some(clock) = clock {
+            *exp_clock = Some(clock);
+            self.inner
+                .has_expiration_clock
+                .store(true, Ordering::SeqCst);
+        } else {
+            self.inner
+                .has_expiration_clock
+                .store(false, Ordering::SeqCst);
+            *exp_clock = None;
         }
     }
 }
@@ -517,6 +538,8 @@ struct Inner<K, V, S> {
     write_op_ch: Receiver<WriteOp<K, V>>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
+    has_expiration_clock: AtomicBool,
+    expiration_clock: RwLock<Option<Clock>>,
 }
 
 // functions/methods used by Cache
@@ -553,6 +576,8 @@ where
             write_op_ch,
             time_to_live,
             time_to_idle,
+            has_expiration_clock: AtomicBool::new(false),
+            expiration_clock: RwLock::new(None),
         }
     }
 
@@ -593,7 +618,7 @@ where
         let ch = &self.write_op_ch;
 
         let timestamp = if self.has_expiry() {
-            Some(Instant::now())
+            Some(self.current_time_from_expiration_clock())
         } else {
             None
         };
@@ -616,46 +641,64 @@ where
     fn evict(&self, deqs: &mut Deques<K>, batch_size: usize) {
         debug_assert!(self.has_expiry());
 
-        let now = Instant::now();
+        let now = self.current_time_from_expiration_clock();
         let mut expired_entries = Vec::default();
 
-        self.find_expired(&deqs.window, &mut expired_entries, batch_size, now); //    Empty yet.
-        self.find_expired(&deqs.probation, &mut expired_entries, batch_size, now);
-        self.find_expired(&deqs.protected, &mut expired_entries, batch_size, now); // Empty yet.
+        self.find_expired(&mut deqs.window, &mut expired_entries, batch_size, now); //    Empty yet.
+        self.find_expired(&mut deqs.probation, &mut expired_entries, batch_size, now);
+        self.find_expired(&mut deqs.protected, &mut expired_entries, batch_size, now);
+        // Empty yet.
 
-        for entry in expired_entries {
-            deqs.unlink(entry);
-        }
+        // for entry in expired_entries {
+        //     deqs.unlink(entry);
+        // }
     }
 
     #[inline]
     fn find_expired(
         &self,
-        deq: &Deque<KeyHashDate<K>>,
-        expired_entries: &mut Vec<Arc<ValueEntry<K, V>>>,
+        deq: &mut Deque<KeyHashDate<K>>,
+        _expired_entries: &mut Vec<Arc<ValueEntry<K, V>>>,
         batch_size: usize,
         now: Instant,
     ) {
         for _ in 0..batch_size {
-            if let Some(node) = deq.peek_front() {
-                if self.is_expired_entry(node, now) {
-                    if let Some(vic_entry) = self.cache.remove(&node.element.key) {
-                        expired_entries.push(vic_entry);
+            let is_expired = deq
+                .peek_front()
+                .map(|node| self.is_expired_entry(node, now))
+                .unwrap_or(false);
+            if is_expired {
+                if let Some(node) = deq.pop_front() {
+                    if let Some(_vic_entry) = self.cache.remove(&node.element.key) {
+                        // expired_entries.push(vic_entry);
                     }
-                } else {
-                    break;
                 }
+            } else {
+                break;
             }
         }
     }
 
     fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
-        if self.read_op_ch.is_empty() && self.write_op_ch.is_empty() {
+        if self.read_op_ch.is_empty() && self.write_op_ch.is_empty() && !self.has_expiry() {
             return None;
         }
 
         let deqs = self.deques.lock();
         self.do_sync(deqs, max_repeats)
+    }
+
+    #[inline]
+    fn current_time_from_expiration_clock(&self) -> Instant {
+        if self.has_expiration_clock.load(Ordering::Relaxed) {
+            self.expiration_clock
+                .read()
+                .as_ref()
+                .expect("Cannot get the expiration clock")
+                .now()
+        } else {
+            Instant::now()
+        }
     }
 
     #[inline]
@@ -1111,8 +1154,12 @@ impl Clone for UnsafeWeakPointer {
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
+    use quanta::Clock;
+
+    use crate::Builder;
+
     use super::{Cache, ConcurrentCache, ConcurrentCacheExt};
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     #[test]
     fn basic_single_thread() {
@@ -1189,5 +1236,48 @@ mod tests {
 
         assert!(cache.get(&10).is_none());
         assert!(cache.get(&20).is_some());
+    }
+
+    #[test]
+    fn expirations() {
+        let mut cache = Builder::new(100)
+            .time_to_idle(Duration::from_secs(10))
+            .build();
+
+        cache.reconfigure_for_testing();
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        assert_eq!(cache.insert("a", "alice"), Arc::new("alice"));
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+
+        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 10 secs.
+
+        assert_eq!(cache.insert("b", "bob"), Arc::new("bob"));
+        assert_eq!(cache.inner.cache.len(), 2);
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 15 secs.
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.inner.cache.len(), 1);
+
+        mock.increment(Duration::from_secs(10)); // 25 secs
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), None);
+        assert!(cache.inner.cache.is_empty());
     }
 }
