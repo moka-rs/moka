@@ -131,26 +131,36 @@ where
     }
 
     pub(crate) fn get_with_hash(&self, key: &K, hash: u64) -> Option<Arc<V>> {
-        if let Some(entry) = self.inner.get(key) {
-            match self.is_expired_entry(&entry) {
-                // Expired
-                (true, maybe_now) => {
-                    self.record_read_op(hash, Some(entry), maybe_now)
-                        .expect("Failed to record a get op");
+        let record = |entry, ts| {
+            self.record_read_op(hash, entry, ts)
+                .expect("Failed to record a get op")
+        };
+
+        match (self.inner.get(key), self.inner.has_expiry()) {
+            // Value not found.
+            (None, _) => {
+                record(None, None);
+                None
+            }
+            // Value found, no expiry.
+            (Some(entry), false) => {
+                let v = Arc::clone(&entry.value);
+                record(Some(entry), None);
+                Some(v)
+            }
+            // Value found, need to check if expired.
+            (Some(entry), true) => {
+                let now = Instant::now();
+                if self.inner.is_expired_entry(&entry, now) {
+                    // Record this access as a cache miss rather than a hit.
+                    record(None, None);
                     None
-                }
-                // Not expired
-                (false, maybe_now) => {
+                } else {
                     let v = Arc::clone(&entry.value);
-                    self.record_read_op(hash, Some(entry), maybe_now)
-                        .expect("Failed to record a get op");
+                    record(Some(entry), Some(now));
                     Some(v)
                 }
             }
-        } else {
-            self.record_read_op(hash, None, None)
-                .expect("Failed to record a get op");
-            None
         }
     }
 
@@ -282,37 +292,6 @@ where
     K: Eq + Hash,
     S: BuildHasher + Clone,
 {
-    #[inline]
-    fn is_expired_entry(&self, entry: &Arc<ValueEntry<K, V>>) -> (bool, Option<Instant>) {
-        let mut maybe_now = None;
-
-        // Time-to-idle
-        if let Some(time_to_idle) = self.inner.time_to_idle {
-            if let Some(last_accessed) = entry.last_accessed() {
-                maybe_now = Some(Instant::now());
-                if last_accessed + time_to_idle <= maybe_now.unwrap() {
-                    return (true, maybe_now);
-                }
-            }
-        }
-
-        // Time-to-live
-        // if let Some(time_to_live) = self.inner.time_to_live {
-        //     if maybe_now.is_none() {
-        //         maybe_now = Some(Instant::now());
-        //     }
-
-        //     if let Some(last_modified) = entry.last_modified() {
-        //         if last_modified + time_to_live <= maybe_now.unwrap() {
-        //             return (true, maybe_now);
-        //         }
-        //     }
-        // }
-
-        // Not expired
-        (false, maybe_now)
-    }
-
     #[inline]
     fn record_read_op(
         &self,
@@ -466,6 +445,12 @@ enum WriteOp<K, V> {
     Remove(Arc<ValueEntry<K, V>>),
 }
 
+trait AccessTime {
+    fn last_accessed(&self) -> Option<Instant>;
+    // fn last_modified(&self) -> Option<Instant>;
+    fn set_last_accessed(&mut self, timestamp: Instant);
+}
+
 type KeyDeqNode<K> = Option<NonNull<DeqNode<KeyHashDate<K>>>>;
 
 struct ValueEntry<K, V> {
@@ -480,7 +465,9 @@ impl<K, V> ValueEntry<K, V> {
             deq_node: UnsafeCell::new(deq_node),
         }
     }
+}
 
+impl<K, V> AccessTime for Arc<ValueEntry<K, V>> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
         unsafe { (*self.deq_node.get()).map(|node| node.as_ref().element.timestamp) }
@@ -492,10 +479,29 @@ impl<K, V> ValueEntry<K, V> {
     // }
 
     #[inline]
-    unsafe fn set_last_accessed(&self, timestamp: Instant) {
-        if let Some(mut node) = *self.deq_node.get() {
-            node.as_mut().element.timestamp = timestamp;
+    fn set_last_accessed(&mut self, timestamp: Instant) {
+        unsafe {
+            if let Some(mut node) = *self.deq_node.get() {
+                node.as_mut().element.timestamp = timestamp;
+            }
         }
+    }
+}
+
+impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
+    #[inline]
+    fn last_accessed(&self) -> Option<Instant> {
+        Some(self.element.timestamp)
+    }
+
+    // #[inline]
+    // fn last_modified(&self) -> Option<Instant> {
+    //     todo!()
+    // }
+
+    #[inline]
+    fn set_last_accessed(&mut self, timestamp: Instant) {
+        self.element.timestamp = timestamp;
     }
 }
 
@@ -568,10 +574,10 @@ where
         let ch = &self.read_op_ch;
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Hit(hash, entry, timestamp)) => {
+                Ok(Hit(hash, mut entry, timestamp)) => {
                     freq.increment(hash);
                     if let Some(ts) = timestamp {
-                        unsafe { entry.set_last_accessed(ts) };
+                        entry.set_last_accessed(ts);
                     }
                     deqs.move_to_back(entry)
                 }
@@ -595,15 +601,51 @@ where
         for _ in 0..count {
             match ch.try_recv() {
                 Ok(Insert(kh, entry)) => self.handle_insert(kh, entry, timestamp, deqs, &freq),
-                Ok(Update(entry)) => {
+                Ok(Update(mut entry)) => {
                     if let Some(ts) = timestamp {
-                        unsafe { entry.set_last_accessed(ts) };
+                        entry.set_last_accessed(ts);
                     }
                     deqs.move_to_back(entry)
                 }
                 Ok(Remove(entry)) => deqs.unlink(entry),
                 Err(_) => break,
             };
+        }
+    }
+
+    fn evict(&self, deqs: &mut Deques<K>, batch_size: usize) {
+        debug_assert!(self.has_expiry());
+
+        let now = Instant::now();
+        let mut expired_entries = Vec::default();
+
+        self.find_expired(&deqs.window, &mut expired_entries, batch_size, now); //    Empty yet.
+        self.find_expired(&deqs.probation, &mut expired_entries, batch_size, now);
+        self.find_expired(&deqs.protected, &mut expired_entries, batch_size, now); // Empty yet.
+
+        for entry in expired_entries {
+            deqs.unlink(entry);
+        }
+    }
+
+    #[inline]
+    fn find_expired(
+        &self,
+        deq: &Deque<KeyHashDate<K>>,
+        expired_entries: &mut Vec<Arc<ValueEntry<K, V>>>,
+        batch_size: usize,
+        now: Instant,
+    ) {
+        for _ in 0..batch_size {
+            if let Some(node) = deq.peek_front() {
+                if self.is_expired_entry(node, now) {
+                    if let Some(vic_entry) = self.cache.remove(&node.element.key) {
+                        expired_entries.push(vic_entry);
+                    }
+                } else {
+                    break;
+                }
+            }
         }
     }
 
@@ -619,6 +661,28 @@ where
     #[inline]
     fn has_expiry(&self) -> bool {
         self.time_to_live.is_some() || self.time_to_idle.is_some()
+    }
+
+    #[inline]
+    fn is_expired_entry(&self, entry: &impl AccessTime, now: Instant) -> bool {
+        debug_assert!(self.has_expiry());
+
+        // Time-to-idle
+        if let (Some(ts), Some(tti)) = (entry.last_accessed(), self.time_to_idle) {
+            if ts + tti <= now {
+                return true;
+            }
+        }
+
+        // Time-to-live
+        // if let (Some(ts), Some(ttl)) = (entry.last_modified(), self.time_to_live) {
+        //     if ts + ttl <= now {
+        //         return true;
+        //     }
+        // }
+
+        // Not expired
+        false
     }
 }
 
@@ -643,6 +707,7 @@ where
     fn do_sync(&self, mut deqs: MutexGuard<'_, Deques<K>>, max_repeats: usize) -> Option<SyncPace> {
         let mut calls = 0;
         let mut should_sync = true;
+        const EVICTION_BATCH_SIZE: usize = 500;
 
         while should_sync && calls <= max_repeats {
             let r_len = self.read_op_ch.len();
@@ -653,6 +718,10 @@ where
             let w_len = self.write_op_ch.len();
             if w_len > 0 {
                 self.apply_writes(&mut deqs, w_len);
+            }
+
+            if self.has_expiry() {
+                self.evict(&mut deqs, EVICTION_BATCH_SIZE);
             }
 
             calls += 1;
@@ -745,9 +814,9 @@ impl<K> KeyHashDate<K> {
 }
 
 struct Deques<K> {
-    window: Deque<KeyHashDate<K>>, //    Not yet used.
+    window: Deque<KeyHashDate<K>>, //    Not used yet.
     probation: Deque<KeyHashDate<K>>,
-    protected: Deque<KeyHashDate<K>>, // Not yet used.
+    protected: Deque<KeyHashDate<K>>, // Not used yet.
 }
 
 impl<K> Default for Deques<K> {
