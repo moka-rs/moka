@@ -595,7 +595,12 @@ where
         for _ in 0..count {
             match ch.try_recv() {
                 Ok(Insert(kh, entry)) => self.handle_insert(kh, entry, timestamp, deqs, &freq),
-                Ok(Update(entry)) => deqs.move_to_back(entry),
+                Ok(Update(entry)) => {
+                    if let Some(ts) = timestamp {
+                        unsafe { entry.set_last_accessed(ts) };
+                    }
+                    deqs.move_to_back(entry)
+                }
                 Ok(Remove(entry)) => deqs.unlink(entry),
                 Err(_) => break,
             };
