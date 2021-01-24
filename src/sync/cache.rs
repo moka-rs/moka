@@ -1,8 +1,8 @@
 use crate::{
     deque::{CacheRegion, DeqNode, Deque},
     frequency_sketch::FrequencySketch,
+    sync::{ConcurrentCache, ConcurrentCacheExt},
     thread_pool::{ThreadPool, ThreadPoolRegistry},
-    ConcurrentCache, ConcurrentCacheExt,
 };
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
@@ -1154,11 +1154,10 @@ impl Clone for UnsafeWeakPointer {
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
-    use quanta::Clock;
-
-    use crate::Builder;
-
+    use crate::sync::Builder;
     use super::{Cache, ConcurrentCache, ConcurrentCacheExt};
+
+    use quanta::Clock;
     use std::{sync::Arc, time::Duration};
 
     #[test]

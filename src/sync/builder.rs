@@ -1,4 +1,4 @@
-use crate::{Cache, SegmentedCache};
+use crate::sync::{Cache, SegmentedCache};
 
 use std::{
     collections::hash_map::RandomState,
@@ -105,7 +105,7 @@ impl<C> Builder<C> {
 #[cfg(test)]
 mod tests {
     use super::Builder;
-    use crate::ConcurrentCache;
+    use crate::sync::ConcurrentCache;
 
     use std::{sync::Arc, time::Duration};
 
