@@ -29,7 +29,7 @@ where
         }
     }
 
-    pub fn segment(self, num_segments: usize) -> Builder<SegmentedCache<K, V, RandomState>> {
+    pub fn segments(self, num_segments: usize) -> Builder<SegmentedCache<K, V, RandomState>> {
         Builder {
             capacity: self.capacity,
             num_segments: Some(num_segments),
@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn build_segmented_cache() {
         // SegmentCache<char, String>
-        let cache = Builder::new(100).segment(16).build();
+        let cache = Builder::new(100).segments(16).build();
 
         assert_eq!(cache.capacity(), 100);
         assert_eq!(cache.time_to_live(), None);
@@ -150,7 +150,7 @@ mod tests {
         assert_eq!(cache.get(&'b'), Some(Arc::new("Bob")));
 
         let cache = Builder::new(100)
-            .segment(16)
+            .segments(16)
             .time_to_live(Duration::from_secs(45 * 60))
             .time_to_idle(Duration::from_secs(15 * 60))
             .build();
