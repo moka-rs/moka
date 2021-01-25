@@ -1,13 +1,15 @@
-use super::thread_pool::{ThreadPool, ThreadPoolRegistry};
+use super::{
+    thread_pool::{ThreadPool, ThreadPoolRegistry},
+    unsafe_weak_pointer::UnsafeWeakPointer,
+};
 use crate::sync::cache::{
-    Inner, MAX_SYNC_REPEATS, PERIODICAL_SYNC_FAST_PACE_NANOS, PERIODICAL_SYNC_INITIAL_DELAY_MILLIS,
+    MAX_SYNC_REPEATS, PERIODICAL_SYNC_FAST_PACE_NANOS, PERIODICAL_SYNC_INITIAL_DELAY_MILLIS,
     PERIODICAL_SYNC_NORMAL_PACE_MILLIS,
 };
 
 use parking_lot::Mutex;
 use scheduled_thread_pool::JobHandle;
 use std::{
-    hash::{BuildHasher, Hash},
     marker::PhantomData,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -15,9 +17,6 @@ use std::{
     },
     time::Duration,
 };
-
-// TODO:
-// - Remove dependencies cache::Inter by using generics and traits.
 
 #[derive(PartialEq, Eq)]
 pub(crate) enum SyncPace {
@@ -35,17 +34,21 @@ impl SyncPace {
     }
 }
 
-pub(crate) struct Housekeeper<K, V, S> {
+pub(crate) trait InnerSync {
+    fn sync(&self, max_sync_repeats: usize) -> Option<SyncPace>;
+}
+
+pub(crate) struct Housekeeper<T> {
     inner: Arc<Mutex<UnsafeWeakPointer>>,
     thread_pool: Arc<ThreadPool>,
     is_shutting_down: Arc<AtomicBool>,
     periodical_sync_job: Mutex<Option<JobHandle>>,
     periodical_sync_running: Arc<Mutex<()>>,
     on_demand_sync_scheduled: Arc<AtomicBool>,
-    _marker: PhantomData<(K, V, S)>,
+    _marker: PhantomData<T>,
 }
 
-impl<K, V, S> Drop for Housekeeper<K, V, S> {
+impl<T> Drop for Housekeeper<T> {
     fn drop(&mut self) {
         // Disallow to create and/or run sync jobs by now.
         self.is_shutting_down.store(true, Ordering::Release);
@@ -66,17 +69,13 @@ impl<K, V, S> Drop for Housekeeper<K, V, S> {
 
         // All sync jobs should have been finished by now. Clean other stuff up.
         ThreadPoolRegistry::release_pool(&self.thread_pool);
-        std::mem::drop(unsafe { self.inner.lock().as_weak_arc::<K, V, S>() });
+        std::mem::drop(unsafe { self.inner.lock().as_weak_arc::<T>() });
     }
 }
 
 // functions/methods used by Cache
-impl<K, V, S> Housekeeper<K, V, S>
-where
-    K: Eq + Hash,
-    S: BuildHasher + Clone,
-{
-    pub(crate) fn new(inner: Weak<Inner<K, V, S>>) -> Self {
+impl<T: InnerSync> Housekeeper<T> {
+    pub(crate) fn new(inner: Weak<T>) -> Self {
         let thread_pool = ThreadPoolRegistry::acquire_default_pool();
 
         let inner_ptr = Arc::new(Mutex::new(UnsafeWeakPointer::from_weak_arc(inner)));
@@ -161,15 +160,11 @@ where
 }
 
 // private functions/methods
-impl<K, V, S> Housekeeper<K, V, S>
-where
-    K: Eq + Hash,
-    S: BuildHasher + Clone,
-{
+impl<T: InnerSync> Housekeeper<T> {
     fn call_sync(unsafe_weak_ptr: &Arc<Mutex<UnsafeWeakPointer>>) -> Option<SyncPace> {
         let lock = unsafe_weak_ptr.lock();
         // Restore the Weak pointer to Inner<K, V, S>.
-        let weak = unsafe { lock.as_weak_arc::<K, V, S>() };
+        let weak = unsafe { lock.as_weak_arc::<T>() };
         if let Some(inner) = weak.upgrade() {
             // TODO: Protect this call with catch_unwind().
             let sync_pace = inner.sync(MAX_SYNC_REPEATS);
@@ -180,61 +175,6 @@ where
             // Avoid to drop the Weak<Inner<K, V, S>>.
             UnsafeWeakPointer::forget_weak_arc(weak);
             None
-        }
-    }
-}
-
-/// WARNING: Do not use this struct unless you are absolutely sure
-/// what you are doing. Using this struct is unsafe and may cause
-/// memory related crashes and/or security vulnerabilities.
-///
-/// This struct exists with the sole purpose of avoiding compile
-/// errors relevant to the thread pool usages. The thread pool
-/// requires that the generic parameters on the `Cache` and `Inner`
-/// structs to have trait bounds `Send`, `Sync` and `'static`. This
-/// will be unacceptable for many cache usages.
-///
-/// This struct avoids the trait bounds by transmuting a pointer
-/// between `std::sync::Weak<Inner<K, V, S>>` and `usize`.
-///
-/// If you know a better solution than this, we would love te hear it.
-pub(crate) struct UnsafeWeakPointer {
-    // This is a std::sync::Weak pointer to Inner<K, V, S>.
-    raw_ptr: usize,
-}
-
-impl UnsafeWeakPointer {
-    pub(crate) fn from_weak_arc<K, V, S>(p: Weak<Inner<K, V, S>>) -> Self {
-        Self {
-            raw_ptr: unsafe { std::mem::transmute(p) },
-        }
-    }
-
-    pub(crate) unsafe fn as_weak_arc<K, V, S>(&self) -> Weak<Inner<K, V, S>> {
-        std::mem::transmute(self.raw_ptr)
-    }
-
-    pub(crate) fn forget_arc<K, V, S>(p: Arc<Inner<K, V, S>>) {
-        // Downgrade the Arc to Weak, then forget.
-        let weak = Arc::downgrade(&p);
-        std::mem::forget(weak);
-    }
-
-    pub(crate) fn forget_weak_arc<K, V, S>(p: Weak<Inner<K, V, S>>) {
-        std::mem::forget(p);
-    }
-}
-
-/// `clone()` simply creates a copy of the `raw_ptr`, effectively
-/// creating many copies of the same `Weak` pointer. We are doing this
-/// for a good reason for our use case.
-///
-/// When you want to drop the Weak pointer, ensure that you drop it
-/// only once for the same `raw_ptr` across clones.
-impl Clone for UnsafeWeakPointer {
-    fn clone(&self) -> Self {
-        Self {
-            raw_ptr: self.raw_ptr,
         }
     }
 }

@@ -3,7 +3,7 @@ use crate::{
         deque::{CacheRegion, DeqNode, Deque},
         deques::Deques,
         frequency_sketch::FrequencySketch,
-        housekeeper::{Housekeeper, SyncPace},
+        housekeeper::{Housekeeper, InnerSync, SyncPace},
         AccessTime, KeyHash, KeyHashDate, ReadOp, ValueEntry, WriteOp,
     },
     sync::{ConcurrentCache, ConcurrentCacheExt},
@@ -45,7 +45,7 @@ pub struct Cache<K, V, S = RandomState> {
     inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
     write_op_ch: Sender<WriteOp<K, V>>,
-    housekeeper: Option<Arc<Housekeeper<K, V, S>>>,
+    housekeeper: Option<Arc<Housekeeper<Inner<K, V, S>>>>,
 }
 
 impl<K, V, S> Drop for Cache<K, V, S> {
@@ -600,15 +600,6 @@ where
         }
     }
 
-    pub(crate) fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
-        if self.read_op_ch.is_empty() && self.write_op_ch.is_empty() && !self.has_expiry() {
-            return None;
-        }
-
-        let deqs = self.deques.lock();
-        self.do_sync(deqs, max_repeats)
-    }
-
     #[inline]
     fn current_time_from_expiration_clock(&self) -> Instant {
         if self.has_expiration_clock.load(Ordering::Relaxed) {
@@ -647,6 +638,21 @@ where
 
         // Not expired
         false
+    }
+}
+
+impl<K, V, S> InnerSync for Inner<K, V, S>
+where
+    K: Eq + Hash,
+    S: BuildHasher + Clone,
+{
+    fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
+        if self.read_op_ch.is_empty() && self.write_op_ch.is_empty() && !self.has_expiry() {
+            return None;
+        }
+
+        let deqs = self.deques.lock();
+        self.do_sync(deqs, max_repeats)
     }
 }
 
