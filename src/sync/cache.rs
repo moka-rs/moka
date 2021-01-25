@@ -1,8 +1,10 @@
 use crate::{
     common::{
         deque::{CacheRegion, DeqNode, Deque},
+        deques::Deques,
         frequency_sketch::FrequencySketch,
-        thread_pool::{ThreadPool, ThreadPoolRegistry},
+        housekeeper::{Housekeeper, SyncPace},
+        AccessTime, KeyHash, KeyHashDate, ReadOp, ValueEntry, WriteOp,
     },
     sync::{ConcurrentCache, ConcurrentCacheExt},
 };
@@ -10,22 +12,19 @@ use crate::{
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use quanta::{Clock, Instant};
-use scheduled_thread_pool::JobHandle;
 use std::{
-    cell::UnsafeCell,
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hash, Hasher},
-    marker::PhantomData,
     ptr::NonNull,
     rc::Rc,
     sync::{
         atomic::{AtomicBool, AtomicU8, Ordering},
-        Arc, Weak,
+        Arc,
     },
     time::Duration,
 };
 
-const MAX_SYNC_REPEATS: usize = 4;
+pub(crate) const MAX_SYNC_REPEATS: usize = 4;
 
 const READ_LOG_FLUSH_POINT: usize = 512;
 const READ_LOG_SIZE: usize = READ_LOG_FLUSH_POINT * (MAX_SYNC_REPEATS + 2);
@@ -38,9 +37,9 @@ const WRITE_LOG_SIZE: usize = WRITE_LOG_FLUSH_POINT * (MAX_SYNC_REPEATS + 2);
 const WRITE_THROTTLE_MICROS: u64 = 15;
 const WRITE_RETRY_INTERVAL_MICROS: u64 = 50;
 
-const PERIODICAL_SYNC_INITIAL_DELAY_MILLIS: u64 = 500;
-const PERIODICAL_SYNC_NORMAL_PACE_MILLIS: u64 = 300;
-const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
+pub(crate) const PERIODICAL_SYNC_INITIAL_DELAY_MILLIS: u64 = 500;
+pub(crate) const PERIODICAL_SYNC_NORMAL_PACE_MILLIS: u64 = 300;
+pub(crate) const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 
 pub struct Cache<K, V, S = RandomState> {
     inner: Arc<Inner<K, V, S>>,
@@ -423,7 +422,8 @@ where
     fn reconfigure_for_testing(&mut self) {
         // Stop the housekeeping job that may cause sync() method to return earlier.
         if let Some(housekeeper) = &self.housekeeper {
-            let mut job = housekeeper.periodical_sync_job.lock();
+            // TODO: Extract this into a housekeeper method.
+            let mut job = housekeeper.periodical_sync_job().lock();
             if let Some(job) = job.take() {
                 job.cancel();
             }
@@ -446,91 +446,10 @@ where
     }
 }
 
-struct KeyHash<K> {
-    key: Arc<K>,
-    hash: u64,
-}
-
-impl<K> KeyHash<K> {
-    fn new(key: Arc<K>, hash: u64) -> Self {
-        Self { key, hash }
-    }
-}
-
-enum ReadOp<K, V> {
-    Hit(u64, Arc<ValueEntry<K, V>>, Option<Instant>),
-    Miss(u64),
-}
-
-enum WriteOp<K, V> {
-    Insert(KeyHash<K>, Arc<ValueEntry<K, V>>),
-    Update(Arc<ValueEntry<K, V>>),
-    Remove(Arc<ValueEntry<K, V>>),
-}
-
-trait AccessTime {
-    fn last_accessed(&self) -> Option<Instant>;
-    // fn last_modified(&self) -> Option<Instant>;
-    fn set_last_accessed(&mut self, timestamp: Instant);
-}
-
-type KeyDeqNode<K> = Option<NonNull<DeqNode<KeyHashDate<K>>>>;
-
-struct ValueEntry<K, V> {
-    value: Arc<V>,
-    deq_node: UnsafeCell<KeyDeqNode<K>>,
-}
-
-impl<K, V> ValueEntry<K, V> {
-    fn new(value: Arc<V>, deq_node: KeyDeqNode<K>) -> Self {
-        Self {
-            value,
-            deq_node: UnsafeCell::new(deq_node),
-        }
-    }
-}
-
-impl<K, V> AccessTime for Arc<ValueEntry<K, V>> {
-    #[inline]
-    fn last_accessed(&self) -> Option<Instant> {
-        unsafe { (*self.deq_node.get()).map(|node| node.as_ref().element.timestamp) }
-    }
-
-    // #[inline]
-    // fn last_modified(&self) -> Option<Instant> {
-    //     todo!()
-    // }
-
-    #[inline]
-    fn set_last_accessed(&mut self, timestamp: Instant) {
-        unsafe {
-            if let Some(mut node) = *self.deq_node.get() {
-                node.as_mut().element.timestamp = timestamp;
-            }
-        }
-    }
-}
-
-impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
-    #[inline]
-    fn last_accessed(&self) -> Option<Instant> {
-        Some(self.element.timestamp)
-    }
-
-    // #[inline]
-    // fn last_modified(&self) -> Option<Instant> {
-    //     todo!()
-    // }
-
-    #[inline]
-    fn set_last_accessed(&mut self, timestamp: Instant) {
-        self.element.timestamp = timestamp;
-    }
-}
-
 type CacheStore<K, V, S> = cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
 
-struct Inner<K, V, S> {
+// TODO: Remove pub(crate) visibility.
+pub(crate) struct Inner<K, V, S> {
     capacity: usize,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
@@ -681,7 +600,7 @@ where
         }
     }
 
-    fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
+    pub(crate) fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
         if self.read_op_ch.is_empty() && self.write_op_ch.is_empty() && !self.has_expiry() {
             return None;
         }
@@ -837,318 +756,6 @@ where
                 // Remove the candidate from the cache.
                 self.cache.remove(&kh.key);
             }
-        }
-    }
-}
-
-struct KeyHashDate<K> {
-    key: Arc<K>,
-    hash: u64,
-    // Optional. Instant(0u64) for None.
-    timestamp: Instant,
-}
-
-impl<K> KeyHashDate<K> {
-    fn new(kh: KeyHash<K>, timestamp: Option<Instant>) -> Self {
-        Self {
-            key: kh.key,
-            hash: kh.hash,
-            timestamp: timestamp.unwrap_or_else(|| unsafe { std::mem::transmute(0u64) }),
-        }
-    }
-}
-
-struct Deques<K> {
-    window: Deque<KeyHashDate<K>>, //    Not used yet.
-    probation: Deque<KeyHashDate<K>>,
-    protected: Deque<KeyHashDate<K>>, // Not used yet.
-}
-
-impl<K> Default for Deques<K> {
-    fn default() -> Self {
-        Self {
-            window: Deque::new(CacheRegion::Window),
-            probation: Deque::new(CacheRegion::MainProbation),
-            protected: Deque::new(CacheRegion::MainProtected),
-        }
-    }
-}
-
-impl<K> Deques<K> {
-    fn push_back<V>(
-        &mut self,
-        region: CacheRegion,
-        kh: KeyHashDate<K>,
-        entry: &Arc<ValueEntry<K, V>>,
-    ) {
-        use CacheRegion::*;
-        let node = Box::new(DeqNode::new(region, kh));
-        let node = match node.as_ref().region {
-            Window => self.window.push_back(node),
-            MainProbation => self.probation.push_back(node),
-            MainProtected => self.protected.push_back(node),
-        };
-        unsafe { *(entry.deq_node.get()) = Some(node) };
-    }
-
-    fn move_to_back<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
-        use CacheRegion::*;
-        unsafe {
-            if let Some(node) = *entry.deq_node.get() {
-                let p = node.as_ref();
-                match &p.region {
-                    Window if self.window.contains(p) => self.window.move_to_back(node),
-                    MainProbation if self.probation.contains(p) => {
-                        self.probation.move_to_back(node)
-                    }
-                    MainProtected if self.protected.contains(p) => {
-                        self.protected.move_to_back(node)
-                    }
-                    region => eprintln!(
-                        "move_to_back - node is not a member of {:?} deque. {:?}",
-                        region, p
-                    ),
-                }
-            }
-        }
-    }
-
-    fn unlink<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
-        unsafe {
-            if let Some(node) = (*entry.deq_node.get()).take() {
-                self.unlink_node(node);
-            }
-        }
-    }
-
-    fn unlink_node(&mut self, node: NonNull<DeqNode<KeyHashDate<K>>>) {
-        use CacheRegion::*;
-        unsafe {
-            let p = node.as_ref();
-            match &p.region {
-                Window if self.window.contains(p) => self.window.unlink(node),
-                MainProbation if self.probation.contains(p) => self.probation.unlink(node),
-                MainProtected if self.protected.contains(p) => self.protected.unlink(node),
-                region => eprintln!(
-                    "unlink_node - node is not a member of {:?} deque. {:?}",
-                    region, p
-                ),
-            }
-        }
-    }
-}
-
-#[derive(PartialEq, Eq)]
-enum SyncPace {
-    Normal,
-    Fast,
-}
-
-impl SyncPace {
-    fn make_duration(&self) -> Duration {
-        use SyncPace::*;
-        match self {
-            Normal => Duration::from_millis(PERIODICAL_SYNC_NORMAL_PACE_MILLIS),
-            Fast => Duration::from_nanos(PERIODICAL_SYNC_FAST_PACE_NANOS),
-        }
-    }
-}
-
-struct Housekeeper<K, V, S> {
-    inner: Arc<Mutex<UnsafeWeakPointer>>,
-    thread_pool: Arc<ThreadPool>,
-    is_shutting_down: Arc<AtomicBool>,
-    periodical_sync_job: Mutex<Option<JobHandle>>,
-    periodical_sync_running: Arc<Mutex<()>>,
-    on_demand_sync_scheduled: Arc<AtomicBool>,
-    _marker: PhantomData<(K, V, S)>,
-}
-
-impl<K, V, S> Drop for Housekeeper<K, V, S> {
-    fn drop(&mut self) {
-        // Disallow to create and/or run sync jobs by now.
-        self.is_shutting_down.store(true, Ordering::Release);
-
-        // Cancel the periodical sync job. (This will not abort the job if it is
-        // already running)
-        if let Some(j) = self.periodical_sync_job.lock().take() {
-            j.cancel()
-        }
-
-        // Wait for the periodical sync job to finish.
-        let _ = self.periodical_sync_running.lock();
-
-        // Wait for the on-demand sync job to finish. (busy loop)
-        while self.on_demand_sync_scheduled.load(Ordering::Acquire) {
-            std::thread::sleep(Duration::from_millis(1));
-        }
-
-        // All sync jobs should have been finished by now. Clean other stuff up.
-        ThreadPoolRegistry::release_pool(&self.thread_pool);
-        std::mem::drop(unsafe { self.inner.lock().as_weak_arc::<K, V, S>() });
-    }
-}
-
-// functions/methods used by Cache
-impl<K, V, S> Housekeeper<K, V, S>
-where
-    K: Eq + Hash,
-    S: BuildHasher + Clone,
-{
-    fn new(inner: Weak<Inner<K, V, S>>) -> Self {
-        let thread_pool = ThreadPoolRegistry::acquire_default_pool();
-
-        let inner_ptr = Arc::new(Mutex::new(UnsafeWeakPointer::from_weak_arc(inner)));
-        let is_shutting_down = Arc::new(AtomicBool::new(false));
-        let periodical_sync_running = Arc::new(Mutex::new(()));
-        let periodical_sync_pace = Arc::new(Mutex::new(SyncPace::Normal));
-
-        let housekeeper_closure = {
-            // The following Arc clones will be moved into the housekeeper closure.
-            let unsafe_weak_ptr = Arc::clone(&inner_ptr);
-            let shutting_down = Arc::clone(&is_shutting_down);
-            let sync_running = Arc::clone(&periodical_sync_running);
-            let sync_pace = Arc::clone(&periodical_sync_pace);
-
-            move || {
-                // To avoid dead-locking with other thread, acquire the lock at very beginning.
-                let mut sync_pace = sync_pace.lock();
-                if !shutting_down.load(Ordering::Acquire) {
-                    let _lock = sync_running.lock();
-                    if let Some(new_pace) = Self::call_sync(&unsafe_weak_ptr) {
-                        if *sync_pace != new_pace {
-                            *sync_pace = new_pace
-                        }
-                    }
-                }
-                // TODO: Check what would happen if the closure returns None.
-                Some(sync_pace.make_duration())
-            }
-        };
-
-        let initial_delay = Duration::from_millis(PERIODICAL_SYNC_INITIAL_DELAY_MILLIS);
-
-        // Execute a task in a worker thread.
-        let job = thread_pool
-            .pool
-            .execute_with_dynamic_delay(initial_delay, housekeeper_closure);
-
-        Self {
-            inner: inner_ptr,
-            thread_pool,
-            is_shutting_down,
-            periodical_sync_job: Mutex::new(Some(job)),
-            periodical_sync_running,
-            on_demand_sync_scheduled: Arc::new(AtomicBool::new(false)),
-            _marker: PhantomData::default(),
-        }
-    }
-
-    fn try_schedule_sync(&self) -> bool {
-        // TODO: Check if these `Orderings` are correct.
-
-        // If shutting down, do not schedule the task.
-        if self.is_shutting_down.load(Ordering::Acquire) {
-            return false;
-        }
-
-        // Try to flip the value of sync_scheduled from false to true.
-        match self.on_demand_sync_scheduled.compare_exchange(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ) {
-            Ok(_) => {
-                let unsafe_weak_ptr = Arc::clone(&self.inner);
-                let sync_scheduled = Arc::clone(&self.on_demand_sync_scheduled);
-                // Execute a task in a worker thread.
-                self.thread_pool.pool.execute(move || {
-                    Self::call_sync(&unsafe_weak_ptr);
-                    sync_scheduled.store(false, Ordering::Release);
-                });
-                true
-            }
-            Err(_) => false,
-        }
-    }
-}
-
-// private functions/methods
-impl<K, V, S> Housekeeper<K, V, S>
-where
-    K: Eq + Hash,
-    S: BuildHasher + Clone,
-{
-    fn call_sync(unsafe_weak_ptr: &Arc<Mutex<UnsafeWeakPointer>>) -> Option<SyncPace> {
-        let lock = unsafe_weak_ptr.lock();
-        // Restore the Weak pointer to Inner<K, V, S>.
-        let weak = unsafe { lock.as_weak_arc::<K, V, S>() };
-        if let Some(inner) = weak.upgrade() {
-            // TODO: Protect this call with catch_unwind().
-            let sync_pace = inner.sync(MAX_SYNC_REPEATS);
-            // Avoid to drop the Arc<Inner<K, V, S>>.
-            UnsafeWeakPointer::forget_arc(inner);
-            sync_pace
-        } else {
-            // Avoid to drop the Weak<Inner<K, V, S>>.
-            UnsafeWeakPointer::forget_weak_arc(weak);
-            None
-        }
-    }
-}
-
-/// WARNING: Do not use this struct unless you are absolutely sure
-/// what you are doing. Using this struct is unsafe and may cause
-/// memory related crashes and/or security vulnerabilities.
-///
-/// This struct exists with the sole purpose of avoiding compile
-/// errors relevant to the thread pool usages. The thread pool
-/// requires that the generic parameters on the `Cache` and `Inner`
-/// structs to have trait bounds `Send`, `Sync` and `'static`. This
-/// will be unacceptable for many cache usages.
-///
-/// This struct avoids the trait bounds by transmuting a pointer
-/// between `std::sync::Weak<Inner<K, V, S>>` and `usize`.
-///
-/// If you know a better solution than this, we would love te hear it.
-struct UnsafeWeakPointer {
-    // This is a std::sync::Weak pointer to Inner<K, V, S>.
-    raw_ptr: usize,
-}
-
-impl UnsafeWeakPointer {
-    fn from_weak_arc<K, V, S>(p: Weak<Inner<K, V, S>>) -> Self {
-        Self {
-            raw_ptr: unsafe { std::mem::transmute(p) },
-        }
-    }
-
-    unsafe fn as_weak_arc<K, V, S>(&self) -> Weak<Inner<K, V, S>> {
-        std::mem::transmute(self.raw_ptr)
-    }
-
-    fn forget_arc<K, V, S>(p: Arc<Inner<K, V, S>>) {
-        // Downgrade the Arc to Weak, then forget.
-        let weak = Arc::downgrade(&p);
-        std::mem::forget(weak);
-    }
-
-    fn forget_weak_arc<K, V, S>(p: Weak<Inner<K, V, S>>) {
-        std::mem::forget(p);
-    }
-}
-
-/// `clone()` simply creates a copy of the `raw_ptr`, effectively
-/// creating many copies of the same `Weak` pointer. We are doing this
-/// for a good reason for our use case.
-///
-/// When you want to drop the Weak pointer, ensure that you drop it
-/// only once for the same `raw_ptr` across clones.
-impl Clone for UnsafeWeakPointer {
-    fn clone(&self) -> Self {
-        Self {
-            raw_ptr: self.raw_ptr,
         }
     }
 }

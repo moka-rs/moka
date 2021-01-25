@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 mod builder;
-mod cache;
+pub(crate) mod cache;
 mod segment;
 
 pub use builder::Builder;
