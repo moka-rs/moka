@@ -124,6 +124,8 @@
 
 pub mod sync;
 
-mod deque;
-mod frequency_sketch;
-mod thread_pool;
+pub(crate) mod common {
+    pub(crate) mod deque;
+    pub(crate) mod frequency_sketch;
+    pub(crate) mod thread_pool;
+}

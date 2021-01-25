@@ -1,8 +1,10 @@
 use crate::{
-    deque::{CacheRegion, DeqNode, Deque},
-    frequency_sketch::FrequencySketch,
+    common::{
+        deque::{CacheRegion, DeqNode, Deque},
+        frequency_sketch::FrequencySketch,
+        thread_pool::{ThreadPool, ThreadPoolRegistry},
+    },
     sync::{ConcurrentCache, ConcurrentCacheExt},
-    thread_pool::{ThreadPool, ThreadPoolRegistry},
 };
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
