@@ -19,6 +19,7 @@ pub(crate) enum CacheRegion {
     Window,
     MainProbation,
     MainProtected,
+    WriteOrder,
 }
 
 #[derive(PartialEq, Eq)]
@@ -94,26 +95,6 @@ impl<T> Deque<T> {
         self.region == node.region && (node.prev.is_some() || self.is_head(node))
     }
 
-    /// Adds the given node to the front of the list.
-    // pub(crate) fn push_front(&mut self, mut node: Box<DeqNode<T>>) {
-    //     // This method takes care not to create mutable references to whole nodes,
-    //     // to maintain validity of aliasing pointers into `element`.
-    //     unsafe {
-    //         node.next = self.head;
-    //         node.prev = None;
-    //         let node = Some(NonNull::new(Box::into_raw(node)).expect("Got a null ptr"));
-
-    //         match self.head {
-    //             None => self.tail = node,
-    //             // Not creating new mutable (unique!) references overlapping `element`.
-    //             Some(head) => (*head.as_ptr()).prev = node,
-    //         }
-
-    //         self.head = node;
-    //         self.len += 1;
-    //     }
-    // }
-
     pub(crate) fn peek_front(&self) -> Option<&DeqNode<T>> {
         // This method takes care not to create mutable references to whole nodes,
         // to maintain validity of aliasing pointers into `element`.
@@ -125,7 +106,7 @@ impl<T> Deque<T> {
         // This method takes care not to create mutable references to whole nodes,
         // to maintain validity of aliasing pointers into `element`.
         self.head.map(|node| unsafe {
-            let node = Box::from_raw(node.as_ptr());
+            let mut node = Box::from_raw(node.as_ptr());
             self.head = node.next;
 
             match self.head {
@@ -135,6 +116,9 @@ impl<T> Deque<T> {
             }
 
             self.len -= 1;
+
+            node.prev = None;
+            node.next = None;
             node
         })
     }
@@ -166,25 +150,6 @@ impl<T> Deque<T> {
             node
         }
     }
-
-    /// Removes and returns the node at the back of the list.
-    // pub(crate) fn pop_back(&mut self) -> Option<Box<DeqNode<T>>> {
-    //     // This method takes care not to create mutable references to whole nodes,
-    //     // to maintain validity of aliasing pointers into `element`.
-    //     self.tail.map(|node| unsafe {
-    //         let node = Box::from_raw(node.as_ptr());
-    //         self.tail = node.prev;
-
-    //         match self.tail {
-    //             None => self.head = None,
-    //             // Not creating new mutable (unique!) references overlapping `element`.
-    //             Some(tail) => (*tail.as_ptr()).next = None,
-    //         }
-
-    //         self.len -= 1;
-    //         node
-    //     })
-    // }
 
     /// Panics:
     pub(crate) unsafe fn move_to_back(&mut self, mut node: NonNull<DeqNode<T>>) {

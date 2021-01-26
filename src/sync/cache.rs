@@ -4,7 +4,7 @@ use crate::common::{
     deques::Deques,
     frequency_sketch::FrequencySketch,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
-    AccessTime, KeyHash, KeyHashDate, ReadOp, ValueEntry, WriteOp,
+    AccessTime, KeyDate, KeyHash, KeyHashDate, ReadOp, ValueEntry, WriteOp,
 };
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
@@ -150,7 +150,9 @@ where
             // Value found, need to check if expired.
             (Some(entry), true) => {
                 let now = self.inner.current_time_from_expiration_clock();
-                if self.inner.is_expired_entry(&entry, now) {
+                if self.inner.is_expired_entry_wo(&entry, now)
+                    || self.inner.is_expired_entry_ao(&entry, now)
+                {
                     // Record this access as a cache miss rather than a hit.
                     record(None, None);
                     None
@@ -187,19 +189,20 @@ where
             Arc::clone(&key),
             // on_insert
             || {
-                let entry = Arc::new(ValueEntry::new(Arc::clone(&value), None));
+                let entry = Arc::new(ValueEntry::new(Arc::clone(&value), None, None));
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((cnt, WriteOp::Insert(KeyHash::new(key, hash), entry.clone())));
                 entry
             },
             // on_modify
             |_k, old_entry| {
-                // Clear the deq_node of the old_entry. This is needed as an Arc
+                // Clear the q_nodes of the old_entry. This is needed as an Arc
                 // pointer to the old (stale) entry might be in the read op queue.
-                let deq_node = unsafe { (*old_entry.deq_node.get()).take() };
-                // Create a new entry using the new value and the deq_node taken
+                let aoq_node = unsafe { (*old_entry.access_order_q_node.get()).take() };
+                let woq_node = unsafe { (*old_entry.write_order_q_node.get()).take() };
+                // Create a new entry using the new value and the q_nodes taken
                 // from the old_entry.
-                let entry = Arc::new(ValueEntry::new(Arc::clone(&value), deq_node));
+                let entry = Arc::new(ValueEntry::new(Arc::clone(&value), aoq_node, woq_node));
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((cnt, WriteOp::Update(entry.clone())));
                 entry
@@ -367,9 +370,6 @@ where
         let len = self.read_op_ch.len();
 
         if self.should_apply_reads(len) {
-            // if let Some(ref mut deqs) = self.inner.deques.try_lock() {
-            //     self.inner.apply_reads(deqs, len);
-            // }
             if let Some(h) = &self.housekeeper {
                 h.try_schedule_sync();
             }
@@ -381,11 +381,6 @@ where
         let w_len = self.write_op_ch.len();
 
         if self.should_apply_writes(w_len) {
-            // let r_len = self.read_op_ch.len();
-            // if let Some(ref mut deqs) = self.inner.deques.try_lock() {
-            //     self.inner.apply_reads(deqs, r_len);
-            //     self.inner.apply_writes(deqs, w_len);
-            // }
             if let Some(h) = &self.housekeeper {
                 h.try_schedule_sync();
             }
@@ -522,7 +517,7 @@ where
                     if let Some(ts) = timestamp {
                         entry.set_last_accessed(ts);
                     }
-                    deqs.move_to_back(entry)
+                    deqs.move_to_back_ao(entry)
                 }
                 Ok(Miss(hash)) => freq.increment(hash),
                 Err(_) => break,
@@ -548,9 +543,13 @@ where
                     if let Some(ts) = timestamp {
                         entry.set_last_accessed(ts);
                     }
-                    deqs.move_to_back(entry)
+                    deqs.move_to_back_ao(Arc::clone(&entry));
+                    deqs.move_to_back_wo(entry)
                 }
-                Ok(Remove(entry)) => deqs.unlink(entry),
+                Ok(Remove(entry)) => {
+                    deqs.unlink_ao(Arc::clone(&entry));
+                    deqs.unlink_wo(entry)
+                }
                 Err(_) => break,
             };
         }
@@ -560,35 +559,68 @@ where
         debug_assert!(self.has_expiry());
 
         let now = self.current_time_from_expiration_clock();
-        let mut expired_entries = Vec::default();
 
-        self.find_expired(&mut deqs.window, &mut expired_entries, batch_size, now); //    Empty yet.
-        self.find_expired(&mut deqs.probation, &mut expired_entries, batch_size, now);
-        self.find_expired(&mut deqs.protected, &mut expired_entries, batch_size, now);
-        // Empty yet.
+        if self.time_to_live.is_some() {
+            let mut expired_entries = Vec::default();
+            self.remove_expired_wo(&mut deqs.write_order, &mut expired_entries, batch_size, now);
+            for entry in expired_entries {
+                deqs.unlink_ao(entry);
+            }
+        }
 
-        // for entry in expired_entries {
-        //     deqs.unlink(entry);
-        // }
+        if self.time_to_idle.is_some() {
+            let mut expired_entries = Vec::default();
+            self.remove_expired_ao(&mut deqs.window, &mut expired_entries, batch_size, now);
+            self.remove_expired_ao(&mut deqs.probation, &mut expired_entries, batch_size, now);
+            self.remove_expired_ao(&mut deqs.protected, &mut expired_entries, batch_size, now);
+            for entry in expired_entries {
+                deqs.unlink_wo(entry);
+            }
+        }
     }
 
     #[inline]
-    fn find_expired(
+    fn remove_expired_ao(
         &self,
         deq: &mut Deque<KeyHashDate<K>>,
-        _expired_entries: &mut Vec<Arc<ValueEntry<K, V>>>,
+        expired_entries: &mut Vec<Arc<ValueEntry<K, V>>>,
         batch_size: usize,
         now: Instant,
     ) {
         for _ in 0..batch_size {
             let is_expired = deq
                 .peek_front()
-                .map(|node| self.is_expired_entry(node, now))
+                .map(|node| self.is_expired_entry_ao(node, now))
                 .unwrap_or(false);
             if is_expired {
                 if let Some(node) = deq.pop_front() {
-                    if let Some(_vic_entry) = self.cache.remove(&node.element.key) {
-                        // expired_entries.push(vic_entry);
+                    if let Some(vic_entry) = self.cache.remove(&node.element.key) {
+                        expired_entries.push(vic_entry);
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+    }
+
+    #[inline]
+    fn remove_expired_wo(
+        &self,
+        deq: &mut Deque<KeyDate<K>>,
+        expired_entries: &mut Vec<Arc<ValueEntry<K, V>>>,
+        batch_size: usize,
+        now: Instant,
+    ) {
+        for _ in 0..batch_size {
+            let is_expired = deq
+                .peek_front()
+                .map(|node| self.is_expired_entry_wo(node, now))
+                .unwrap_or(false);
+            if is_expired {
+                if let Some(node) = deq.pop_front() {
+                    if let Some(vic_entry) = self.cache.remove(&node.element.key) {
+                        expired_entries.push(vic_entry);
                     }
                 }
             } else {
@@ -616,24 +648,26 @@ where
     }
 
     #[inline]
-    fn is_expired_entry(&self, entry: &impl AccessTime, now: Instant) -> bool {
+    fn is_expired_entry_ao(&self, entry: &impl AccessTime, now: Instant) -> bool {
         debug_assert!(self.has_expiry());
-
-        // Time-to-idle
         if let (Some(ts), Some(tti)) = (entry.last_accessed(), self.time_to_idle) {
             if ts + tti <= now {
                 return true;
             }
         }
 
-        // Time-to-live
-        // if let (Some(ts), Some(ttl)) = (entry.last_modified(), self.time_to_live) {
-        //     if ts + ttl <= now {
-        //         return true;
-        //     }
-        // }
+        false
+    }
 
-        // Not expired
+    #[inline]
+    fn is_expired_entry_wo(&self, entry: &impl AccessTime, now: Instant) -> bool {
+        debug_assert!(self.has_expiry());
+        if let (Some(ts), Some(tti)) = (entry.last_modified(), self.time_to_idle) {
+            if ts + tti <= now {
+                return true;
+            }
+        }
+
         false
     }
 }
@@ -728,11 +762,15 @@ where
     ) {
         if self.cache.len() <= self.capacity {
             // Add the candidate to the deque.
-            deqs.push_back(
+            let key = Arc::clone(&kh.key);
+            deqs.push_back_ao(
                 CacheRegion::MainProbation,
                 KeyHashDate::new(kh, timestamp),
                 &entry,
             );
+            if self.time_to_live.is_some() {
+                deqs.push_back_wo(KeyDate::new(key, timestamp), &entry);
+            }
         } else {
             let victim = self.find_cache_victim(deqs, freq);
             if self.admit(kh.hash, victim, freq) {
@@ -744,13 +782,14 @@ where
                 // from the deque is still on the write operations queue and is not
                 // yet executed.
                 if let Some(vic_entry) = self.cache.remove(&victim.element.key) {
-                    deqs.unlink(vic_entry);
+                    deqs.unlink_ao(Arc::clone(&vic_entry));
+                    deqs.unlink_wo(vic_entry);
                 } else {
                     let victim = NonNull::from(victim);
-                    deqs.unlink_node(victim)
+                    deqs.unlink_node_ao(victim);
                 }
                 // Add the candidate to the deque.
-                deqs.push_back(
+                deqs.push_back_ao(
                     CacheRegion::MainProbation,
                     KeyHashDate::new(kh, timestamp),
                     &entry,
