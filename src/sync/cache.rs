@@ -446,8 +446,7 @@ where
 
 type CacheStore<K, V, S> = cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
 
-// TODO: Remove pub(crate) visibility.
-pub(crate) struct Inner<K, V, S> {
+struct Inner<K, V, S> {
     capacity: usize,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
