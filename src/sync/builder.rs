@@ -1,4 +1,4 @@
-use crate::sync::{Cache, SegmentedCache};
+use super::{Cache, SegmentedCache};
 
 use std::{
     collections::hash_map::RandomState,

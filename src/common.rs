@@ -1,5 +1,3 @@
-use self::deque::DeqNode;
-
 use quanta::Instant;
 use std::{cell::UnsafeCell, ptr::NonNull, sync::Arc};
 
@@ -9,6 +7,8 @@ pub(crate) mod frequency_sketch;
 pub(crate) mod housekeeper;
 pub(crate) mod thread_pool;
 pub(crate) mod unsafe_weak_pointer;
+
+use self::deque::DeqNode;
 
 pub(crate) struct KeyHash<K> {
     pub(crate) key: Arc<K>,

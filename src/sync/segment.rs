@@ -1,4 +1,4 @@
-use crate::sync::{cache::Cache, ConcurrentCache, ConcurrentCacheExt};
+use super::{cache::Cache, ConcurrentCache, ConcurrentCacheExt};
 
 use std::{
     collections::hash_map::RandomState,

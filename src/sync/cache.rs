@@ -1,12 +1,10 @@
-use crate::{
-    common::{
-        deque::{CacheRegion, DeqNode, Deque},
-        deques::Deques,
-        frequency_sketch::FrequencySketch,
-        housekeeper::{Housekeeper, InnerSync, SyncPace},
-        AccessTime, KeyHash, KeyHashDate, ReadOp, ValueEntry, WriteOp,
-    },
-    sync::{ConcurrentCache, ConcurrentCacheExt},
+use super::{ConcurrentCache, ConcurrentCacheExt};
+use crate::common::{
+    deque::{CacheRegion, DeqNode, Deque},
+    deques::Deques,
+    frequency_sketch::FrequencySketch,
+    housekeeper::{Housekeeper, InnerSync, SyncPace},
+    AccessTime, KeyHash, KeyHashDate, ReadOp, ValueEntry, WriteOp,
 };
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
