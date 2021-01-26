@@ -108,14 +108,19 @@
 //!
 //! ## Expiration
 //!
-//! Cache expiration policies such as time-to-live are planned but not
-//! implemented in the current release of this crate.
+//! Current release supports the following cache expiration policies:
 //!
-//! A future release will provide such policies with O(1) time
-//! complexity:
+//! - The time-to-live policy
+//! - The time-to-idle policy
 //!
-//! - The time-to-live policy will use a write-order queue.
-//! - The time-to-idle policy will use an access-order queue.
+//! A future release will support the following:
+//!
+//! - The variable expiration
+//!
+//! These policies are provided with O(1) time complexity:
+//!
+//! - The time-to-live policy uses a write-order queue.
+//! - The time-to-idle policy uses an access-order queue.
 //! - The variable expiration will use a
 //!   [hierarchical timer wheel][timer-wheel].
 //!
