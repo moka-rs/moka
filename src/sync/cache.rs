@@ -569,12 +569,14 @@ where
         }
 
         if self.time_to_idle.is_some() {
-            let mut expired_entries = Vec::default();
+            let mut expired_entries = self.time_to_live.map(|_| Vec::default());
             self.remove_expired_ao(&mut deqs.window, &mut expired_entries, batch_size, now);
             self.remove_expired_ao(&mut deqs.probation, &mut expired_entries, batch_size, now);
             self.remove_expired_ao(&mut deqs.protected, &mut expired_entries, batch_size, now);
-            for entry in expired_entries {
-                deqs.unlink_wo(entry);
+            if let Some(entries) = expired_entries {
+                for entry in entries {
+                    deqs.unlink_wo(entry);
+                }
             }
         }
     }
@@ -583,7 +585,7 @@ where
     fn remove_expired_ao(
         &self,
         deq: &mut Deque<KeyHashDate<K>>,
-        expired_entries: &mut Vec<Arc<ValueEntry<K, V>>>,
+        expired_entries: &mut Option<Vec<Arc<ValueEntry<K, V>>>>,
         batch_size: usize,
         now: Instant,
     ) {
@@ -594,8 +596,9 @@ where
                 .unwrap_or(false);
             if is_expired {
                 if let Some(node) = deq.pop_front() {
-                    if let Some(vic_entry) = self.cache.remove(&node.element.key) {
-                        expired_entries.push(vic_entry);
+                    let removed = self.cache.remove(&node.element.key);
+                    if let (Some(entry), Some(entries)) = (removed, expired_entries.as_mut()) {
+                        entries.push(entry);
                     }
                 }
             } else {
@@ -619,8 +622,8 @@ where
                 .unwrap_or(false);
             if is_expired {
                 if let Some(node) = deq.pop_front() {
-                    if let Some(vic_entry) = self.cache.remove(&node.element.key) {
-                        expired_entries.push(vic_entry);
+                    if let Some(entry) = self.cache.remove(&node.element.key) {
+                        expired_entries.push(entry);
                     }
                 }
             } else {
@@ -655,19 +658,17 @@ where
                 return true;
             }
         }
-
         false
     }
 
     #[inline]
     fn is_expired_entry_wo(&self, entry: &impl AccessTime, now: Instant) -> bool {
         debug_assert!(self.has_expiry());
-        if let (Some(ts), Some(tti)) = (entry.last_modified(), self.time_to_idle) {
+        if let (Some(ts), Some(tti)) = (entry.last_modified(), self.time_to_live) {
             if ts + tti <= now {
                 return true;
             }
         }
-
         false
     }
 }
@@ -889,7 +890,54 @@ mod tests {
     }
 
     #[test]
-    fn expirations() {
+    fn time_to_live() {
+        let mut cache = Builder::new(100)
+            .time_to_live(Duration::from_secs(10))
+            .build();
+
+        cache.reconfigure_for_testing();
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        assert_eq!(cache.insert("a", "alice"), Arc::new("alice"));
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
+
+        mock.increment(Duration::from_secs(5)); // 10 secs.
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), None);
+        assert!(cache.inner.cache.is_empty());
+
+        assert_eq!(cache.insert("b", "bob"), Arc::new("bob"));
+        cache.sync();
+
+        assert_eq!(cache.inner.cache.len(), 1);
+
+        mock.increment(Duration::from_secs(5)); // 15 secs.
+        cache.sync();
+
+        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.inner.cache.len(), 1);
+
+        mock.increment(Duration::from_secs(5)); // 20 secs
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), None);
+        assert!(cache.inner.cache.is_empty());
+    }
+
+    #[test]
+    fn time_to_idle() {
         let mut cache = Builder::new(100)
             .time_to_idle(Duration::from_secs(10))
             .build();
@@ -906,15 +954,17 @@ mod tests {
         cache.sync();
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        cache.sync();
 
         assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        cache.sync();
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
+        cache.sync();
 
         assert_eq!(cache.insert("b", "bob"), Arc::new("bob"));
-        assert_eq!(cache.inner.cache.len(), 2);
         cache.sync();
+
+        assert_eq!(cache.inner.cache.len(), 2);
 
         mock.increment(Duration::from_secs(5)); // 15 secs.
         cache.sync();
