@@ -539,6 +539,7 @@ where
                 Ok(Update(mut entry)) => {
                     if let Some(ts) = timestamp {
                         entry.set_last_accessed(ts);
+                        entry.set_last_modified(ts);
                     }
                     deqs.move_to_back_ao(Arc::clone(&entry));
                     deqs.move_to_back_wo(entry)
@@ -661,8 +662,8 @@ where
     #[inline]
     fn is_expired_entry_wo(&self, entry: &impl AccessTime, now: Instant) -> bool {
         debug_assert!(self.has_expiry());
-        if let (Some(ts), Some(tti)) = (entry.last_modified(), self.time_to_live) {
-            if ts + tti <= now {
+        if let (Some(ts), Some(ttl)) = (entry.last_modified(), self.time_to_live) {
+            if ts + ttl <= now {
                 return true;
             }
         }

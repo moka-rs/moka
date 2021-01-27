@@ -78,8 +78,9 @@ impl<K, V> ValueEntry<K, V> {
 
 pub(crate) trait AccessTime {
     fn last_accessed(&self) -> Option<Instant>;
-    fn last_modified(&self) -> Option<Instant>;
     fn set_last_accessed(&mut self, timestamp: Instant);
+    fn last_modified(&self) -> Option<Instant>;
+    fn set_last_modified(&mut self, timestamp: Instant);
 }
 
 impl<K, V> AccessTime for Arc<ValueEntry<K, V>> {
@@ -89,14 +90,22 @@ impl<K, V> AccessTime for Arc<ValueEntry<K, V>> {
     }
 
     #[inline]
+    fn set_last_accessed(&mut self, timestamp: Instant) {
+        unsafe {
+            if let Some(mut node) = *self.access_order_q_node.get() {
+                node.as_mut().element.timestamp = timestamp;
+            }
+        }
+    }
+
+    #[inline]
     fn last_modified(&self) -> Option<Instant> {
         unsafe { (*self.write_order_q_node.get()).map(|node| node.as_ref().element.timestamp) }
     }
 
-    #[inline]
-    fn set_last_accessed(&mut self, timestamp: Instant) {
+    fn set_last_modified(&mut self, timestamp: Instant) {
         unsafe {
-            if let Some(mut node) = *self.access_order_q_node.get() {
+            if let Some(mut node) = *self.write_order_q_node.get() {
                 node.as_mut().element.timestamp = timestamp;
             }
         }
@@ -110,12 +119,15 @@ impl<K> AccessTime for DeqNode<KeyDate<K>> {
     }
 
     #[inline]
+    fn set_last_accessed(&mut self, _timestamp: Instant) { /* do nothing */
+    }
+
+    #[inline]
     fn last_modified(&self) -> Option<Instant> {
         Some(self.element.timestamp)
     }
 
-    #[inline]
-    fn set_last_accessed(&mut self, timestamp: Instant) {
+    fn set_last_modified(&mut self, timestamp: Instant) {
         self.element.timestamp = timestamp;
     }
 }
@@ -127,13 +139,17 @@ impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
     }
 
     #[inline]
+    fn set_last_accessed(&mut self, timestamp: Instant) {
+        self.element.timestamp = timestamp;
+    }
+
+    #[inline]
     fn last_modified(&self) -> Option<Instant> {
         None
     }
 
     #[inline]
-    fn set_last_accessed(&mut self, timestamp: Instant) {
-        self.element.timestamp = timestamp;
+    fn set_last_modified(&mut self, _timestamp: Instant) { /* do nothing */
     }
 }
 
