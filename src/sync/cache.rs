@@ -153,10 +153,11 @@ where
                 if self.inner.is_expired_entry_wo(&entry, now)
                     || self.inner.is_expired_entry_ao(&entry, now)
                 {
-                    // Record this access as a cache miss rather than a hit.
+                    // Expired entry. Record this access as a cache miss rather than a hit.
                     record(None, None);
                     None
                 } else {
+                    // Valid entry.
                     let v = Arc::clone(&entry.value);
                     record(Some(entry), Some(now));
                     Some(v)
@@ -196,12 +197,8 @@ where
             },
             // on_modify
             |_k, old_entry| {
-                // Clear the q_nodes of the old_entry. This is needed as an Arc
-                // pointer to the old (stale) entry might be in the read op queue.
-                let aoq_node = unsafe { (*old_entry.access_order_q_node.get()).take() };
-                let woq_node = unsafe { (*old_entry.write_order_q_node.get()).take() };
-                // Create a new entry using the new value and the q_nodes taken
-                // from the old_entry.
+                let aoq_node = unsafe { (*old_entry.access_order_q_node.get()).clone() };
+                let woq_node = unsafe { (*old_entry.write_order_q_node.get()).clone() };
                 let entry = Arc::new(ValueEntry::new(Arc::clone(&value), aoq_node, woq_node));
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((cnt, WriteOp::Update(entry.clone())));
