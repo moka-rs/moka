@@ -197,8 +197,8 @@ where
             },
             // on_modify
             |_k, old_entry| {
-                let aoq_node = unsafe { (*old_entry.access_order_q_node.get()).clone() };
-                let woq_node = unsafe { (*old_entry.write_order_q_node.get()).clone() };
+                let aoq_node = unsafe { *old_entry.access_order_q_node.get() };
+                let woq_node = unsafe { *old_entry.write_order_q_node.get() };
                 let entry = Arc::new(ValueEntry::new(Arc::clone(&value), aoq_node, woq_node));
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((cnt, WriteOp::Update(entry.clone())));
