@@ -592,15 +592,17 @@ where
                 .peek_front()
                 .map(|node| self.is_expired_entry_ao(node, now))
                 .unwrap_or(false);
-            if is_expired {
-                if let Some(node) = deq.pop_front() {
-                    let removed = self.cache.remove(&node.element.key);
-                    if let (Some(entry), Some(entries)) = (removed, expired_entries.as_mut()) {
+
+            if !is_expired {
+                break;
+            }
+
+            if let Some(node) = deq.pop_front() {
+                if let Some(entry) = self.cache.remove(&node.element.key) {
+                    if let Some(entries) = expired_entries.as_mut() {
                         entries.push(entry);
                     }
                 }
-            } else {
-                break;
             }
         }
     }
@@ -618,14 +620,15 @@ where
                 .peek_front()
                 .map(|node| self.is_expired_entry_wo(node, now))
                 .unwrap_or(false);
-            if is_expired {
-                if let Some(node) = deq.pop_front() {
-                    if let Some(entry) = self.cache.remove(&node.element.key) {
-                        expired_entries.push(entry);
-                    }
-                }
-            } else {
+
+            if !is_expired {
                 break;
+            }
+
+            if let Some(node) = deq.pop_front() {
+                if let Some(entry) = self.cache.remove(&node.element.key) {
+                    expired_entries.push(entry);
+                }
             }
         }
     }
@@ -926,7 +929,16 @@ mod tests {
         assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
         assert_eq!(cache.inner.cache.len(), 1);
 
+        assert_eq!(cache.insert("b", "bill"), Arc::new("bill"));
+        cache.sync();
+
         mock.increment(Duration::from_secs(5)); // 20 secs
+        cache.sync();
+
+        assert_eq!(cache.get(&"b"), Some(Arc::new("bill")));
+        assert_eq!(cache.inner.cache.len(), 1);
+
+        mock.increment(Duration::from_secs(5)); // 25 secs
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
