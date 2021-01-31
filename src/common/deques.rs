@@ -38,68 +38,52 @@ impl<K> Deques<K> {
             MainProtected => self.protected.push_back(node),
             WriteOrder => unreachable!(),
         };
-        unsafe { *(entry.access_order_q_node.get()) = Some(node) };
+        entry.set_access_order_q_node(Some(node));
     }
 
     pub(crate) fn push_back_wo<V>(&mut self, kh: KeyDate<K>, entry: &Arc<ValueEntry<K, V>>) {
         let node = Box::new(DeqNode::new(CacheRegion::WriteOrder, kh));
         let node = self.write_order.push_back(node);
-        unsafe { *(entry.write_order_q_node.get()) = Some(node) };
+        entry.set_write_order_q_node(Some(node));
     }
 
     pub(crate) fn move_to_back_ao<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
         use CacheRegion::*;
-        unsafe {
-            if let Some(node) = *entry.access_order_q_node.get() {
-                let p = node.as_ref();
-                match &p.region {
-                    Window if self.window.contains(p) => self.window.move_to_back(node),
-                    MainProbation if self.probation.contains(p) => {
-                        self.probation.move_to_back(node)
-                    }
-                    MainProtected if self.protected.contains(p) => {
-                        self.protected.move_to_back(node)
-                    }
-                    region => panic!(
-                        "move_to_back - node is not a member of {:?} deque. {:?}",
-                        region, p
-                    ),
-                }
+        if let Some(node) = *entry.access_order_q_node.lock() {
+            let p = unsafe { node.as_ref() };
+            match &p.region {
+                Window if self.window.contains(p) => unsafe { self.window.move_to_back(node) },
+                MainProbation if self.probation.contains(p) => unsafe {
+                    self.probation.move_to_back(node)
+                },
+                MainProtected if self.protected.contains(p) => unsafe {
+                    self.protected.move_to_back(node)
+                },
+                _ => {}
             }
         }
     }
 
     pub(crate) fn move_to_back_wo<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
         use CacheRegion::*;
-        unsafe {
-            if let Some(node) = *entry.write_order_q_node.get() {
-                let p = node.as_ref();
-                debug_assert_eq!(&p.region, &WriteOrder);
-                if self.write_order.contains(p) {
-                    self.write_order.move_to_back(node);
-                } else {
-                    panic!(
-                        "move_to_back - node is not a member of write_order deque. {:?}",
-                        p
-                    )
-                }
+        if let Some(node) = *entry.write_order_q_node.lock() {
+            let p = unsafe { node.as_ref() };
+            debug_assert_eq!(&p.region, &WriteOrder);
+            if self.write_order.contains(p) {
+                unsafe { self.write_order.move_to_back(node) };
             }
         }
     }
 
     pub(crate) fn unlink_ao<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
-        unsafe {
-            if let Some(node) = (*entry.access_order_q_node.get()).take() {
-                self.unlink_node_ao(node);
-            }
+        if let Some(node) = (*entry.access_order_q_node.lock()).take() {
+            self.unlink_node_ao(node);
         }
     }
 
     pub(crate) fn unlink_wo<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
-        unsafe {
-            if let Some(node) = (*entry.write_order_q_node.get()).take() {
-                self.unlink_node_wo(node);
-            }
+        if let Some(node) = (*entry.write_order_q_node.lock()).take() {
+            self.unlink_node_wo(node);
         }
     }
 
