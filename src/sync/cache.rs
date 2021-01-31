@@ -1,6 +1,6 @@
 use super::{ConcurrentCache, ConcurrentCacheExt};
 use crate::common::{
-    deque::{CacheRegion, DeqNode},
+    deque::{CacheRegion, DeqNode, Deque},
     deques::Deques,
     frequency_sketch::FrequencySketch,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
@@ -550,7 +550,7 @@ where
                 }
                 Ok(Remove(entry)) => {
                     deqs.unlink_ao(Arc::clone(&entry));
-                    deqs.unlink_wo(entry)
+                    Deques::unlink_wo(&mut deqs.write_order, entry);
                 }
                 Err(_) => break,
             };
@@ -567,21 +567,33 @@ where
         }
 
         if self.time_to_idle.is_some() {
-            // TODO: Support other deqs (window and protected).
-            self.remove_expired_ao_from_protected(deqs, batch_size, now);
+            let (window, probation, protected, wo) = (
+                &mut deqs.window,
+                &mut deqs.probation,
+                &mut deqs.protected,
+                &mut deqs.write_order,
+            );
+
+            let mut rm_expired_ao =
+                |name, deq| self.remove_expired_ao(name, deq, wo, batch_size, now);
+
+            rm_expired_ao("window", window);
+            rm_expired_ao("probation", probation);
+            rm_expired_ao("protected", protected);
         }
     }
 
     #[inline]
-    fn remove_expired_ao_from_protected(
+    fn remove_expired_ao(
         &self,
-        deqs: &mut Deques<K>,
+        deq_name: &str,
+        deq: &mut Deque<KeyHashDate<K>>,
+        write_order_deq: &mut Deque<KeyDate<K>>,
         batch_size: usize,
         now: Instant,
     ) {
         for _ in 0..batch_size {
-            let key = deqs
-                .probation
+            let key = deq
                 .peek_front()
                 .and_then(|node| {
                     if self.is_expired_entry_ao(&*node, now) {
@@ -597,10 +609,10 @@ where
             }
 
             if let Some(entry) = self.cache.remove(&key.unwrap()) {
-                deqs.unlink_ao(Arc::clone(&entry));
-                deqs.unlink_wo(entry);
+                Deques::unlink_ao_from_deque(deq_name, deq, Arc::clone(&entry));
+                Deques::unlink_wo(write_order_deq, entry);
             } else {
-                deqs.probation.pop_front();
+                deq.pop_front();
             }
         }
     }
@@ -626,7 +638,7 @@ where
 
             if let Some(entry) = self.cache.remove(&key.unwrap()) {
                 deqs.unlink_ao(Arc::clone(&entry));
-                deqs.unlink_wo(entry);
+                Deques::unlink_wo(&mut deqs.write_order, entry);
             } else {
                 deqs.write_order.pop_front();
             }
@@ -794,7 +806,7 @@ where
                 // yet executed.
                 if let Some(vic_entry) = self.cache.remove(&victim.element.key) {
                     deqs.unlink_ao(Arc::clone(&vic_entry));
-                    deqs.unlink_wo(vic_entry);
+                    Deques::unlink_wo(&mut deqs.write_order, vic_entry);
                 } else {
                     let victim = NonNull::from(victim);
                     deqs.unlink_node_ao(victim);
