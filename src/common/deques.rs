@@ -3,7 +3,7 @@ use super::{
     KeyDate, KeyHashDate, ValueEntry,
 };
 
-use std::{ptr::NonNull, sync::Arc, unreachable};
+use std::{ptr::NonNull, sync::Arc};
 
 pub(crate) struct Deques<K> {
     pub(crate) window: Deque<KeyHashDate<K>>, //    Not used yet.
