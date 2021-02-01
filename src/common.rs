@@ -58,12 +58,16 @@ impl<K> KeyHashDate<K> {
 pub(crate) type KeyDeqNodeAO<K> = NonNull<DeqNode<KeyHashDate<K>>>;
 pub(crate) type KeyDeqNodeWO<K> = NonNull<DeqNode<KeyDate<K>>>;
 
+struct DeqNodes<K> {
+    access_order_q_node: Option<KeyDeqNodeAO<K>>,
+    write_order_q_node: Option<KeyDeqNodeWO<K>>,
+}
+
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: Arc<V>,
     last_accessed: Option<Arc<AtomicU64>>,
     last_modified: Option<Arc<AtomicU64>>,
-    access_order_q_node: Mutex<Option<KeyDeqNodeAO<K>>>,
-    write_order_q_node: Mutex<Option<KeyDeqNodeWO<K>>>,
+    nodes: Mutex<DeqNodes<K>>,
 }
 
 impl<K, V> ValueEntry<K, V> {
@@ -78,18 +82,26 @@ impl<K, V> ValueEntry<K, V> {
             value,
             last_accessed: last_accessed.map(|ts| Arc::new(AtomicU64::new(ts.as_u64()))),
             last_modified: last_modified.map(|ts| Arc::new(AtomicU64::new(ts.as_u64()))),
-            access_order_q_node: Mutex::new(access_order_q_node),
-            write_order_q_node: Mutex::new(write_order_q_node),
+            nodes: Mutex::new(DeqNodes {
+                access_order_q_node,
+                write_order_q_node,
+            }),
         }
     }
 
     pub(crate) fn new_with(value: Arc<V>, other: &Self) -> Self {
+        let nodes = {
+            let other_nodes = other.nodes.lock();
+            DeqNodes {
+                access_order_q_node: other_nodes.access_order_q_node,
+                write_order_q_node: other_nodes.write_order_q_node,
+            }
+        };
         Self {
             value,
             last_accessed: other.last_accessed.clone(),
             last_modified: other.last_modified.clone(),
-            access_order_q_node: Mutex::new(*other.access_order_q_node().lock()),
-            write_order_q_node: Mutex::new(*other.write_order_q_node().lock()),
+            nodes: Mutex::new(nodes),
         }
     }
 
@@ -101,19 +113,34 @@ impl<K, V> ValueEntry<K, V> {
         self.last_modified.clone()
     }
 
-    pub(crate) fn access_order_q_node(&self) -> &Mutex<Option<KeyDeqNodeAO<K>>> {
-        &self.access_order_q_node
-    }
-    pub(crate) fn set_access_order_q_node(&self, node: Option<KeyDeqNodeAO<K>>) {
-        *self.access_order_q_node.lock() = node;
+    pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAO<K>> {
+        self.nodes.lock().access_order_q_node
     }
 
-    pub(crate) fn write_order_q_node(&self) -> &Mutex<Option<KeyDeqNodeWO<K>>> {
-        &self.write_order_q_node
+    pub(crate) fn set_access_order_q_node(&self, node: Option<KeyDeqNodeAO<K>>) {
+        self.nodes.lock().access_order_q_node = node;
+    }
+
+    pub(crate) fn take_access_order_q_node(&self) -> Option<KeyDeqNodeAO<K>> {
+        self.nodes.lock().access_order_q_node.take()
+    }
+
+    pub(crate) fn write_order_q_node(&self) -> Option<KeyDeqNodeWO<K>> {
+        self.nodes.lock().write_order_q_node
     }
 
     pub(crate) fn set_write_order_q_node(&self, node: Option<KeyDeqNodeWO<K>>) {
-        *self.write_order_q_node.lock() = node;
+        self.nodes.lock().write_order_q_node = node;
+    }
+
+    pub(crate) fn take_write_order_q_node(&self) -> Option<KeyDeqNodeWO<K>> {
+        self.nodes.lock().write_order_q_node.take()
+    }
+
+    pub(crate) fn unset_q_nodes(&self) {
+        let mut nodes = self.nodes.lock();
+        nodes.access_order_q_node = None;
+        nodes.write_order_q_node = None;
     }
 }
 

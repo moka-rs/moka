@@ -49,7 +49,7 @@ impl<K> Deques<K> {
 
     pub(crate) fn move_to_back_ao<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
         use CacheRegion::*;
-        if let Some(node) = *entry.access_order_q_node.lock() {
+        if let Some(node) = entry.access_order_q_node() {
             let p = unsafe { node.as_ref() };
             match &p.region {
                 Window if self.window.contains(p) => unsafe { self.window.move_to_back(node) },
@@ -66,7 +66,7 @@ impl<K> Deques<K> {
 
     pub(crate) fn move_to_back_wo<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
         use CacheRegion::*;
-        if let Some(node) = *entry.write_order_q_node.lock() {
+        if let Some(node) = entry.write_order_q_node() {
             let p = unsafe { node.as_ref() };
             debug_assert_eq!(&p.region, &WriteOrder);
             if self.write_order.contains(p) {
@@ -76,7 +76,7 @@ impl<K> Deques<K> {
     }
 
     pub(crate) fn unlink_ao<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
-        if let Some(node) = (*entry.access_order_q_node.lock()).take() {
+        if let Some(node) = entry.take_access_order_q_node() {
             self.unlink_node_ao(node);
         }
     }
@@ -86,13 +86,13 @@ impl<K> Deques<K> {
         deq: &mut Deque<KeyHashDate<K>>,
         entry: Arc<ValueEntry<K, V>>,
     ) {
-        if let Some(node) = (*entry.access_order_q_node.lock()).take() {
+        if let Some(node) = entry.take_access_order_q_node() {
             unsafe { Self::unlink_node_ao_from_deque(deq_name, deq, node) };
         }
     }
 
     pub(crate) fn unlink_wo<V>(deq: &mut Deque<KeyDate<K>>, entry: Arc<ValueEntry<K, V>>) {
-        if let Some(node) = (*entry.write_order_q_node.lock()).take() {
+        if let Some(node) = entry.take_write_order_q_node() {
             Deques::unlink_node_wo(deq, node);
         }
     }

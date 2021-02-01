@@ -209,26 +209,37 @@ where
                     None,
                 ));
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
-                op1 = Some((cnt, WriteOp::Insert(KeyHash::new(key, hash), entry.clone())));
+                op1 = Some((
+                    cnt,
+                    WriteOp::Insert(KeyHash::new(key, hash), Arc::clone(&entry)),
+                ));
                 entry
             },
             // on_modify
             |_k, old_entry| {
                 let entry = Arc::new(ValueEntry::new_with(Arc::clone(&value), old_entry));
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
-                op2 = Some((cnt, WriteOp::Update(entry.clone())));
+                op2 = Some((
+                    cnt,
+                    Arc::clone(&old_entry),
+                    WriteOp::Update(Arc::clone(&entry)),
+                ));
                 entry
             },
         );
 
         match (op1, op2) {
-            (Some((_cnt, op)), None) => self.schedule_insert_op(op),
-            (None, Some((_cnt, op))) => self.schedule_insert_op(op),
-            (Some((cnt1, op1)), Some((cnt2, op2))) => {
+            (Some((_cnt, ins_op)), None) => self.schedule_insert_op(ins_op),
+            (None, Some((_cnt, old_entry, upd_op))) => {
+                old_entry.unset_q_nodes();
+                self.schedule_insert_op(upd_op)
+            }
+            (Some((cnt1, ins_op)), Some((cnt2, old_entry, upd_op))) => {
                 if cnt1 > cnt2 {
-                    self.schedule_insert_op(op1)
+                    self.schedule_insert_op(ins_op)
                 } else {
-                    self.schedule_insert_op(op2)
+                    old_entry.unset_q_nodes();
+                    self.schedule_insert_op(upd_op)
                 }
             }
             (None, None) => unreachable!(),
