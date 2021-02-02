@@ -5,7 +5,7 @@
 //! inspired by [Caffeine][caffeine-git] (Java) and
 //! [Ristretto][ristretto-git] (Go).
 //!
-//! This crate provides in-memory concurrent cache implementations
+//! Moka provides in-memory concurrent cache implementations
 //! [`Cache`][cache-struct] and [`SegmentedCache`][seg-cache-struct].
 //! They support full concurrency of retrievals and a high expected
 //! concurrency for updates.
