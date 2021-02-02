@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 mod builder;
 pub(crate) mod cache;
@@ -10,11 +10,11 @@ pub use segment::SegmentedCache;
 
 // Interior mutability (no need for `&mut self`)
 pub trait ConcurrentCache<K, V> {
-    fn get(&self, key: &K) -> Option<Arc<V>>;
+    fn get(&self, key: &K) -> Option<V>;
 
-    fn insert(&self, key: K, value: V) -> Arc<V>;
+    fn insert(&self, key: K, value: V);
 
-    fn remove(&self, key: &K) -> Option<Arc<V>>;
+    fn remove(&self, key: &K) -> Option<V>;
 
     fn capacity(&self) -> usize;
 

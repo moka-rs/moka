@@ -38,6 +38,7 @@ impl<K, V, S> Clone for SegmentedCache<K, V, S> {
 impl<K, V> SegmentedCache<K, V, RandomState>
 where
     K: Eq + Hash,
+    V: Clone,
 {
     // TODO: Instead of taking the capacity as an argument, take the followings:
     // - initial_capacity of the cache (hashmap)
@@ -56,6 +57,7 @@ where
 impl<K, V, S> SegmentedCache<K, V, S>
 where
     K: Eq + Hash,
+    V: Clone,
     S: BuildHasher + Clone,
 {
     pub fn with_hasher(capacity: usize, num_segments: usize, build_hasher: S) -> Self {
@@ -101,19 +103,20 @@ where
 impl<K, V, S> ConcurrentCache<K, V> for SegmentedCache<K, V, S>
 where
     K: Eq + Hash,
+    V: Clone,
     S: BuildHasher + Clone,
 {
-    fn get(&self, key: &K) -> Option<Arc<V>> {
+    fn get(&self, key: &K) -> Option<V> {
         let hash = self.inner.hash(key);
         self.inner.select(hash).get_with_hash(key, hash)
     }
 
-    fn insert(&self, key: K, value: V) -> Arc<V> {
+    fn insert(&self, key: K, value: V) {
         let hash = self.inner.hash(&key);
         self.inner.select(hash).insert_with_hash(key, hash, value)
     }
 
-    fn remove(&self, key: &K) -> Option<Arc<V>> {
+    fn remove(&self, key: &K) -> Option<V> {
         let hash = self.inner.hash(key);
         self.inner.select(hash).remove(key)
     }
@@ -157,6 +160,7 @@ struct Inner<K, V, S> {
 impl<K, V, S> Inner<K, V, S>
 where
     K: Eq + Hash,
+    V: Clone,
     S: BuildHasher + Clone,
 {
     /// # Panics
@@ -223,7 +227,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::{ConcurrentCache, ConcurrentCacheExt, SegmentedCache};
-    use std::sync::Arc;
 
     #[test]
     fn basic_single_thread() {
@@ -233,42 +236,42 @@ mod tests {
         // Make the cache exterior immutable.
         let cache = cache;
 
-        assert_eq!(cache.insert("a", "alice"), Arc::new("alice"));
-        assert_eq!(cache.insert("b", "bob"), Arc::new("bob"));
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         cache.sync();
         // counts: a -> 1, b -> 1
 
-        assert_eq!(cache.insert("c", "cindy"), Arc::new("cindy"));
-        assert_eq!(cache.get(&"c"), Some(Arc::new("cindy")));
+        cache.insert("c", "cindy");
+        assert_eq!(cache.get(&"c"), Some("cindy"));
         // counts: a -> 1, b -> 1, c -> 1
         cache.sync();
 
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         cache.sync();
         // counts: a -> 2, b -> 2, c -> 1
 
         // "d" should not be admitted because its frequency is too low.
-        assert_eq!(cache.insert("d", "david"), Arc::new("david")); //   count: d -> 0
+        cache.insert("d", "david"); //   count: d -> 0
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 1
 
-        assert_eq!(cache.insert("d", "david"), Arc::new("david"));
+        cache.insert("d", "david");
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher then c's.
-        assert_eq!(cache.insert("d", "dennis"), Arc::new("dennis"));
+        cache.insert("d", "dennis");
         cache.sync();
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.get(&"c"), None);
-        assert_eq!(cache.get(&"d"), Some(Arc::new("dennis")));
+        assert_eq!(cache.get(&"d"), Some("dennis"));
 
-        assert_eq!(cache.remove(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.remove(&"b"), Some("bob"));
     }
 
     #[test]

@@ -83,6 +83,7 @@ impl<K, V, S> Clone for Cache<K, V, S> {
 impl<K, V> Cache<K, V, RandomState>
 where
     K: Eq + Hash,
+    V: Clone,
 {
     pub fn new(capacity: usize) -> Self {
         let build_hasher = RandomState::default();
@@ -93,6 +94,7 @@ where
 impl<K, V, S> Cache<K, V, S>
 where
     K: Eq + Hash,
+    V: Clone,
     S: BuildHasher + Clone,
 {
     pub fn with_hasher(capacity: usize, build_hasher: S) -> Self {
@@ -129,7 +131,7 @@ where
         }
     }
 
-    pub(crate) fn get_with_hash(&self, key: &K, hash: u64) -> Option<Arc<V>> {
+    pub(crate) fn get_with_hash(&self, key: &K, hash: u64) -> Option<V> {
         let record = |entry, ts| {
             self.record_read_op(hash, entry, ts)
                 .expect("Failed to record a get op")
@@ -143,7 +145,7 @@ where
             }
             // Value found, no expiry.
             (Some(entry), false) => {
-                let v = Arc::clone(&entry.value);
+                let v = entry.value.clone();
                 record(Some(entry), None);
                 Some(v)
             }
@@ -158,7 +160,7 @@ where
                     None
                 } else {
                     // Valid entry.
-                    let v = Arc::clone(&entry.value);
+                    let v = entry.value.clone();
                     record(Some(entry), Some(now));
                     Some(v)
                 }
@@ -166,11 +168,10 @@ where
         }
     }
 
-    pub(crate) fn insert_with_hash(&self, key: K, hash: u64, value: V) -> Arc<V> {
+    pub(crate) fn insert_with_hash(&self, key: K, hash: u64, value: V) {
         self.throttle_write_pace();
 
         let key = Arc::new(key);
-        let value = Arc::new(value);
 
         let op_cnt1 = Rc::new(AtomicU8::new(0));
         let op_cnt2 = Rc::clone(&op_cnt1);
@@ -202,7 +203,7 @@ where
                     }
                 }
                 let entry = Arc::new(ValueEntry::new(
-                    Arc::clone(&value),
+                    value.clone(),
                     last_accessed,
                     last_modified,
                     None,
@@ -217,7 +218,7 @@ where
             },
             // on_modify
             |_k, old_entry| {
-                let entry = Arc::new(ValueEntry::new_with(Arc::clone(&value), old_entry));
+                let entry = Arc::new(ValueEntry::new_with(value.clone(), old_entry));
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((
                     cnt,
@@ -245,29 +246,28 @@ where
             (None, None) => unreachable!(),
         }
         .expect("Failed to insert");
-
-        value
     }
 }
 
 impl<K, V, S> ConcurrentCache<K, V> for Cache<K, V, S>
 where
     K: Eq + Hash,
+    V: Clone,
     S: BuildHasher + Clone,
 {
-    fn get(&self, key: &K) -> Option<Arc<V>> {
+    fn get(&self, key: &K) -> Option<V> {
         self.get_with_hash(key, self.inner.hash(key))
     }
 
-    fn insert(&self, key: K, value: V) -> Arc<V> {
+    fn insert(&self, key: K, value: V) {
         let hash = self.inner.hash(&key);
         self.insert_with_hash(key, hash, value)
     }
 
-    fn remove(&self, key: &K) -> Option<Arc<V>> {
+    fn remove(&self, key: &K) -> Option<V> {
         self.throttle_write_pace();
         self.inner.cache.remove(key).map(|entry| {
-            let value = Arc::clone(&entry.value);
+            let value = entry.value.clone();
             self.schedule_remove_op(entry).expect("Failed to remove");
             value
         })
@@ -847,7 +847,7 @@ mod tests {
     use crate::sync::Builder;
 
     use quanta::Clock;
-    use std::{sync::Arc, time::Duration};
+    use std::time::Duration;
 
     #[test]
     fn basic_single_thread() {
@@ -857,42 +857,42 @@ mod tests {
         // Make the cache exterior immutable.
         let cache = cache;
 
-        assert_eq!(cache.insert("a", "alice"), Arc::new("alice"));
-        assert_eq!(cache.insert("b", "bob"), Arc::new("bob"));
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         cache.sync();
         // counts: a -> 1, b -> 1
 
-        assert_eq!(cache.insert("c", "cindy"), Arc::new("cindy"));
-        assert_eq!(cache.get(&"c"), Some(Arc::new("cindy")));
+        cache.insert("c", "cindy");
+        assert_eq!(cache.get(&"c"), Some("cindy"));
         // counts: a -> 1, b -> 1, c -> 1
         cache.sync();
 
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         cache.sync();
         // counts: a -> 2, b -> 2, c -> 1
 
         // "d" should not be admitted because its frequency is too low.
-        assert_eq!(cache.insert("d", "david"), Arc::new("david")); //   count: d -> 0
+        cache.insert("d", "david"); //   count: d -> 0
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 1
 
-        assert_eq!(cache.insert("d", "david"), Arc::new("david"));
+        cache.insert("d", "david");
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher then c's.
-        assert_eq!(cache.insert("d", "dennis"), Arc::new("dennis"));
+        cache.insert("d", "dennis");
         cache.sync();
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.get(&"c"), None);
-        assert_eq!(cache.get(&"d"), Some(Arc::new("dennis")));
+        assert_eq!(cache.get(&"d"), Some("dennis"));
 
-        assert_eq!(cache.remove(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.remove(&"b"), Some("bob"));
     }
 
     #[test]
@@ -940,13 +940,13 @@ mod tests {
         // Make the cache exterior immutable.
         let cache = cache;
 
-        assert_eq!(cache.insert("a", "alice"), Arc::new("alice"));
+        cache.insert("a", "alice");
         cache.sync();
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
         cache.sync();
 
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
+        cache.get(&"a");
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
         cache.sync();
@@ -954,7 +954,7 @@ mod tests {
         assert_eq!(cache.get(&"a"), None);
         assert!(cache.inner.cache.is_empty());
 
-        assert_eq!(cache.insert("b", "bob"), Arc::new("bob"));
+        cache.insert("b", "bob");
         cache.sync();
 
         assert_eq!(cache.inner.cache.len(), 1);
@@ -962,16 +962,16 @@ mod tests {
         mock.increment(Duration::from_secs(5)); // 15 secs.
         cache.sync();
 
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.inner.cache.len(), 1);
 
-        assert_eq!(cache.insert("b", "bill"), Arc::new("bill"));
+        cache.insert("b", "bill");
         cache.sync();
 
         mock.increment(Duration::from_secs(5)); // 20 secs
         cache.sync();
 
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bill")));
+        assert_eq!(cache.get(&"b"), Some("bill"));
         assert_eq!(cache.inner.cache.len(), 1);
 
         mock.increment(Duration::from_secs(5)); // 25 secs
@@ -996,18 +996,18 @@ mod tests {
         // Make the cache exterior immutable.
         let cache = cache;
 
-        assert_eq!(cache.insert("a", "alice"), Arc::new("alice"));
+        cache.insert("a", "alice");
         cache.sync();
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
         cache.sync();
 
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
+        assert_eq!(cache.get(&"a"), Some("alice"));
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
         cache.sync();
 
-        assert_eq!(cache.insert("b", "bob"), Arc::new("bob"));
+        cache.insert("b", "bob");
         cache.sync();
 
         assert_eq!(cache.inner.cache.len(), 2);
@@ -1016,7 +1016,7 @@ mod tests {
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.inner.cache.len(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs

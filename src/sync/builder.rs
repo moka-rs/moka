@@ -18,6 +18,7 @@ pub struct Builder<C> {
 impl<K, V> Builder<Cache<K, V, RandomState>>
 where
     K: Eq + Hash,
+    V: Clone,
 {
     pub fn new(capacity: usize) -> Self {
         Self {
@@ -60,6 +61,7 @@ where
 impl<K, V> Builder<SegmentedCache<K, V, RandomState>>
 where
     K: Eq + Hash,
+    V: Clone,
 {
     pub fn build(self) -> SegmentedCache<K, V, RandomState> {
         let build_hasher = RandomState::default();
@@ -107,7 +109,7 @@ mod tests {
     use super::Builder;
     use crate::sync::ConcurrentCache;
 
-    use std::{sync::Arc, time::Duration};
+    use std::time::Duration;
 
     #[test]
     fn build_cache() {
@@ -120,7 +122,7 @@ mod tests {
         assert_eq!(cache.num_segments(), 1);
 
         cache.insert('a', "Alice");
-        assert_eq!(cache.get(&'a'), Some(Arc::new("Alice")));
+        assert_eq!(cache.get(&'a'), Some("Alice"));
 
         let cache = Builder::new(100)
             .time_to_live(Duration::from_secs(45 * 60))
@@ -133,7 +135,7 @@ mod tests {
         assert_eq!(cache.num_segments(), 1);
 
         cache.insert('a', "Alice");
-        assert_eq!(cache.get(&'a'), Some(Arc::new("Alice")));
+        assert_eq!(cache.get(&'a'), Some("Alice"));
     }
 
     #[test]
@@ -147,7 +149,7 @@ mod tests {
         assert_eq!(cache.num_segments(), 16_usize.next_power_of_two());
 
         cache.insert('b', "Bob");
-        assert_eq!(cache.get(&'b'), Some(Arc::new("Bob")));
+        assert_eq!(cache.get(&'b'), Some("Bob"));
 
         let cache = Builder::new(100)
             .segments(16)
@@ -161,6 +163,6 @@ mod tests {
         assert_eq!(cache.num_segments(), 16_usize.next_power_of_two());
 
         cache.insert('b', "Bob");
-        assert_eq!(cache.get(&'b'), Some(Arc::new("Bob")));
+        assert_eq!(cache.get(&'b'), Some("Bob"));
     }
 }
