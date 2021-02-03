@@ -71,7 +71,7 @@ pub(crate) const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 /// This is because the `Cache` allows concurrent updates from threads so a value stored in the cache can be dropped or replaced at any time by any other thread.
 /// It is impossible to create a reference `&V` and guarantee the value outlives its reference.
 ///
-/// If you want to store values that will be expensive to clone, wrap them by the `std::sync::Arc` before storing to a cache.
+/// If you want to store values that will be expensive to clone, you may want to wrap them by the `std::sync::Arc` before storing to a cache.
 /// The [`Arc`][rustdoc-std-arc] is a thread-safe reference-counted pointer and its `clone()` method is cheap.
 ///
 /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html

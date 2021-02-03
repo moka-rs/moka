@@ -48,12 +48,7 @@ Moka currently does not provide `async` optimized caches. The sync (blocking) ca
 Here's an example that reads and updates the cache by using multiple threads:
 
 ```rust
-use moka::sync::{
-    // One of the cache implementations.
-    Cache,
-    // The trait for the basic cache API.
-    ConcurrentCache,
-};
+use moka::sync::Cache;
 
 use std::thread;
 
@@ -108,13 +103,14 @@ fn main() {
 ```
 
 
-### NOTE: `get()` returns a clone of the stored value
+### NOTE: `get()` and `remove()` return a clone of the stored value
 
 Note that the return type of `get()` is `Option<V>` instead of `Option<&V>`, where `V` is the value type (`String` in the above example). Every time `get()` is called for an existing key, it creates a clone of the stored value `V` and returns it.
 
-Because of the nature of concurrent cache, `get()` cannot return `Option<&V>`. A value stored in a cache can be dropped or replaced at any time by any other thread including cache's eviction thread. So it is impossible to create a `&V`, a reference to a value and guarantee the value outlives the reference.
+Because of the nature of concurrent cache, `get()` cannot return `Option<&V>`. A value stored in a cache can be dropped or replaced at any time by any other thread including cache's eviction thread. So it is impossible to create a `&V`, a reference to a value, and guarantee the value outlives the reference.
 
-If you want to store values that will be expensive to clone, wrap them by [`std::sync::Arc`][rustdoc-std-arc], a thread-safe reference counting pointer, before storing to a cache.
+If you want to store values that will be expensive to clone, wrap them by `std::sync::Arc` before storing to a cache.
+The [`Arc`][rustdoc-std-arc] is a thread-safe reference counted pointer.
 
 [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
 
@@ -153,12 +149,7 @@ Here is the same example, but using Tokio runtime with `spawn-blocking()`:
 // [dependencies]
 // tokio = { version = "1.1", features = ["rt-multi-thread", "macros" ] }
 
-use moka::sync::{
-    // One of the cache implementations.
-    Cache,
-    // A trait that provides the basic cache API.
-    ConcurrentCache,
-};
+use moka::sync::Cache;
 
 use tokio::task;
 
@@ -241,10 +232,7 @@ Moka supports the following expiration policies:
 To set them, use the cache `Builder`.
 
 ```rust
-use moka::sync::{
-    Builder,
-    ConcurrentCache,
-};
+use moka::sync::Builder;
 
 use std::time::Duration;
 
@@ -268,7 +256,7 @@ fn main() {
 }
 ```
 
-## Usage: Segmented Cache
+## Segmented Cache
 
 Moka caches maintain internal data structures for entry replacement algorithms.
 These structures are guarded by a lock and operations are applied in batches to avoid lock contention using a dedicated worker thread.
