@@ -20,6 +20,7 @@
 
 Moka is a fast, concurrent cache library for Rust.
 It is inspired by [Caffeine][caffeine-git] (Java) and [Ristretto][ristretto-git] (Go).
+
 Moka provides a cache that supports full concurrency of retrievals and a high expected concurrency for updates. It also provides a segmented cache for increased concurrent update performance.
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
@@ -30,10 +31,10 @@ Moka provides a cache that supports full concurrency of retrievals and a high ex
 
 - Thread-safe, highly concurrent in-memory cache implementations.
 - Caches are bounded by the maximum number of elements.
-- Maintains good hit rate by the caching strategies inspired by [Caffeine][caffeine-git]:
+- Maintains good hit rate by using entry replacement algorithms inspired by [Caffeine][caffeine-git]:
     - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.
     - Eviction from a cache is controlled by the Least Recently Used (LRU) policy.
-- Support optional expiration policies:
+- Support expiration policies:
     - Time to live
     - Time to idle
 
@@ -50,7 +51,7 @@ Here's an example that reads and updates the cache by using multiple threads:
 use moka::sync::{
     // One of the cache implementations.
     Cache,
-    // The trait that provides the basic cache API.
+    // The trait for the basic cache API.
     ConcurrentCache,
 };
 
@@ -122,6 +123,8 @@ use std::sync::Arc;
 
 let key = ...
 let large_value = vec![0u8; 2 * 1024 * 1024]; // 2 MiB
+
+// When insert, wrap the large_value by Arc.
 cache.insert(key.clone(), Arc::new(large_value));
 
 // get() will call Arc::clone() on the store value, which is cheap.
@@ -225,11 +228,55 @@ async fn main() {
 }
 ```
 
-A near future version of Moka will provide `async` optimized caches.
+A near future version of Moka will provide `async` optimized caches in addition to the sync caches.
 
 
 ## Usage: Expiration Policies
 
+Moka supports the following expiration policies:
+
+- Time to live: An element will be expired after the specified duration past from `insert()`.
+- Time to idle: An element will be expired after the specified duration past from `get()` or `insert()`.
+
+To set them, use the cache `Builder`.
+
+```rust
+use moka::sync::{
+    Builder,
+    ConcurrentCache,
+};
+
+use std::time::Duration;
+
+fn main() {
+    let cache = Builder::new(10_000) // Max 10,000 elements
+        // Time to live (TTL): 30 minutes 
+        .time_to_live(Duration::from_secs(30 * 60))
+        // Time to idle (TTI):  5 minutes
+        .time_to_idle(Duration::from_secs( 5 * 60))
+        // Create the cache.
+        .build();
+    
+    // This element will expire after 5 minutes (TTI) if there is no get().
+    cache.insert(0, "zero");
+
+    // This get() will extend the element life for another 5 minutes.
+    cache.get(&0);
+
+    // Even though we keep calling get(), the element will expire
+    // after 30 minutes (TTL) from the insert().
+}
+```
+
+## Usage: Segmented Cache
+
+Moka caches maintain internal data structures for entry replacement algorithms.
+These structures are guarded by a lock and operations are applied in batches to avoid lock contention using a dedicated worker thread.
+Under heavy updates, the worker thread may not be able to catch up to the updates.
+When this happens, `insert()` or `remove()` call will be paused (blocked) for a short time.
+
+If this pause happen very often, you may want to switch to a segmented cache.
+You can use `segments()` method of the builder to create such a cache.
 
 
 ## Requirements
