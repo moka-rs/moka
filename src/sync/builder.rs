@@ -107,7 +107,6 @@ impl<C> Builder<C> {
 #[cfg(test)]
 mod tests {
     use super::Builder;
-    use crate::sync::ConcurrentCache;
 
     use std::time::Duration;
 

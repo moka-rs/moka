@@ -1,4 +1,4 @@
-use super::{ConcurrentCache, ConcurrentCacheExt};
+use super::ConcurrentCacheExt;
 use crate::common::{
     deque::{CacheRegion, DeqNode, Deque},
     deques::Deques,
@@ -11,6 +11,7 @@ use crossbeam_channel::{Receiver, Sender, TrySendError};
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use quanta::{Clock, Instant};
 use std::{
+    borrow::Borrow,
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hash, Hasher},
     ptr::NonNull,
@@ -39,6 +40,45 @@ pub(crate) const PERIODICAL_SYNC_INITIAL_DELAY_MILLIS: u64 = 500;
 pub(crate) const PERIODICAL_SYNC_NORMAL_PACE_MILLIS: u64 = 300;
 pub(crate) const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 
+/// A thread-safe concurrent in-memory cache.
+///
+/// `Cache` supports full concurrency of retrievals and a high expected concurrency for updates.
+///
+/// See the module level document for general usage examples.
+///
+/// # Thread safety
+///
+/// All methods provided by the `Cache` are thread-safe.
+///
+/// `Cache<K, V, S>` will implement `Send` and `Sync` when all of the following conditions meet:
+///
+/// - `K` (key) and `V` (value) implement `Send` and `Sync`.
+/// - `S` (the hash-map state) implements `Send`.
+///
+/// # Sharing a cache across threads
+///
+/// To share a cache across threads, do one of the followings:
+///
+/// - Create a clone of the cache by calling its `clone()` method and pass it to other thread.
+/// - Wrap the cache by a `sync::OnceCell` or `sync::Lazy` from once_cell create, and set it to a `static` variable.
+///
+/// Cloning is a cheap operation for `Cache` as it only creates a thread-safe reference-counted pointer to the internal data structure.
+///
+/// # Avoiding to clone the value at `get()`
+///
+/// The return type of `get()` method is `Option<V>` instead of `Option<&V>`.
+/// Every time `get()` is called for an existing key, it creates a clone of the stored value `V` and returns it.
+/// This is because the `Cache` allows concurrent updates from threads so a value stored in the cache can be dropped or replaced at any time by any other thread.
+/// It is impossible to create a reference `&V` and guarantee the value outlives its reference.
+///
+/// If you want to store values that will be expensive to clone, wrap them by the `std::sync::Arc` before storing to a cache.
+/// The [`Arc`][rustdoc-std-arc] is a thread-safe reference-counted pointer and its `clone()` method is cheap.
+///
+/// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
+///
+/// # Using faster hashing algorithm
+///
+///
 pub struct Cache<K, V, S = RandomState> {
     inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
@@ -82,7 +122,7 @@ impl<K, V, S> Clone for Cache<K, V, S> {
 
 impl<K, V> Cache<K, V, RandomState>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     V: Clone,
 {
     pub fn new(capacity: usize) -> Self {
@@ -93,7 +133,7 @@ where
 
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     V: Clone,
     S: BuildHasher + Clone,
 {
@@ -131,7 +171,62 @@ where
         }
     }
 
-    pub(crate) fn get_with_hash(&self, key: &K, hash: u64) -> Option<V> {
+    /// Returns a _clone_ of the value corresponding to the key.
+    ///
+    /// <!-- The key may be any borrowed ... -->
+    ///
+    /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
+    pub fn get<Q>(&self, key: &Q) -> Option<V>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.get_with_hash(key, self.inner.hash(key))
+    }
+
+    /// Inserts a key-value pair into the cache.
+    ///
+    /// If the cache has this key present, the value is updated.
+    pub fn insert(&self, key: K, value: V) {
+        let hash = self.inner.hash(&key);
+        self.insert_with_hash(key, hash, value)
+    }
+
+    /// Removes a key from map, returning a _clone_ of the value at the key if present.
+    pub fn remove<Q>(&self, key: &Q) -> Option<V>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.throttle_write_pace();
+        self.inner.cache.remove(key).map(|entry| {
+            let value = entry.value.clone();
+            self.schedule_remove_op(entry).expect("Failed to remove");
+            value
+        })
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.inner.capacity
+    }
+
+    pub fn time_to_live(&self) -> Option<Duration> {
+        self.inner.time_to_live
+    }
+
+    pub fn time_to_idle(&self) -> Option<Duration> {
+        self.inner.time_to_idle
+    }
+
+    pub fn num_segments(&self) -> usize {
+        1
+    }
+
+    pub(crate) fn get_with_hash<Q: ?Sized>(&self, key: &Q, hash: u64) -> Option<V>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq,
+    {
         let record = |entry, ts| {
             self.record_read_op(hash, entry, ts)
                 .expect("Failed to record a get op")
@@ -249,50 +344,9 @@ where
     }
 }
 
-impl<K, V, S> ConcurrentCache<K, V> for Cache<K, V, S>
-where
-    K: Eq + Hash,
-    V: Clone,
-    S: BuildHasher + Clone,
-{
-    fn get(&self, key: &K) -> Option<V> {
-        self.get_with_hash(key, self.inner.hash(key))
-    }
-
-    fn insert(&self, key: K, value: V) {
-        let hash = self.inner.hash(&key);
-        self.insert_with_hash(key, hash, value)
-    }
-
-    fn remove(&self, key: &K) -> Option<V> {
-        self.throttle_write_pace();
-        self.inner.cache.remove(key).map(|entry| {
-            let value = entry.value.clone();
-            self.schedule_remove_op(entry).expect("Failed to remove");
-            value
-        })
-    }
-
-    fn capacity(&self) -> usize {
-        self.inner.capacity
-    }
-
-    fn time_to_live(&self) -> Option<Duration> {
-        self.inner.time_to_live
-    }
-
-    fn time_to_idle(&self) -> Option<Duration> {
-        self.inner.time_to_idle
-    }
-
-    fn num_segments(&self) -> usize {
-        1
-    }
-}
-
 impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     S: BuildHasher + Clone,
 {
     fn sync(&self) {
@@ -303,7 +357,7 @@ where
 // private methods
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     S: BuildHasher + Clone,
 {
     #[inline]
@@ -421,7 +475,7 @@ where
 #[cfg(test)]
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     S: BuildHasher + Clone,
 {
     fn reconfigure_for_testing(&mut self) {
@@ -470,7 +524,7 @@ struct Inner<K, V, S> {
 // functions/methods used by Cache
 impl<K, V, S> Inner<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     S: BuildHasher + Clone,
 {
     fn new(
@@ -507,14 +561,22 @@ where
     }
 
     #[inline]
-    fn hash(&self, key: &K) -> u64 {
+    fn hash<Q>(&self, key: &Q) -> u64
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         let mut hasher = self.build_hasher.build_hasher();
         key.hash(&mut hasher);
         hasher.finish()
     }
 
     #[inline]
-    fn get(&self, key: &K) -> Option<Arc<ValueEntry<K, V>>> {
+    fn get<Q>(&self, key: &Q) -> Option<Arc<ValueEntry<K, V>>>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         self.cache.get(key)
     }
 
@@ -699,7 +761,7 @@ where
 
 impl<K, V, S> InnerSync for Inner<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     S: BuildHasher + Clone,
 {
     fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
@@ -715,7 +777,7 @@ where
 // private methods
 impl<K, V, S> Inner<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     S: BuildHasher + Clone,
 {
     #[inline]
@@ -843,7 +905,7 @@ where
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
-    use super::{Cache, ConcurrentCache, ConcurrentCacheExt};
+    use super::{Cache, ConcurrentCacheExt};
     use crate::sync::Builder;
 
     use quanta::Clock;

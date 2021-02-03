@@ -1,6 +1,7 @@
-use super::{cache::Cache, ConcurrentCache, ConcurrentCacheExt};
+use super::{cache::Cache, ConcurrentCacheExt};
 
 use std::{
+    borrow::Borrow,
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hash, Hasher},
     sync::Arc,
@@ -37,7 +38,7 @@ impl<K, V, S> Clone for SegmentedCache<K, V, S> {
 
 impl<K, V> SegmentedCache<K, V, RandomState>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     V: Clone,
 {
     // TODO: Instead of taking the capacity as an argument, take the followings:
@@ -56,7 +57,7 @@ where
 
 impl<K, V, S> SegmentedCache<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     V: Clone,
     S: BuildHasher + Clone,
 {
@@ -90,6 +91,45 @@ where
         }
     }
 
+    pub fn get<Q>(&self, key: &Q) -> Option<V>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        let hash = self.inner.hash(key);
+        self.inner.select(hash).get_with_hash(key, hash)
+    }
+
+    pub fn insert(&self, key: K, value: V) {
+        let hash = self.inner.hash(&key);
+        self.inner.select(hash).insert_with_hash(key, hash, value)
+    }
+
+    pub fn remove<Q>(&self, key: &Q) -> Option<V>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        let hash = self.inner.hash(key);
+        self.inner.select(hash).remove(key)
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.inner.desired_capacity
+    }
+
+    pub fn time_to_live(&self) -> Option<Duration> {
+        self.inner.segments[0].time_to_live()
+    }
+
+    pub fn time_to_idle(&self) -> Option<Duration> {
+        self.inner.segments[0].time_to_idle()
+    }
+
+    pub fn num_segments(&self) -> usize {
+        self.inner.segments.len()
+    }
+
     // /// This is used by unit tests to get consistent result.
     // #[cfg(test)]
     // pub(crate) fn reconfigure_for_testing(&mut self) {
@@ -100,47 +140,9 @@ where
     // }
 }
 
-impl<K, V, S> ConcurrentCache<K, V> for SegmentedCache<K, V, S>
-where
-    K: Eq + Hash,
-    V: Clone,
-    S: BuildHasher + Clone,
-{
-    fn get(&self, key: &K) -> Option<V> {
-        let hash = self.inner.hash(key);
-        self.inner.select(hash).get_with_hash(key, hash)
-    }
-
-    fn insert(&self, key: K, value: V) {
-        let hash = self.inner.hash(&key);
-        self.inner.select(hash).insert_with_hash(key, hash, value)
-    }
-
-    fn remove(&self, key: &K) -> Option<V> {
-        let hash = self.inner.hash(key);
-        self.inner.select(hash).remove(key)
-    }
-
-    fn capacity(&self) -> usize {
-        self.inner.desired_capacity
-    }
-
-    fn time_to_live(&self) -> Option<Duration> {
-        self.inner.segments[0].time_to_live()
-    }
-
-    fn time_to_idle(&self) -> Option<Duration> {
-        self.inner.segments[0].time_to_idle()
-    }
-
-    fn num_segments(&self) -> usize {
-        self.inner.segments.len()
-    }
-}
-
 impl<K, V, S> ConcurrentCacheExt<K, V> for SegmentedCache<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     S: BuildHasher + Clone,
 {
     fn sync(&self) {
@@ -159,7 +161,7 @@ struct Inner<K, V, S> {
 
 impl<K, V, S> Inner<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     V: Clone,
     S: BuildHasher + Clone,
 {
@@ -201,7 +203,11 @@ where
     }
 
     #[inline]
-    fn hash(&self, key: &K) -> u64 {
+    fn hash<Q>(&self, key: &Q) -> u64
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         // TODO: Ensure that build_hasher() is thread safe.
         let mut hasher = self.build_hasher.build_hasher();
         key.hash(&mut hasher);
@@ -226,7 +232,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{ConcurrentCache, ConcurrentCacheExt, SegmentedCache};
+    use super::{ConcurrentCacheExt, SegmentedCache};
 
     #[test]
     fn basic_single_thread() {
