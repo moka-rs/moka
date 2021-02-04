@@ -115,7 +115,7 @@ fn main() {
 ```
 
 
-### NOTE: `get` return a clone of the stored value
+### NOTE: `get` returns a clone of the stored value
 
 Note that the return type of `get` method is `Option<V>` instead of `Option<&V>`,
 where `V` is the value type. Every time `get` is called for an existing key, it
