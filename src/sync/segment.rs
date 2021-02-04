@@ -1,6 +1,7 @@
-use super::{cache::Cache, ConcurrentCache, ConcurrentCacheExt};
+use super::{cache::Cache, ConcurrentCacheExt};
 
 use std::{
+    borrow::Borrow,
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hash, Hasher},
     sync::Arc,
@@ -37,41 +38,30 @@ impl<K, V, S> Clone for SegmentedCache<K, V, S> {
 
 impl<K, V> SegmentedCache<K, V, RandomState>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
+    V: Clone,
 {
-    // TODO: Instead of taking the capacity as an argument, take the followings:
-    // - initial_capacity of the cache (hashmap)
-    // - max_capacity of the cache (hashmap)
-    // - estimated_max_unique_keys (for the frequency sketch)
-
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
-    pub fn new(capacity: usize, num_segments: usize) -> Self {
+    pub fn new(max_capacity: usize, num_segments: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(capacity, num_segments, build_hasher, None, None)
+        Self::with_everything(max_capacity, None, num_segments, build_hasher, None, None)
     }
 }
 
 impl<K, V, S> SegmentedCache<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
+    V: Clone,
     S: BuildHasher + Clone,
 {
-    pub fn with_hasher(capacity: usize, num_segments: usize, build_hasher: S) -> Self {
-        Self::with_everything(capacity, num_segments, build_hasher, None, None)
-    }
-
-    // TODO: Instead of taking the capacity as an argument, take the followings:
-    // - initial_capacity of the cache (hashmap)
-    // - max_capacity of the cache (hashmap)
-    // - estimated_max_unique_keys (for the frequency sketch)
-
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
     pub(crate) fn with_everything(
-        capacity: usize,
+        max_capacity: usize,
+        initial_capacity: Option<usize>,
         num_segments: usize,
         build_hasher: S,
         time_to_live: Option<Duration>,
@@ -79,13 +69,53 @@ where
     ) -> Self {
         Self {
             inner: Arc::new(Inner::new(
-                capacity,
+                max_capacity,
+                initial_capacity,
                 num_segments,
                 build_hasher,
                 time_to_live,
                 time_to_idle,
             )),
         }
+    }
+
+    pub fn get<Q>(&self, key: &Q) -> Option<V>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        let hash = self.inner.hash(key);
+        self.inner.select(hash).get_with_hash(key, hash)
+    }
+
+    pub fn insert(&self, key: K, value: V) {
+        let hash = self.inner.hash(&key);
+        self.inner.select(hash).insert_with_hash(key, hash, value);
+    }
+
+    pub fn invalidate<Q>(&self, key: &Q)
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        let hash = self.inner.hash(key);
+        self.inner.select(hash).invalidate(key);
+    }
+
+    pub fn max_capacity(&self) -> usize {
+        self.inner.desired_capacity
+    }
+
+    pub fn time_to_live(&self) -> Option<Duration> {
+        self.inner.segments[0].time_to_live()
+    }
+
+    pub fn time_to_idle(&self) -> Option<Duration> {
+        self.inner.segments[0].time_to_idle()
+    }
+
+    pub fn num_segments(&self) -> usize {
+        self.inner.segments.len()
     }
 
     // /// This is used by unit tests to get consistent result.
@@ -98,46 +128,9 @@ where
     // }
 }
 
-impl<K, V, S> ConcurrentCache<K, V> for SegmentedCache<K, V, S>
-where
-    K: Eq + Hash,
-    S: BuildHasher + Clone,
-{
-    fn get(&self, key: &K) -> Option<Arc<V>> {
-        let hash = self.inner.hash(key);
-        self.inner.select(hash).get_with_hash(key, hash)
-    }
-
-    fn insert(&self, key: K, value: V) -> Arc<V> {
-        let hash = self.inner.hash(&key);
-        self.inner.select(hash).insert_with_hash(key, hash, value)
-    }
-
-    fn remove(&self, key: &K) -> Option<Arc<V>> {
-        let hash = self.inner.hash(key);
-        self.inner.select(hash).remove(key)
-    }
-
-    fn capacity(&self) -> usize {
-        self.inner.desired_capacity
-    }
-
-    fn time_to_live(&self) -> Option<Duration> {
-        self.inner.segments[0].time_to_live()
-    }
-
-    fn time_to_idle(&self) -> Option<Duration> {
-        self.inner.segments[0].time_to_idle()
-    }
-
-    fn num_segments(&self) -> usize {
-        self.inner.segments.len()
-    }
-}
-
 impl<K, V, S> ConcurrentCacheExt<K, V> for SegmentedCache<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     S: BuildHasher + Clone,
 {
     fn sync(&self) {
@@ -156,14 +149,16 @@ struct Inner<K, V, S> {
 
 impl<K, V, S> Inner<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
+    V: Clone,
     S: BuildHasher + Clone,
 {
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
     fn new(
-        capacity: usize,
+        max_capacity: usize,
+        initial_capacity: Option<usize>,
         num_segments: usize,
         build_hasher: S,
         time_to_live: Option<Duration>,
@@ -174,13 +169,15 @@ where
         let actual_num_segments = num_segments.next_power_of_two();
         let segment_shift = 64 - actual_num_segments.trailing_zeros();
         // TODO: Round up.
-        let seg_capacity = capacity / actual_num_segments;
+        let seg_capacity = max_capacity / actual_num_segments;
+        let seg_init_capacity = initial_capacity.map(|cap| cap / actual_num_segments);
         // NOTE: We cannot initialize the segments as `vec![cache; actual_num_segments]`
         // because Cache::clone() does not clone its inner but shares the same inner.
         let segments = (0..num_segments)
             .map(|_| {
                 Cache::with_everything(
                     seg_capacity,
+                    seg_init_capacity,
                     build_hasher.clone(),
                     time_to_live,
                     time_to_idle,
@@ -189,7 +186,7 @@ where
             .collect::<Vec<_>>();
 
         Self {
-            desired_capacity: capacity,
+            desired_capacity: max_capacity,
             segments: segments.into_boxed_slice(),
             build_hasher,
             segment_shift,
@@ -197,8 +194,11 @@ where
     }
 
     #[inline]
-    fn hash(&self, key: &K) -> u64 {
-        // TODO: Ensure that build_hasher() is thread safe.
+    fn hash<Q>(&self, key: &Q) -> u64
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         let mut hasher = self.build_hasher.build_hasher();
         key.hash(&mut hasher);
         hasher.finish()
@@ -222,8 +222,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{ConcurrentCache, ConcurrentCacheExt, SegmentedCache};
-    use std::sync::Arc;
+    use super::{ConcurrentCacheExt, SegmentedCache};
 
     #[test]
     fn basic_single_thread() {
@@ -233,42 +232,42 @@ mod tests {
         // Make the cache exterior immutable.
         let cache = cache;
 
-        assert_eq!(cache.insert("a", "alice"), Arc::new("alice"));
-        assert_eq!(cache.insert("b", "bob"), Arc::new("bob"));
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         cache.sync();
         // counts: a -> 1, b -> 1
 
-        assert_eq!(cache.insert("c", "cindy"), Arc::new("cindy"));
-        assert_eq!(cache.get(&"c"), Some(Arc::new("cindy")));
+        cache.insert("c", "cindy");
+        assert_eq!(cache.get(&"c"), Some("cindy"));
         // counts: a -> 1, b -> 1, c -> 1
         cache.sync();
 
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         cache.sync();
         // counts: a -> 2, b -> 2, c -> 1
 
         // "d" should not be admitted because its frequency is too low.
-        assert_eq!(cache.insert("d", "david"), Arc::new("david")); //   count: d -> 0
+        cache.insert("d", "david"); //   count: d -> 0
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 1
 
-        assert_eq!(cache.insert("d", "david"), Arc::new("david"));
+        cache.insert("d", "david");
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher then c's.
-        assert_eq!(cache.insert("d", "dennis"), Arc::new("dennis"));
+        cache.insert("d", "dennis");
         cache.sync();
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.get(&"c"), None);
-        assert_eq!(cache.get(&"d"), Some(Arc::new("dennis")));
+        assert_eq!(cache.get(&"d"), Some("dennis"));
 
-        assert_eq!(cache.remove(&"b"), Some(Arc::new("bob")));
+        cache.invalidate(&"b");
     }
 
     #[test]
@@ -289,7 +288,7 @@ mod tests {
                     cache.get(&10);
                     cache.sync();
                     cache.insert(20, format!("{}-200", id));
-                    cache.remove(&10);
+                    cache.invalidate(&10);
                 })
             })
             .collect::<Vec<_>>();

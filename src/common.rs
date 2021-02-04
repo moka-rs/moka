@@ -64,7 +64,7 @@ struct DeqNodes<K> {
 }
 
 pub(crate) struct ValueEntry<K, V> {
-    pub(crate) value: Arc<V>,
+    pub(crate) value: V,
     last_accessed: Option<Arc<AtomicU64>>,
     last_modified: Option<Arc<AtomicU64>>,
     nodes: Mutex<DeqNodes<K>>,
@@ -72,7 +72,7 @@ pub(crate) struct ValueEntry<K, V> {
 
 impl<K, V> ValueEntry<K, V> {
     pub(crate) fn new(
-        value: Arc<V>,
+        value: V,
         last_accessed: Option<Instant>,
         last_modified: Option<Instant>,
         access_order_q_node: Option<KeyDeqNodeAO<K>>,
@@ -89,7 +89,7 @@ impl<K, V> ValueEntry<K, V> {
         }
     }
 
-    pub(crate) fn new_with(value: Arc<V>, other: &Self) -> Self {
+    pub(crate) fn new_with(value: V, other: &Self) -> Self {
         let nodes = {
             let other_nodes = other.nodes.lock();
             DeqNodes {

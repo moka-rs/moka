@@ -7,8 +7,34 @@ use std::{
     time::Duration,
 };
 
+/// Builds a `Cache` or `SegmentedCache` with various configuration knobs.
+///
+/// ```rust
+/// use moka::sync::Builder;
+///
+/// use std::time::Duration;
+///
+/// let cache = Builder::new(10_000) // Max 10,000 elements
+///     // Time to live (TTL): 30 minutes
+///     .time_to_live(Duration::from_secs(30 * 60))
+///     // Time to idle (TTI):  5 minutes
+///     .time_to_idle(Duration::from_secs( 5 * 60))
+///     // Create the cache.
+///     .build();
+///
+/// // This entry will expire after 5 minutes (TTI) if there is no get().
+/// cache.insert(0, "zero");
+///
+/// // This get() will extend the entry life for another 5 minutes.
+/// cache.get(&0);
+///
+/// // Even though we keep calling get(), the entry will expire
+/// // after 30 minutes (TTL) from the insert().
+/// ```
+///
 pub struct Builder<C> {
-    capacity: usize,
+    max_capacity: usize,
+    initial_capacity: Option<usize>,
     num_segments: Option<usize>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
@@ -18,10 +44,12 @@ pub struct Builder<C> {
 impl<K, V> Builder<Cache<K, V, RandomState>>
 where
     K: Eq + Hash,
+    V: Clone,
 {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(max_capacity: usize) -> Self {
         Self {
-            capacity,
+            max_capacity,
+            initial_capacity: None,
             num_segments: None,
             time_to_live: None,
             time_to_idle: None,
@@ -31,7 +59,8 @@ where
 
     pub fn segments(self, num_segments: usize) -> Builder<SegmentedCache<K, V, RandomState>> {
         Builder {
-            capacity: self.capacity,
+            max_capacity: self.max_capacity,
+            initial_capacity: self.initial_capacity,
             num_segments: Some(num_segments),
             time_to_live: self.time_to_live,
             time_to_idle: self.time_to_idle,
@@ -42,7 +71,8 @@ where
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
         Cache::with_everything(
-            self.capacity,
+            self.max_capacity,
+            self.initial_capacity,
             build_hasher,
             self.time_to_live,
             self.time_to_idle,
@@ -53,18 +83,26 @@ where
     where
         S: BuildHasher + Clone,
     {
-        Cache::with_everything(self.capacity, hasher, self.time_to_live, self.time_to_idle)
+        Cache::with_everything(
+            self.max_capacity,
+            self.initial_capacity,
+            hasher,
+            self.time_to_live,
+            self.time_to_idle,
+        )
     }
 }
 
 impl<K, V> Builder<SegmentedCache<K, V, RandomState>>
 where
     K: Eq + Hash,
+    V: Clone,
 {
     pub fn build(self) -> SegmentedCache<K, V, RandomState> {
         let build_hasher = RandomState::default();
         SegmentedCache::with_everything(
-            self.capacity,
+            self.max_capacity,
+            self.initial_capacity,
             self.num_segments.unwrap(),
             build_hasher,
             self.time_to_live,
@@ -77,7 +115,8 @@ where
         S: BuildHasher + Clone,
     {
         SegmentedCache::with_everything(
-            self.capacity,
+            self.max_capacity,
+            self.initial_capacity,
             self.num_segments.unwrap(),
             hasher,
             self.time_to_live,
@@ -87,6 +126,13 @@ where
 }
 
 impl<C> Builder<C> {
+    pub fn initial_capacity(self, capacity: usize) -> Self {
+        Self {
+            initial_capacity: Some(capacity),
+            ..self
+        }
+    }
+
     pub fn time_to_live(self, duration: Duration) -> Self {
         Self {
             time_to_live: Some(duration),
@@ -105,35 +151,34 @@ impl<C> Builder<C> {
 #[cfg(test)]
 mod tests {
     use super::Builder;
-    use crate::sync::ConcurrentCache;
 
-    use std::{sync::Arc, time::Duration};
+    use std::time::Duration;
 
     #[test]
     fn build_cache() {
         // Cache<char, String>
         let cache = Builder::new(100).build();
 
-        assert_eq!(cache.capacity(), 100);
+        assert_eq!(cache.max_capacity(), 100);
         assert_eq!(cache.time_to_live(), None);
         assert_eq!(cache.time_to_idle(), None);
         assert_eq!(cache.num_segments(), 1);
 
         cache.insert('a', "Alice");
-        assert_eq!(cache.get(&'a'), Some(Arc::new("Alice")));
+        assert_eq!(cache.get(&'a'), Some("Alice"));
 
         let cache = Builder::new(100)
             .time_to_live(Duration::from_secs(45 * 60))
             .time_to_idle(Duration::from_secs(15 * 60))
             .build();
 
-        assert_eq!(cache.capacity(), 100);
+        assert_eq!(cache.max_capacity(), 100);
         assert_eq!(cache.time_to_live(), Some(Duration::from_secs(45 * 60)));
         assert_eq!(cache.time_to_idle(), Some(Duration::from_secs(15 * 60)));
         assert_eq!(cache.num_segments(), 1);
 
         cache.insert('a', "Alice");
-        assert_eq!(cache.get(&'a'), Some(Arc::new("Alice")));
+        assert_eq!(cache.get(&'a'), Some("Alice"));
     }
 
     #[test]
@@ -141,13 +186,13 @@ mod tests {
         // SegmentCache<char, String>
         let cache = Builder::new(100).segments(16).build();
 
-        assert_eq!(cache.capacity(), 100);
+        assert_eq!(cache.max_capacity(), 100);
         assert_eq!(cache.time_to_live(), None);
         assert_eq!(cache.time_to_idle(), None);
         assert_eq!(cache.num_segments(), 16_usize.next_power_of_two());
 
         cache.insert('b', "Bob");
-        assert_eq!(cache.get(&'b'), Some(Arc::new("Bob")));
+        assert_eq!(cache.get(&'b'), Some("Bob"));
 
         let cache = Builder::new(100)
             .segments(16)
@@ -155,12 +200,12 @@ mod tests {
             .time_to_idle(Duration::from_secs(15 * 60))
             .build();
 
-        assert_eq!(cache.capacity(), 100);
+        assert_eq!(cache.max_capacity(), 100);
         assert_eq!(cache.time_to_live(), Some(Duration::from_secs(45 * 60)));
         assert_eq!(cache.time_to_idle(), Some(Duration::from_secs(15 * 60)));
         assert_eq!(cache.num_segments(), 16_usize.next_power_of_two());
 
         cache.insert('b', "Bob");
-        assert_eq!(cache.get(&'b'), Some(Arc::new("Bob")));
+        assert_eq!(cache.get(&'b'), Some("Bob"));
     }
 }

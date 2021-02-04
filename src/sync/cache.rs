@@ -1,4 +1,4 @@
-use super::{ConcurrentCache, ConcurrentCacheExt};
+use super::ConcurrentCacheExt;
 use crate::common::{
     deque::{CacheRegion, DeqNode, Deque},
     deques::Deques,
@@ -11,6 +11,7 @@ use crossbeam_channel::{Receiver, Sender, TrySendError};
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use quanta::{Clock, Instant};
 use std::{
+    borrow::Borrow,
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hash, Hasher},
     ptr::NonNull,
@@ -39,6 +40,155 @@ pub(crate) const PERIODICAL_SYNC_INITIAL_DELAY_MILLIS: u64 = 500;
 pub(crate) const PERIODICAL_SYNC_NORMAL_PACE_MILLIS: u64 = 300;
 pub(crate) const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 
+/// A thread-safe concurrent in-memory cache.
+///
+/// `Cache` supports full concurrency of retrievals and a high expected concurrency
+/// for updates.
+///
+/// `Cache` utilizes a lock-free concurrent hash table `cht::SegmentedHashMap` from
+/// the [cht][cht-crate] crate for the central key-value storage. `Cache` performs a
+/// best-effort bounding of a map using an entry replacement algorithm to determine
+/// which entries to evict when the capacity is exceeded.
+///
+/// [cht-crate]: https://crates.io/crates/cht
+///
+/// # Usage
+///
+/// Cache entries are manually added using `insert` method, and are stored in the
+/// cache until either evicted or manually invalidated.
+///
+/// Here's an example that reads and updates a cache by using multiple threads:
+///
+/// ```rust
+/// use moka::sync::Cache;
+///
+/// use std::thread;
+///
+/// fn value(n: usize) -> String {
+///     format!("value {}", n)
+/// }
+///
+/// const NUM_THREADS: usize = 16;
+/// const NUM_KEYS_PER_THREAD: usize = 64;
+///
+/// // Create a cache that can store up to 10,000 elements.
+/// let cache = Cache::new(10_000);
+///
+/// // Spawn threads and read and update the cache simultaneously.
+/// let threads: Vec<_> = (0..NUM_THREADS)
+///     .map(|i| {
+///         // To share the same cache across the threads, clone it.
+///         // This is a cheap operation.
+///         let my_cache = cache.clone();
+///         let start = i * NUM_KEYS_PER_THREAD;
+///         let end = (i + 1) * NUM_KEYS_PER_THREAD;
+///
+///         thread::spawn(move || {
+///             // Insert 64 elements. (NUM_KEYS_PER_THREAD = 64)
+///             for key in start..end {
+///                 my_cache.insert(key, value(key));
+///                 // get() returns Option<String>, a clone of the stored value.
+///                 assert_eq!(my_cache.get(&key), Some(value(key)));
+///             }
+///
+///             // Invalidate every 4 element of the inserted elements.
+///             for key in (start..end).step_by(4) {
+///                 my_cache.invalidate(&key);
+///             }
+///         })
+///     })
+///     .collect();
+///
+/// // Wait for all threads to complete.
+/// threads.into_iter().for_each(|t| t.join().expect("Failed"));
+///
+/// // Verify the result.
+/// for key in 0..(NUM_THREADS * NUM_KEYS_PER_THREAD) {
+///     if key % 4 == 0 {
+///         assert_eq!(cache.get(&key), None);
+///     } else {
+///         assert_eq!(cache.get(&key), Some(value(key)));
+///     }
+/// }
+/// ```
+///
+/// If you want to use `sync::Cache` in an async runtime such as Tokio or async-std,
+/// see [this example][async-example] in the README.
+///
+/// [async-example]: https://github.com/moka-rs/moka/blob/master/README.md#using-cache-with-an-async-runtime-tokio-async-std-etc
+///
+/// # Thread Safety
+///
+/// All methods provided by the `Cache` are considered thread-safe, and can be safely
+/// accessed by multiple concurrent threads.
+///
+/// `Cache<K, V, S>` will implement `Send` and `Sync` when all of the following conditions meet:
+///
+/// - `K` (key) and `V` (value) implement `Send` and `Sync`.
+/// - `S` (the hash-map state) implements `Send`.
+///
+/// # Sharing a cache across threads
+///
+/// To share a cache across threads, do one of the followings:
+///
+/// - Create a clone of the cache by calling its `clone` method and pass it to other
+///   thread.
+/// - Wrap the cache by a `sync::OnceCell` or `sync::Lazy` from
+///   [once_cell][once-cell-crate] create, and set it to a `static` variable.
+///
+/// Cloning is a cheap operation for `Cache` as it only creates thread-safe
+/// reference-counted pointers to the internal data structures.
+///
+/// [once-cell-crate]: https://crates.io/crates/once_cell
+///
+/// # Avoiding to clone the value at `get`
+///
+/// The return type of `get` method is `Option<V>` instead of `Option<&V>`. Every
+/// time `get` is called for an existing key, it creates a clone of the stored value
+/// `V` and returns it. This is because the `Cache` allows concurrent updates from
+/// threads so a value stored in the cache can be dropped or replaced at any time by
+/// any other thread. `get` cannot return a reference `&V` as it is impossible to
+/// guarantee the value outlives the reference.
+///
+/// If you want to store values that will be expensive to clone, wrap them by
+/// `std::sync::Arc` before storing in a cache. [`Arc`][rustdoc-std-arc] is a
+/// thread-safe reference-counted pointer and its `clone()` method is cheap.
+///
+/// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
+///
+/// # Expiration Policies
+///
+/// `Cache` supports the following expiration policies:
+///
+/// - **Time to live**: A cached entry will be expired after the specified duration
+///   past from `insert`.
+/// - **Time to idle**: A cached entry will be expired after the specified duration
+///   past from `get` or `insert`.
+///
+/// See the cache [`Builder`][builder-struct]'s doc for how to configure a cache
+/// with them.
+///
+/// [builder-struct]: ./struct.Builder.html
+///
+/// # Hashing Algorithm
+///
+/// By default, `Cache` uses a hashing algorithm selected to provide resistance
+/// against HashDoS attacks.
+///
+/// The default hashing algorithm is the one used by `std::collections::HashMap`,
+/// which is currently SipHash 1-3.
+///
+/// While its performance is very competitive for medium sized keys, other hashing
+/// algorithms will outperform it for small keys such as integers as well as large
+/// keys such as long strings. However those algorithms will typically not protect
+/// against attacks such as HashDoS.
+///
+/// The hashing algorithm can be replaced on a per-`Cache` basis using the
+/// `build_with_hasher` method of the cache `Builder`. Many alternative algorithms
+/// are available on crates.io, such as the [aHash][ahash-crate] crate.
+///
+/// [ahash-crate]: https://crates.io/crates/ahash
+///
 pub struct Cache<K, V, S = RandomState> {
     inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
@@ -82,29 +232,24 @@ impl<K, V, S> Clone for Cache<K, V, S> {
 
 impl<K, V> Cache<K, V, RandomState>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
+    V: Clone,
 {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(max_capacity: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_hasher(capacity, build_hasher)
+        Self::with_everything(max_capacity, None, build_hasher, None, None)
     }
 }
 
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
+    V: Clone,
     S: BuildHasher + Clone,
 {
-    pub fn with_hasher(capacity: usize, build_hasher: S) -> Self {
-        Self::with_everything(capacity, build_hasher, None, None)
-    }
-
-    // TODO: Instead of taking the capacity as an argument, take the followings:
-    // - initial_capacity of the cache (hashmap)
-    // - max_capacity of the cache (hashmap)
-    // - estimated_max_unique_keys (for the frequency sketch)
     pub(crate) fn with_everything(
-        capacity: usize,
+        max_capacity: usize,
+        initial_capacity: Option<usize>,
         build_hasher: S,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
@@ -112,7 +257,8 @@ where
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
         let inner = Arc::new(Inner::new(
-            capacity,
+            max_capacity,
+            initial_capacity,
             build_hasher,
             r_rcv,
             w_rcv,
@@ -129,7 +275,68 @@ where
         }
     }
 
-    pub(crate) fn get_with_hash(&self, key: &K, hash: u64) -> Option<Arc<V>> {
+    /// Returns a _clone_ of the value corresponding to the key.
+    ///
+    /// If you want to store values that will be expensive to clone, wrap them by
+    /// `std::sync::Arc` before storing in a cache. [`Arc`][rustdoc-std-arc] is a
+    /// thread-safe reference-counted pointer and its `clone()` method is cheap.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
+    /// on the borrowed form _must_ match those for the key type.
+    ///
+    /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
+    pub fn get<Q>(&self, key: &Q) -> Option<V>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.get_with_hash(key, self.inner.hash(key))
+    }
+
+    /// Inserts a key-value pair into the cache.
+    ///
+    /// If the cache has this key present, the value is updated.
+    pub fn insert(&self, key: K, value: V) {
+        let hash = self.inner.hash(&key);
+        self.insert_with_hash(key, hash, value)
+    }
+
+    /// Discards any cached value for the key.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
+    /// on the borrowed form _must_ match those for the key type.
+    pub fn invalidate<Q>(&self, key: &Q)
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.throttle_write_pace();
+        if let Some(entry) = self.inner.cache.remove(key) {
+            self.schedule_remove_op(entry).expect("Failed to remove");
+        }
+    }
+
+    pub fn max_capacity(&self) -> usize {
+        self.inner.max_capacity
+    }
+
+    pub fn time_to_live(&self) -> Option<Duration> {
+        self.inner.time_to_live
+    }
+
+    pub fn time_to_idle(&self) -> Option<Duration> {
+        self.inner.time_to_idle
+    }
+
+    pub fn num_segments(&self) -> usize {
+        1
+    }
+
+    pub(crate) fn get_with_hash<Q: ?Sized>(&self, key: &Q, hash: u64) -> Option<V>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq,
+    {
         let record = |entry, ts| {
             self.record_read_op(hash, entry, ts)
                 .expect("Failed to record a get op")
@@ -143,7 +350,7 @@ where
             }
             // Value found, no expiry.
             (Some(entry), false) => {
-                let v = Arc::clone(&entry.value);
+                let v = entry.value.clone();
                 record(Some(entry), None);
                 Some(v)
             }
@@ -158,7 +365,7 @@ where
                     None
                 } else {
                     // Valid entry.
-                    let v = Arc::clone(&entry.value);
+                    let v = entry.value.clone();
                     record(Some(entry), Some(now));
                     Some(v)
                 }
@@ -166,11 +373,10 @@ where
         }
     }
 
-    pub(crate) fn insert_with_hash(&self, key: K, hash: u64, value: V) -> Arc<V> {
+    pub(crate) fn insert_with_hash(&self, key: K, hash: u64, value: V) {
         self.throttle_write_pace();
 
         let key = Arc::new(key);
-        let value = Arc::new(value);
 
         let op_cnt1 = Rc::new(AtomicU8::new(0));
         let op_cnt2 = Rc::clone(&op_cnt1);
@@ -179,13 +385,12 @@ where
 
         // Since the cache (cht::SegmentedHashMap) employs optimistic locking
         // strategy, insert_with_or_modify() may get an insert/modify operation
-        // conflicted with other concurrent hash table operations. In that case,
-        // it has to retry the insertion or modification, so on_insert and/or
-        // on_modify closures can be executed more than once. In order to
-        // identify the last call of these closures, we use a shared counter
-        // (op_cnt{1,2}) here to record a serial number on a WriteOp, and
-        // consider the WriteOp with the largest serial number is the one made
-        // by the last call of the closures.
+        // conflicted with other concurrent hash table operations. In that case, it
+        // has to retry the insertion or modification, so on_insert and/or on_modify
+        // closures can be executed more than once. In order to identify the last
+        // call of these closures, we use a shared counter (op_cnt{1,2}) here to
+        // record a serial number on a WriteOp, and consider the WriteOp with the
+        // largest serial number is the one made by the last call of the closures.
         self.inner.cache.insert_with_or_modify(
             Arc::clone(&key),
             // on_insert
@@ -202,7 +407,7 @@ where
                     }
                 }
                 let entry = Arc::new(ValueEntry::new(
-                    Arc::clone(&value),
+                    value.clone(),
                     last_accessed,
                     last_modified,
                     None,
@@ -217,7 +422,7 @@ where
             },
             // on_modify
             |_k, old_entry| {
-                let entry = Arc::new(ValueEntry::new_with(Arc::clone(&value), old_entry));
+                let entry = Arc::new(ValueEntry::new_with(value.clone(), old_entry));
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((
                     cnt,
@@ -245,54 +450,12 @@ where
             (None, None) => unreachable!(),
         }
         .expect("Failed to insert");
-
-        value
-    }
-}
-
-impl<K, V, S> ConcurrentCache<K, V> for Cache<K, V, S>
-where
-    K: Eq + Hash,
-    S: BuildHasher + Clone,
-{
-    fn get(&self, key: &K) -> Option<Arc<V>> {
-        self.get_with_hash(key, self.inner.hash(key))
-    }
-
-    fn insert(&self, key: K, value: V) -> Arc<V> {
-        let hash = self.inner.hash(&key);
-        self.insert_with_hash(key, hash, value)
-    }
-
-    fn remove(&self, key: &K) -> Option<Arc<V>> {
-        self.throttle_write_pace();
-        self.inner.cache.remove(key).map(|entry| {
-            let value = Arc::clone(&entry.value);
-            self.schedule_remove_op(entry).expect("Failed to remove");
-            value
-        })
-    }
-
-    fn capacity(&self) -> usize {
-        self.inner.capacity
-    }
-
-    fn time_to_live(&self) -> Option<Duration> {
-        self.inner.time_to_live
-    }
-
-    fn time_to_idle(&self) -> Option<Duration> {
-        self.inner.time_to_idle
-    }
-
-    fn num_segments(&self) -> usize {
-        1
     }
 }
 
 impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     S: BuildHasher + Clone,
 {
     fn sync(&self) {
@@ -303,7 +466,7 @@ where
 // private methods
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     S: BuildHasher + Clone,
 {
     #[inline]
@@ -421,7 +584,7 @@ where
 #[cfg(test)]
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     S: BuildHasher + Clone,
 {
     fn reconfigure_for_testing(&mut self) {
@@ -454,7 +617,7 @@ where
 type CacheStore<K, V, S> = cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
 
 struct Inner<K, V, S> {
-    capacity: usize,
+    max_capacity: usize,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
     deques: Mutex<Deques<K>>,
@@ -470,29 +633,31 @@ struct Inner<K, V, S> {
 // functions/methods used by Cache
 impl<K, V, S> Inner<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     S: BuildHasher + Clone,
 {
     fn new(
-        capacity: usize,
+        max_capacity: usize,
+        initial_capacity: Option<usize>,
         build_hasher: S,
         read_op_ch: Receiver<ReadOp<K, V>>,
         write_op_ch: Receiver<WriteOp<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
     ) -> Self {
-        // TODO: Make this much smaller.
-        let initial_capacity = ((capacity as f64) * 1.4) as usize;
+        let initial_capacity = initial_capacity
+            .map(|cap| cap + WRITE_LOG_SIZE * 4)
+            .unwrap_or_default();
         let num_segments = 64;
         let cache = cht::SegmentedHashMap::with_num_segments_capacity_and_hasher(
             num_segments,
             initial_capacity,
             build_hasher.clone(),
         );
-        let skt_capacity = usize::max(capacity * 32, 100);
+        let skt_capacity = usize::max(max_capacity * 32, 100);
         let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
         Self {
-            capacity,
+            max_capacity,
             cache,
             build_hasher,
             deques: Mutex::new(Deques::default()),
@@ -507,14 +672,22 @@ where
     }
 
     #[inline]
-    fn hash(&self, key: &K) -> u64 {
+    fn hash<Q>(&self, key: &Q) -> u64
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         let mut hasher = self.build_hasher.build_hasher();
         key.hash(&mut hasher);
         hasher.finish()
     }
 
     #[inline]
-    fn get(&self, key: &K) -> Option<Arc<ValueEntry<K, V>>> {
+    fn get<Q>(&self, key: &Q) -> Option<Arc<ValueEntry<K, V>>>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
         self.cache.get(key)
     }
 
@@ -699,7 +872,7 @@ where
 
 impl<K, V, S> InnerSync for Inner<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     S: BuildHasher + Clone,
 {
     fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
@@ -715,7 +888,7 @@ where
 // private methods
 impl<K, V, S> Inner<K, V, S>
 where
-    K: Eq + Hash,
+    K: Hash + Eq,
     S: BuildHasher + Clone,
 {
     #[inline]
@@ -794,7 +967,7 @@ where
             ts
         });
 
-        if self.cache.len() <= self.capacity {
+        if self.cache.len() <= self.max_capacity {
             // Add the candidate to the deque.
             let key = Arc::clone(&kh.key);
             deqs.push_back_ao(
@@ -843,11 +1016,11 @@ where
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
-    use super::{Cache, ConcurrentCache, ConcurrentCacheExt};
+    use super::{Cache, ConcurrentCacheExt};
     use crate::sync::Builder;
 
     use quanta::Clock;
-    use std::{sync::Arc, time::Duration};
+    use std::time::Duration;
 
     #[test]
     fn basic_single_thread() {
@@ -857,42 +1030,42 @@ mod tests {
         // Make the cache exterior immutable.
         let cache = cache;
 
-        assert_eq!(cache.insert("a", "alice"), Arc::new("alice"));
-        assert_eq!(cache.insert("b", "bob"), Arc::new("bob"));
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         cache.sync();
         // counts: a -> 1, b -> 1
 
-        assert_eq!(cache.insert("c", "cindy"), Arc::new("cindy"));
-        assert_eq!(cache.get(&"c"), Some(Arc::new("cindy")));
+        cache.insert("c", "cindy");
+        assert_eq!(cache.get(&"c"), Some("cindy"));
         // counts: a -> 1, b -> 1, c -> 1
         cache.sync();
 
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         cache.sync();
         // counts: a -> 2, b -> 2, c -> 1
 
         // "d" should not be admitted because its frequency is too low.
-        assert_eq!(cache.insert("d", "david"), Arc::new("david")); //   count: d -> 0
+        cache.insert("d", "david"); //   count: d -> 0
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 1
 
-        assert_eq!(cache.insert("d", "david"), Arc::new("david"));
+        cache.insert("d", "david");
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher then c's.
-        assert_eq!(cache.insert("d", "dennis"), Arc::new("dennis"));
+        cache.insert("d", "dennis");
         cache.sync();
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.get(&"c"), None);
-        assert_eq!(cache.get(&"d"), Some(Arc::new("dennis")));
+        assert_eq!(cache.get(&"d"), Some("dennis"));
 
-        assert_eq!(cache.remove(&"b"), Some(Arc::new("bob")));
+        cache.invalidate(&"b");
     }
 
     #[test]
@@ -913,7 +1086,7 @@ mod tests {
                     cache.get(&10);
                     cache.sync();
                     cache.insert(20, format!("{}-200", id));
-                    cache.remove(&10);
+                    cache.invalidate(&10);
                 })
             })
             .collect::<Vec<_>>();
@@ -940,13 +1113,13 @@ mod tests {
         // Make the cache exterior immutable.
         let cache = cache;
 
-        assert_eq!(cache.insert("a", "alice"), Arc::new("alice"));
+        cache.insert("a", "alice");
         cache.sync();
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
         cache.sync();
 
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
+        cache.get(&"a");
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
         cache.sync();
@@ -954,7 +1127,7 @@ mod tests {
         assert_eq!(cache.get(&"a"), None);
         assert!(cache.inner.cache.is_empty());
 
-        assert_eq!(cache.insert("b", "bob"), Arc::new("bob"));
+        cache.insert("b", "bob");
         cache.sync();
 
         assert_eq!(cache.inner.cache.len(), 1);
@@ -962,16 +1135,16 @@ mod tests {
         mock.increment(Duration::from_secs(5)); // 15 secs.
         cache.sync();
 
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.inner.cache.len(), 1);
 
-        assert_eq!(cache.insert("b", "bill"), Arc::new("bill"));
+        cache.insert("b", "bill");
         cache.sync();
 
         mock.increment(Duration::from_secs(5)); // 20 secs
         cache.sync();
 
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bill")));
+        assert_eq!(cache.get(&"b"), Some("bill"));
         assert_eq!(cache.inner.cache.len(), 1);
 
         mock.increment(Duration::from_secs(5)); // 25 secs
@@ -996,18 +1169,18 @@ mod tests {
         // Make the cache exterior immutable.
         let cache = cache;
 
-        assert_eq!(cache.insert("a", "alice"), Arc::new("alice"));
+        cache.insert("a", "alice");
         cache.sync();
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
         cache.sync();
 
-        assert_eq!(cache.get(&"a"), Some(Arc::new("alice")));
+        assert_eq!(cache.get(&"a"), Some("alice"));
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
         cache.sync();
 
-        assert_eq!(cache.insert("b", "bob"), Arc::new("bob"));
+        cache.insert("b", "bob");
         cache.sync();
 
         assert_eq!(cache.inner.cache.len(), 2);
@@ -1016,7 +1189,7 @@ mod tests {
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
-        assert_eq!(cache.get(&"b"), Some(Arc::new("bob")));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.inner.cache.len(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs

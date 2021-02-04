@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
 
@@ -13,6 +13,8 @@ keywords = ["concurrent", "cache"]
 categories = ["concurrency", "caching"]
 readme = "README.md"
 exclude = [".devcontainer", ".github", ".vscode"]
+
+build = "build.rs"
 
 [dependencies]
 cht = "0.4"
@@ -28,3 +30,8 @@ scheduled-thread-pool = "0.2"
 
 [dev-dependencies]
 getrandom = "0.2"
+skeptic = "0.13"
+tokio = { version = "1.1", features = ["rt-multi-thread", "macros" ] }
+
+[build-dependencies]
+skeptic = "0.13"
