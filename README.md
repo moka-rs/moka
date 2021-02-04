@@ -19,9 +19,13 @@
 
 
 Moka is a fast, concurrent cache library for Rust.
-It is inspired by [Caffeine][caffeine-git] (Java) and [Ristretto][ristretto-git] (Go).
+Moka is inspired by [Caffeine][caffeine-git] (Java) and [Ristretto][ristretto-git] (Go).
 
-Moka provides a cache that supports full concurrency of retrievals and a high expected concurrency for updates. It also provides a segmented cache for increased concurrent update performance.
+Moka provides a cache that supports full concurrency of retrievals and a high
+expected concurrency for updates. It also provides a segmented cache for increased
+concurrent update performance. These caches perform a best-effort bounding of a map
+using an entry replacement algorithm to determine which entries to evict when the
+capacity is exceeded.
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 [ristretto-git]: https://github.com/dgraph-io/ristretto
@@ -31,21 +35,29 @@ Moka provides a cache that supports full concurrency of retrievals and a high ex
 
 - Thread-safe, highly concurrent in-memory cache implementations.
 - Caches are bounded by the maximum number of elements.
-- Maintains good hit rate by using entry replacement algorithms inspired by [Caffeine][caffeine-git]:
+- Maintains good hit rate by using entry replacement algorithms inspired by
+  [Caffeine][caffeine-git]:
     - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.
     - Eviction from a cache is controlled by the Least Recently Used (LRU) policy.
 - Support expiration policies:
     - Time to live
     - Time to idle
 
-Moka currently does not provide `async` optimized caches. The sync (blocking) caches in the current version can be safely used under async runtime such as Tokio or async-std, but will not produce optimal performance under heavy updates. See [this example][async-example] for more details. A near future version of Moka will provide `async` optimized caches.
+Moka currently does not provide `async` optimized caches. The synchronous (blocking)
+caches in the current version can be safely used in async runtime such as Tokio or
+async-std, but will not produce optimal performance under heavy updates. See
+[this example][async-example] for more details. A near future version of Moka will
+provide `async` optimized caches in addition to the sync caches.
 
 [async-example]: #using-cache-with-an-async-runtime-tokio-async-std-etc
 
 
 ## Usage
 
-Here's an example that reads and updates the cache by using multiple threads:
+Cache entries are manually added using `insert` method, and are stored in the cache
+until either evicted or manually invalidated.
+
+Here's an example that reads and updates a cache by using multiple threads:
 
 ```rust
 use moka::sync::Cache;
@@ -69,11 +81,10 @@ fn main() {
             // To share the same cache across the threads, clone it.
             // This is a cheap operation.
             let my_cache = cache.clone();
+            let start = i * NUM_KEYS_PER_THREAD;
+            let end = (i + 1) * NUM_KEYS_PER_THREAD;
 
             thread::spawn(move || {
-                let start = i * NUM_KEYS_PER_THREAD;
-                let end = (i + 1) * NUM_KEYS_PER_THREAD;
-
                 // Insert 64 elements. (NUM_KEYS_PER_THREAD = 64)
                 for key in start..end {
                     my_cache.insert(key, value(key));
@@ -81,8 +92,9 @@ fn main() {
                     assert_eq!(my_cache.get(&key), Some(value(key)));
                 }
 
+                // Invalidate every 4 element of the inserted elements.
                 for key in (start..end).step_by(4) {
-                    assert_eq!(my_cache.remove(&key), Some(value(key)));
+                    my_cache.invalidate(&key);
                 }
             })
         })
@@ -103,14 +115,20 @@ fn main() {
 ```
 
 
-### NOTE: `get()` and `remove()` return a clone of the stored value
+### NOTE: `get` return a clone of the stored value
 
-Note that the return type of `get()` is `Option<V>` instead of `Option<&V>`, where `V` is the value type (`String` in the above example). Every time `get()` is called for an existing key, it creates a clone of the stored value `V` and returns it.
+Note that the return type of `get` method is `Option<V>` instead of `Option<&V>`,
+where `V` is the value type. Every time `get` is called for an existing key, it
+creates a clone of the stored value `V` and returns it.
 
-Because of the nature of concurrent cache, `get()` cannot return `Option<&V>`. A value stored in a cache can be dropped or replaced at any time by any other thread including cache's eviction thread. So it is impossible to create a `&V`, a reference to a value, and guarantee the value outlives the reference.
+Because of the nature of concurrent cache, `get` cannot return `Option<&V>`. A value
+stored in a cache can be dropped or replaced at any time by any other thread
+including cache's eviction thread. So it is impossible to create a `&V`, a reference
+to a value, and guarantee the value outlives the reference.
 
-If you want to store values that will be expensive to clone, wrap them by `std::sync::Arc` before storing to a cache.
-The [`Arc`][rustdoc-std-arc] is a thread-safe reference counted pointer.
+If you want to store values that will be expensive to clone, wrap them by
+`std::sync::Arc` before storing in a cache. [`Arc`][rustdoc-std-arc] is a thread-safe
+reference counted pointer.
 
 [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
 
@@ -130,18 +148,26 @@ cache.get(&key);
 
 ## Using Cache with an Async Runtime (Tokio, async-std, etc.)
 
-Currently, Moka does not provide `async` optimized caches. An update operation (`insert()` or `remove()`) can be blocked for a short period of time under heavy updates. They employ locks, mpsc channels and thread sleeps that are not aware of the [Future trait][std-future] in std. While `insert()` or `remove()` can be safely called in an `async fn` or `async` block, they will not produce optimal performance as they may prevent async tasks from switching while acquiring a lock.
+Currently, Moka does not provide `async` optimized caches. An update operation
+(`insert` or `invalidate` methods) can be blocked for a short time under heavy
+updates. They employ locks, mpsc channels and thread sleeps that are not aware of the
+[Future trait][std-future] in std. While `insert` or `invalidate` can be safely
+called in an `async fn` or `async` block, they will not produce optimal performance
+as they may prevent async tasks from switching while acquiring a lock.
 
-Some of the async runtime libraries such as Tokio and async-std provide APIs to off-load a blocking operation to a dedicated thread pool. You may want to use them when calling `insert()` or `remove()` although it is not required.
+Some of the async runtime libraries such as Tokio and async-std provide APIs to
+off-load a blocking operation to a dedicated thread pool. You may want to use them
+when calling `insert` or `invalidate` although it is not required.
 
-- Tokio &mdash; [`spawn-blocking()`][tokio-spawn-blocking]
-- async-std &mdash; [`spawn-blocking()`][async-std-spawn-blocking]
+- Tokio &mdash; [`spawn-blocking`][tokio-spawn-blocking] function
+- async-std &mdash; [`spawn-blocking`][async-std-spawn-blocking] function
 
 [std-future]: https://doc.rust-lang.org/stable/std/future/trait.Future.html
 [tokio-spawn-blocking]: https://docs.rs/tokio/latest/tokio/task/fn.spawn_blocking.html
 [async-std-spawn-blocking]: https://docs.rs/async-std/latest/async_std/task/fn.spawn_blocking.html
 
-Here is the same example, but using Tokio runtime with `spawn-blocking()`:
+Here is a similar program to the previous example, but using Tokio runtime with
+`spawn-blocking`:
 
 ```rust
 // Cargo.toml
@@ -171,11 +197,10 @@ async fn main() {
             // To share the same cache across the async tasks, clone it.
             // This is a cheap operation.
             let my_cache = cache.clone();
+            let start = i * NUM_KEYS_PER_TASK;
+            let end = (i + 1) * NUM_KEYS_PER_TASK;
 
             tokio::spawn(async move {
-                let start = i * NUM_KEYS_PER_TASK;
-                let end = (i + 1) * NUM_KEYS_PER_TASK;
-
                 // Insert 64 elements. (NUM_KEYS_PER_TASK = 64)
                 for key in start..end {
                     // Use spawn_blocking() for insert() as it internally uses locks
@@ -184,20 +209,19 @@ async fn main() {
                     task::spawn_blocking(move || my_cache1.insert(key, value(key)))
                         .await
                         .unwrap();
-                    
+
                     // get() returns Option<String>, a clone of the stored value.
                     assert_eq!(my_cache.get(&key), Some(value(key)));
                 }
 
-                // Remove every 4 element of the inserted elements.
+                // Invalidate every 4 element of the inserted elements.
                 for key in (start..end).step_by(4) {
-                    // Use spawn_blocking() for remove() as it internally uses locks
+                    // Use spawn_blocking() for invalidate() as it internally uses locks
                     // that are not async aware.
                     let my_cache1 = my_cache.clone();
-                    let res = task::spawn_blocking(move || my_cache1.remove(&key))
+                    task::spawn_blocking(move || my_cache1.invalidate(&key))
                         .await
                         .unwrap();
-                    assert_eq!(res, Some(value(key)));
                 }
             })
         })
@@ -219,15 +243,18 @@ async fn main() {
 }
 ```
 
-A near future version of Moka will provide `async` optimized caches in addition to the sync caches.
+A near future version of Moka will provide `async` optimized caches in addition to
+the synchronous caches.
 
 
 ## Usage: Expiration Policies
 
 Moka supports the following expiration policies:
 
-- Time to live: An element will be expired after the specified duration past from `insert()`.
-- Time to idle: An element will be expired after the specified duration past from `get()` or `insert()`.
+- **Time to live**: A cached entry will be expired after the specified duration past
+  from `insert`.
+- **Time to idle**: A cached entry will be expired after the specified duration past
+  from `get` or `insert`.
 
 To set them, use the cache `Builder`.
 
@@ -238,38 +265,58 @@ use std::time::Duration;
 
 fn main() {
     let cache = Builder::new(10_000) // Max 10,000 elements
-        // Time to live (TTL): 30 minutes 
+        // Time to live (TTL): 30 minutes
         .time_to_live(Duration::from_secs(30 * 60))
         // Time to idle (TTI):  5 minutes
         .time_to_idle(Duration::from_secs( 5 * 60))
         // Create the cache.
         .build();
-    
-    // This element will expire after 5 minutes (TTI) if there is no get().
+
+    // This entry will expire after 5 minutes (TTI) if there is no get().
     cache.insert(0, "zero");
 
-    // This get() will extend the element life for another 5 minutes.
+    // This get() will extend the entry life for another 5 minutes.
     cache.get(&0);
 
-    // Even though we keep calling get(), the element will expire
+    // Even though we keep calling get(), the entry will expire
     // after 30 minutes (TTL) from the insert().
 }
 ```
 
 ## Segmented Cache
 
-Moka caches maintain internal data structures for entry replacement algorithms.
-These structures are guarded by a lock and operations are applied in batches to avoid lock contention using a dedicated worker thread.
-Under heavy updates, the worker thread may not be able to catch up to the updates.
-When this happens, `insert()` or `remove()` call will be paused (blocked) for a short time.
+Moka caches maintain internal data structures for entry replacement algorithms. These
+structures are guarded by a lock and operations are applied in batches using a
+dedicated worker thread to avoid lock contention. Under heavy updates, the worker
+thread may not be able to catch up to the updates. When this happens, `insert` or
+`invalidate` call will be paused (blocked) for a short time.
 
-If this pause happen very often, you may want to switch to a segmented cache.
-You can use `segments()` method of the builder to create such a cache.
+If this pause happen very often, you may want to switch to a segmented cache. You can
+use `segments` method of the builder to create such a cache.
 
 
-## Requirements
+## Hashing Algorithm
 
-- Rust 1.45.2 or newer.
+By default, a cache uses a hashing algorithm selected to provide resistance against
+HashDoS attacks.
+
+The default hashing algorithm is the one used by `std::collections::HashMap`, which
+is currently SipHash 1-3, though this is subject to change at any point in the
+future.
+
+While its performance is very competitive for medium sized keys, other hashing
+algorithms will outperform it for small keys such as integers as well as large keys
+such as long strings. However those algorithms will typically not protect against
+attacks such as HashDoS.
+
+The hashing algorithm can be replaced on a per-`Cache` basis using the `with_hasher`
+method of the cache `Builder`. Many alternative algorithms are available on
+crates.io, such as the aHash crate.
+
+
+## Minimum Supported Rust Version
+
+This crate's minimum supported Rust version (MSRV) is 1.45.2.
 
 <!--
 - quanta requires 1.45.
@@ -277,20 +324,31 @@ You can use `segments()` method of the builder to create such a cache.
 - cht requires 1.41.
 -->
 
+If no feature is enabled, MSRV will be updated conservatively. When using other
+features, like `async` (which is not available yet), MSRV might be updated more
+frequently, up to the latest stable. In both cases, increasing MSRV is _not_
+considered a semver-breaking change.
 
-## Miscellaneous Information
 
-Moka is named after the [moka pot][moka-pot-wikipedia], a stove-top coffee maker that brews espresso-like coffee using boiling water pressurized by steam.
+## About the Name
 
-[caffeine-git]: https://github.com/ben-manes/caffeine
-[ristretto-git]: https://github.com/dgraph-io/ristretto
+Moka is named after the [moka pot][moka-pot-wikipedia], a stove-top coffee maker that
+brews espresso-like coffee using boiling water pressurized by steam.
+
 [moka-pot-wikipedia]: https://en.wikipedia.org/wiki/Moka_pot
 
 
 ## License
 
-Moka is distributed under the terms of both the MIT license and the Apache
-License (Version 2.0).
+Moka is distributed under the terms of both the MIT license and the Apache License
+(Version 2.0).
 
-See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for
-details.
+See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.
+
+
+<!--
+
+MEMO:
+- Column width is 85. (Emacs: C-x f)
+
+-->

@@ -41,17 +41,12 @@ where
     K: Hash + Eq,
     V: Clone,
 {
-    // TODO: Instead of taking the capacity as an argument, take the followings:
-    // - initial_capacity of the cache (hashmap)
-    // - max_capacity of the cache (hashmap)
-    // - estimated_max_unique_keys (for the frequency sketch)
-
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
-    pub fn new(capacity: usize, num_segments: usize) -> Self {
+    pub fn new(max_capacity: usize, num_segments: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(capacity, num_segments, build_hasher, None, None)
+        Self::with_everything(max_capacity, None, num_segments, build_hasher, None, None)
     }
 }
 
@@ -61,20 +56,12 @@ where
     V: Clone,
     S: BuildHasher + Clone,
 {
-    pub fn with_hasher(capacity: usize, num_segments: usize, build_hasher: S) -> Self {
-        Self::with_everything(capacity, num_segments, build_hasher, None, None)
-    }
-
-    // TODO: Instead of taking the capacity as an argument, take the followings:
-    // - initial_capacity of the cache (hashmap)
-    // - max_capacity of the cache (hashmap)
-    // - estimated_max_unique_keys (for the frequency sketch)
-
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
     pub(crate) fn with_everything(
-        capacity: usize,
+        max_capacity: usize,
+        initial_capacity: Option<usize>,
         num_segments: usize,
         build_hasher: S,
         time_to_live: Option<Duration>,
@@ -82,7 +69,8 @@ where
     ) -> Self {
         Self {
             inner: Arc::new(Inner::new(
-                capacity,
+                max_capacity,
+                initial_capacity,
                 num_segments,
                 build_hasher,
                 time_to_live,
@@ -102,19 +90,19 @@ where
 
     pub fn insert(&self, key: K, value: V) {
         let hash = self.inner.hash(&key);
-        self.inner.select(hash).insert_with_hash(key, hash, value)
+        self.inner.select(hash).insert_with_hash(key, hash, value);
     }
 
-    pub fn remove<Q>(&self, key: &Q) -> Option<V>
+    pub fn invalidate<Q>(&self, key: &Q)
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.inner.hash(key);
-        self.inner.select(hash).remove(key)
+        self.inner.select(hash).invalidate(key);
     }
 
-    pub fn capacity(&self) -> usize {
+    pub fn max_capacity(&self) -> usize {
         self.inner.desired_capacity
     }
 
@@ -169,7 +157,8 @@ where
     ///
     /// Panics if `num_segments` is 0.
     fn new(
-        capacity: usize,
+        max_capacity: usize,
+        initial_capacity: Option<usize>,
         num_segments: usize,
         build_hasher: S,
         time_to_live: Option<Duration>,
@@ -180,13 +169,15 @@ where
         let actual_num_segments = num_segments.next_power_of_two();
         let segment_shift = 64 - actual_num_segments.trailing_zeros();
         // TODO: Round up.
-        let seg_capacity = capacity / actual_num_segments;
+        let seg_capacity = max_capacity / actual_num_segments;
+        let seg_init_capacity = initial_capacity.map(|cap| cap / actual_num_segments);
         // NOTE: We cannot initialize the segments as `vec![cache; actual_num_segments]`
         // because Cache::clone() does not clone its inner but shares the same inner.
         let segments = (0..num_segments)
             .map(|_| {
                 Cache::with_everything(
                     seg_capacity,
+                    seg_init_capacity,
                     build_hasher.clone(),
                     time_to_live,
                     time_to_idle,
@@ -195,7 +186,7 @@ where
             .collect::<Vec<_>>();
 
         Self {
-            desired_capacity: capacity,
+            desired_capacity: max_capacity,
             segments: segments.into_boxed_slice(),
             build_hasher,
             segment_shift,
@@ -208,7 +199,6 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        // TODO: Ensure that build_hasher() is thread safe.
         let mut hasher = self.build_hasher.build_hasher();
         key.hash(&mut hasher);
         hasher.finish()
@@ -277,7 +267,7 @@ mod tests {
         assert_eq!(cache.get(&"c"), None);
         assert_eq!(cache.get(&"d"), Some("dennis"));
 
-        assert_eq!(cache.remove(&"b"), Some("bob"));
+        cache.invalidate(&"b");
     }
 
     #[test]
@@ -298,7 +288,7 @@ mod tests {
                     cache.get(&10);
                     cache.sync();
                     cache.insert(20, format!("{}-200", id));
-                    cache.remove(&10);
+                    cache.invalidate(&10);
                 })
             })
             .collect::<Vec<_>>();
