@@ -14,7 +14,7 @@ use std::{
 ///
 /// use std::time::Duration;
 ///
-/// let cache = Builder::new(10_000) // Max 10,000 elements
+/// let cache = CacheBuilder::new(10_000) // Max 10,000 elements
 ///     // Time to live (TTL): 30 minutes
 ///     .time_to_live(Duration::from_secs(30 * 60))
 ///     // Time to idle (TTI):  5 minutes
