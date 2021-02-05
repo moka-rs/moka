@@ -165,10 +165,10 @@ pub(crate) const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 /// - **Time to idle**: A cached entry will be expired after the specified duration
 ///   past from `get` or `insert`.
 ///
-/// See the cache [`Builder`][builder-struct]'s doc for how to configure a cache
+/// See the [`CacheBuilder`][builder-struct]'s doc for how to configure a cache
 /// with them.
 ///
-/// [builder-struct]: ./struct.Builder.html
+/// [builder-struct]: ./struct.CacheBuilder.html
 ///
 /// # Hashing Algorithm
 ///
@@ -184,7 +184,7 @@ pub(crate) const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 /// against attacks such as HashDoS.
 ///
 /// The hashing algorithm can be replaced on a per-`Cache` basis using the
-/// `build_with_hasher` method of the cache `Builder`. Many alternative algorithms
+/// `build_with_hasher` method of the `CacheBuilder`. Many alternative algorithms
 /// are available on crates.io, such as the [aHash][ahash-crate] crate.
 ///
 /// [ahash-crate]: https://crates.io/crates/ahash
@@ -332,10 +332,10 @@ where
         1
     }
 
-    pub(crate) fn get_with_hash<Q: ?Sized>(&self, key: &Q, hash: u64) -> Option<V>
+    pub(crate) fn get_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<V>
     where
         Arc<K>: Borrow<Q>,
-        Q: Hash + Eq,
+        Q: Hash + Eq + ?Sized,
     {
         let record = |entry, ts| {
             self.record_read_op(hash, entry, ts)
@@ -1017,7 +1017,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Cache, ConcurrentCacheExt};
-    use crate::sync::Builder;
+    use crate::sync::CacheBuilder;
 
     use quanta::Clock;
     use std::time::Duration;
@@ -1101,7 +1101,7 @@ mod tests {
 
     #[test]
     fn time_to_live() {
-        let mut cache = Builder::new(100)
+        let mut cache = CacheBuilder::new(100)
             .time_to_live(Duration::from_secs(10))
             .build();
 
@@ -1157,7 +1157,7 @@ mod tests {
 
     #[test]
     fn time_to_idle() {
-        let mut cache = Builder::new(100)
+        let mut cache = CacheBuilder::new(100)
             .time_to_idle(Duration::from_secs(10))
             .build();
 

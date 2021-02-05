@@ -10,7 +10,7 @@ use std::{
 /// Builds a `Cache` or `SegmentedCache` with various configuration knobs.
 ///
 /// ```rust
-/// use moka::sync::Builder;
+/// use moka::sync::CacheBuilder;
 ///
 /// use std::time::Duration;
 ///
@@ -32,7 +32,7 @@ use std::{
 /// // after 30 minutes (TTL) from the insert().
 /// ```
 ///
-pub struct Builder<C> {
+pub struct CacheBuilder<C> {
     max_capacity: usize,
     initial_capacity: Option<usize>,
     num_segments: Option<usize>,
@@ -41,7 +41,7 @@ pub struct Builder<C> {
     cache_type: PhantomData<C>,
 }
 
-impl<K, V> Builder<Cache<K, V, RandomState>>
+impl<K, V> CacheBuilder<Cache<K, V, RandomState>>
 where
     K: Eq + Hash,
     V: Clone,
@@ -57,8 +57,8 @@ where
         }
     }
 
-    pub fn segments(self, num_segments: usize) -> Builder<SegmentedCache<K, V, RandomState>> {
-        Builder {
+    pub fn segments(self, num_segments: usize) -> CacheBuilder<SegmentedCache<K, V, RandomState>> {
+        CacheBuilder {
             max_capacity: self.max_capacity,
             initial_capacity: self.initial_capacity,
             num_segments: Some(num_segments),
@@ -93,7 +93,7 @@ where
     }
 }
 
-impl<K, V> Builder<SegmentedCache<K, V, RandomState>>
+impl<K, V> CacheBuilder<SegmentedCache<K, V, RandomState>>
 where
     K: Eq + Hash,
     V: Clone,
@@ -125,7 +125,7 @@ where
     }
 }
 
-impl<C> Builder<C> {
+impl<C> CacheBuilder<C> {
     pub fn initial_capacity(self, capacity: usize) -> Self {
         Self {
             initial_capacity: Some(capacity),
@@ -150,14 +150,14 @@ impl<C> Builder<C> {
 
 #[cfg(test)]
 mod tests {
-    use super::Builder;
+    use super::CacheBuilder;
 
     use std::time::Duration;
 
     #[test]
     fn build_cache() {
         // Cache<char, String>
-        let cache = Builder::new(100).build();
+        let cache = CacheBuilder::new(100).build();
 
         assert_eq!(cache.max_capacity(), 100);
         assert_eq!(cache.time_to_live(), None);
@@ -167,7 +167,7 @@ mod tests {
         cache.insert('a', "Alice");
         assert_eq!(cache.get(&'a'), Some("Alice"));
 
-        let cache = Builder::new(100)
+        let cache = CacheBuilder::new(100)
             .time_to_live(Duration::from_secs(45 * 60))
             .time_to_idle(Duration::from_secs(15 * 60))
             .build();
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn build_segmented_cache() {
         // SegmentCache<char, String>
-        let cache = Builder::new(100).segments(16).build();
+        let cache = CacheBuilder::new(100).segments(16).build();
 
         assert_eq!(cache.max_capacity(), 100);
         assert_eq!(cache.time_to_live(), None);
@@ -194,7 +194,7 @@ mod tests {
         cache.insert('b', "Bob");
         assert_eq!(cache.get(&'b'), Some("Bob"));
 
-        let cache = Builder::new(100)
+        let cache = CacheBuilder::new(100)
             .segments(16)
             .time_to_live(Duration::from_secs(45 * 60))
             .time_to_idle(Duration::from_secs(15 * 60))
