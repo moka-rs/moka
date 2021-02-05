@@ -39,7 +39,7 @@ capacity is exceeded.
   [Caffeine][caffeine-git]:
     - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.
     - Eviction from a cache is controlled by the Least Recently Used (LRU) policy.
-- Support expiration policies:
+- Supports expiration policies:
     - Time to live
     - Time to idle
 
@@ -141,7 +141,7 @@ let large_value = vec![0u8; 2 * 1024 * 1024]; // 2 MiB
 // When insert, wrap the large_value by Arc.
 cache.insert(key.clone(), Arc::new(large_value));
 
-// get() will call Arc::clone() on the store value, which is cheap.
+// get() will call Arc::clone() on the stored value, which is cheap.
 cache.get(&key);
 ```
 
@@ -256,15 +256,15 @@ Moka supports the following expiration policies:
 - **Time to idle**: A cached entry will be expired after the specified duration past
   from `get` or `insert`.
 
-To set them, use the cache `Builder`.
+To set them, use the `CacheBuilder`.
 
 ```rust
-use moka::sync::Builder;
+use moka::sync::CacheBuilder;
 
 use std::time::Duration;
 
 fn main() {
-    let cache = Builder::new(10_000) // Max 10,000 elements
+    let cache = CacheBuilder::new(10_000) // Max 10,000 elements
         // Time to live (TTL): 30 minutes
         .time_to_live(Duration::from_secs(30 * 60))
         // Time to idle (TTI):  5 minutes
@@ -292,7 +292,7 @@ thread may not be able to catch up to the updates. When this happens, `insert` o
 `invalidate` call will be paused (blocked) for a short time.
 
 If this pause happen very often, you may want to switch to a segmented cache. You can
-use `segments` method of the builder to create such a cache.
+use `segments` method of the `CacheBuilder` to create such a cache.
 
 
 ## Hashing Algorithm
@@ -309,9 +309,11 @@ algorithms will outperform it for small keys such as integers as well as large k
 such as long strings. However those algorithms will typically not protect against
 attacks such as HashDoS.
 
-The hashing algorithm can be replaced on a per-`Cache` basis using the `with_hasher`
-method of the cache `Builder`. Many alternative algorithms are available on
-crates.io, such as the aHash crate.
+The hashing algorithm can be replaced on a per-`Cache` basis using the
+`build_with_hasher` method of the `CacheBuilder`. Many alternative algorithms are
+available on crates.io, such as the [aHash][ahash-crate] crate.
+
+[ahash-crate]: https://crates.io/crates/ahash
 
 
 ## Minimum Supported Rust Version

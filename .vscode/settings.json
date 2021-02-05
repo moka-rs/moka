@@ -9,15 +9,20 @@
         "Moka",
         "Ristretto",
         "Tatsuya",
+        "ahash",
         "benmanes",
         "clippy",
         "cpus",
         "deqs",
         "getrandom",
+        "mpsc",
         "nanos",
         "nocapture",
+        "rustdoc",
         "rustfmt",
+        "semver",
         "structs",
-        "toolchain"
+        "toolchain",
+        "usize"
     ]
 }

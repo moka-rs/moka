@@ -27,6 +27,18 @@
 //! [seg-cache-struct]: ./sync/struct.SegmentedCache.html
 //! [cht-crate]: https://crates.io/crates/cht
 //!
+//! # Features
+//!
+//! - Thread-safe, highly concurrent in-memory cache implementations.
+//! - Caches are bounded by the maximum number of elements.
+//! - Maintains good hit rate by using entry replacement algorithms inspired by
+//!   [Caffeine][caffeine-git]:
+//!    - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.
+//!    - Eviction from a cache is controlled by the Least Recently Used (LRU) policy.
+//! - Supports expiration policies:
+//!    - Time to live
+//!    - Time to idle
+//!
 //! # Usages
 //!
 //! See the followings:
