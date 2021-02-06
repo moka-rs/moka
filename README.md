@@ -327,7 +327,7 @@ considered a semver-breaking change.
 ## Road Map
 
 - [ ] `async` optimized caches.
-- [ ] Upgrade TimyLFU to Window TinyLFU.
+- [ ] Upgrade TinyLFU to Window TinyLFU.
 - [ ] The variable (per-entry) expiration, using a hierarchical timer wheel.
 
 
