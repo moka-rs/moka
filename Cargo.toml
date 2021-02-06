@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.1.0-beta.2"
+version = "0.1.0"
 authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
 
@@ -31,7 +31,7 @@ scheduled-thread-pool = "0.2"
 [dev-dependencies]
 getrandom = "0.2"
 skeptic = "0.13"
-tokio = { version = "1.1", features = ["rt-multi-thread", "macros" ] }
+tokio = { version = "1.2", features = ["rt-multi-thread", "macros" ] }
 
 [build-dependencies]
 skeptic = "0.13"
