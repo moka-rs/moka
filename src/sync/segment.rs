@@ -157,8 +157,6 @@ where
     }
 
     /// Returns the number of internal segments of this cache.
-    ///
-    /// `Cache` always returns `1`.
     pub fn num_segments(&self) -> usize {
         self.inner.segments.len()
     }
