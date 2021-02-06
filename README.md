@@ -324,6 +324,13 @@ frequently, up to the latest stable. In both cases, increasing MSRV is _not_
 considered a semver-breaking change.
 
 
+## Road Map
+
+- [ ] `async` optimized caches.
+- [ ] Upgrade TimyLFU to Window TinyLFU.
+- [ ] The variable (per-entry) expiration, using a hierarchical timer wheel.
+
+
 ## About the Name
 
 Moka is named after the [moka pot][moka-pot-wikipedia], a stove-top coffee maker that
