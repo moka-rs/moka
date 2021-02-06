@@ -13,7 +13,7 @@
 //!
 //! Both `Cache` and `SegmentedCache` utilize a lock-free concurrent hash table
 //! `cht::SegmentedHashMap` from the [cht][cht-crate] crate for the central key-value
-//! storage. These caches perform a best-effort bounding of a map using an entry
+//! storage. These caches perform a best-effort bounding of the map using an entry
 //! replacement algorithm to determine which entries to evict when the capacity is
 //! exceeded.
 //!
@@ -30,7 +30,7 @@
 //! # Features
 //!
 //! - Thread-safe, highly concurrent in-memory cache implementations.
-//! - Caches are bounded by the maximum number of elements.
+//! - Caches are bounded by the maximum number of entries.
 //! - Maintains good hit rate by using entry replacement algorithms inspired by
 //!   [Caffeine][caffeine-git]:
 //!    - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.
@@ -39,12 +39,12 @@
 //!    - Time to live
 //!    - Time to idle
 //!
-//! # Usages
+//! # Examples
 //!
 //! See the followings:
 //!
-//! - The API document for the [`sync::Cache`][cache-struct].
-//! - The [README][readme].
+//! - The document for the [`sync::Cache`][cache-struct].
+//! - The [README][readme] file.
 //!
 //! [readme]: https://github.com/moka-rs/moka/blob/master/README.md
 //!
@@ -105,9 +105,9 @@
 //! full, then the historic popularity estimator determines to evict one of the
 //! following entries:
 //!
-//! - The newly admitted entry.
-//! - Or, the victim entry that is selected from the main space by LRU (Least
-//!   Recently Used) eviction policy.
+//! - The temporary admitted entry.
+//! - Or, an entry that is selected from the main cache space by LRU (Least Recently
+//!   Used) eviction policy.
 //!
 //! In a future release of this crate, TinyLFU admission policy will be replaced by
 //! Window TinyLFU (W-TinyLFU) policy. W-TinyLFU has an admission window in front of
@@ -135,12 +135,15 @@
 //! - The time-to-idle policy uses an access-order queue.
 //! - The variable expiration will use a [hierarchical timer wheel][timer-wheel].
 //!
+//! (If you get 404 page not found when you click on the link to the hierarchical
+//! timer wheel paper, try to change the URL from `https:` to `http:`)
+//!
 //! [timer-wheel]: http://www.cs.columbia.edu/~nahum/w6998/papers/ton97-timing-wheels.pdf
 //!
 //! # About the Name
 //!
-//! Moka is named after the [moka pot][moka-pot-wikipedia], a stove-top coffee maker that
-//! brews espresso-like coffee using boiling water pressurized by steam.
+//! Moka is named after the [moka pot][moka-pot-wikipedia], a stove-top coffee maker
+//! that brews espresso-like coffee using boiling water pressurized by steam.
 //!
 //! [moka-pot-wikipedia]: https://en.wikipedia.org/wiki/Moka_pot
 

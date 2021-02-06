@@ -8,6 +8,16 @@ use std::{
     time::Duration,
 };
 
+/// A thread-safe concurrent in-memory cache, with multiple internal segments.
+///
+/// `SegmentedCache` has multiple internal [`Cache`][cache-struct] instances for
+/// increased concurrent update performance. However, it has little overheads on
+/// retrievals and updates for managing these segments.
+///
+/// For usage examples, see the document of the [`Cache`][cache-struct].
+///
+/// [cache-struct]: ./struct.Cache.html
+///
 pub struct SegmentedCache<K, V, S = RandomState> {
     inner: Arc<Inner<K, V, S>>,
 }
@@ -29,6 +39,10 @@ where
 }
 
 impl<K, V, S> Clone for SegmentedCache<K, V, S> {
+    /// Makes a clone of this shared cache.
+    ///
+    /// This operation is cheap as it only creates thread-safe reference counted
+    /// pointers to the shared internal data structures.
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -41,6 +55,14 @@ where
     K: Hash + Eq,
     V: Clone,
 {
+    /// Constructs a new `SegmentedCache<K, V>` that has multiple internal
+    /// segments and will store up to the `max_capacity` entries.
+    ///
+    /// To adjust various configuration knobs such as `initial_capacity` or
+    /// `time_to_live`, use the [`CacheBuilder`][builder-struct].
+    ///
+    /// [builder-struct]: ./struct.CacheBuilder.html
+    ///
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
@@ -79,6 +101,16 @@ where
         }
     }
 
+    /// Returns a _clone_ of the value corresponding to the key.
+    ///
+    /// If you want to store values that will be expensive to clone, wrap them by
+    /// `std::sync::Arc` before storing in a cache. [`Arc`][rustdoc-std-arc] is a
+    /// thread-safe reference-counted pointer and its `clone()` method is cheap.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
+    /// on the borrowed form _must_ match those for the key type.
+    ///
+    /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
         Arc<K>: Borrow<Q>,
@@ -88,11 +120,18 @@ where
         self.inner.select(hash).get_with_hash(key, hash)
     }
 
+    /// Inserts a key-value pair into the cache.
+    ///
+    /// If the cache has this key present, the value is updated.
     pub fn insert(&self, key: K, value: V) {
         let hash = self.inner.hash(&key);
         self.inner.select(hash).insert_with_hash(key, hash, value);
     }
 
+    /// Discards any cached value for the key.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
+    /// on the borrowed form _must_ match those for the key type.
     pub fn invalidate<Q>(&self, key: &Q)
     where
         Arc<K>: Borrow<Q>,
@@ -102,18 +141,24 @@ where
         self.inner.select(hash).invalidate(key);
     }
 
+    /// Returns the `max_capacity` of this cache.
     pub fn max_capacity(&self) -> usize {
         self.inner.desired_capacity
     }
 
+    /// Returns the `time_to_live` of this cache.
     pub fn time_to_live(&self) -> Option<Duration> {
         self.inner.segments[0].time_to_live()
     }
 
+    /// Returns the `time_to_idle` of this cache.
     pub fn time_to_idle(&self) -> Option<Duration> {
         self.inner.segments[0].time_to_idle()
     }
 
+    /// Returns the number of internal segments of this cache.
+    ///
+    /// `Cache` always returns `1`.
     pub fn num_segments(&self) -> usize {
         self.inner.segments.len()
     }

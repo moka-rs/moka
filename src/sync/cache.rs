@@ -52,7 +52,7 @@ pub(crate) const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 ///
 /// [cht-crate]: https://crates.io/crates/cht
 ///
-/// # Usage
+/// # Examples
 ///
 /// Cache entries are manually added using `insert` method, and are stored in the
 /// cache until either evicted or manually invalidated.
@@ -71,7 +71,7 @@ pub(crate) const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 /// const NUM_THREADS: usize = 16;
 /// const NUM_KEYS_PER_THREAD: usize = 64;
 ///
-/// // Create a cache that can store up to 10,000 elements.
+/// // Create a cache that can store up to 10,000 entries.
 /// let cache = Cache::new(10_000);
 ///
 /// // Spawn threads and read and update the cache simultaneously.
@@ -84,14 +84,14 @@ pub(crate) const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 ///         let end = (i + 1) * NUM_KEYS_PER_THREAD;
 ///
 ///         thread::spawn(move || {
-///             // Insert 64 elements. (NUM_KEYS_PER_THREAD = 64)
+///             // Insert 64 entries. (NUM_KEYS_PER_THREAD = 64)
 ///             for key in start..end {
 ///                 my_cache.insert(key, value(key));
 ///                 // get() returns Option<String>, a clone of the stored value.
 ///                 assert_eq!(my_cache.get(&key), Some(value(key)));
 ///             }
 ///
-///             // Invalidate every 4 element of the inserted elements.
+///             // Invalidate every 4 element of the inserted entries.
 ///             for key in (start..end).step_by(4) {
 ///                 my_cache.invalidate(&key);
 ///             }
@@ -122,10 +122,15 @@ pub(crate) const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 /// All methods provided by the `Cache` are considered thread-safe, and can be safely
 /// accessed by multiple concurrent threads.
 ///
-/// `Cache<K, V, S>` will implement `Send` and `Sync` when all of the following conditions meet:
+/// `Cache<K, V, S>` will implement `Send` when all of the following conditions meet:
 ///
 /// - `K` (key) and `V` (value) implement `Send` and `Sync`.
 /// - `S` (the hash-map state) implements `Send`.
+///
+/// and will implement `Sync` when all of the following conditions meet:
+///
+/// - `K` (key) and `V` (value) implement `Send` and `Sync`.
+/// - `S` (the hash-map state) implements `Sync`.
 ///
 /// # Sharing a cache across threads
 ///
@@ -184,9 +189,11 @@ pub(crate) const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 /// against attacks such as HashDoS.
 ///
 /// The hashing algorithm can be replaced on a per-`Cache` basis using the
-/// `build_with_hasher` method of the `CacheBuilder`. Many alternative algorithms
-/// are available on crates.io, such as the [aHash][ahash-crate] crate.
+/// [`build_with_hasher`][build-with-hasher-method] method of the
+/// `CacheBuilder`. Many alternative algorithms are available on crates.io, such
+/// as the [aHash][ahash-crate] crate.
 ///
+/// [build-with-hasher-method]: ./struct.CacheBuilder.html#method.build_with_hasher
 /// [ahash-crate]: https://crates.io/crates/ahash
 ///
 pub struct Cache<K, V, S = RandomState> {
@@ -220,6 +227,10 @@ where
 }
 
 impl<K, V, S> Clone for Cache<K, V, S> {
+    /// Makes a clone of this shared cache.
+    ///
+    /// This operation is cheap as it only creates thread-safe reference counted
+    /// pointers to the shared internal data structures.
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
@@ -235,6 +246,12 @@ where
     K: Hash + Eq,
     V: Clone,
 {
+    /// Constructs a new `Cache<K, V>` that will store up to the `max_capacity` entries.
+    ///
+    /// To adjust various configuration knobs such as `initial_capacity` or
+    /// `time_to_live`, use the [`CacheBuilder`][builder-struct].
+    ///
+    /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: usize) -> Self {
         let build_hasher = RandomState::default();
         Self::with_everything(max_capacity, None, build_hasher, None, None)
@@ -316,18 +333,24 @@ where
         }
     }
 
+    /// Returns the `max_capacity` of this cache.
     pub fn max_capacity(&self) -> usize {
         self.inner.max_capacity
     }
 
+    /// Returns the `time_to_live` of this cache.
     pub fn time_to_live(&self) -> Option<Duration> {
         self.inner.time_to_live
     }
 
+    /// Returns the `time_to_idle` of this cache.
     pub fn time_to_idle(&self) -> Option<Duration> {
         self.inner.time_to_idle
     }
 
+    /// Returns the number of internal segments of this cache.
+    ///
+    /// `Cache` always returns `1`.
     pub fn num_segments(&self) -> usize {
         1
     }

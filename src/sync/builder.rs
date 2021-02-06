@@ -7,7 +7,13 @@ use std::{
     time::Duration,
 };
 
-/// Builds a `Cache` or `SegmentedCache` with various configuration knobs.
+/// Builds a [`Cache`][cache-struct] or [`SegmentedCache`][seg-cache-struct]
+/// with various configuration knobs.
+///
+/// [cache-struct]: ./struct.Cache.html
+/// [seg-cache-struct]: ./struct.SegmentedCache.html
+///
+/// # Examples
 ///
 /// ```rust
 /// use moka::sync::CacheBuilder;
@@ -46,6 +52,8 @@ where
     K: Eq + Hash,
     V: Clone,
 {
+    /// Construct a new `CacheBuilder` that will be used to build a `Cache` or
+    /// `SegmentedCache` holding up to `max_capacity` entries.
     pub fn new(max_capacity: usize) -> Self {
         Self {
             max_capacity,
@@ -57,7 +65,14 @@ where
         }
     }
 
+    /// Sets the number of segments of the cache.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `num_segments` is less than or equals to 1.
     pub fn segments(self, num_segments: usize) -> CacheBuilder<SegmentedCache<K, V, RandomState>> {
+        assert!(num_segments > 1);
+
         CacheBuilder {
             max_capacity: self.max_capacity,
             initial_capacity: self.initial_capacity,
@@ -68,6 +83,10 @@ where
         }
     }
 
+    /// Builds a `Cache<K, V>`.
+    ///
+    /// If you want to build a `SegmentedCache<K, V>`, call `segments` method before
+    /// calling this method.
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
         Cache::with_everything(
@@ -79,6 +98,10 @@ where
         )
     }
 
+    /// Builds a `Cache<K, V, S>`, with the given `hasher`.
+    ///
+    /// If you want to build a `SegmentedCache<K, V>`, call `segments` method  before
+    /// calling this method.
     pub fn build_with_hasher<S>(self, hasher: S) -> Cache<K, V, S>
     where
         S: BuildHasher + Clone,
@@ -98,6 +121,10 @@ where
     K: Eq + Hash,
     V: Clone,
 {
+    /// Builds a `SegmentedCache<K, V>`.
+    ///
+    /// If you want to build a `Cache<K, V>`, do not call `segments` method before
+    /// calling this method.
     pub fn build(self) -> SegmentedCache<K, V, RandomState> {
         let build_hasher = RandomState::default();
         SegmentedCache::with_everything(
@@ -110,6 +137,10 @@ where
         )
     }
 
+    /// Builds a `SegmentedCache<K, V, S>`, with the given `hasher`.
+    ///
+    /// If you want to build a `Cache<K, V>`, do not call `segments` method before
+    /// calling this method.
     pub fn build_with_hasher<S>(self, hasher: S) -> SegmentedCache<K, V, S>
     where
         S: BuildHasher + Clone,
@@ -126,6 +157,7 @@ where
 }
 
 impl<C> CacheBuilder<C> {
+    /// Sets the initial capacity of the cache.
     pub fn initial_capacity(self, capacity: usize) -> Self {
         Self {
             initial_capacity: Some(capacity),
@@ -133,6 +165,10 @@ impl<C> CacheBuilder<C> {
         }
     }
 
+    /// Sets the time to live of the cache.
+    ///
+    /// A cached entry will be expired after the specified duration past from
+    /// `insert`.
     pub fn time_to_live(self, duration: Duration) -> Self {
         Self {
             time_to_live: Some(duration),
@@ -140,6 +176,10 @@ impl<C> CacheBuilder<C> {
         }
     }
 
+    /// Sets the time to idle of the cache.
+    ///
+    /// A cached entry will be expired after the specified duration past from `get`
+    /// or `insert`.
     pub fn time_to_idle(self, duration: Duration) -> Self {
         Self {
             time_to_idle: Some(duration),
