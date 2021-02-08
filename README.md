@@ -129,7 +129,7 @@ can be blocked for a short time under heavy updates.
 Here is a similar program to the previous example, but using [Tokio][tokio-crate]
 runtime:
 
-```rust
+```rust,ignore
 // Cargo.toml
 //
 // [dependencies]
