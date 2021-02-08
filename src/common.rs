@@ -8,6 +8,7 @@ use std::{
     },
 };
 
+pub(crate) mod base_cache;
 pub(crate) mod deque;
 pub(crate) mod deques;
 pub(crate) mod frequency_sketch;
