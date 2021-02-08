@@ -64,6 +64,9 @@ struct DeqNodes<K> {
     write_order_q_node: Option<KeyDeqNodeWO<K>>,
 }
 
+// TODO: Remove this if possible.
+unsafe impl<K> Send for DeqNodes<K> {}
+
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: V,
     last_accessed: Option<Arc<AtomicU64>>,

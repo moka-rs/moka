@@ -33,6 +33,9 @@ capacity is exceeded.
 ## Features
 
 - Thread-safe, highly concurrent in-memory cache implementations.
+    - Synchronous (blocking) caches for OS threads.
+    - Asynchronous (future aware) caches for async runtimes: Tokio, async-std
+      and actix-rt.
 - Caches are bounded by the maximum number of entries.
 - Maintains good hit rate by using entry replacement algorithms inspired by
   [Caffeine][caffeine-git]:
@@ -41,14 +44,6 @@ capacity is exceeded.
 - Supports expiration policies:
     - Time to live
     - Time to idle
-
-Moka currently does not provide `async` optimized caches. The synchronous (blocking)
-caches in the current version can be safely used in async runtime such as Tokio or
-async-std, but will not produce optimal performance under heavy updates. See
-[this example][async-example] for more details. A near future version of Moka will
-provide `async` optimized caches in addition to the sync caches.
-
-[async-example]: #using-cache-with-an-async-runtime-tokio-async-std-etc
 
 
 ## Usage
@@ -59,6 +54,8 @@ Add this to your `Cargo.toml`:
 [dependencies]
 moka = "0.1"
 ```
+
+## Example: Synchronous (Blocking) Cache
 
 Cache entries are manually added using `insert` method, and are stored in the cache
 until either evicted or manually invalidated.
@@ -120,44 +117,14 @@ fn main() {
 }
 ```
 
+## Example: Asynchronous (Future Aware) Cache
 
-### Avoiding to clone the value at `get`
+- **runtime-actix**
+- **runtime-async-std**
+- **runtime-tokio**
 
-The return type of `get` method is `Option<V>` instead of `Option<&V>`, where `V` is
-the value type. Every time `get` is called for an existing key, it creates a clone of
-the stored value `V` and returns it. This is because the `Cache` allows concurrent
-updates from threads so a value stored in the cache can be dropped or replaced at any
-time by any other thread. `get` cannot return a reference `&V` as it is impossible to
-guarantee the value outlives the reference.
-
-If you want to store values that will be expensive to clone, wrap them by
-`std::sync::Arc` before storing in a cache. [`Arc`][rustdoc-std-arc] is a thread-safe
-reference-counted pointer and its `clone()` method is cheap.
-
-[rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
-
-```rust,ignore
-use std::sync::Arc;
-
-let key = ...
-let large_value = vec![0u8; 2 * 1024 * 1024]; // 2 MiB
-
-// When insert, wrap the large_value by Arc.
-cache.insert(key.clone(), Arc::new(large_value));
-
-// get() will call Arc::clone() on the stored value, which is cheap.
-cache.get(&key);
-```
-
-
-## Using Cache with an Async Runtime (Tokio, async-std, etc.)
-
-Currently, Moka does not provide `async` optimized caches. An update operation
-(`insert` or `invalidate` method) can be blocked for a short time under heavy
-updates. They employ locks, mpsc channels and thread sleeps that are not aware of the
-[Future trait][std-future] in std. While `insert` or `invalidate` can be safely
-called in an `async fn` or `async` block, they will not produce optimal performance
-as they may prevent async tasks from switching while acquiring a lock.
+Update operations `insert` and `invalidate` method are provided as `async fn` as they
+can be blocked for a short time under heavy updates.
 
 Here is a similar program to the previous example, but using [Tokio][tokio-crate]
 runtime:
@@ -167,8 +134,9 @@ runtime:
 //
 // [dependencies]
 // tokio = { version = "1.1", features = ["rt-multi-thread", "macros" ] }
+// futures = "0.3"
 
-use moka::sync::Cache;
+use moka::future::Cache;
 
 use tokio::task;
 
@@ -196,27 +164,25 @@ async fn main() {
             tokio::spawn(async move {
                 // Insert 64 entries. (NUM_KEYS_PER_TASK = 64)
                 for key in start..end {
-                    // insert() may block for a short time under heavy updates,
-                    // but can be safely called in an async block.
-                    my_cache.insert(key, value(key));
-                    // get() returns Option<String>, a clone of the stored value.
+                    // insert() is an async method as it may block for
+                    // a short time under heavy updates.
+                    my_cache.insert(key, value(key)).await;
+                    // get() is returns Option<String>, a clone of the stored value.
                     assert_eq!(my_cache.get(&key), Some(value(key)));
                 }
 
                 // Invalidate every 4 element of the inserted entries.
                 for key in (start..end).step_by(4) {
-                    // invalidate() may block for a short time under heavy updates,
-                    // but can be safely called in an async block.
-                    my_cache.invalidate(&key);
+                    // invalidate() is an async method as it may block for
+                    // a short time under heavy updates.
+                    my_cache.invalidate(&key).await;
                 }
             })
         })
         .collect();
 
     // Wait for all tasks to complete.
-    for task in tasks {
-        task.await.expect("Failed");
-    }
+    futures::future::join_all(tasks).await;
 
     // Verify the result.
     for key in 0..(NUM_TASKS * NUM_KEYS_PER_TASK) {
@@ -228,9 +194,6 @@ async fn main() {
     }
 }
 ```
-
-A near future version of Moka will provide `async` optimized caches in addition to
-the synchronous caches.
 
 [std-future]: https://doc.rust-lang.org/stable/std/future/trait.Future.html
 [tokio-crate]: https://crates.io/crates/tokio
@@ -269,6 +232,34 @@ fn main() {
     // Even though we keep calling get(), the entry will expire
     // after 30 minutes (TTL) from the insert().
 }
+```
+
+## Avoiding to clone the value at `get`
+
+The return type of `get` method is `Option<V>` instead of `Option<&V>`, where `V` is
+the value type. Every time `get` is called for an existing key, it creates a clone of
+the stored value `V` and returns it. This is because the `Cache` allows concurrent
+updates from threads so a value stored in the cache can be dropped or replaced at any
+time by any other thread. `get` cannot return a reference `&V` as it is impossible to
+guarantee the value outlives the reference.
+
+If you want to store values that will be expensive to clone, wrap them by
+`std::sync::Arc` before storing in a cache. [`Arc`][rustdoc-std-arc] is a thread-safe
+reference-counted pointer and its `clone()` method is cheap.
+
+[rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
+
+```rust,ignore
+use std::sync::Arc;
+
+let key = ...
+let large_value = vec![0u8; 2 * 1024 * 1024]; // 2 MiB
+
+// When insert, wrap the large_value by Arc.
+cache.insert(key.clone(), Arc::new(large_value));
+
+// get() will call Arc::clone() on the stored value, which is cheap.
+cache.get(&key);
 ```
 
 ## Segmented Cache
@@ -326,7 +317,8 @@ considered a semver-breaking change.
 
 ## Road Map
 
-- [ ] `async` optimized caches.
+- [x] `async` optimized caches. **DONE** `v0.2.0`
+- [ ] Cache statistics. (Hit rate, etc.)
 - [ ] Upgrade TinyLFU to Window TinyLFU.
 - [ ] The variable (per-entry) expiration, using a hierarchical timer wheel.
 

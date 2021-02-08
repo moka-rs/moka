@@ -12,6 +12,9 @@ pub(crate) struct Deques<K> {
     pub(crate) write_order: Deque<KeyDate<K>>,
 }
 
+// TODO: Remove this if possible.
+unsafe impl<K> Send for Deques<K> {}
+
 impl<K> Default for Deques<K> {
     fn default() -> Self {
         Self {

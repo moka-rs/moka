@@ -1,5 +1,12 @@
 # Moka &mdash; Release Notes
 
+## Version 0.2.0
+
+### Features
+
+- Introduce asynchronous (future aware) caches.
+
+
 ## Version 0.1.0
 
 ### Features

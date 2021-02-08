@@ -147,6 +147,13 @@
 //!
 //! [moka-pot-wikipedia]: https://en.wikipedia.org/wiki/Moka_pot
 
+#[cfg(any(
+    feature = "runtime-async-std",
+    feature = "runtime-actix",
+    feature = "runtime-tokio"
+))]
+pub mod future;
+
 pub mod sync;
 
 pub(crate) mod common;
