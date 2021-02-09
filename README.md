@@ -52,7 +52,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-moka = "0.1"
+moka = "0.2"
 ```
 
 ## Example: Synchronous (Blocking) Cache
