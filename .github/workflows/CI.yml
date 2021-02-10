@@ -46,23 +46,11 @@ jobs:
           command: test
           args: --release
 
-      - name: Run tests (runtime-actix)
+      - name: Run tests (future)
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --release --features runtime-actix
-
-      - name: Run tests (runtime-async-std)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --features runtime-async-std
-
-      - name: Run tests (runtime-tokio)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --features runtime-tokio
+          args: --release --features future
 
       - name: Run Rustfmt
         uses: actions-rs/cargo@v1
@@ -74,4 +62,4 @@ jobs:
         uses: actions-rs/clippy-check@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          args: --features runtime-tokio -- -D warnings
+          args: --features future -- -D warnings

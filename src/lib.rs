@@ -86,7 +86,7 @@
 //!   the draining task catches up.
 //!
 //! `Cache` does its best to avoid blocking updates by adjusting the interval of
-//! draining and throttling updates from clients. But since it has only one worker
+//! draining. But since it has only one worker
 //! thread, it cannot always avoid blocking. If this happens very often in your cache
 //! (in the future, you can check the statistics of the cache), you may want to
 //! switch to `SegmentedCache`. It has multiple internal cache segments and each
@@ -147,11 +147,7 @@
 //!
 //! [moka-pot-wikipedia]: https://en.wikipedia.org/wiki/Moka_pot
 
-#[cfg(any(
-    feature = "runtime-async-std",
-    feature = "runtime-actix",
-    feature = "runtime-tokio"
-))]
+#[cfg(feature = "future")]
 pub mod future;
 
 pub mod sync;

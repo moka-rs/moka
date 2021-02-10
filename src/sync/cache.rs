@@ -1,9 +1,6 @@
 use super::ConcurrentCacheExt;
 use crate::common::{
-    base_cache::{
-        BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_LOG_HIGH_WATER_MARK,
-        WRITE_RETRY_INTERVAL_MICROS, WRITE_THROTTLE_MICROS,
-    },
+    base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
     housekeeper::InnerSync,
     WriteOp,
 };
@@ -270,7 +267,6 @@ where
     }
 
     pub(crate) fn insert_with_hash(&self, key: K, hash: u64, value: V) {
-        self.throttle_write_pace();
         let op = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
         Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to insert");
@@ -285,7 +281,6 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.throttle_write_pace();
         if let Some(entry) = self.base.inner.cache.remove(key) {
             let op = WriteOp::Remove(entry);
             let hk = self.base.housekeeper.as_ref();
@@ -357,13 +352,6 @@ where
             }
         }
         Ok(())
-    }
-
-    #[inline]
-    fn throttle_write_pace(&self) {
-        if self.base.write_op_ch.len() >= WRITE_LOG_HIGH_WATER_MARK {
-            std::thread::sleep(Duration::from_micros(WRITE_THROTTLE_MICROS))
-        }
     }
 }
 

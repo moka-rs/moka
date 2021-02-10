@@ -1,5 +1,5 @@
 {
-    "rust-analyzer.cargo.features": ["runtime-tokio"],
+    "rust-analyzer.cargo.features": ["future"],
     "cSpell.words": [
         "CLFU",
         "Deque",

@@ -1,9 +1,6 @@
-use super::{moka_rt, ConcurrentCacheExt};
+use super::ConcurrentCacheExt;
 use crate::common::{
-    base_cache::{
-        BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_LOG_HIGH_WATER_MARK,
-        WRITE_RETRY_INTERVAL_MICROS, WRITE_THROTTLE_MICROS,
-    },
+    base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
     housekeeper::InnerSync,
     WriteOp,
 };
@@ -17,6 +14,70 @@ use std::{
     time::Duration,
 };
 
+///```rust
+/// // Cargo.toml
+/// //
+/// // [dependencies]
+/// // moka = { version = "0.2", features = ["future"] }
+/// // tokio = { version = "1.2", features = ["rt-multi-thread", "macros" ] }
+/// // futures = "0.3"
+///
+/// use moka::future::Cache;
+///
+/// #[tokio::main]
+/// async fn main() {
+///     const NUM_TASKS: usize = 16;
+///     const NUM_KEYS_PER_TASK: usize = 64;
+///
+///     fn value(n: usize) -> String {
+///         format!("value {}", n)
+///     }
+///
+///     // Create a cache that can store up to 10,000 entries.
+///     let cache = Cache::new(10_000);
+///
+///     // Spawn async tasks and write to and read from the cache.
+///     let tasks: Vec<_> = (0..NUM_TASKS)
+///         .map(|i| {
+///             // To share the same cache across the async tasks, clone it.
+///             // This is a cheap operation.
+///             let my_cache = cache.clone();
+///             let start = i * NUM_KEYS_PER_TASK;
+///             let end = (i + 1) * NUM_KEYS_PER_TASK;
+///
+///             tokio::spawn(async move {
+///                 // Insert 64 entries. (NUM_KEYS_PER_TASK = 64)
+///                 for key in start..end {
+///                     // insert() is an async method as it may block for
+///                     // a short time under heavy updates.
+///                     my_cache.insert(key, value(key)).await;
+///                     // get() is returns Option<String>, a clone of the stored value.
+///                     assert_eq!(my_cache.get(&key), Some(value(key)));
+///                 }
+///
+///                 // Invalidate every 4 element of the inserted entries.
+///                 for key in (start..end).step_by(4) {
+///                     // invalidate() is an async method as it may block for
+///                     // a short time under heavy updates.
+///                     my_cache.invalidate(&key).await;
+///                 }
+///             })
+///         })
+///         .collect();
+///
+///     // Wait for all tasks to complete.
+///     futures::future::join_all(tasks).await;
+///
+///     // Verify the result.
+///     for key in 0..(NUM_TASKS * NUM_KEYS_PER_TASK) {
+///         if key % 4 == 0 {
+///             assert_eq!(cache.get(&key), None);
+///         } else {
+///             assert_eq!(cache.get(&key), Some(value(key)));
+///         }
+///     }
+/// }
+/// ```
 #[derive(Clone)]
 pub struct Cache<K, V, S = RandomState> {
     base: BaseCache<K, V, S>,
@@ -106,7 +167,6 @@ where
     }
 
     pub(crate) async fn insert_with_hash(&self, key: K, hash: u64, value: V) {
-        self.throttle_write_pace().await;
         let op = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
         if Self::schedule_write_op(&self.base.write_op_ch, op, hk)
@@ -126,7 +186,6 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.throttle_write_pace().await;
         if let Some(entry) = self.base.inner.cache.remove(key) {
             let op = WriteOp::Remove(entry);
             let hk = self.base.housekeeper.as_ref();
@@ -187,29 +246,21 @@ where
     ) -> Result<(), TrySendError<WriteOp<K, V>>> {
         let mut op = op;
 
-        // NOTES:
-        // - This will block when the channel is full.
-        // - We are doing a busy-loop here. We were originally calling `ch.send(op)?`,
-        //   but we got a notable performance degradation.
+        // TODO: Try to replace the timer with an async event listener to see if it
+        // can provide better performance.
         loop {
             BaseCache::apply_reads_writes_if_needed(ch, housekeeper);
             match ch.try_send(op) {
                 Ok(()) => break,
                 Err(TrySendError::Full(op1)) => {
                     op = op1;
-                    moka_rt::sleep(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS)).await;
+                    async_io::Timer::after(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS))
+                        .await;
                 }
                 Err(e @ TrySendError::Disconnected(_)) => return Err(e),
             }
         }
         Ok(())
-    }
-
-    #[inline]
-    async fn throttle_write_pace(&self) {
-        if self.base.write_op_ch.len() >= WRITE_LOG_HIGH_WATER_MARK {
-            moka_rt::sleep(Duration::from_micros(WRITE_THROTTLE_MICROS)).await
-        }
     }
 }
 
@@ -232,16 +283,14 @@ where
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
-    use super::{moka_rt, Cache, ConcurrentCacheExt};
+    use super::{Cache, ConcurrentCacheExt};
     use crate::future::CacheBuilder;
 
     use quanta::Clock;
     use std::time::Duration;
 
-    #[cfg_attr(feature = "runtime-actix", tokio::test)]
-    #[cfg_attr(feature = "runtime-async-std", async_std::test)]
-    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
-    async fn basic_single_thread() {
+    #[tokio::test]
+    async fn basic_single_async_task() {
         let mut cache = Cache::new(3);
         cache.reconfigure_for_testing();
 
@@ -286,10 +335,8 @@ mod tests {
         cache.invalidate(&"b").await;
     }
 
-    #[cfg_attr(feature = "runtime-actix", tokio::test)]
-    #[cfg_attr(feature = "runtime-async-std", async_std::test)]
-    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
-    async fn basic_multi_threads() {
+    #[tokio::test]
+    async fn basic_multi_async_tasks() {
         let num_threads = 4;
 
         let mut cache = Cache::new(100);
@@ -301,7 +348,7 @@ mod tests {
         let handles = (0..num_threads)
             .map(|id| {
                 let cache = cache.clone();
-                moka_rt::spawn(async move {
+                tokio::spawn(async move {
                     cache.insert(10, format!("{}-100", id)).await;
                     cache.get(&10);
                     cache.sync();
@@ -318,9 +365,7 @@ mod tests {
         assert!(cache.get(&20).is_some());
     }
 
-    #[cfg_attr(feature = "runtime-actix", tokio::test)]
-    #[cfg_attr(feature = "runtime-async-std", async_std::test)]
-    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    #[tokio::test]
     async fn time_to_live() {
         let mut cache = CacheBuilder::new(100)
             .time_to_live(Duration::from_secs(10))
@@ -376,9 +421,7 @@ mod tests {
         assert!(cache.base.inner.cache.is_empty());
     }
 
-    #[cfg_attr(feature = "runtime-actix", tokio::test)]
-    #[cfg_attr(feature = "runtime-async-std", async_std::test)]
-    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    #[tokio::test]
     async fn time_to_idle() {
         let mut cache = CacheBuilder::new(100)
             .time_to_idle(Duration::from_secs(10))

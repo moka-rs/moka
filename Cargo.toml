@@ -17,13 +17,11 @@ build = "build.rs"
 
 # https://docs.rs/about/metadata
 [package.metadata.docs.rs]
-features = ["runtime-tokio"]
+features = ["future"]
 
 [features]
 default = []
-runtime-actix = ["actix-rt", "tokio"]
-runtime-async-std = ["async-std"]
-runtime-tokio = ["tokio"]
+future = ["async-io"]
 
 [dependencies]
 cht = "0.4"
@@ -36,16 +34,17 @@ parking_lot = "0.11"
 quanta = "0.7.1"
 scheduled-thread-pool = "0.2"
 
-# Optional async runtimes
-actix-rt = { version = "2.0", default-features = false, optional = true }
-async-std = { version = "1.9", features = ["attributes"], optional = true }
-tokio = { version = "1.2", features = ["rt-multi-thread", "time", "macros"], optional = true }
+# Optional dependencies
+async-io = { version = "1", optional = true }
 
 [dev-dependencies]
+actix-rt2 = { package = "actix-rt", version = "2", default-features = false }
+actix-rt1 = { package = "actix-rt", version = "1", default-features = false }
+async-std = { version = "1", features = ["attributes"] }
 futures = "0.3"
 getrandom = "0.2"
 skeptic = "0.13"
-tokio = { version = "1.1", features = ["rt-multi-thread", "macros" ] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 
 [build-dependencies]
 skeptic = "0.13"

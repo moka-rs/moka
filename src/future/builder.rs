@@ -134,9 +134,7 @@ mod tests {
 
     use std::time::Duration;
 
-    #[cfg_attr(feature = "runtime-actix", tokio::test)]
-    #[cfg_attr(feature = "runtime-async-std", async_std::test)]
-    #[cfg_attr(feature = "runtime-tokio", tokio::test)]
+    #[tokio::test]
     async fn build_cache() {
         // Cache<char, String>
         let cache = CacheBuilder::new(100).build();
@@ -162,32 +160,4 @@ mod tests {
         cache.insert('a', "Alice").await;
         assert_eq!(cache.get(&'a'), Some("Alice"));
     }
-
-    // #[test]
-    // fn build_segmented_cache() {
-    //     // SegmentCache<char, String>
-    //     let cache = CacheBuilder::new(100).segments(16).build();
-
-    //     assert_eq!(cache.max_capacity(), 100);
-    //     assert_eq!(cache.time_to_live(), None);
-    //     assert_eq!(cache.time_to_idle(), None);
-    //     assert_eq!(cache.num_segments(), 16_usize.next_power_of_two());
-
-    //     cache.insert('b', "Bob");
-    //     assert_eq!(cache.get(&'b'), Some("Bob"));
-
-    //     let cache = CacheBuilder::new(100)
-    //         .segments(16)
-    //         .time_to_live(Duration::from_secs(45 * 60))
-    //         .time_to_idle(Duration::from_secs(15 * 60))
-    //         .build();
-
-    //     assert_eq!(cache.max_capacity(), 100);
-    //     assert_eq!(cache.time_to_live(), Some(Duration::from_secs(45 * 60)));
-    //     assert_eq!(cache.time_to_idle(), Some(Duration::from_secs(15 * 60)));
-    //     assert_eq!(cache.num_segments(), 16_usize.next_power_of_two());
-
-    //     cache.insert('b', "Bob");
-    //     assert_eq!(cache.get(&'b'), Some("Bob"));
-    // }
 }
