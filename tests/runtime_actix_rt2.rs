@@ -1,7 +1,7 @@
 #![cfg(features = "future")]
 
-use moka::future::Cache;
 use actix_rt2::{Arbiter, System};
+use moka::future::Cache;
 
 fn main() {
     const NUM_TASKS: usize = 16;
