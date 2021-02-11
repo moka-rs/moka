@@ -130,7 +130,7 @@ where
         time_to_idle: Option<Duration>,
     ) -> Self {
         Self {
-            base: BaseCache::with_everything(
+            base: BaseCache::new(
                 max_capacity,
                 initial_capacity,
                 build_hasher,
@@ -155,14 +155,14 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.base.get_with_hash(key, self.base.inner.hash(key))
+        self.base.get_with_hash(key, self.base.hash(key))
     }
 
     /// Inserts a key-value pair into the cache.
     ///
     /// If the cache has this key present, the value is updated.
     pub async fn insert(&self, key: K, value: V) {
-        let hash = self.base.inner.hash(&key);
+        let hash = self.base.hash(&key);
         self.insert_with_hash(key, hash, value).await
     }
 
@@ -186,7 +186,7 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(entry) = self.base.inner.cache.remove(key) {
+        if let Some(entry) = self.base.remove(key) {
             let op = WriteOp::Remove(entry);
             let hk = self.base.housekeeper.as_ref();
             if Self::schedule_write_op(&self.base.write_op_ch, op, hk)
@@ -200,17 +200,17 @@ where
 
     /// Returns the `max_capacity` of this cache.
     pub fn max_capacity(&self) -> usize {
-        self.base.inner.max_capacity
+        self.base.max_capacity()
     }
 
     /// Returns the `time_to_live` of this cache.
     pub fn time_to_live(&self) -> Option<Duration> {
-        self.base.inner.time_to_live
+        self.base.time_to_live()
     }
 
     /// Returns the `time_to_idle` of this cache.
     pub fn time_to_idle(&self) -> Option<Duration> {
-        self.base.inner.time_to_idle
+        self.base.time_to_idle()
     }
 
     /// Returns the number of internal segments of this cache.
@@ -391,18 +391,18 @@ mod tests {
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
-        assert!(cache.base.inner.cache.is_empty());
+        assert!(cache.base.is_empty());
 
         cache.insert("b", "bob").await;
         cache.sync();
 
-        assert_eq!(cache.base.inner.cache.len(), 1);
+        assert_eq!(cache.base.len(), 1);
 
         mock.increment(Duration::from_secs(5)); // 15 secs.
         cache.sync();
 
         assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.base.inner.cache.len(), 1);
+        assert_eq!(cache.base.len(), 1);
 
         cache.insert("b", "bill").await;
         cache.sync();
@@ -411,14 +411,14 @@ mod tests {
         cache.sync();
 
         assert_eq!(cache.get(&"b"), Some("bill"));
-        assert_eq!(cache.base.inner.cache.len(), 1);
+        assert_eq!(cache.base.len(), 1);
 
         mock.increment(Duration::from_secs(5)); // 25 secs
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
-        assert!(cache.base.inner.cache.is_empty());
+        assert!(cache.base.is_empty());
     }
 
     #[tokio::test]
@@ -449,20 +449,20 @@ mod tests {
         cache.insert("b", "bob").await;
         cache.sync();
 
-        assert_eq!(cache.base.inner.cache.len(), 2);
+        assert_eq!(cache.base.len(), 2);
 
         mock.increment(Duration::from_secs(5)); // 15 secs.
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.base.inner.cache.len(), 1);
+        assert_eq!(cache.base.len(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
-        assert!(cache.base.inner.cache.is_empty());
+        assert!(cache.base.is_empty());
     }
 }

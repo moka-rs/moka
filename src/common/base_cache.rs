@@ -75,7 +75,7 @@ where
     V: Clone,
     S: BuildHasher + Clone,
 {
-    pub(crate) fn with_everything(
+    pub(crate) fn new(
         max_capacity: usize,
         initial_capacity: Option<usize>,
         build_hasher: S,
@@ -101,6 +101,15 @@ where
             write_op_ch: w_snd,
             housekeeper: Some(Arc::new(housekeeper)),
         }
+    }
+
+    #[inline]
+    pub(crate) fn hash<Q>(&self, key: &Q) -> u64
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.inner.hash(key)
     }
 
     pub(crate) fn get_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<V>
@@ -144,6 +153,51 @@ where
         }
     }
 
+    #[inline]
+    pub(crate) fn remove<Q>(&self, key: &Q) -> Option<Arc<ValueEntry<K, V>>>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.inner.remove(key)
+    }
+
+    #[inline]
+    pub(crate) fn apply_reads_writes_if_needed(
+        ch: &Sender<WriteOp<K, V>>,
+        housekeeper: Option<&HouseKeeperArc<K, V, S>>,
+    ) {
+        let w_len = ch.len();
+
+        if Self::should_apply_writes(w_len) {
+            if let Some(h) = housekeeper {
+                h.try_schedule_sync();
+            }
+        }
+    }
+
+    pub(crate) fn max_capacity(&self) -> usize {
+        self.inner.max_capacity()
+    }
+
+    pub(crate) fn time_to_live(&self) -> Option<Duration> {
+        self.inner.time_to_live()
+    }
+
+    pub(crate) fn time_to_idle(&self) -> Option<Duration> {
+        self.inner.time_to_idle()
+    }
+}
+
+//
+// private methods
+//
+impl<K, V, S> BaseCache<K, V, S>
+where
+    K: Hash + Eq,
+    V: Clone,
+    S: BuildHasher + Clone,
+{
     #[inline]
     fn record_read_op(
         &self,
@@ -191,10 +245,10 @@ where
                 let mut last_modified = None;
                 if self.inner.has_expiry() {
                     let ts = unsafe { std::mem::transmute(std::u64::MAX) };
-                    if self.inner.time_to_idle.is_some() {
+                    if self.inner.time_to_idle().is_some() {
                         last_accessed = Some(ts);
                     }
-                    if self.inner.time_to_live.is_some() {
+                    if self.inner.time_to_live().is_some() {
                         last_modified = Some(ts);
                     }
                 }
@@ -255,20 +309,6 @@ where
     }
 
     #[inline]
-    pub(crate) fn apply_reads_writes_if_needed(
-        ch: &Sender<WriteOp<K, V>>,
-        housekeeper: Option<&HouseKeeperArc<K, V, S>>,
-    ) {
-        let w_len = ch.len();
-
-        if Self::should_apply_writes(w_len) {
-            if let Some(h) = housekeeper {
-                h.try_schedule_sync();
-            }
-        }
-    }
-
-    #[inline]
     fn should_apply_reads(ch_len: usize) -> bool {
         ch_len >= READ_LOG_FLUSH_POINT
     }
@@ -285,6 +325,14 @@ where
     K: Hash + Eq,
     S: BuildHasher + Clone,
 {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.inner.len() == 0
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.inner.len()
+    }
+
     pub(crate) fn reconfigure_for_testing(&mut self) {
         // Stop the housekeeping job that may cause sync() method to return earlier.
         if let Some(housekeeper) = &self.housekeeper {
@@ -297,44 +345,33 @@ where
     }
 
     pub(crate) fn set_expiration_clock(&self, clock: Option<quanta::Clock>) {
-        let mut exp_clock = self.inner.expiration_clock.write();
-        if let Some(clock) = clock {
-            *exp_clock = Some(clock);
-            self.inner
-                .has_expiration_clock
-                .store(true, Ordering::SeqCst);
-        } else {
-            self.inner
-                .has_expiration_clock
-                .store(false, Ordering::SeqCst);
-            *exp_clock = None;
-        }
+        self.inner.set_expiration_clock(clock);
     }
 }
 
 type CacheStore<K, V, S> = cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
 
 pub(crate) struct Inner<K, V, S> {
-    pub(crate) max_capacity: usize,
-    pub(crate) cache: CacheStore<K, V, S>,
+    max_capacity: usize,
+    cache: CacheStore<K, V, S>,
     build_hasher: S,
     deques: Mutex<Deques<K>>,
     frequency_sketch: RwLock<FrequencySketch>,
     read_op_ch: Receiver<ReadOp<K, V>>,
     write_op_ch: Receiver<WriteOp<K, V>>,
-    pub(crate) time_to_live: Option<Duration>,
-    pub(crate) time_to_idle: Option<Duration>,
-    pub(crate) has_expiration_clock: AtomicBool,
-    pub(crate) expiration_clock: RwLock<Option<Clock>>,
+    time_to_live: Option<Duration>,
+    time_to_idle: Option<Duration>,
+    has_expiration_clock: AtomicBool,
+    expiration_clock: RwLock<Option<Clock>>,
 }
 
-// functions/methods used by Cache
+// functions/methods used by BaseCache
 impl<K, V, S> Inner<K, V, S>
 where
     K: Hash + Eq,
     S: BuildHasher + Clone,
 {
-    pub(crate) fn new(
+    fn new(
         max_capacity: usize,
         initial_capacity: Option<usize>,
         build_hasher: S,
@@ -370,7 +407,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn hash<Q>(&self, key: &Q) -> u64
+    fn hash<Q>(&self, key: &Q) -> u64
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -381,12 +418,220 @@ where
     }
 
     #[inline]
-    pub(crate) fn get<Q>(&self, key: &Q) -> Option<Arc<ValueEntry<K, V>>>
+    fn get<Q>(&self, key: &Q) -> Option<Arc<ValueEntry<K, V>>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.cache.get(key)
+    }
+
+    #[inline]
+    fn remove<Q>(&self, key: &Q) -> Option<Arc<ValueEntry<K, V>>>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.cache.remove(key)
+    }
+
+    fn max_capacity(&self) -> usize {
+        self.max_capacity
+    }
+
+    #[inline]
+    fn time_to_live(&self) -> Option<Duration> {
+        self.time_to_live
+    }
+
+    #[inline]
+    fn time_to_idle(&self) -> Option<Duration> {
+        self.time_to_idle
+    }
+
+    #[inline]
+    fn has_expiry(&self) -> bool {
+        self.time_to_live.is_some() || self.time_to_idle.is_some()
+    }
+
+    #[inline]
+    fn current_time_from_expiration_clock(&self) -> Instant {
+        if self.has_expiration_clock.load(Ordering::Relaxed) {
+            self.expiration_clock
+                .read()
+                .as_ref()
+                .expect("Cannot get the expiration clock")
+                .now()
+        } else {
+            Instant::now()
+        }
+    }
+
+    #[inline]
+    fn is_expired_entry_ao(&self, entry: &impl AccessTime, now: Instant) -> bool {
+        debug_assert!(self.has_expiry());
+        if let (Some(ts), Some(tti)) = (entry.last_accessed(), self.time_to_idle) {
+            if ts + tti <= now {
+                return true;
+            }
+        }
+        false
+    }
+
+    #[inline]
+    fn is_expired_entry_wo(&self, entry: &impl AccessTime, now: Instant) -> bool {
+        debug_assert!(self.has_expiry());
+        if let (Some(ts), Some(ttl)) = (entry.last_modified(), self.time_to_live) {
+            if ts + ttl <= now {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+impl<K, V, S> InnerSync for Inner<K, V, S>
+where
+    K: Hash + Eq,
+    S: BuildHasher + Clone,
+{
+    fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
+        if self.read_op_ch.is_empty() && self.write_op_ch.is_empty() && !self.has_expiry() {
+            return None;
+        }
+
+        let deqs = self.deques.lock();
+        self.do_sync(deqs, max_repeats)
+    }
+}
+
+//
+// private methods
+//
+impl<K, V, S> Inner<K, V, S>
+where
+    K: Hash + Eq,
+    S: BuildHasher + Clone,
+{
+    #[inline]
+    fn handle_insert(
+        &self,
+        kh: KeyHash<K>,
+        entry: Arc<ValueEntry<K, V>>,
+        timestamp: Option<Instant>,
+        deqs: &mut Deques<K>,
+        freq: &FrequencySketch,
+    ) {
+        let last_accessed = entry.raw_last_accessed().map(|ts| {
+            ts.store(timestamp.unwrap().as_u64(), Ordering::Relaxed);
+            ts
+        });
+        let last_modified = entry.raw_last_modified().map(|ts| {
+            ts.store(timestamp.unwrap().as_u64(), Ordering::Relaxed);
+            ts
+        });
+
+        if self.cache.len() <= self.max_capacity {
+            // Add the candidate to the deque.
+            let key = Arc::clone(&kh.key);
+            deqs.push_back_ao(
+                CacheRegion::MainProbation,
+                KeyHashDate::new(kh, last_accessed),
+                &entry,
+            );
+            if self.time_to_live.is_some() {
+                deqs.push_back_wo(KeyDate::new(key, last_modified), &entry);
+            }
+        } else {
+            let victim = self.find_cache_victim(deqs, freq);
+            if self.admit(kh.hash, victim, freq) {
+                // Remove the victim from the cache and deque.
+                //
+                // TODO: Check if the selected victim was actually removed. If not,
+                // maybe we should find another victim. This can happen because it
+                // could have been already removed from the cache but the removal
+                // from the deque is still on the write operations queue and is not
+                // yet executed.
+                if let Some(vic_entry) = self.cache.remove(&victim.element.key) {
+                    deqs.unlink_ao(Arc::clone(&vic_entry));
+                    Deques::unlink_wo(&mut deqs.write_order, vic_entry);
+                } else {
+                    let victim = NonNull::from(victim);
+                    deqs.unlink_node_ao(victim);
+                }
+                // Add the candidate to the deque.
+                let key = Arc::clone(&kh.key);
+                deqs.push_back_ao(
+                    CacheRegion::MainProbation,
+                    KeyHashDate::new(kh, last_accessed),
+                    &entry,
+                );
+                if self.time_to_live.is_some() {
+                    deqs.push_back_wo(KeyDate::new(key, last_modified), &entry);
+                }
+            } else {
+                // Remove the candidate from the cache.
+                self.cache.remove(&kh.key);
+            }
+        }
+    }
+
+    #[inline]
+    fn find_cache_victim<'a>(
+        &self,
+        deqs: &'a mut Deques<K>,
+        _freq: &FrequencySketch,
+    ) -> &'a DeqNode<KeyHashDate<K>> {
+        // TODO: Check its frequency. If it is not very low, maybe we should
+        // check frequencies of next few others and pick from them.
+        deqs.probation.peek_front().expect("No victim found")
+    }
+
+    #[inline]
+    fn admit(
+        &self,
+        candidate_hash: u64,
+        victim: &DeqNode<KeyHashDate<K>>,
+        freq: &FrequencySketch,
+    ) -> bool {
+        // TODO: Implement some randomness to mitigate hash DoS attack.
+        // See Caffeine's implementation.
+        freq.frequency(candidate_hash) > freq.frequency(victim.element.hash)
+    }
+
+    fn do_sync(&self, mut deqs: MutexGuard<'_, Deques<K>>, max_repeats: usize) -> Option<SyncPace> {
+        let mut calls = 0;
+        let mut should_sync = true;
+        const EVICTION_BATCH_SIZE: usize = 500;
+
+        while should_sync && calls <= max_repeats {
+            let r_len = self.read_op_ch.len();
+            if r_len > 0 {
+                self.apply_reads(&mut deqs, r_len);
+            }
+
+            let w_len = self.write_op_ch.len();
+            if w_len > 0 {
+                self.apply_writes(&mut deqs, w_len);
+            }
+
+            if self.has_expiry() {
+                self.evict(&mut deqs, EVICTION_BATCH_SIZE);
+            }
+
+            calls += 1;
+            should_sync = self.read_op_ch.len() >= READ_LOG_FLUSH_POINT
+                || self.write_op_ch.len() >= WRITE_LOG_FLUSH_POINT;
+        }
+
+        if should_sync {
+            Some(SyncPace::Fast)
+        } else if self.write_op_ch.len() <= WRITE_LOG_LOW_WATER_MARK {
+            Some(SyncPace::Normal)
+        } else {
+            // Keep the current pace.
+            None
+        }
     }
 
     fn apply_reads(&self, deqs: &mut Deques<K>, count: usize) {
@@ -526,187 +771,29 @@ where
             }
         }
     }
-
-    #[inline]
-    pub(crate) fn current_time_from_expiration_clock(&self) -> Instant {
-        if self.has_expiration_clock.load(Ordering::Relaxed) {
-            self.expiration_clock
-                .read()
-                .as_ref()
-                .expect("Cannot get the expiration clock")
-                .now()
-        } else {
-            Instant::now()
-        }
-    }
-
-    #[inline]
-    pub(crate) fn has_expiry(&self) -> bool {
-        self.time_to_live.is_some() || self.time_to_idle.is_some()
-    }
-
-    #[inline]
-    pub(crate) fn is_expired_entry_ao(&self, entry: &impl AccessTime, now: Instant) -> bool {
-        debug_assert!(self.has_expiry());
-        if let (Some(ts), Some(tti)) = (entry.last_accessed(), self.time_to_idle) {
-            if ts + tti <= now {
-                return true;
-            }
-        }
-        false
-    }
-
-    #[inline]
-    pub(crate) fn is_expired_entry_wo(&self, entry: &impl AccessTime, now: Instant) -> bool {
-        debug_assert!(self.has_expiry());
-        if let (Some(ts), Some(ttl)) = (entry.last_modified(), self.time_to_live) {
-            if ts + ttl <= now {
-                return true;
-            }
-        }
-        false
-    }
 }
 
-impl<K, V, S> InnerSync for Inner<K, V, S>
-where
-    K: Hash + Eq,
-    S: BuildHasher + Clone,
-{
-    fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
-        if self.read_op_ch.is_empty() && self.write_op_ch.is_empty() && !self.has_expiry() {
-            return None;
-        }
-
-        let deqs = self.deques.lock();
-        self.do_sync(deqs, max_repeats)
-    }
-}
-
-// private methods
+//
+// for testing
+//
+#[cfg(test)]
 impl<K, V, S> Inner<K, V, S>
 where
     K: Hash + Eq,
     S: BuildHasher + Clone,
 {
-    #[inline]
-    fn admit(
-        &self,
-        candidate_hash: u64,
-        victim: &DeqNode<KeyHashDate<K>>,
-        freq: &FrequencySketch,
-    ) -> bool {
-        // TODO: Implement some randomness to mitigate hash DoS attack.
-        // See Caffeine's implementation.
-        freq.frequency(candidate_hash) > freq.frequency(victim.element.hash)
+    fn len(&self) -> usize {
+        self.cache.len()
     }
 
-    fn do_sync(&self, mut deqs: MutexGuard<'_, Deques<K>>, max_repeats: usize) -> Option<SyncPace> {
-        let mut calls = 0;
-        let mut should_sync = true;
-        const EVICTION_BATCH_SIZE: usize = 500;
-
-        while should_sync && calls <= max_repeats {
-            let r_len = self.read_op_ch.len();
-            if r_len > 0 {
-                self.apply_reads(&mut deqs, r_len);
-            }
-
-            let w_len = self.write_op_ch.len();
-            if w_len > 0 {
-                self.apply_writes(&mut deqs, w_len);
-            }
-
-            if self.has_expiry() {
-                self.evict(&mut deqs, EVICTION_BATCH_SIZE);
-            }
-
-            calls += 1;
-            should_sync = self.read_op_ch.len() >= READ_LOG_FLUSH_POINT
-                || self.write_op_ch.len() >= WRITE_LOG_FLUSH_POINT;
-        }
-
-        if should_sync {
-            Some(SyncPace::Fast)
-        } else if self.write_op_ch.len() <= WRITE_LOG_LOW_WATER_MARK {
-            Some(SyncPace::Normal)
+    fn set_expiration_clock(&self, clock: Option<quanta::Clock>) {
+        let mut exp_clock = self.expiration_clock.write();
+        if let Some(clock) = clock {
+            *exp_clock = Some(clock);
+            self.has_expiration_clock.store(true, Ordering::SeqCst);
         } else {
-            // Keep the current pace.
-            None
-        }
-    }
-
-    #[inline]
-    fn find_cache_victim<'a>(
-        &self,
-        deqs: &'a mut Deques<K>,
-        _freq: &FrequencySketch,
-    ) -> &'a DeqNode<KeyHashDate<K>> {
-        // TODO: Check its frequency. If it is not very low, maybe we should
-        // check frequencies of next few others and pick from them.
-        deqs.probation.peek_front().expect("No victim found")
-    }
-
-    #[inline]
-    fn handle_insert(
-        &self,
-        kh: KeyHash<K>,
-        entry: Arc<ValueEntry<K, V>>,
-        timestamp: Option<Instant>,
-        deqs: &mut Deques<K>,
-        freq: &FrequencySketch,
-    ) {
-        let last_accessed = entry.raw_last_accessed().map(|ts| {
-            ts.store(timestamp.unwrap().as_u64(), Ordering::Relaxed);
-            ts
-        });
-        let last_modified = entry.raw_last_modified().map(|ts| {
-            ts.store(timestamp.unwrap().as_u64(), Ordering::Relaxed);
-            ts
-        });
-
-        if self.cache.len() <= self.max_capacity {
-            // Add the candidate to the deque.
-            let key = Arc::clone(&kh.key);
-            deqs.push_back_ao(
-                CacheRegion::MainProbation,
-                KeyHashDate::new(kh, last_accessed),
-                &entry,
-            );
-            if self.time_to_live.is_some() {
-                deqs.push_back_wo(KeyDate::new(key, last_modified), &entry);
-            }
-        } else {
-            let victim = self.find_cache_victim(deqs, freq);
-            if self.admit(kh.hash, victim, freq) {
-                // Remove the victim from the cache and deque.
-                //
-                // TODO: Check if the selected victim was actually removed. If not,
-                // maybe we should find another victim. This can happen because it
-                // could have been already removed from the cache but the removal
-                // from the deque is still on the write operations queue and is not
-                // yet executed.
-                if let Some(vic_entry) = self.cache.remove(&victim.element.key) {
-                    deqs.unlink_ao(Arc::clone(&vic_entry));
-                    Deques::unlink_wo(&mut deqs.write_order, vic_entry);
-                } else {
-                    let victim = NonNull::from(victim);
-                    deqs.unlink_node_ao(victim);
-                }
-                // Add the candidate to the deque.
-                let key = Arc::clone(&kh.key);
-                deqs.push_back_ao(
-                    CacheRegion::MainProbation,
-                    KeyHashDate::new(kh, last_accessed),
-                    &entry,
-                );
-                if self.time_to_live.is_some() {
-                    deqs.push_back_wo(KeyDate::new(key, last_modified), &entry);
-                }
-            } else {
-                // Remove the candidate from the cache.
-                self.cache.remove(&kh.key);
-            }
+            self.has_expiration_clock.store(false, Ordering::SeqCst);
+            *exp_clock = None;
         }
     }
 }
