@@ -166,13 +166,14 @@ where
         self.insert_with_hash(key, hash, value).await
     }
 
-    pub(crate) async fn insert_with_hash(&self, key: K, hash: u64, value: V) {
+    /// Blocking [insert](#method.insert) to call outside of asynchronous contexts.
+    ///
+    /// This method is intended for use cases where you are inserting from synchronous code.
+    pub fn blocking_insert(&self, key: K, value: V) {
+        let hash = self.base.hash(&key);
         let op = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
-        if Self::schedule_write_op(&self.base.write_op_ch, op, hk)
-            .await
-            .is_err()
-        {
+        if Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk).is_err() {
             panic!("Failed to insert");
         }
     }
@@ -193,6 +194,23 @@ where
                 .await
                 .is_err()
             {
+                panic!("Failed to remove");
+            }
+        }
+    }
+
+    /// Blocking [invalidate](#method.invalidate) to call outside of asynchronous contexts.
+    ///
+    /// This method is intended for use cases where you are invalidating from synchronous code.
+    pub fn blocking_invalidate<Q>(&self, key: &Q)
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        if let Some(entry) = self.base.remove(key) {
+            let op = WriteOp::Remove(entry);
+            let hk = self.base.housekeeper.as_ref();
+            if Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk).is_err() {
                 panic!("Failed to remove");
             }
         }
@@ -238,6 +256,17 @@ where
     V: Clone,
     S: BuildHasher + Clone,
 {
+    async fn insert_with_hash(&self, key: K, hash: u64, value: V) {
+        let op = self.base.do_insert_with_hash(key, hash, value);
+        let hk = self.base.housekeeper.as_ref();
+        if Self::schedule_write_op(&self.base.write_op_ch, op, hk)
+            .await
+            .is_err()
+        {
+            panic!("Failed to insert");
+        }
+    }
+
     #[inline]
     async fn schedule_write_op(
         ch: &Sender<WriteOp<K, V>>,
@@ -256,6 +285,28 @@ where
                     op = op1;
                     async_io::Timer::after(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS))
                         .await;
+                }
+                Err(e @ TrySendError::Disconnected(_)) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn blocking_schedule_write_op(
+        ch: &Sender<WriteOp<K, V>>,
+        op: WriteOp<K, V>,
+        housekeeper: Option<&HouseKeeperArc<K, V, S>>,
+    ) -> Result<(), TrySendError<WriteOp<K, V>>> {
+        let mut op = op;
+
+        loop {
+            BaseCache::apply_reads_writes_if_needed(ch, housekeeper);
+            match ch.try_send(op) {
+                Ok(()) => break,
+                Err(TrySendError::Full(op1)) => {
+                    op = op1;
+                    std::thread::sleep(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS));
                 }
                 Err(e @ TrySendError::Disconnected(_)) => return Err(e),
             }
@@ -333,6 +384,54 @@ mod tests {
         assert_eq!(cache.get(&"d"), Some("dennis"));
 
         cache.invalidate(&"b").await;
+        assert_eq!(cache.get(&"b"), None);
+    }
+
+    #[test]
+    fn basic_single_blocking_api() {
+        let mut cache = Cache::new(3);
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.blocking_insert("a", "alice");
+        cache.blocking_insert("b", "bob");
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        cache.sync();
+        // counts: a -> 1, b -> 1
+
+        cache.blocking_insert("c", "cindy");
+        assert_eq!(cache.get(&"c"), Some("cindy"));
+        // counts: a -> 1, b -> 1, c -> 1
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        cache.sync();
+        // counts: a -> 2, b -> 2, c -> 1
+
+        // "d" should not be admitted because its frequency is too low.
+        cache.blocking_insert("d", "david"); //   count: d -> 0
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 1
+
+        cache.blocking_insert("d", "david");
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 2
+
+        // "d" should be admitted and "c" should be evicted
+        // because d's frequency is higher then c's.
+        cache.blocking_insert("d", "dennis");
+        cache.sync();
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"c"), None);
+        assert_eq!(cache.get(&"d"), Some("dennis"));
+
+        cache.blocking_invalidate(&"b");
+        assert_eq!(cache.get(&"b"), None);
     }
 
     #[tokio::test]
@@ -345,7 +444,7 @@ mod tests {
         // Make the cache exterior immutable.
         let cache: Cache<i32, String> = cache;
 
-        let handles = (0..num_threads)
+        let tasks = (0..num_threads)
             .map(|id| {
                 let cache = cache.clone();
                 tokio::spawn(async move {
@@ -358,7 +457,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let _ = futures::future::join_all(handles).await;
+        let _ = futures::future::join_all(tasks).await;
         cache.sync();
 
         assert!(cache.get(&10).is_none());

@@ -424,6 +424,7 @@ mod tests {
         assert_eq!(cache.get(&"d"), Some("dennis"));
 
         cache.invalidate(&"b");
+        assert_eq!(cache.get(&"b"), None);
     }
 
     #[test]
