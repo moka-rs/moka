@@ -21,7 +21,7 @@ use std::{
 ///
 /// `Cache` utilizes a lock-free concurrent hash table `cht::SegmentedHashMap` from
 /// the [cht][cht-crate] crate for the central key-value storage. `Cache` performs a
-/// best-effort bounding of a map using an entry replacement algorithm to determine
+/// best-effort bounding of the map using an entry replacement algorithm to determine
 /// which entries to evict when the capacity is exceeded.
 ///
 /// [cht-crate]: https://crates.io/crates/cht
@@ -85,11 +85,6 @@ use std::{
 ///     }
 /// }
 /// ```
-///
-/// If you want to use `sync::Cache` in an async runtime such as Tokio or async-std,
-/// see [this example][async-example] in the README.
-///
-/// [async-example]: https://github.com/moka-rs/moka/blob/master/README.md#using-cache-with-an-async-runtime-tokio-async-std-etc
 ///
 /// # Thread Safety
 ///

@@ -9,9 +9,8 @@
 Moka is a fast, concurrent cache library for Rust. Moka is inspired by
 [Caffeine][caffeine-git] (Java) and [Ristretto][ristretto-git] (Go).
 
-Moka provides a cache that supports full concurrency of retrievals and a high
-expected concurrency for updates. It also provides a segmented cache for increased
-concurrent update performance. These caches perform a best-effort bounding of a map
+Moka provides cache implementations that support full concurrency of retrievals and a high
+expected concurrency for updates. They perform a best-effort bounding of a concurrent hash map
 using an entry replacement algorithm to determine which entries to evict when the
 capacity is exceeded.
 
@@ -32,12 +31,11 @@ capacity is exceeded.
 
 ## Features
 
-- Thread-safe, highly concurrent in-memory cache implementations.
-    - Synchronous (blocking) caches for OS threads.
-    - Asynchronous (future aware) caches for async runtimes: Tokio, async-std
-      and actix-rt.
+- Thread-safe, highly concurrent in-memory cache implementations:
+    - Synchronous (blocking) caches that can be shared across OS threads.
+    - An asynchronous (future aware) cache that can be accessed inside and outside of asynchronous contexts.
 - Caches are bounded by the maximum number of entries.
-- Maintains good hit rate by using entry replacement algorithms inspired by
+- Maintains good hit rate by using an entry replacement algorithms inspired by
   [Caffeine][caffeine-git]:
     - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.
     - Eviction from a cache is controlled by the Least Recently Used (LRU) policy.
@@ -55,7 +53,17 @@ Add this to your `Cargo.toml`:
 moka = "0.2"
 ```
 
-## Example: Synchronous (Blocking) Cache
+To use the asynchronous cache, enable a crate feature called "future".
+
+```toml
+[dependencies]
+moka = { version = "0.2", features = ["future"] }
+```
+
+
+## Example: Synchronous Cache
+
+The synchronous (blocking) caches are defined in the `sync` module.
 
 Cache entries are manually added using `insert` method, and are stored in the cache
 until either evicted or manually invalidated.
@@ -63,6 +71,7 @@ until either evicted or manually invalidated.
 Here's an example that reads and updates a cache by using multiple threads:
 
 ```rust
+// Use the synchronous cache.
 use moka::sync::Cache;
 
 use std::thread;
@@ -117,6 +126,94 @@ fn main() {
 }
 ```
 
+
+## Example: Asynchronous Cache
+
+The asynchronous (future aware) cache is defined in the `future` module.
+It works with asynchronous runtime such as [Tokio][tokio-crate], [async-std][async-std-crate] or [actix-rt][actix-rt-crate]. To use the asynchronous cache, [enable a crate feature called "future"](#usage).
+
+<!--
+**There is a limitation though:** The current version requires the target platform to provide OS threads. This limitation will be removed in a future version of Moka.
+-->
+
+[tokio-crate]: https://crates.io/crates/tokio
+[async-std-crate]: https://crates.io/crates/asinc-std
+[actix-rt-crate]: https://crates.io/crates/actix-rt
+
+Cache entries are manually added using an insert method, and are stored in the cache
+until either evicted or manually invalidated:
+
+- Inside an async context (`async fn` or `async` block), use `insert` or `invalidate` method for updating the cache and `await` them. `get` and other methods are regular methods, so no need to `await`.
+- Outside any async context, use `blocking_insert` or `blocking_invalidate` methods. They will block for a short time under heavy updates.
+
+Here is a similar program to the previous example, but using asynchronous cache with [Tokio][tokio-crate]
+runtime:
+
+```rust
+// Cargo.toml
+//
+// [dependencies]
+// moka = { version = "0.2", features = ["future"] }
+// tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+// futures = "0.3"
+
+// Use the asynchronous cache.
+use moka::future::Cache;
+
+#[tokio::main]
+async fn main() {
+    const NUM_TASKS: usize = 16;
+    const NUM_KEYS_PER_TASK: usize = 64;
+
+    fn value(n: usize) -> String {
+        format!("value {}", n)
+    }
+
+    // Create a cache that can store up to 10,000 entries.
+    let cache = Cache::new(10_000);
+
+    // Spawn async tasks and write to and read from the cache.
+    let tasks: Vec<_> = (0..NUM_TASKS)
+        .map(|i| {
+            // To share the same cache across the async tasks, clone it.
+            // This is a cheap operation.
+            let my_cache = cache.clone();
+            let start = i * NUM_KEYS_PER_TASK;
+            let end = (i + 1) * NUM_KEYS_PER_TASK;
+
+            tokio::spawn(async move {
+                // Insert 64 entries. (NUM_KEYS_PER_TASK = 64)
+                for key in start..end {
+                    // insert() is an async method, so await it.
+                    my_cache.insert(key, value(key)).await;
+                    // get() returns Option<String>, a clone of the stored value.
+                    assert_eq!(my_cache.get(&key), Some(value(key)));
+                }
+
+                // Invalidate every 4 element of the inserted entries.
+                for key in (start..end).step_by(4) {
+                    // invalidate() is an async method, so await it.
+                    my_cache.invalidate(&key).await;
+                }
+            })
+        })
+        .collect();
+
+    // Wait for all tasks to complete.
+    futures::future::join_all(tasks).await;
+
+    // Verify the result.
+    for key in 0..(NUM_TASKS * NUM_KEYS_PER_TASK) {
+        if key % 4 == 0 {
+            assert_eq!(cache.get(&key), None);
+        } else {
+            assert_eq!(cache.get(&key), Some(value(key)));
+        }
+    }
+}
+```
+
+
 ### Avoiding to clone the value at `get`
 
 The return type of `get` method is `Option<V>` instead of `Option<&V>`, where `V` is
@@ -145,19 +242,8 @@ cache.insert(key.clone(), Arc::new(large_value));
 cache.get(&key);
 ```
 
-## Example: Asynchronous (Future Aware) Cache
 
-- Crate feature **future**
-
-Update operations `insert` and `invalidate` method are provided as `async fn` as they
-can be blocked for a short time under heavy updates.
-
-Here is a similar program to the previous example, but using [Tokio][tokio-crate]
-runtime:
-
-[tokio-crate]: https://crates.io/crates/tokio
-
-## Usage: Expiration Policies
+## Example: Expiration Policies
 
 Moka supports the following expiration policies:
 
@@ -192,21 +278,6 @@ fn main() {
     // after 30 minutes (TTL) from the insert().
 }
 ```
-
-## Segmented Cache
-
-Moka caches maintain internal data structures for entry replacement algorithms. These
-structures are guarded by a lock and operations are applied in batches using a
-dedicated worker thread to avoid lock contention. `sync::Cache` has only one worker
-thread, so under heavy updates, the worker thread may not be able to catch up to the
-updates. When this happens, `insert` or `invalidate` call will be paused (blocked)
-for a short time.
-
-If this pause happens very often, you may want to switch to `sync::SegmentedCache`.
-A segmented cache has multiple internal cache segments and each segment has its own
-worker thread. This will reduce the chances of the pausing.
-
-Use `segments` method of the `CacheBuilder` to create a segmented cache.
 
 
 ## Hashing Algorithm

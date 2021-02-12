@@ -26,17 +26,15 @@ async fn main() {
             tokio::spawn(async move {
                 // Insert 64 entries. (NUM_KEYS_PER_TASK = 64)
                 for key in start..end {
-                    // insert() is an async method as it may block for
-                    // a short time under heavy updates.
+                    // insert() is an async method, so await it
                     my_cache.insert(key, value(key)).await;
-                    // get() is returns Option<String>, a clone of the stored value.
+                    // get() returns Option<String>, a clone of the stored value.
                     assert_eq!(my_cache.get(&key), Some(value(key)));
                 }
 
                 // Invalidate every 4 element of the inserted entries.
                 for key in (start..end).step_by(4) {
-                    // invalidate() is an async method as it may block for
-                    // a short time under heavy updates.
+                    // invalidate() is an async method, so await it
                     my_cache.invalidate(&key).await;
                 }
             })

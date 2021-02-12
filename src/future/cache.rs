@@ -14,12 +14,39 @@ use std::{
     time::Duration,
 };
 
+/// A thread-safe, futures-aware concurrent in-memory cache.
+///
+/// `Cache` supports full concurrency of retrievals and a high expected concurrency
+/// for updates.
+/// It can be accessed inside and outside of asynchronous contexts.
+///
+/// `Cache` utilizes a lock-free concurrent hash table `cht::SegmentedHashMap` from
+/// the [cht][cht-crate] crate for the central key-value storage. `Cache` performs a
+/// best-effort bounding of the map using an entry replacement algorithm to determine
+/// which entries to evict when the capacity is exceeded.
+///
+/// To use this cache, [enable a crate feature called "future"](#usage).
+///
+/// [cht-crate]: https://crates.io/crates/cht
+///
+/// # Examples
+///
+/// Cache entries are manually added using an insert method, and are stored in the
+/// cache until either evicted or manually invalidated:
+///
+/// - Inside an async context (`async fn` or `async` block), use [`insert`](#method.insert) or [`invalidate`](#method.invalidate) method for updating the cache and `await` them. `get` and other methods are regular methods, so no need to `await`.
+/// - Outside any async context, use [`blocking_insert`](#method.blocking_insert) or [`blocking_invalidate`](#method.blocking_invalidate) methods. They will block for a short time under heavy updates.
+///
+/// Here's an example that reads and updates a cache by using multiple asynchronous tasks with [Tokio][tokio-crate] runtime:
+///
+/// [tokio-crate]: https://crates.io/crates/tokio
+///
 ///```rust
 /// // Cargo.toml
 /// //
 /// // [dependencies]
 /// // moka = { version = "0.2", features = ["future"] }
-/// // tokio = { version = "1.2", features = ["rt-multi-thread", "macros" ] }
+/// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures = "0.3"
 ///
 /// use moka::future::Cache;
@@ -48,17 +75,15 @@ use std::{
 ///             tokio::spawn(async move {
 ///                 // Insert 64 entries. (NUM_KEYS_PER_TASK = 64)
 ///                 for key in start..end {
-///                     // insert() is an async method as it may block for
-///                     // a short time under heavy updates.
+///                     // insert() is an async method, so await it.
 ///                     my_cache.insert(key, value(key)).await;
-///                     // get() is returns Option<String>, a clone of the stored value.
+///                     // get() returns Option<String>, a clone of the stored value.
 ///                     assert_eq!(my_cache.get(&key), Some(value(key)));
 ///                 }
 ///
 ///                 // Invalidate every 4 element of the inserted entries.
 ///                 for key in (start..end).step_by(4) {
-///                     // invalidate() is an async method as it may block for
-///                     // a short time under heavy updates.
+///                     // invalidate() is an async method, so await it.
 ///                     my_cache.invalidate(&key).await;
 ///                 }
 ///             })
@@ -78,6 +103,85 @@ use std::{
 ///     }
 /// }
 /// ```
+/// # Thread Safety
+///
+/// All methods provided by the `Cache` are considered thread-safe, and can be safely
+/// accessed by multiple concurrent threads.
+///
+/// `Cache<K, V, S>` will implement `Send` when all of the following conditions meet:
+///
+/// - `K` (key) and `V` (value) implement `Send` and `Sync`.
+/// - `S` (the hash-map state) implements `Send`.
+///
+/// and will implement `Sync` when all of the following conditions meet:
+///
+/// - `K` (key) and `V` (value) implement `Send` and `Sync`.
+/// - `S` (the hash-map state) implements `Sync`.
+///
+/// # Sharing a cache across asynchronous tasks
+///
+/// To share a cache across async tasks (or OS threads), do one of the followings:
+///
+/// - Create a clone of the cache by calling its `clone` method and pass it to other
+///   task.
+/// - Wrap the cache by a `sync::OnceCell` or `sync::Lazy` from
+///   [once_cell][once-cell-crate] create, and set it to a `static` variable.
+///
+/// Cloning is a cheap operation for `Cache` as it only creates thread-safe
+/// reference-counted pointers to the internal data structures.
+///
+/// [once-cell-crate]: https://crates.io/crates/once_cell
+///
+/// # Avoiding to clone the value at `get`
+///
+/// The return type of `get` method is `Option<V>` instead of `Option<&V>`. Every
+/// time `get` is called for an existing key, it creates a clone of the stored value
+/// `V` and returns it. This is because the `Cache` allows concurrent updates from
+/// threads so a value stored in the cache can be dropped or replaced at any time by
+/// any other thread. `get` cannot return a reference `&V` as it is impossible to
+/// guarantee the value outlives the reference.
+///
+/// If you want to store values that will be expensive to clone, wrap them by
+/// `std::sync::Arc` before storing in a cache. [`Arc`][rustdoc-std-arc] is a
+/// thread-safe reference-counted pointer and its `clone()` method is cheap.
+///
+/// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
+///
+/// # Expiration Policies
+///
+/// `Cache` supports the following expiration policies:
+///
+/// - **Time to live**: A cached entry will be expired after the specified duration
+///   past from `insert`.
+/// - **Time to idle**: A cached entry will be expired after the specified duration
+///   past from `get` or `insert`.
+///
+/// See the [`CacheBuilder`][builder-struct]'s doc for how to configure a cache
+/// with them.
+///
+/// [builder-struct]: ./struct.CacheBuilder.html
+///
+/// # Hashing Algorithm
+///
+/// By default, `Cache` uses a hashing algorithm selected to provide resistance
+/// against HashDoS attacks.
+///
+/// The default hashing algorithm is the one used by `std::collections::HashMap`,
+/// which is currently SipHash 1-3.
+///
+/// While its performance is very competitive for medium sized keys, other hashing
+/// algorithms will outperform it for small keys such as integers as well as large
+/// keys such as long strings. However those algorithms will typically not protect
+/// against attacks such as HashDoS.
+///
+/// The hashing algorithm can be replaced on a per-`Cache` basis using the
+/// [`build_with_hasher`][build-with-hasher-method] method of the
+/// `CacheBuilder`. Many alternative algorithms are available on crates.io, such
+/// as the [aHash][ahash-crate] crate.
+///
+/// [build-with-hasher-method]: ./struct.CacheBuilder.html#method.build_with_hasher
+/// [ahash-crate]: https://crates.io/crates/ahash
+///
 #[derive(Clone)]
 pub struct Cache<K, V, S = RandomState> {
     base: BaseCache<K, V, S>,
