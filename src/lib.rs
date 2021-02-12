@@ -36,7 +36,7 @@
 //! See the followings:
 //!
 //! - Synchronous (blocking) caches:
-//!     - The document for the [`sync::Cache`][sync-cache-struct] and 
+//!     - The document for the [`sync::Cache`][sync-cache-struct] and
 //!       [`sync::SegmentedCache`][sync-seg-cache-struct].
 //! - Asynchronous (future aware) cache:
 //!     - The document for the [`future::Cache`][future-cache-struct].
