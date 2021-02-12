@@ -4,49 +4,46 @@
 //! Moka is a fast, concurrent cache library for Rust. Moka is inspired by
 //! [Caffeine][caffeine-git] (Java) and [Ristretto][ristretto-git] (Go).
 //!
-//! Moka provides in-memory concurrent cache implementations
-//! [`sync::Cache`][cache-struct] and [`sync::SegmentedCache`][seg-cache-struct].
-//! They support full concurrency of retrievals and a high expected concurrency for
-//! updates.
-//! <!-- They support full concurrency of retrievals, a high expected concurrency for
-//! updates, and multiple ways to bound the cache. -->
-//!
-//! Both `Cache` and `SegmentedCache` utilize a lock-free concurrent hash table
-//! `cht::SegmentedHashMap` from the [cht][cht-crate] crate for the central key-value
-//! storage. These caches perform a best-effort bounding of the map using an entry
-//! replacement algorithm to determine which entries to evict when the capacity is
-//! exceeded.
-//!
-//! While `Cache` will be good for general use cases, `SegmentedCache` may yield
-//! better performance under heavy concurrent updates. However, `SegmentedCache` has
-//! little overheads on retrievals/updates for managing multiple internal segments.
+//! Moka provides in-memory concurrent cache implementations that support full
+//! concurrency of retrievals and a high expected concurrency for updates.
+//! <!-- , and multiple ways to bound the cache. -->
+//! They utilize a lock-free concurrent hash table `cht::SegmentedHashMap` from the
+//! [cht][cht-crate] crate for the central key-value storage. These caches perform a
+//! best-effort bounding of the map using an entry replacement algorithm to determine
+//! which entries to evict when the capacity is exceeded.
 //!
 //! [caffeine-git]: https://github.com/ben-manes/caffeine
 //! [ristretto-git]: https://github.com/dgraph-io/ristretto
-//! [cache-struct]: ./sync/struct.Cache.html
-//! [seg-cache-struct]: ./sync/struct.SegmentedCache.html
 //! [cht-crate]: https://crates.io/crates/cht
 //!
 //! # Features
 //!
-//! - Thread-safe, highly concurrent in-memory cache implementations.
+//! - Thread-safe, highly concurrent in-memory cache implementations:
+//!     - Synchronous (blocking) caches that can be shared across OS threads.
+//!     - An asynchronous (futures aware) cache that can be accessed inside and
+//!       outside of asynchronous contexts.
 //! - Caches are bounded by the maximum number of entries.
 //! - Maintains good hit rate by using entry replacement algorithms inspired by
 //!   [Caffeine][caffeine-git]:
-//!    - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.
-//!    - Eviction from a cache is controlled by the Least Recently Used (LRU) policy.
+//!     - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.
+//!     - Eviction from a cache is controlled by the Least Recently Used (LRU) policy.
 //! - Supports expiration policies:
-//!    - Time to live
-//!    - Time to idle
+//!     - Time to live
+//!     - Time to idle
 //!
 //! # Examples
 //!
 //! See the followings:
 //!
-//! - The document for the [`sync::Cache`][cache-struct].
-//! - The [README][readme] file.
+//! - Synchronous (blocking) caches:
+//!     - The document for the [`sync::Cache`][sync-cache-struct] and
+//!       [`sync::SegmentedCache`][sync-seg-cache-struct].
+//! - Asynchronous (futures aware) cache:
+//!     - The document for the [`future::Cache`][future-cache-struct].
 //!
-//! [readme]: https://github.com/moka-rs/moka/blob/master/README.md
+//! [future-cache-struct]: ./future/struct.Cache.html
+//! [sync-cache-struct]: ./sync/struct.Cache.html
+//! [sync-seg-cache-struct]: ./sync/struct.SegmentedCache.html
 //!
 //! # Minimum Supported Rust Version
 //!
@@ -86,7 +83,7 @@
 //!   the draining task catches up.
 //!
 //! `Cache` does its best to avoid blocking updates by adjusting the interval of
-//! draining and throttling updates from clients. But since it has only one worker
+//! draining. But since it has only one worker
 //! thread, it cannot always avoid blocking. If this happens very often in your cache
 //! (in the future, you can check the statistics of the cache), you may want to
 //! switch to `SegmentedCache`. It has multiple internal cache segments and each
@@ -133,19 +130,15 @@
 //!
 //! - The time-to-live policy uses a write-order queue.
 //! - The time-to-idle policy uses an access-order queue.
-//! - The variable expiration will use a [hierarchical timer wheel][timer-wheel].
+//! - The variable expiration will use a [hierarchical timer wheel][timer-wheel] (*1).
 //!
-//! (If you get 404 page not found when you click on the link to the hierarchical
-//! timer wheel paper, try to change the URL from `https:` to `http:`)
+//! *1: If you get 404 page not found when you click on the link to the hierarchical
+//! timer wheel paper, try to change the URL from `https:` to `http:`.
 //!
 //! [timer-wheel]: http://www.cs.columbia.edu/~nahum/w6998/papers/ton97-timing-wheels.pdf
-//!
-//! # About the Name
-//!
-//! Moka is named after the [moka pot][moka-pot-wikipedia], a stove-top coffee maker
-//! that brews espresso-like coffee using boiling water pressurized by steam.
-//!
-//! [moka-pot-wikipedia]: https://en.wikipedia.org/wiki/Moka_pot
+
+#[cfg(feature = "future")]
+pub mod future;
 
 pub mod sync;
 

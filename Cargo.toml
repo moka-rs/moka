@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
 
@@ -13,13 +13,19 @@ keywords = ["concurrent", "cache"]
 categories = ["concurrency", "caching"]
 readme = "README.md"
 exclude = [".devcontainer", ".github", ".vscode"]
-
 build = "build.rs"
+
+# https://docs.rs/about/metadata
+[package.metadata.docs.rs]
+features = ["future"]
+
+[features]
+default = []
+future = ["async-io"]
 
 [dependencies]
 cht = "0.4"
 crossbeam-channel = "0.5"
-# hierarchical_hash_wheel_timer = "1.0"
 num_cpus = "1.13"
 once_cell = "1.5"
 parking_lot = "0.11"
@@ -28,10 +34,17 @@ parking_lot = "0.11"
 quanta = "0.7.1"
 scheduled-thread-pool = "0.2"
 
+# Optional dependencies
+async-io = { version = "1", optional = true }
+
 [dev-dependencies]
+actix-rt2 = { package = "actix-rt", version = "2", default-features = false }
+actix-rt1 = { package = "actix-rt", version = "1", default-features = false }
+async-std = { version = "1", features = ["attributes"] }
+futures = "0.3"
 getrandom = "0.2"
 skeptic = "0.13"
-tokio = { version = "1.2", features = ["rt-multi-thread", "macros" ] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 
 [build-dependencies]
 skeptic = "0.13"

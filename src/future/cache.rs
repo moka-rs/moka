@@ -14,78 +14,99 @@ use std::{
     time::Duration,
 };
 
-/// A thread-safe concurrent in-memory cache.
+/// A thread-safe, futures-aware concurrent in-memory cache.
 ///
 /// `Cache` supports full concurrency of retrievals and a high expected concurrency
-/// for updates.
+/// for updates. It can be accessed inside and outside of asynchronous contexts.
 ///
 /// `Cache` utilizes a lock-free concurrent hash table `cht::SegmentedHashMap` from
 /// the [cht][cht-crate] crate for the central key-value storage. `Cache` performs a
 /// best-effort bounding of the map using an entry replacement algorithm to determine
 /// which entries to evict when the capacity is exceeded.
 ///
+/// To use this cache, enable a crate feature called "future".
+///
 /// [cht-crate]: https://crates.io/crates/cht
 ///
 /// # Examples
 ///
-/// Cache entries are manually added using `insert` method, and are stored in the
-/// cache until either evicted or manually invalidated.
+/// Cache entries are manually added using an insert method, and are stored in the
+/// cache until either evicted or manually invalidated:
 ///
-/// Here's an example that reads and updates a cache by using multiple threads:
+/// - Inside an async context (`async fn` or `async` block), use
+///   [`insert`](#method.insert) or [`invalidate`](#method.invalidate) method for
+///   updating the cache and `await` them.
+/// - Outside any async context, use [`blocking_insert`](#method.blocking_insert) or
+///   [`blocking_invalidate`](#method.blocking_invalidate) methods. They will block
+///   for a short time under heavy updates.
 ///
-/// ```rust
-/// use moka::sync::Cache;
+/// Here's an example that reads and updates a cache by using multiple asynchronous
+/// tasks with [Tokio][tokio-crate] runtime:
 ///
-/// use std::thread;
+/// [tokio-crate]: https://crates.io/crates/tokio
 ///
-/// fn value(n: usize) -> String {
-///     format!("value {}", n)
-/// }
+///```rust
+/// // Cargo.toml
+/// //
+/// // [dependencies]
+/// // moka = { version = "0.2", features = ["future"] }
+/// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+/// // futures = "0.3"
 ///
-/// const NUM_THREADS: usize = 16;
-/// const NUM_KEYS_PER_THREAD: usize = 64;
+/// use moka::future::Cache;
 ///
-/// // Create a cache that can store up to 10,000 entries.
-/// let cache = Cache::new(10_000);
+/// #[tokio::main]
+/// async fn main() {
+///     const NUM_TASKS: usize = 16;
+///     const NUM_KEYS_PER_TASK: usize = 64;
 ///
-/// // Spawn threads and read and update the cache simultaneously.
-/// let threads: Vec<_> = (0..NUM_THREADS)
-///     .map(|i| {
-///         // To share the same cache across the threads, clone it.
-///         // This is a cheap operation.
-///         let my_cache = cache.clone();
-///         let start = i * NUM_KEYS_PER_THREAD;
-///         let end = (i + 1) * NUM_KEYS_PER_THREAD;
+///     fn value(n: usize) -> String {
+///         format!("value {}", n)
+///     }
 ///
-///         thread::spawn(move || {
-///             // Insert 64 entries. (NUM_KEYS_PER_THREAD = 64)
-///             for key in start..end {
-///                 my_cache.insert(key, value(key));
-///                 // get() returns Option<String>, a clone of the stored value.
-///                 assert_eq!(my_cache.get(&key), Some(value(key)));
-///             }
+///     // Create a cache that can store up to 10,000 entries.
+///     let cache = Cache::new(10_000);
 ///
-///             // Invalidate every 4 element of the inserted entries.
-///             for key in (start..end).step_by(4) {
-///                 my_cache.invalidate(&key);
-///             }
+///     // Spawn async tasks and write to and read from the cache.
+///     let tasks: Vec<_> = (0..NUM_TASKS)
+///         .map(|i| {
+///             // To share the same cache across the async tasks, clone it.
+///             // This is a cheap operation.
+///             let my_cache = cache.clone();
+///             let start = i * NUM_KEYS_PER_TASK;
+///             let end = (i + 1) * NUM_KEYS_PER_TASK;
+///
+///             tokio::spawn(async move {
+///                 // Insert 64 entries. (NUM_KEYS_PER_TASK = 64)
+///                 for key in start..end {
+///                     // insert() is an async method, so await it.
+///                     my_cache.insert(key, value(key)).await;
+///                     // get() returns Option<String>, a clone of the stored value.
+///                     assert_eq!(my_cache.get(&key), Some(value(key)));
+///                 }
+///
+///                 // Invalidate every 4 element of the inserted entries.
+///                 for key in (start..end).step_by(4) {
+///                     // invalidate() is an async method, so await it.
+///                     my_cache.invalidate(&key).await;
+///                 }
+///             })
 ///         })
-///     })
-///     .collect();
+///         .collect();
 ///
-/// // Wait for all threads to complete.
-/// threads.into_iter().for_each(|t| t.join().expect("Failed"));
+///     // Wait for all tasks to complete.
+///     futures::future::join_all(tasks).await;
 ///
-/// // Verify the result.
-/// for key in 0..(NUM_THREADS * NUM_KEYS_PER_THREAD) {
-///     if key % 4 == 0 {
-///         assert_eq!(cache.get(&key), None);
-///     } else {
-///         assert_eq!(cache.get(&key), Some(value(key)));
+///     // Verify the result.
+///     for key in 0..(NUM_TASKS * NUM_KEYS_PER_TASK) {
+///         if key % 4 == 0 {
+///             assert_eq!(cache.get(&key), None);
+///         } else {
+///             assert_eq!(cache.get(&key), Some(value(key)));
+///         }
 ///     }
 /// }
 /// ```
-///
 /// # Thread Safety
 ///
 /// All methods provided by the `Cache` are considered thread-safe, and can be safely
@@ -101,12 +122,12 @@ use std::{
 /// - `K` (key) and `V` (value) implement `Send` and `Sync`.
 /// - `S` (the hash-map state) implements `Sync`.
 ///
-/// # Sharing a cache across threads
+/// # Sharing a cache across asynchronous tasks
 ///
-/// To share a cache across threads, do one of the followings:
+/// To share a cache across async tasks (or OS threads), do one of the followings:
 ///
 /// - Create a clone of the cache by calling its `clone` method and pass it to other
-///   thread.
+///   task.
 /// - Wrap the cache by a `sync::OnceCell` or `sync::Lazy` from
 ///   [once_cell][once-cell-crate] create, and set it to a `static` variable.
 ///
@@ -245,33 +266,32 @@ where
         self.base.get_with_hash(key, self.base.hash(key))
     }
 
-    pub(crate) fn get_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<V>
-    where
-        Arc<K>: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
-    {
-        self.base.get_with_hash(key, hash)
-    }
-
     /// Inserts a key-value pair into the cache.
     ///
     /// If the cache has this key present, the value is updated.
-    pub fn insert(&self, key: K, value: V) {
+    pub async fn insert(&self, key: K, value: V) {
         let hash = self.base.hash(&key);
-        self.insert_with_hash(key, hash, value)
+        self.insert_with_hash(key, hash, value).await
     }
 
-    pub(crate) fn insert_with_hash(&self, key: K, hash: u64, value: V) {
+    /// Blocking [insert](#method.insert) to call outside of asynchronous contexts.
+    ///
+    /// This method is intended for use cases where you are inserting from
+    /// synchronous code.
+    pub fn blocking_insert(&self, key: K, value: V) {
+        let hash = self.base.hash(&key);
         let op = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
-        Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to insert");
+        if Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk).is_err() {
+            panic!("Failed to insert");
+        }
     }
 
     /// Discards any cached value for the key.
     ///
     /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
     /// on the borrowed form _must_ match those for the key type.
-    pub fn invalidate<Q>(&self, key: &Q)
+    pub async fn invalidate<Q>(&self, key: &Q)
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -279,7 +299,31 @@ where
         if let Some(entry) = self.base.remove(key) {
             let op = WriteOp::Remove(entry);
             let hk = self.base.housekeeper.as_ref();
-            Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to remove");
+            if Self::schedule_write_op(&self.base.write_op_ch, op, hk)
+                .await
+                .is_err()
+            {
+                panic!("Failed to remove");
+            }
+        }
+    }
+
+    /// Blocking [invalidate](#method.invalidate) to call outside of asynchronous
+    /// contexts.
+    ///
+    /// This method is intended for use cases where you are invalidating from
+    /// synchronous code.
+    pub fn blocking_invalidate<Q>(&self, key: &Q)
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        if let Some(entry) = self.base.remove(key) {
+            let op = WriteOp::Remove(entry);
+            let hk = self.base.housekeeper.as_ref();
+            if Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk).is_err() {
+                panic!("Failed to remove");
+            }
         }
     }
 
@@ -323,18 +367,50 @@ where
     V: Clone,
     S: BuildHasher + Clone,
 {
+    async fn insert_with_hash(&self, key: K, hash: u64, value: V) {
+        let op = self.base.do_insert_with_hash(key, hash, value);
+        let hk = self.base.housekeeper.as_ref();
+        if Self::schedule_write_op(&self.base.write_op_ch, op, hk)
+            .await
+            .is_err()
+        {
+            panic!("Failed to insert");
+        }
+    }
+
     #[inline]
-    fn schedule_write_op(
+    async fn schedule_write_op(
         ch: &Sender<WriteOp<K, V>>,
         op: WriteOp<K, V>,
         housekeeper: Option<&HouseKeeperArc<K, V, S>>,
     ) -> Result<(), TrySendError<WriteOp<K, V>>> {
         let mut op = op;
 
-        // NOTES:
-        // - This will block when the channel is full.
-        // - We are doing a busy-loop here. We were originally calling `ch.send(op)?`,
-        //   but we got a notable performance degradation.
+        // TODO: Try to replace the timer with an async event listener to see if it
+        // can provide better performance.
+        loop {
+            BaseCache::apply_reads_writes_if_needed(ch, housekeeper);
+            match ch.try_send(op) {
+                Ok(()) => break,
+                Err(TrySendError::Full(op1)) => {
+                    op = op1;
+                    async_io::Timer::after(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS))
+                        .await;
+                }
+                Err(e @ TrySendError::Disconnected(_)) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    #[inline]
+    fn blocking_schedule_write_op(
+        ch: &Sender<WriteOp<K, V>>,
+        op: WriteOp<K, V>,
+        housekeeper: Option<&HouseKeeperArc<K, V, S>>,
+    ) -> Result<(), TrySendError<WriteOp<K, V>>> {
+        let mut op = op;
+
         loop {
             BaseCache::apply_reads_writes_if_needed(ch, housekeeper);
             match ch.try_send(op) {
@@ -370,27 +446,27 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Cache, ConcurrentCacheExt};
-    use crate::sync::CacheBuilder;
+    use crate::future::CacheBuilder;
 
     use quanta::Clock;
     use std::time::Duration;
 
-    #[test]
-    fn basic_single_thread() {
+    #[tokio::test]
+    async fn basic_single_async_task() {
         let mut cache = Cache::new(3);
         cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.
         let cache = cache;
 
-        cache.insert("a", "alice");
-        cache.insert("b", "bob");
+        cache.insert("a", "alice").await;
+        cache.insert("b", "bob").await;
         assert_eq!(cache.get(&"a"), Some("alice"));
         assert_eq!(cache.get(&"b"), Some("bob"));
         cache.sync();
         // counts: a -> 1, b -> 1
 
-        cache.insert("c", "cindy");
+        cache.insert("c", "cindy").await;
         assert_eq!(cache.get(&"c"), Some("cindy"));
         // counts: a -> 1, b -> 1, c -> 1
         cache.sync();
@@ -401,60 +477,106 @@ mod tests {
         // counts: a -> 2, b -> 2, c -> 1
 
         // "d" should not be admitted because its frequency is too low.
-        cache.insert("d", "david"); //   count: d -> 0
+        cache.insert("d", "david").await; //   count: d -> 0
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 1
 
-        cache.insert("d", "david");
+        cache.insert("d", "david").await;
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher then c's.
-        cache.insert("d", "dennis");
+        cache.insert("d", "dennis").await;
         cache.sync();
         assert_eq!(cache.get(&"a"), Some("alice"));
         assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.get(&"c"), None);
         assert_eq!(cache.get(&"d"), Some("dennis"));
 
-        cache.invalidate(&"b");
+        cache.invalidate(&"b").await;
         assert_eq!(cache.get(&"b"), None);
     }
 
     #[test]
-    fn basic_multi_threads() {
+    fn basic_single_blocking_api() {
+        let mut cache = Cache::new(3);
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.blocking_insert("a", "alice");
+        cache.blocking_insert("b", "bob");
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        cache.sync();
+        // counts: a -> 1, b -> 1
+
+        cache.blocking_insert("c", "cindy");
+        assert_eq!(cache.get(&"c"), Some("cindy"));
+        // counts: a -> 1, b -> 1, c -> 1
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        cache.sync();
+        // counts: a -> 2, b -> 2, c -> 1
+
+        // "d" should not be admitted because its frequency is too low.
+        cache.blocking_insert("d", "david"); //   count: d -> 0
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 1
+
+        cache.blocking_insert("d", "david");
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 2
+
+        // "d" should be admitted and "c" should be evicted
+        // because d's frequency is higher then c's.
+        cache.blocking_insert("d", "dennis");
+        cache.sync();
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"c"), None);
+        assert_eq!(cache.get(&"d"), Some("dennis"));
+
+        cache.blocking_invalidate(&"b");
+        assert_eq!(cache.get(&"b"), None);
+    }
+
+    #[tokio::test]
+    async fn basic_multi_async_tasks() {
         let num_threads = 4;
 
         let mut cache = Cache::new(100);
         cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.
-        let cache = cache;
+        let cache: Cache<i32, String> = cache;
 
-        let handles = (0..num_threads)
+        let tasks = (0..num_threads)
             .map(|id| {
                 let cache = cache.clone();
-                std::thread::spawn(move || {
-                    cache.insert(10, format!("{}-100", id));
+                tokio::spawn(async move {
+                    cache.insert(10, format!("{}-100", id)).await;
                     cache.get(&10);
                     cache.sync();
-                    cache.insert(20, format!("{}-200", id));
-                    cache.invalidate(&10);
+                    cache.insert(20, format!("{}-200", id)).await;
+                    cache.invalidate(&10).await;
                 })
             })
             .collect::<Vec<_>>();
 
-        handles.into_iter().for_each(|h| h.join().expect("Failed"));
-
+        let _ = futures::future::join_all(tasks).await;
         cache.sync();
 
         assert!(cache.get(&10).is_none());
         assert!(cache.get(&20).is_some());
     }
 
-    #[test]
-    fn time_to_live() {
+    #[tokio::test]
+    async fn time_to_live() {
         let mut cache = CacheBuilder::new(100)
             .time_to_live(Duration::from_secs(10))
             .build();
@@ -467,7 +589,7 @@ mod tests {
         // Make the cache exterior immutable.
         let cache = cache;
 
-        cache.insert("a", "alice");
+        cache.insert("a", "alice").await;
         cache.sync();
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
@@ -481,7 +603,7 @@ mod tests {
         assert_eq!(cache.get(&"a"), None);
         assert!(cache.base.is_empty());
 
-        cache.insert("b", "bob");
+        cache.insert("b", "bob").await;
         cache.sync();
 
         assert_eq!(cache.base.len(), 1);
@@ -492,7 +614,7 @@ mod tests {
         assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.base.len(), 1);
 
-        cache.insert("b", "bill");
+        cache.insert("b", "bill").await;
         cache.sync();
 
         mock.increment(Duration::from_secs(5)); // 20 secs
@@ -509,8 +631,8 @@ mod tests {
         assert!(cache.base.is_empty());
     }
 
-    #[test]
-    fn time_to_idle() {
+    #[tokio::test]
+    async fn time_to_idle() {
         let mut cache = CacheBuilder::new(100)
             .time_to_idle(Duration::from_secs(10))
             .build();
@@ -523,7 +645,7 @@ mod tests {
         // Make the cache exterior immutable.
         let cache = cache;
 
-        cache.insert("a", "alice");
+        cache.insert("a", "alice").await;
         cache.sync();
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
@@ -534,7 +656,7 @@ mod tests {
         mock.increment(Duration::from_secs(5)); // 10 secs.
         cache.sync();
 
-        cache.insert("b", "bob");
+        cache.insert("b", "bob").await;
         cache.sync();
 
         assert_eq!(cache.base.len(), 2);

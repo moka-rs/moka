@@ -35,16 +35,22 @@ jobs:
           override: true
           components: rustfmt, clippy
 
-      - name: Build
+      - name: Build (no features)
         uses: actions-rs/cargo@v1
         with:
           command: build
 
-      - name: Run tests
+      - name: Run tests (no features)
         uses: actions-rs/cargo@v1
         with:
           command: test
           args: --release
+
+      - name: Run tests (future)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --release --features future
 
       - name: Run Rustfmt
         uses: actions-rs/cargo@v1
@@ -56,4 +62,4 @@ jobs:
         uses: actions-rs/clippy-check@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          args: -- -D warnings
+          args: --features future -- -D warnings
