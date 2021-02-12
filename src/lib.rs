@@ -130,19 +130,12 @@
 //!
 //! - The time-to-live policy uses a write-order queue.
 //! - The time-to-idle policy uses an access-order queue.
-//! - The variable expiration will use a [hierarchical timer wheel][timer-wheel].
+//! - The variable expiration will use a [hierarchical timer wheel][timer-wheel] (*1).
 //!
-//! (If you get 404 page not found when you click on the link to the hierarchical
-//! timer wheel paper, try to change the URL from `https:` to `http:`)
+//! *1: If you get 404 page not found when you click on the link to the hierarchical
+//! timer wheel paper, try to change the URL from `https:` to `http:`.
 //!
 //! [timer-wheel]: http://www.cs.columbia.edu/~nahum/w6998/papers/ton97-timing-wheels.pdf
-//!
-//! # About the Name
-//!
-//! Moka is named after the [moka pot][moka-pot-wikipedia], a stove-top coffee maker
-//! that brews espresso-like coffee using boiling water pressurized by steam.
-//!
-//! [moka-pot-wikipedia]: https://en.wikipedia.org/wiki/Moka_pot
 
 #[cfg(feature = "future")]
 pub mod future;
