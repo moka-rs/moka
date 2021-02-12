@@ -1,4 +1,6 @@
 //! Provides thread-safe, asynchronous (futures aware) cache implementations.
+//!
+//! To use this module, enable a crate feature called "future".
 
 mod builder;
 pub(crate) mod cache;

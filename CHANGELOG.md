@@ -4,7 +4,7 @@
 
 ### Features
 
-- Introduce asynchronous (future aware) caches.
+- Introduce an asynchronous (futures aware) cache.
 
 
 ## Version 0.1.0

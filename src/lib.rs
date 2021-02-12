@@ -4,14 +4,13 @@
 //! Moka is a fast, concurrent cache library for Rust. Moka is inspired by
 //! [Caffeine][caffeine-git] (Java) and [Ristretto][ristretto-git] (Go).
 //!
-//! Moka provides in-memory concurrent cache implementations that
-//! support full concurrency of retrievals and a high expected concurrency for
-//! updates. <!-- , and multiple ways to bound the cache. -->
-//! They utilize a lock-free concurrent hash table
-//! `cht::SegmentedHashMap` from the [cht][cht-crate] crate for the central key-value
-//! storage. These caches perform a best-effort bounding of the map using an entry
-//! replacement algorithm to determine which entries to evict when the capacity is
-//! exceeded.
+//! Moka provides in-memory concurrent cache implementations that support full
+//! concurrency of retrievals and a high expected concurrency for updates.
+//! <!-- , and multiple ways to bound the cache. -->
+//! They utilize a lock-free concurrent hash table `cht::SegmentedHashMap` from the
+//! [cht][cht-crate] crate for the central key-value storage. These caches perform a
+//! best-effort bounding of the map using an entry replacement algorithm to determine
+//! which entries to evict when the capacity is exceeded.
 //!
 //! [caffeine-git]: https://github.com/ben-manes/caffeine
 //! [ristretto-git]: https://github.com/dgraph-io/ristretto
@@ -21,7 +20,8 @@
 //!
 //! - Thread-safe, highly concurrent in-memory cache implementations:
 //!     - Synchronous (blocking) caches that can be shared across OS threads.
-//!     - An asynchronous (future aware) cache that can be accessed inside and outside of asynchronous contexts.
+//!     - An asynchronous (futures aware) cache that can be accessed inside and
+//!       outside of asynchronous contexts.
 //! - Caches are bounded by the maximum number of entries.
 //! - Maintains good hit rate by using entry replacement algorithms inspired by
 //!   [Caffeine][caffeine-git]:
@@ -38,7 +38,7 @@
 //! - Synchronous (blocking) caches:
 //!     - The document for the [`sync::Cache`][sync-cache-struct] and
 //!       [`sync::SegmentedCache`][sync-seg-cache-struct].
-//! - Asynchronous (future aware) cache:
+//! - Asynchronous (futures aware) cache:
 //!     - The document for the [`future::Cache`][future-cache-struct].
 //!
 //! [future-cache-struct]: ./future/struct.Cache.html

@@ -17,15 +17,14 @@ use std::{
 /// A thread-safe, futures-aware concurrent in-memory cache.
 ///
 /// `Cache` supports full concurrency of retrievals and a high expected concurrency
-/// for updates.
-/// It can be accessed inside and outside of asynchronous contexts.
+/// for updates. It can be accessed inside and outside of asynchronous contexts.
 ///
 /// `Cache` utilizes a lock-free concurrent hash table `cht::SegmentedHashMap` from
 /// the [cht][cht-crate] crate for the central key-value storage. `Cache` performs a
 /// best-effort bounding of the map using an entry replacement algorithm to determine
 /// which entries to evict when the capacity is exceeded.
 ///
-/// To use this cache, [enable a crate feature called "future"](#usage).
+/// To use this cache, enable a crate feature called "future".
 ///
 /// [cht-crate]: https://crates.io/crates/cht
 ///
@@ -34,10 +33,15 @@ use std::{
 /// Cache entries are manually added using an insert method, and are stored in the
 /// cache until either evicted or manually invalidated:
 ///
-/// - Inside an async context (`async fn` or `async` block), use [`insert`](#method.insert) or [`invalidate`](#method.invalidate) method for updating the cache and `await` them. `get` and other methods are regular methods, so no need to `await`.
-/// - Outside any async context, use [`blocking_insert`](#method.blocking_insert) or [`blocking_invalidate`](#method.blocking_invalidate) methods. They will block for a short time under heavy updates.
+/// - Inside an async context (`async fn` or `async` block), use
+///   [`insert`](#method.insert) or [`invalidate`](#method.invalidate) method for
+///   updating the cache and `await` them.
+/// - Outside any async context, use [`blocking_insert`](#method.blocking_insert) or
+///   [`blocking_invalidate`](#method.blocking_invalidate) methods. They will block
+///   for a short time under heavy updates.
 ///
-/// Here's an example that reads and updates a cache by using multiple asynchronous tasks with [Tokio][tokio-crate] runtime:
+/// Here's an example that reads and updates a cache by using multiple asynchronous
+/// tasks with [Tokio][tokio-crate] runtime:
 ///
 /// [tokio-crate]: https://crates.io/crates/tokio
 ///
@@ -272,7 +276,8 @@ where
 
     /// Blocking [insert](#method.insert) to call outside of asynchronous contexts.
     ///
-    /// This method is intended for use cases where you are inserting from synchronous code.
+    /// This method is intended for use cases where you are inserting from
+    /// synchronous code.
     pub fn blocking_insert(&self, key: K, value: V) {
         let hash = self.base.hash(&key);
         let op = self.base.do_insert_with_hash(key, hash, value);
@@ -303,9 +308,11 @@ where
         }
     }
 
-    /// Blocking [invalidate](#method.invalidate) to call outside of asynchronous contexts.
+    /// Blocking [invalidate](#method.invalidate) to call outside of asynchronous
+    /// contexts.
     ///
-    /// This method is intended for use cases where you are invalidating from synchronous code.
+    /// This method is intended for use cases where you are invalidating from
+    /// synchronous code.
     pub fn blocking_invalidate<Q>(&self, key: &Q)
     where
         Arc<K>: Borrow<Q>,

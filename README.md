@@ -9,10 +9,10 @@
 Moka is a fast, concurrent cache library for Rust. Moka is inspired by
 [Caffeine][caffeine-git] (Java) and [Ristretto][ristretto-git] (Go).
 
-Moka provides cache implementations that support full concurrency of retrievals and a high
-expected concurrency for updates. They perform a best-effort bounding of a concurrent hash map
-using an entry replacement algorithm to determine which entries to evict when the
-capacity is exceeded.
+Moka provides cache implementations that support full concurrency of retrievals and
+a high expected concurrency for updates. They perform a best-effort bounding of a
+concurrent hash map using an entry replacement algorithm to determine which entries
+to evict when the capacity is exceeded.
 
 [gh-actions-badge]: https://github.com/moka-rs/moka/workflows/CI/badge.svg
 [release-badge]: https://img.shields.io/crates/v/moka.svg
@@ -33,7 +33,8 @@ capacity is exceeded.
 
 - Thread-safe, highly concurrent in-memory cache implementations:
     - Synchronous (blocking) caches that can be shared across OS threads.
-    - An asynchronous (future aware) cache that can be accessed inside and outside of asynchronous contexts.
+    - An asynchronous (futures aware) cache that can be accessed inside and outside
+      of asynchronous contexts.
 - Caches are bounded by the maximum number of entries.
 - Maintains good hit rate by using an entry replacement algorithms inspired by
   [Caffeine][caffeine-git]:
@@ -129,12 +130,10 @@ fn main() {
 
 ## Example: Asynchronous Cache
 
-The asynchronous (future aware) cache is defined in the `future` module.
-It works with asynchronous runtime such as [Tokio][tokio-crate], [async-std][async-std-crate] or [actix-rt][actix-rt-crate]. To use the asynchronous cache, [enable a crate feature called "future"](#usage).
-
-<!--
-**There is a limitation though:** The current version requires the target platform to provide OS threads. This limitation will be removed in a future version of Moka.
--->
+The asynchronous (futures aware) cache is defined in the `future` module.
+It works with asynchronous runtime such as [Tokio][tokio-crate],
+[async-std][async-std-crate] or [actix-rt][actix-rt-crate].
+To use the asynchronous cache, [enable a crate feature called "future"](#usage).
 
 [tokio-crate]: https://crates.io/crates/tokio
 [async-std-crate]: https://crates.io/crates/asinc-std
@@ -143,11 +142,13 @@ It works with asynchronous runtime such as [Tokio][tokio-crate], [async-std][asy
 Cache entries are manually added using an insert method, and are stored in the cache
 until either evicted or manually invalidated:
 
-- Inside an async context (`async fn` or `async` block), use `insert` or `invalidate` method for updating the cache and `await` them. `get` and other methods are regular methods, so no need to `await`.
-- Outside any async context, use `blocking_insert` or `blocking_invalidate` methods. They will block for a short time under heavy updates.
+- Inside an async context (`async fn` or `async` block), use `insert` or `invalidate`
+  method for updating the cache and `await` them.
+- Outside any async context, use `blocking_insert` or `blocking_invalidate`
+  methods. They will block for a short time under heavy updates.
 
-Here is a similar program to the previous example, but using asynchronous cache with [Tokio][tokio-crate]
-runtime:
+Here is a similar program to the previous example, but using asynchronous cache with
+[Tokio][tokio-crate] runtime:
 
 ```rust,ignore
 // Cargo.toml
@@ -320,7 +321,7 @@ considered a semver-breaking change.
 
 ## Road Map
 
-- [x] `async` optimized caches. **DONE** `v0.2.0`
+- [x] `async` optimized caches. (`v0.2.0`)
 - [ ] Cache statistics. (Hit rate, etc.)
 - [ ] Upgrade TinyLFU to Window TinyLFU.
 - [ ] The variable (per-entry) expiration, using a hierarchical timer wheel.
