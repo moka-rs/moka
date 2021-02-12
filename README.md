@@ -149,7 +149,7 @@ until either evicted or manually invalidated:
 Here is a similar program to the previous example, but using asynchronous cache with [Tokio][tokio-crate]
 runtime:
 
-```rust
+```rust,ignore
 // Cargo.toml
 //
 // [dependencies]
@@ -162,6 +162,7 @@ use moka::future::Cache;
 
 #[tokio::main]
 async fn main() {
+    panic!();
     const NUM_TASKS: usize = 16;
     const NUM_KEYS_PER_TASK: usize = 64;
 
