@@ -56,12 +56,15 @@ impl<K> KeyHashDate<K> {
     }
 }
 
-pub(crate) type KeyDeqNodeAO<K> = NonNull<DeqNode<KeyHashDate<K>>>;
-pub(crate) type KeyDeqNodeWO<K> = NonNull<DeqNode<KeyDate<K>>>;
+// DeqNode for an access order queue.
+type KeyDeqNodeAo<K> = NonNull<DeqNode<KeyHashDate<K>>>;
+
+// DeqNode for the write order queue.
+type KeyDeqNodeWo<K> = NonNull<DeqNode<KeyDate<K>>>;
 
 struct DeqNodes<K> {
-    access_order_q_node: Option<KeyDeqNodeAO<K>>,
-    write_order_q_node: Option<KeyDeqNodeWO<K>>,
+    access_order_q_node: Option<KeyDeqNodeAo<K>>,
+    write_order_q_node: Option<KeyDeqNodeWo<K>>,
 }
 
 #[cfg(feature = "future")]
@@ -82,8 +85,8 @@ impl<K, V> ValueEntry<K, V> {
         value: V,
         last_accessed: Option<Instant>,
         last_modified: Option<Instant>,
-        access_order_q_node: Option<KeyDeqNodeAO<K>>,
-        write_order_q_node: Option<KeyDeqNodeWO<K>>,
+        access_order_q_node: Option<KeyDeqNodeAo<K>>,
+        write_order_q_node: Option<KeyDeqNodeWo<K>>,
     ) -> Self {
         Self {
             value,
@@ -120,27 +123,27 @@ impl<K, V> ValueEntry<K, V> {
         self.last_modified.clone()
     }
 
-    pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAO<K>> {
+    pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
         self.nodes.lock().access_order_q_node
     }
 
-    pub(crate) fn set_access_order_q_node(&self, node: Option<KeyDeqNodeAO<K>>) {
+    pub(crate) fn set_access_order_q_node(&self, node: Option<KeyDeqNodeAo<K>>) {
         self.nodes.lock().access_order_q_node = node;
     }
 
-    pub(crate) fn take_access_order_q_node(&self) -> Option<KeyDeqNodeAO<K>> {
+    pub(crate) fn take_access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
         self.nodes.lock().access_order_q_node.take()
     }
 
-    pub(crate) fn write_order_q_node(&self) -> Option<KeyDeqNodeWO<K>> {
+    pub(crate) fn write_order_q_node(&self) -> Option<KeyDeqNodeWo<K>> {
         self.nodes.lock().write_order_q_node
     }
 
-    pub(crate) fn set_write_order_q_node(&self, node: Option<KeyDeqNodeWO<K>>) {
+    pub(crate) fn set_write_order_q_node(&self, node: Option<KeyDeqNodeWo<K>>) {
         self.nodes.lock().write_order_q_node = node;
     }
 
-    pub(crate) fn take_write_order_q_node(&self) -> Option<KeyDeqNodeWO<K>> {
+    pub(crate) fn take_write_order_q_node(&self) -> Option<KeyDeqNodeWo<K>> {
         self.nodes.lock().write_order_q_node.take()
     }
 
