@@ -215,7 +215,7 @@ async fn main() {
 ```
 
 
-### Avoiding to clone the value at `get`
+## Avoiding to clone the value at `get`
 
 The return type of `get` method is `Option<V>` instead of `Option<&V>`, where `V` is
 the value type. Every time `get` is called for an existing key, it creates a clone of
