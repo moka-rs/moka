@@ -163,7 +163,6 @@ use moka::future::Cache;
 
 #[tokio::main]
 async fn main() {
-    panic!();
     const NUM_TASKS: usize = 16;
     const NUM_KEYS_PER_TASK: usize = 64;
 
