@@ -5,8 +5,14 @@ jobs:
     steps:
       - checkout
       - run:
-          name: Coverage with docker
-          command: docker run --security-opt seccomp=unconfined -v "${PWD}:/volume" xd009642/tarpaulin cargo tarpaulin -v --ciserver circle-ci --coveralls ${COVERALLS_TOKEN} --timeout 600
+          name: Run cargo tarpaulin
+          command: |
+            docker run --security-opt seccomp=unconfined -v "${PWD}:/volume" xd009642/tarpaulin \
+              cargo tarpaulin -v \
+                --features future \
+                --ciserver circle-ci \
+                --coveralls ${COVERALLS_TOKEN} \
+                --timeout 600
 
 workflows:
   build:
