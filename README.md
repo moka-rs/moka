@@ -4,6 +4,7 @@
 [![crates.io release][release-badge]][crate]
 [![docs][docs-badge]][docs]
 [![dependency status][deps-rs-badge]][deps-rs]
+[![coverage status][coveralls-badge]][coveralls]
 [![license][license-badge]](#license)
 
 Moka is a fast, concurrent cache library for Rust. Moka is inspired by
@@ -18,12 +19,14 @@ to evict when the capacity is exceeded.
 [release-badge]: https://img.shields.io/crates/v/moka.svg
 [docs-badge]: https://docs.rs/moka/badge.svg
 [deps-rs-badge]: https://deps.rs/repo/github/moka-rs/moka/status.svg
+[coveralls-badge]: https://coveralls.io/repos/github/moka-rs/moka/badge.svg?branch=master
 [license-badge]: https://img.shields.io/crates/l/moka.svg
 
 [gh-actions]: https://github.com/moka-rs/moka/actions?query=workflow%3ACI
 [crate]: https://crates.io/crates/moka
 [docs]: https://docs.rs/moka
 [deps-rs]: https://deps.rs/repo/github/moka-rs/moka
+[coveralls]: https://coveralls.io/github/moka-rs/moka?branch=master
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 [ristretto-git]: https://github.com/dgraph-io/ristretto
