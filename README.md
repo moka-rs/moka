@@ -316,9 +316,9 @@ This crate's minimum supported Rust version (MSRV) is 1.45.2.
 -->
 
 If no feature is enabled, MSRV will be updated conservatively. When using other
-features, like `async` (which is not available yet), MSRV might be updated more
-frequently, up to the latest stable. In both cases, increasing MSRV is _not_
-considered a semver-breaking change.
+features, like `future`, MSRV might be updated more frequently, up to the latest
+stable. In both cases, increasing MSRV is _not_ considered a semver-breaking
+change.
 
 
 ## Road Map
