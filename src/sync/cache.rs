@@ -424,12 +424,7 @@ mod tests {
     #[test]
     fn basic_multi_threads() {
         let num_threads = 4;
-
-        let mut cache = Cache::new(100);
-        cache.reconfigure_for_testing();
-
-        // Make the cache exterior immutable.
-        let cache = cache;
+        let cache = Cache::new(100);
 
         let handles = (0..num_threads)
             .map(|id| {
@@ -437,7 +432,6 @@ mod tests {
                 std::thread::spawn(move || {
                     cache.insert(10, format!("{}-100", id));
                     cache.get(&10);
-                    cache.sync();
                     cache.insert(20, format!("{}-200", id));
                     cache.invalidate(&10);
                 })
@@ -445,8 +439,6 @@ mod tests {
             .collect::<Vec<_>>();
 
         handles.into_iter().for_each(|h| h.join().expect("Failed"));
-
-        cache.sync();
 
         assert!(cache.get(&10).is_none());
         assert!(cache.get(&20).is_some());
