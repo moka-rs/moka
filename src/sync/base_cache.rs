@@ -1,9 +1,12 @@
 use super::{
-    deque::{CacheRegion, DeqNode, Deque},
     deques::Deques,
-    frequency_sketch::FrequencySketch,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
-    AccessTime, KeyDate, KeyHash, KeyHashDate, ReadOp, ValueEntry, WriteOp,
+    KeyDate, KeyHash, KeyHashDate, ReadOp, ValueEntry, WriteOp,
+};
+use crate::common::{
+    deque::{CacheRegion, DeqNode, Deque},
+    frequency_sketch::FrequencySketch,
+    AccessTime,
 };
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
@@ -513,92 +516,6 @@ where
     K: Hash + Eq,
     S: BuildHasher + Clone,
 {
-    #[inline]
-    fn handle_insert(
-        &self,
-        kh: KeyHash<K>,
-        entry: Arc<ValueEntry<K, V>>,
-        timestamp: Option<Instant>,
-        deqs: &mut Deques<K>,
-        freq: &FrequencySketch,
-    ) {
-        let last_accessed = entry.raw_last_accessed().map(|ts| {
-            ts.store(timestamp.unwrap().as_u64(), Ordering::Relaxed);
-            ts
-        });
-        let last_modified = entry.raw_last_modified().map(|ts| {
-            ts.store(timestamp.unwrap().as_u64(), Ordering::Relaxed);
-            ts
-        });
-
-        if self.cache.len() <= self.max_capacity {
-            // Add the candidate to the deque.
-            let key = Arc::clone(&kh.key);
-            deqs.push_back_ao(
-                CacheRegion::MainProbation,
-                KeyHashDate::new(kh, last_accessed),
-                &entry,
-            );
-            if self.time_to_live.is_some() {
-                deqs.push_back_wo(KeyDate::new(key, last_modified), &entry);
-            }
-        } else {
-            let victim = self.find_cache_victim(deqs, freq);
-            if self.admit(kh.hash, victim, freq) {
-                // Remove the victim from the cache and deque.
-                //
-                // TODO: Check if the selected victim was actually removed. If not,
-                // maybe we should find another victim. This can happen because it
-                // could have been already removed from the cache but the removal
-                // from the deque is still on the write operations queue and is not
-                // yet executed.
-                if let Some(vic_entry) = self.cache.remove(&victim.element.key) {
-                    deqs.unlink_ao(Arc::clone(&vic_entry));
-                    Deques::unlink_wo(&mut deqs.write_order, vic_entry);
-                } else {
-                    let victim = NonNull::from(victim);
-                    deqs.unlink_node_ao(victim);
-                }
-                // Add the candidate to the deque.
-                let key = Arc::clone(&kh.key);
-                deqs.push_back_ao(
-                    CacheRegion::MainProbation,
-                    KeyHashDate::new(kh, last_accessed),
-                    &entry,
-                );
-                if self.time_to_live.is_some() {
-                    deqs.push_back_wo(KeyDate::new(key, last_modified), &entry);
-                }
-            } else {
-                // Remove the candidate from the cache.
-                self.cache.remove(&kh.key);
-            }
-        }
-    }
-
-    #[inline]
-    fn find_cache_victim<'a>(
-        &self,
-        deqs: &'a mut Deques<K>,
-        _freq: &FrequencySketch,
-    ) -> &'a DeqNode<KeyHashDate<K>> {
-        // TODO: Check its frequency. If it is not very low, maybe we should
-        // check frequencies of next few others and pick from them.
-        deqs.probation.peek_front().expect("No victim found")
-    }
-
-    #[inline]
-    fn admit(
-        &self,
-        candidate_hash: u64,
-        victim: &DeqNode<KeyHashDate<K>>,
-        freq: &FrequencySketch,
-    ) -> bool {
-        // TODO: Implement some randomness to mitigate hash DoS attack.
-        // See Caffeine's implementation.
-        freq.frequency(candidate_hash) > freq.frequency(victim.element.hash)
-    }
-
     fn do_sync(&self, mut deqs: MutexGuard<'_, Deques<K>>, max_repeats: usize) -> Option<SyncPace> {
         let mut calls = 0;
         let mut should_sync = true;
@@ -676,12 +593,98 @@ where
                     deqs.move_to_back_wo(entry)
                 }
                 Ok(Remove(entry)) => {
-                    deqs.unlink_ao(Arc::clone(&entry));
-                    Deques::unlink_wo(&mut deqs.write_order, entry);
+                    Self::handle_remove(deqs, entry);
                 }
                 Err(_) => break,
             };
         }
+    }
+
+    fn handle_insert(
+        &self,
+        kh: KeyHash<K>,
+        entry: Arc<ValueEntry<K, V>>,
+        timestamp: Option<Instant>,
+        deqs: &mut Deques<K>,
+        freq: &FrequencySketch,
+    ) {
+        let last_accessed = entry.raw_last_accessed().map(|ts| {
+            ts.store(timestamp.unwrap().as_u64(), Ordering::Relaxed);
+            ts
+        });
+        let last_modified = entry.raw_last_modified().map(|ts| {
+            ts.store(timestamp.unwrap().as_u64(), Ordering::Relaxed);
+            ts
+        });
+
+        if self.cache.len() <= self.max_capacity {
+            // Add the candidate to the deque.
+            let key = Arc::clone(&kh.key);
+            deqs.push_back_ao(
+                CacheRegion::MainProbation,
+                KeyHashDate::new(kh, last_accessed),
+                &entry,
+            );
+            if self.time_to_live.is_some() {
+                deqs.push_back_wo(KeyDate::new(key, last_modified), &entry);
+            }
+        } else {
+            let victim = Self::find_cache_victim(deqs, freq);
+            if Self::admit(kh.hash, victim, freq) {
+                // Remove the victim from the cache and deque.
+                //
+                // TODO: Check if the selected victim was actually removed. If not,
+                // maybe we should find another victim. This can happen because it
+                // could have been already removed from the cache but the removal
+                // from the deque is still on the write operations queue and is not
+                // yet executed.
+                if let Some(vic_entry) = self.cache.remove(&victim.element.key) {
+                    Self::handle_remove(deqs, vic_entry);
+                } else {
+                    let victim = NonNull::from(victim);
+                    deqs.unlink_node_ao(victim);
+                }
+                // Add the candidate to the deque.
+                let key = Arc::clone(&kh.key);
+                deqs.push_back_ao(
+                    CacheRegion::MainProbation,
+                    KeyHashDate::new(kh, last_accessed),
+                    &entry,
+                );
+                if self.time_to_live.is_some() {
+                    deqs.push_back_wo(KeyDate::new(key, last_modified), &entry);
+                }
+            } else {
+                // Remove the candidate from the cache.
+                self.cache.remove(&kh.key);
+            }
+        }
+    }
+
+    #[inline]
+    fn find_cache_victim<'a>(
+        deqs: &'a mut Deques<K>,
+        _freq: &FrequencySketch,
+    ) -> &'a DeqNode<KeyHashDate<K>> {
+        // TODO: Check its frequency. If it is not very low, maybe we should
+        // check frequencies of next few others and pick from them.
+        deqs.probation.peek_front().expect("No victim found")
+    }
+
+    #[inline]
+    fn admit(
+        candidate_hash: u64,
+        victim: &DeqNode<KeyHashDate<K>>,
+        freq: &FrequencySketch,
+    ) -> bool {
+        // TODO: Implement some randomness to mitigate hash DoS attack.
+        // See Caffeine's implementation.
+        freq.frequency(candidate_hash) > freq.frequency(victim.element.hash)
+    }
+
+    fn handle_remove(deqs: &mut Deques<K>, entry: Arc<ValueEntry<K, V>>) {
+        deqs.unlink_ao(Arc::clone(&entry));
+        Deques::unlink_wo(&mut deqs.write_order, entry);
     }
 
     fn evict(&self, deqs: &mut Deques<K>, batch_size: usize) {

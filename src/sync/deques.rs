@@ -1,7 +1,5 @@
-use super::{
-    deque::{CacheRegion, DeqNode, Deque},
-    KeyDate, KeyHashDate, ValueEntry,
-};
+use super::{KeyDate, KeyHashDate, ValueEntry};
+use crate::common::deque::{CacheRegion, DeqNode, Deque};
 
 use std::{ptr::NonNull, sync::Arc};
 
@@ -99,7 +97,7 @@ impl<K> Deques<K> {
 
     pub(crate) fn unlink_wo<V>(deq: &mut Deque<KeyDate<K>>, entry: Arc<ValueEntry<K, V>>) {
         if let Some(node) = entry.take_write_order_q_node() {
-            Deques::unlink_node_wo(deq, node);
+            Self::unlink_node_wo(deq, node);
         }
     }
 

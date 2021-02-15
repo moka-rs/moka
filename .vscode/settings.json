@@ -10,6 +10,7 @@
         "Moka",
         "Ristretto",
         "Tatsuya",
+        "unsync",
         "actix",
         "ahash",
         "benmanes",

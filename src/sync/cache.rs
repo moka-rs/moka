@@ -1,8 +1,7 @@
-use super::ConcurrentCacheExt;
-use crate::common::{
+use super::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
     housekeeper::InnerSync,
-    WriteOp,
+    ConcurrentCacheExt, WriteOp,
 };
 
 use crossbeam_channel::{Sender, TrySendError};

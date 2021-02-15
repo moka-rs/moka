@@ -1,5 +1,5 @@
 use super::ConcurrentCacheExt;
-use crate::common::{
+use crate::sync::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
     housekeeper::InnerSync,
     WriteOp,
