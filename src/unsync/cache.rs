@@ -15,8 +15,6 @@ use std::{
     time::Duration,
 };
 
-const EVICTION_BATCH_SIZE: usize = 100;
-
 type CacheStore<K, V, S> = std::collections::HashMap<Rc<K>, ValueEntry<K, V>, S>;
 
 pub struct Cache<K, V, S = RandomState> {
@@ -41,6 +39,9 @@ where
     }
 }
 
+//
+// public
+//
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq,
@@ -79,18 +80,18 @@ where
     {
         let hash = self.hash(key);
         let has_expiry = self.has_expiry();
-
-        let now;
-        if has_expiry {
-            let now1 = self.current_time_from_expiration_clock();
-            self.evict(now1, EVICTION_BATCH_SIZE);
-            now = Some(now1);
+        let timestamp = if has_expiry {
+            Some(self.current_time_from_expiration_clock())
         } else {
-            now = None;
+            None
         };
 
+        if let Some(ts) = timestamp {
+            self.evict(ts);
+        }
+
         let (entry, sketch, deqs) = (
-            self.cache.get(key),
+            self.cache.get_mut(key),
             &mut self.frequency_sketch,
             &mut self.deques,
         );
@@ -108,36 +109,34 @@ where
             }
             // Value found, need to check if expired.
             (Some(entry), true) => {
-                // if self.is_expired_entry_wo(
-                //     unsafe { entry.access_order_q_node().borrow().as_ref() },
-                //     now,
-                // ) || self.is_expired_entry_ao(
-                //     unsafe { entry.write_order_q_node().borrow().as_ref() },
-                //     now,
-                // ) {
-                //     // Expired entry. Record this access as a cache miss rather than a hit.
-                //     self.record_read(hash, None, None);
-                //     None
-                // } else {
-                // Valid entry.
-                Self::record_read(sketch, deqs, hash, Some(entry), now);
-                Some(&entry.value)
-                // }
+                if Self::is_expired_entry_wo(&self.time_to_live, entry, timestamp.unwrap())
+                    || Self::is_expired_entry_ao(&self.time_to_idle, entry, timestamp.unwrap())
+                {
+                    // Expired entry. Record this access as a cache miss rather than a hit.
+                    Self::record_read(sketch, deqs, hash, None, None);
+                    None
+                } else {
+                    // Valid entry.
+                    Self::record_read(sketch, deqs, hash, Some(entry), timestamp);
+                    Some(&entry.value)
+                }
             }
         }
     }
 
     pub fn insert(&mut self, key: K, value: V) {
-        let mut timestamp = None;
+        let timestamp = if self.has_expiry() {
+            Some(self.current_time_from_expiration_clock())
+        } else {
+            None
+        };
 
-        if self.has_expiry() {
-            let now = self.current_time_from_expiration_clock();
-            self.evict(now, EVICTION_BATCH_SIZE);
-            timestamp = Some(now);
+        if let Some(ts) = timestamp {
+            self.evict(ts);
         }
 
         let key = Rc::new(key);
-        let entry = ValueEntry::new(value, None, None);
+        let entry = ValueEntry::new(value);
 
         if let Some(old_entry) = self.cache.insert(Rc::clone(&key), entry) {
             self.handle_update(key, timestamp, old_entry);
@@ -154,8 +153,8 @@ where
         Q: Hash + Eq + ?Sized,
     {
         if self.has_expiry() {
-            let now = self.current_time_from_expiration_clock();
-            self.evict(now, EVICTION_BATCH_SIZE);
+            let ts = self.current_time_from_expiration_clock();
+            self.evict(ts);
         }
 
         if let Some(mut entry) = self.cache.remove(key) {
@@ -178,7 +177,9 @@ where
     }
 }
 
-// private methods
+//
+// private
+//
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq,
@@ -225,10 +226,13 @@ where
     }
 
     #[inline]
-    fn is_expired_entry_wo(&self, entry: &impl AccessTime, now: Instant) -> bool {
-        debug_assert!(self.has_expiry());
-        if let (Some(ts), Some(ttl)) = (entry.last_modified(), self.time_to_live) {
-            if ts + ttl <= now {
+    fn is_expired_entry_wo(
+        time_to_live: &Option<Duration>,
+        entry: &impl AccessTime,
+        now: Instant,
+    ) -> bool {
+        if let (Some(ts), Some(ttl)) = (entry.last_modified(), time_to_live) {
+            if ts + *ttl <= now {
                 return true;
             }
         }
@@ -239,7 +243,7 @@ where
         frequency_sketch: &mut FrequencySketch,
         deques: &mut Deques<K>,
         hash: u64,
-        entry: Option<&ValueEntry<K, V>>,
+        entry: Option<&mut ValueEntry<K, V>>,
         timestamp: Option<Instant>,
     ) {
         frequency_sketch.increment(hash);
@@ -252,18 +256,7 @@ where
     }
 
     #[inline]
-    fn handle_insert(&mut self, key: Rc<K>, hash: u64, _timestamp: Option<Instant>) {
-        let last_accessed = None;
-        // let last_accessed = entry.raw_last_accessed().map(|ts| {
-        //     ts.store(timestamp.unwrap().as_u64(), Ordering::Relaxed);
-        //     ts
-        // });
-        let last_modified = None;
-        // let last_modified = entry.raw_last_modified().map(|ts| {
-        //     ts.store(timestamp.unwrap().as_u64(), Ordering::Relaxed);
-        //     ts
-        // });
-
+    fn handle_insert(&mut self, key: Rc<K>, hash: u64, timestamp: Option<Instant>) {
         let has_free_space = self.cache.len() <= self.max_capacity;
         let (cache, deqs, freq) = (&mut self.cache, &mut self.deques, &self.frequency_sketch);
 
@@ -273,12 +266,12 @@ where
             let mut entry = cache.get_mut(&key).unwrap();
             deqs.push_back_ao(
                 CacheRegion::MainProbation,
-                KeyHashDate::new(key, hash, last_accessed),
+                KeyHashDate::new(Rc::clone(&key), hash, timestamp),
                 &mut entry,
             );
-            // if self.time_to_live.is_some() {
-            //     deqs.push_back_wo(KeyDate::new(key, last_modified), &entry);
-            // }
+            if self.time_to_live.is_some() {
+                deqs.push_back_wo(KeyDate::new(key, timestamp), &mut entry);
+            }
         } else {
             let victim = Self::find_cache_victim(deqs, freq);
             if Self::admit(hash, victim, freq) {
@@ -302,11 +295,11 @@ where
                 let key = Rc::clone(&key);
                 deqs.push_back_ao(
                     CacheRegion::MainProbation,
-                    KeyHashDate::new(Rc::clone(&key), hash, last_accessed),
+                    KeyHashDate::new(Rc::clone(&key), hash, timestamp),
                     &mut entry,
                 );
                 if self.time_to_live.is_some() {
-                    deqs.push_back_wo(KeyDate::new(key, last_modified), &mut entry);
+                    deqs.push_back_wo(KeyDate::new(key, timestamp), &mut entry);
                 }
             } else {
                 // Remove the candidate from the cache.
@@ -353,9 +346,11 @@ where
         deqs.move_to_back_wo(&entry)
     }
 
-    fn evict(&mut self, now: Instant, batch_size: usize) {
+    fn evict(&mut self, now: Instant) {
+        const EVICTION_BATCH_SIZE: usize = 100;
+
         if self.time_to_live.is_some() {
-            self.remove_expired_wo(batch_size, now);
+            self.remove_expired_wo(EVICTION_BATCH_SIZE, now);
         }
 
         if self.time_to_idle.is_some() {
@@ -370,7 +365,15 @@ where
             );
 
             let mut rm_expired_ao = |name, deq| {
-                Self::remove_expired_ao(name, deq, wo, cache, time_to_idle, batch_size, now)
+                Self::remove_expired_ao(
+                    name,
+                    deq,
+                    wo,
+                    cache,
+                    time_to_idle,
+                    EVICTION_BATCH_SIZE,
+                    now,
+                )
             };
 
             rm_expired_ao("window", window);
@@ -399,7 +402,7 @@ where
                         None
                     }
                 })
-                .unwrap_or(None);
+                .unwrap_or_default();
 
             if key.is_none() {
                 break;
@@ -416,19 +419,20 @@ where
 
     #[inline]
     fn remove_expired_wo(&mut self, batch_size: usize, now: Instant) {
+        let time_to_live = &self.time_to_live;
         for _ in 0..batch_size {
             let key = self
                 .deques
                 .write_order
                 .peek_front()
                 .and_then(|node| {
-                    if self.is_expired_entry_wo(&*node, now) {
+                    if Self::is_expired_entry_wo(time_to_live, &*node, now) {
                         Some(Some(Rc::clone(&node.element.key)))
                     } else {
                         None
                     }
                 })
-                .unwrap_or(None);
+                .unwrap_or_default();
 
             if key.is_none() {
                 break;
@@ -444,26 +448,28 @@ where
     }
 }
 
-// For unit tests.
-// #[cfg(test)]
-// impl<K, V, S> Cache<K, V, S>
-// where
-//     K: Hash + Eq,
-//     S: BuildHasher + Clone,
-// {
-//     fn set_expiration_clock(&self, clock: Option<quanta::Clock>) {
-//         todo!()
-//     }
-// }
+//
+// for testing
+//
+#[cfg(test)]
+impl<K, V, S> Cache<K, V, S>
+where
+    K: Hash + Eq,
+    S: BuildHasher + Clone,
+{
+    fn set_expiration_clock(&mut self, clock: Option<quanta::Clock>) {
+        self.expiration_clock = clock;
+    }
+}
 
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
     use super::Cache;
-    // use crate::unsync::CacheBuilder;
+    use crate::unsync::CacheBuilder;
 
-    // use quanta::Clock;
-    // use std::time::Duration;
+    use quanta::Clock;
+    use std::time::Duration;
 
     #[test]
     fn basic_single_thread() {
@@ -502,84 +508,80 @@ mod tests {
         assert_eq!(cache.get(&"b"), None);
     }
 
-    // #[test]
-    // fn time_to_live() {
-    //     let mut cache = CacheBuilder::new(100)
-    //         .time_to_live(Duration::from_secs(10))
-    //         .build();
+    #[test]
+    fn time_to_live() {
+        let mut cache = CacheBuilder::new(100)
+            .time_to_live(Duration::from_secs(10))
+            .build();
 
-    //     cache.reconfigure_for_testing();
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
 
-    //     let (clock, mock) = Clock::mock();
-    //     cache.set_expiration_clock(Some(clock));
+        cache.insert("a", "alice");
 
-    //     cache.insert("a", "alice");
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
 
-    //     mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        cache.get(&"a");
 
-    //     cache.get(&"a");
+        mock.increment(Duration::from_secs(5)); // 10 secs.
 
-    //     mock.increment(Duration::from_secs(5)); // 10 secs.
+        assert_eq!(cache.get(&"a"), None);
+        assert!(cache.cache.is_empty());
 
-    //     assert_eq!(cache.get(&"a"), None);
-    //     assert!(cache.base.is_empty());
+        cache.insert("b", "bob");
 
-    //     cache.insert("b", "bob");
+        assert_eq!(cache.cache.len(), 1);
 
-    //     assert_eq!(cache.base.len(), 1);
+        mock.increment(Duration::from_secs(5)); // 15 secs.
 
-    //     mock.increment(Duration::from_secs(5)); // 15 secs.
+        assert_eq!(cache.get(&"b"), Some(&"bob"));
+        assert_eq!(cache.cache.len(), 1);
 
-    //     assert_eq!(cache.get(&"b"), Some("bob"));
-    //     assert_eq!(cache.base.len(), 1);
+        cache.insert("b", "bill");
 
-    //     cache.insert("b", "bill");
+        mock.increment(Duration::from_secs(5)); // 20 secs
 
-    //     mock.increment(Duration::from_secs(5)); // 20 secs
+        assert_eq!(cache.get(&"b"), Some(&"bill"));
+        assert_eq!(cache.cache.len(), 1);
 
-    //     assert_eq!(cache.get(&"b"), Some("bill"));
-    //     assert_eq!(cache.cache.len(), 1);
+        mock.increment(Duration::from_secs(5)); // 25 secs
 
-    //     mock.increment(Duration::from_secs(5)); // 25 secs
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), None);
+        assert!(cache.cache.is_empty());
+    }
 
-    //     assert_eq!(cache.get(&"a"), None);
-    //     assert_eq!(cache.get(&"b"), None);
-    //     assert!(cache.base.is_empty());
-    // }
+    #[test]
+    fn time_to_idle() {
+        let mut cache = CacheBuilder::new(100)
+            .time_to_idle(Duration::from_secs(10))
+            .build();
 
-    // #[test]
-    // fn time_to_idle() {
-    //     let mut cache = CacheBuilder::new(100)
-    //         .time_to_idle(Duration::from_secs(10))
-    //         .build();
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
 
-    //     cache.reconfigure_for_testing();
+        cache.insert("a", "alice");
 
-    //     let (clock, mock) = Clock::mock();
-    //     cache.set_expiration_clock(Some(clock));
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
 
-    //     cache.insert("a", "alice");
+        assert_eq!(cache.get(&"a"), Some(&"alice"));
 
-    //     mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        mock.increment(Duration::from_secs(5)); // 10 secs.
 
-    //     assert_eq!(cache.get(&"a"), Some("alice"));
+        cache.insert("b", "bob");
 
-    //     mock.increment(Duration::from_secs(5)); // 10 secs.
+        assert_eq!(cache.cache.len(), 2);
 
-    //     cache.insert("b", "bob");
+        mock.increment(Duration::from_secs(5)); // 15 secs.
 
-    //     assert_eq!(cache.base.len(), 2);
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), Some(&"bob"));
+        assert_eq!(cache.cache.len(), 1);
 
-    //     mock.increment(Duration::from_secs(5)); // 15 secs.
+        mock.increment(Duration::from_secs(10)); // 25 secs
 
-    //     assert_eq!(cache.get(&"a"), None);
-    //     assert_eq!(cache.get(&"b"), Some("bob"));
-    //     assert_eq!(cache.base.len(), 1);
-
-    //     mock.increment(Duration::from_secs(10)); // 25 secs
-
-    //     assert_eq!(cache.get(&"a"), None);
-    //     assert_eq!(cache.get(&"b"), None);
-    //     assert!(cache.base.is_empty());
-    // }
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), None);
+        assert!(cache.cache.is_empty());
+    }
 }

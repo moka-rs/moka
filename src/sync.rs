@@ -96,16 +96,14 @@ impl<K, V> ValueEntry<K, V> {
         value: V,
         last_accessed: Option<Instant>,
         last_modified: Option<Instant>,
-        access_order_q_node: Option<KeyDeqNodeAo<K>>,
-        write_order_q_node: Option<KeyDeqNodeWo<K>>,
     ) -> Self {
         Self {
             value,
             last_accessed: last_accessed.map(|ts| Arc::new(AtomicU64::new(ts.as_u64()))),
             last_modified: last_modified.map(|ts| Arc::new(AtomicU64::new(ts.as_u64()))),
             nodes: Mutex::new(DeqNodes {
-                access_order_q_node,
-                write_order_q_node,
+                access_order_q_node: None,
+                write_order_q_node: None,
             }),
         }
     }
@@ -217,7 +215,7 @@ impl<K> AccessTime for DeqNode<KeyDate<K>> {
 
     #[inline]
     fn set_last_accessed(&mut self, _timestamp: Instant) {
-        // do nothing
+        unreachable!();
     }
 
     #[inline]
@@ -273,7 +271,7 @@ impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
 
     #[inline]
     fn set_last_modified(&mut self, _timestamp: Instant) {
-        // do nothing
+        unreachable!();
     }
 }
 

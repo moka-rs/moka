@@ -255,13 +255,7 @@ where
                         last_modified = Some(ts);
                     }
                 }
-                let entry = Arc::new(ValueEntry::new(
-                    value.clone(),
-                    last_accessed,
-                    last_modified,
-                    None,
-                    None,
-                ));
+                let entry = Arc::new(ValueEntry::new(value.clone(), last_accessed, last_modified));
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((
                     cnt,
@@ -732,7 +726,7 @@ where
                         None
                     }
                 })
-                .unwrap_or(None);
+                .unwrap_or_default();
 
             if key.is_none() {
                 break;
@@ -760,7 +754,7 @@ where
                         None
                     }
                 })
-                .unwrap_or(None);
+                .unwrap_or_default();
 
             if key.is_none() {
                 break;

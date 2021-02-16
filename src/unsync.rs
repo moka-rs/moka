@@ -1,8 +1,10 @@
+pub(crate) mod builder;
 pub(crate) mod cache;
 mod deques;
 
-use std::{cell::RefCell, ptr::NonNull, rc::Rc};
+use std::{ptr::NonNull, rc::Rc};
 
+pub use builder::CacheBuilder;
 pub use cache::Cache;
 use quanta::Instant;
 
@@ -48,89 +50,82 @@ struct DeqNodes<K> {
 
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: V,
-    deq_nodes: RefCell<DeqNodes<K>>,
+    deq_nodes: DeqNodes<K>,
 }
 
 impl<K, V> ValueEntry<K, V> {
-    pub(crate) fn new(
-        value: V,
-        access_order_q_node: Option<KeyDeqNodeAo<K>>,
-        write_order_q_node: Option<KeyDeqNodeWo<K>>,
-    ) -> Self {
+    pub(crate) fn new(value: V) -> Self {
         Self {
             value,
-            deq_nodes: RefCell::new(DeqNodes {
-                access_order_q_node,
-                write_order_q_node,
-            }),
+            deq_nodes: DeqNodes {
+                access_order_q_node: None,
+                write_order_q_node: None,
+            },
         }
     }
 
-    // #[inline]
-    // pub(crate) fn set_deq_nodes(&self, access_order_q_node: Option<KeyDeqNodeAo<K>>, write_order_q_node: Option<KeyDeqNodeWo<K>>) {
-    //     let mut deq_nodes = self.deq_nodes.borrow_mut();
-    //     deq_nodes.access_order_q_node = access_order_q_node;
-    //     deq_nodes.write_order_q_node = write_order_q_node;
-    // }
-
     #[inline]
-    pub(crate) fn replace_deq_nodes_with(&self, other: Self) {
-        let mut self_deq_nodes = self.deq_nodes.borrow_mut();
-        let mut other_deq_nodes = other.deq_nodes.borrow_mut();
-        self_deq_nodes.access_order_q_node = other_deq_nodes.access_order_q_node.take();
-        self_deq_nodes.write_order_q_node = other_deq_nodes.write_order_q_node.take();
+    pub(crate) fn replace_deq_nodes_with(&mut self, mut other: Self) {
+        self.deq_nodes.access_order_q_node = other.deq_nodes.access_order_q_node.take();
+        self.deq_nodes.write_order_q_node = other.deq_nodes.write_order_q_node.take();
     }
 
     #[inline]
     pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
-        self.deq_nodes.borrow().access_order_q_node
+        self.deq_nodes.access_order_q_node
     }
 
     #[inline]
     pub(crate) fn set_access_order_q_node(&mut self, node: Option<KeyDeqNodeAo<K>>) {
-        self.deq_nodes.borrow_mut().access_order_q_node = node;
+        self.deq_nodes.access_order_q_node = node;
     }
 
     #[inline]
     pub(crate) fn take_access_order_q_node(&mut self) -> Option<KeyDeqNodeAo<K>> {
-        self.deq_nodes.borrow_mut().access_order_q_node.take()
+        self.deq_nodes.access_order_q_node.take()
     }
 
     #[inline]
     pub(crate) fn write_order_q_node(&self) -> Option<KeyDeqNodeWo<K>> {
-        self.deq_nodes.borrow().write_order_q_node
+        self.deq_nodes.write_order_q_node
     }
 
     #[inline]
     pub(crate) fn set_write_order_q_node(&mut self, node: Option<KeyDeqNodeWo<K>>) {
-        self.deq_nodes.borrow_mut().write_order_q_node = node;
+        self.deq_nodes.write_order_q_node = node;
     }
 
     #[inline]
     pub(crate) fn take_write_order_q_node(&mut self) -> Option<KeyDeqNodeWo<K>> {
-        self.deq_nodes.borrow_mut().write_order_q_node.take()
+        self.deq_nodes.write_order_q_node.take()
+    }
+}
+
+impl<K, V> AccessTime for ValueEntry<K, V> {
+    #[inline]
+    fn last_accessed(&self) -> Option<Instant> {
+        self.access_order_q_node()
+            .and_then(|node| unsafe { node.as_ref() }.element.timestamp)
     }
 
-    // #[inline]
-    // fn last_accessed(&self) -> Option<Instant> {
-    //     todo!()
-    // }
-
     #[inline]
-    fn set_last_accessed(&self, timestamp: Instant) {
-        if let Some(mut node) = self.deq_nodes.borrow_mut().access_order_q_node {
+    fn set_last_accessed(&mut self, timestamp: Instant) {
+        if let Some(mut node) = self.deq_nodes.access_order_q_node {
             unsafe { node.as_mut() }.set_last_accessed(timestamp);
         }
     }
 
-    // #[inline]
-    // fn last_modified(&self) -> Option<Instant> {
-    //     todo!()
-    // }
+    #[inline]
+    fn last_modified(&self) -> Option<Instant> {
+        self.write_order_q_node()
+            .and_then(|node| unsafe { node.as_ref() }.element.timestamp)
+    }
 
     #[inline]
-    fn set_last_modified(&self, _timestamp: Instant) {
-        todo!()
+    fn set_last_modified(&mut self, timestamp: Instant) {
+        if let Some(mut node) = self.deq_nodes.write_order_q_node {
+            unsafe { node.as_mut() }.set_last_modified(timestamp);
+        }
     }
 }
 
@@ -142,7 +137,7 @@ impl<K> AccessTime for DeqNode<KeyDate<K>> {
 
     #[inline]
     fn set_last_accessed(&mut self, _timestamp: Instant) {
-        // do nothing
+        unreachable!();
     }
 
     #[inline]
@@ -174,6 +169,6 @@ impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
 
     #[inline]
     fn set_last_modified(&mut self, _timestamp: Instant) {
-        // do nothing
+        unreachable!();
     }
 }
