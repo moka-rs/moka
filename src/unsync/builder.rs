@@ -14,11 +14,11 @@ use std::{
 /// # Examples
 ///
 /// ```rust
-/// use moka::future::CacheBuilder;
+/// use moka::unsync::CacheBuilder;
 ///
 /// use std::time::Duration;
 ///
-/// let cache = CacheBuilder::new(10_000) // Max 10,000 elements
+/// let mut cache = CacheBuilder::new(10_000) // Max 10,000 elements
 ///     // Time to live (TTL): 30 minutes
 ///     .time_to_live(Duration::from_secs(30 * 60))
 ///     // Time to idle (TTI):  5 minutes
