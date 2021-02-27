@@ -141,6 +141,12 @@ where
         self.inner.select(hash).invalidate(key);
     }
 
+    pub fn invalidate_all(&self) {
+        for segment in self.inner.segments.iter() {
+            segment.invalidate_all();
+        }
+    }
+
     /// Returns the `max_capacity` of this cache.
     pub fn max_capacity(&self) -> usize {
         self.inner.desired_capacity
@@ -273,7 +279,7 @@ mod tests {
         // cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.
-        let cache = cache;
+        // let cache = cache;
 
         cache.insert("a", "alice");
         cache.insert("b", "bob");
@@ -321,7 +327,7 @@ mod tests {
         // cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.
-        let cache = cache;
+        // let cache = cache;
 
         let handles = (0..num_threads)
             .map(|id| {
@@ -343,4 +349,32 @@ mod tests {
         assert!(cache.get(&10).is_none());
         assert!(cache.get(&20).is_some());
     }
+
+    // #[test]
+    // fn invalidate_all() {
+    //     let cache = SegmentedCache::new(3, 4);
+    //     // cache.reconfigure_for_testing();
+
+    //     // Make the cache exterior immutable.
+    //     // let cache = cache;
+
+    //     cache.insert("a", "alice");
+    //     cache.insert("b", "bob");
+    //     cache.insert("c", "cindy");
+    //     assert_eq!(cache.get(&"a"), Some("alice"));
+    //     assert_eq!(cache.get(&"b"), Some("bob"));
+    //     assert_eq!(cache.get(&"c"), Some("cindy"));
+    //     cache.sync();
+
+    //     cache.invalidate_all();
+    //     cache.sync();
+
+    //     cache.insert("d", "david");
+    //     cache.sync();
+
+    //     assert!(cache.get(&"a").is_none());
+    //     assert!(cache.get(&"b").is_none());
+    //     assert!(cache.get(&"c").is_none());
+    //     assert_eq!(cache.get(&"d"), Some("david"));
+    // }
 }

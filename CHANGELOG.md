@@ -1,17 +1,14 @@
-# Moka &mdash; Release Notes
+# Moka &mdash; Change Log
 
 ## Unreleased
 
-### Features
-
-- Introduce an unsync cache.
+- Add an unsync cache (`moka::unsync::Cache`) and its builder.
+- Add `invalidate_all` method to `sync`, `future` and `unsync` caches.
 
 
 ## Version 0.2.0
 
-### Features
-
-- Introduce an asynchronous (futures aware) cache.
+- Add an asynchronous, futures aware cache (`moka::future::Cache`) and its builder.
 
 
 ## Version 0.1.0

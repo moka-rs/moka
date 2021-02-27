@@ -163,6 +163,11 @@ where
         }
     }
 
+    pub fn invalidate_all(&mut self) {
+        self.cache.clear();
+        self.deques.clear();
+    }
+
     pub fn max_capacity(&self) -> usize {
         self.max_capacity
     }
@@ -218,9 +223,7 @@ where
         now: Instant,
     ) -> bool {
         if let (Some(ts), Some(tti)) = (entry.last_accessed(), time_to_idle) {
-            if ts + *tti <= now {
-                return true;
-            }
+            return ts + *tti <= now;
         }
         false
     }
@@ -232,9 +235,7 @@ where
         now: Instant,
     ) -> bool {
         if let (Some(ts), Some(ttl)) = (entry.last_modified(), time_to_live) {
-            if ts + *ttl <= now {
-                return true;
-            }
+            return ts + *ttl <= now;
         }
         false
     }
@@ -506,6 +507,27 @@ mod tests {
 
         cache.invalidate(&"b");
         assert_eq!(cache.get(&"b"), None);
+    }
+
+    #[test]
+    fn invalidate_all() {
+        let mut cache = Cache::new(100);
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+        assert_eq!(cache.get(&"a"), Some(&"alice"));
+        assert_eq!(cache.get(&"b"), Some(&"bob"));
+        assert_eq!(cache.get(&"c"), Some(&"cindy"));
+
+        cache.invalidate_all();
+
+        cache.insert("d", "david");
+
+        assert!(cache.get(&"a").is_none());
+        assert!(cache.get(&"b").is_none());
+        assert!(cache.get(&"c").is_none());
+        assert_eq!(cache.get(&"d"), Some(&"david"));
     }
 
     #[test]

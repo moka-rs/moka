@@ -19,7 +19,7 @@ use std::{
     ptr::NonNull,
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
         Arc,
     },
     time::Duration,
@@ -125,23 +125,18 @@ where
                 .expect("Failed to record a get op");
         };
 
-        match (self.inner.get(key), self.inner.has_expiry()) {
-            // Value not found.
-            (None, _) => {
+        match self.inner.get(key) {
+            None => {
                 record(None, None);
                 None
             }
-            // Value found, no expiry.
-            (Some(entry), false) => {
-                let v = entry.value.clone();
-                record(Some(entry), None);
-                Some(v)
-            }
-            // Value found, need to check if expired.
-            (Some(entry), true) => {
+            Some(entry) => {
+                let ttl = &self.inner.time_to_live();
+                let tti = &self.inner.time_to_idle();
+                let va = self.inner.valid_after();
                 let now = self.inner.current_time_from_expiration_clock();
-                if self.inner.is_expired_entry_wo(&entry, now)
-                    || self.inner.is_expired_entry_ao(&entry, now)
+                if is_expired_entry_wo(ttl, va, &entry, now)
+                    || is_expired_entry_ao(tti, va, &entry, now)
                 {
                     // Expired entry. Record this access as a cache miss rather than a hit.
                     record(None, None);
@@ -179,6 +174,11 @@ where
         }
     }
 
+    pub(crate) fn invalidate_all(&self) {
+        let now = self.inner.current_time_from_expiration_clock();
+        self.inner.set_valid_after(now);
+    }
+
     pub(crate) fn max_capacity(&self) -> usize {
         self.inner.max_capacity()
     }
@@ -212,7 +212,7 @@ where
         self.apply_reads_if_needed();
         let ch = &self.read_op_ch;
         let op = if let Some(entry) = entry {
-            Hit(hash, entry, timestamp)
+            Hit(hash, entry, timestamp.unwrap())
         } else {
             Miss(hash)
         };
@@ -244,18 +244,7 @@ where
             Arc::clone(&key),
             // on_insert
             || {
-                let mut last_accessed = None;
-                let mut last_modified = None;
-                if self.inner.has_expiry() {
-                    let ts = unsafe { std::mem::transmute(std::u64::MAX) };
-                    if self.inner.time_to_idle().is_some() {
-                        last_accessed = Some(ts);
-                    }
-                    if self.inner.time_to_live().is_some() {
-                        last_modified = Some(ts);
-                    }
-                }
-                let entry = Arc::new(ValueEntry::new(value.clone(), last_accessed, last_modified));
+                let entry = Arc::new(ValueEntry::new(value.clone()));
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((
                     cnt,
@@ -358,6 +347,7 @@ pub(crate) struct Inner<K, V, S> {
     write_op_ch: Receiver<WriteOp<K, V>>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
+    valid_after: AtomicU64,
     has_expiration_clock: AtomicBool,
     expiration_clock: RwLock<Option<Clock>>,
 }
@@ -398,6 +388,7 @@ where
             write_op_ch,
             time_to_live,
             time_to_idle,
+            valid_after: AtomicU64::new(0),
             has_expiration_clock: AtomicBool::new(false),
             expiration_clock: RwLock::new(None),
         }
@@ -452,6 +443,18 @@ where
     }
 
     #[inline]
+    fn valid_after(&self) -> Instant {
+        let ts = self.valid_after.load(Ordering::Acquire);
+        unsafe { std::mem::transmute(ts) }
+    }
+
+    #[inline]
+    fn set_valid_after(&self, timestamp: Instant) {
+        self.valid_after
+            .store(timestamp.as_u64(), Ordering::Release);
+    }
+
+    #[inline]
     fn current_time_from_expiration_clock(&self) -> Instant {
         if self.has_expiration_clock.load(Ordering::Relaxed) {
             self.expiration_clock
@@ -462,28 +465,6 @@ where
         } else {
             Instant::now()
         }
-    }
-
-    #[inline]
-    fn is_expired_entry_ao(&self, entry: &impl AccessTime, now: Instant) -> bool {
-        debug_assert!(self.has_expiry());
-        if let (Some(ts), Some(tti)) = (entry.last_accessed(), self.time_to_idle) {
-            if ts + tti <= now {
-                return true;
-            }
-        }
-        false
-    }
-
-    #[inline]
-    fn is_expired_entry_wo(&self, entry: &impl AccessTime, now: Instant) -> bool {
-        debug_assert!(self.has_expiry());
-        if let (Some(ts), Some(ttl)) = (entry.last_modified(), self.time_to_live) {
-            if ts + ttl <= now {
-                return true;
-            }
-        }
-        false
     }
 }
 
@@ -553,9 +534,7 @@ where
             match ch.try_recv() {
                 Ok(Hit(hash, mut entry, timestamp)) => {
                     freq.increment(hash);
-                    if let Some(ts) = timestamp {
-                        entry.set_last_accessed(ts);
-                    }
+                    entry.set_last_accessed(timestamp);
                     deqs.move_to_back_ao(entry)
                 }
                 Ok(Miss(hash)) => freq.increment(hash),
@@ -568,21 +547,14 @@ where
         use WriteOp::*;
         let freq = self.frequency_sketch.read();
         let ch = &self.write_op_ch;
-
-        let timestamp = if self.has_expiry() {
-            Some(self.current_time_from_expiration_clock())
-        } else {
-            None
-        };
+        let ts = self.current_time_from_expiration_clock();
 
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Insert(kh, entry)) => self.handle_insert(kh, entry, timestamp, deqs, &freq),
+                Ok(Insert(kh, entry)) => self.handle_insert(kh, entry, ts, deqs, &freq),
                 Ok(Update(mut entry)) => {
-                    if let Some(ts) = timestamp {
-                        entry.set_last_accessed(ts);
-                        entry.set_last_modified(ts);
-                    }
+                    entry.set_last_accessed(ts);
+                    entry.set_last_modified(ts);
                     deqs.move_to_back_ao(Arc::clone(&entry));
                     deqs.move_to_back_wo(entry)
                 }
@@ -598,18 +570,14 @@ where
         &self,
         kh: KeyHash<K>,
         entry: Arc<ValueEntry<K, V>>,
-        timestamp: Option<Instant>,
+        timestamp: Instant,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
     ) {
-        let last_accessed = entry.raw_last_accessed().map(|ts| {
-            ts.store(timestamp.unwrap().as_u64(), Ordering::Relaxed);
-            ts
-        });
-        let last_modified = entry.raw_last_modified().map(|ts| {
-            ts.store(timestamp.unwrap().as_u64(), Ordering::Relaxed);
-            ts
-        });
+        let last_accessed = entry.raw_last_accessed();
+        let last_modified = entry.raw_last_modified();
+        last_accessed.store(timestamp.as_u64(), Ordering::Relaxed);
+        last_modified.store(timestamp.as_u64(), Ordering::Relaxed);
 
         if self.cache.len() <= self.max_capacity {
             // Add the candidate to the deque.
@@ -716,11 +684,13 @@ where
         batch_size: usize,
         now: Instant,
     ) {
+        let tti = &self.time_to_idle;
+        let va = self.valid_after();
         for _ in 0..batch_size {
             let key = deq
                 .peek_front()
                 .and_then(|node| {
-                    if self.is_expired_entry_ao(&*node, now) {
+                    if is_expired_entry_ao(tti, va, &*node, now) {
                         Some(Some(Arc::clone(&node.element.key)))
                     } else {
                         None
@@ -743,12 +713,14 @@ where
 
     #[inline]
     fn remove_expired_wo(&self, deqs: &mut Deques<K>, batch_size: usize, now: Instant) {
+        let ttl = &self.time_to_live;
+        let va = self.valid_after();
         for _ in 0..batch_size {
             let key = deqs
                 .write_order
                 .peek_front()
                 .and_then(|node| {
-                    if self.is_expired_entry_wo(&*node, now) {
+                    if is_expired_entry_wo(ttl, va, &*node, now) {
                         Some(Some(Arc::clone(&node.element.key)))
                     } else {
                         None
@@ -793,4 +765,43 @@ where
             *exp_clock = None;
         }
     }
+}
+
+//
+// private free-standing functions
+//
+#[inline]
+fn is_expired_entry_ao(
+    time_to_idle: &Option<Duration>,
+    valid_after: Instant,
+    entry: &impl AccessTime,
+    now: Instant,
+) -> bool {
+    if let Some(ts) = entry.last_accessed() {
+        if ts < valid_after {
+            return true;
+        }
+        if let Some(tti) = time_to_idle {
+            return ts + *tti <= now;
+        }
+    }
+    false
+}
+
+#[inline]
+fn is_expired_entry_wo(
+    time_to_live: &Option<Duration>,
+    valid_after: Instant,
+    entry: &impl AccessTime,
+    now: Instant,
+) -> bool {
+    if let Some(ts) = entry.last_modified() {
+        if ts < valid_after {
+            return true;
+        }
+        if let Some(ttl) = time_to_live {
+            return ts + *ttl <= now;
+        }
+    }
+    false
 }

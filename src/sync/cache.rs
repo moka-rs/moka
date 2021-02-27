@@ -282,6 +282,10 @@ where
         }
     }
 
+    pub fn invalidate_all(&self) {
+        self.base.invalidate_all();
+    }
+
     /// Returns the `max_capacity` of this cache.
     pub fn max_capacity(&self) -> usize {
         self.base.max_capacity()
@@ -442,6 +446,34 @@ mod tests {
 
         assert!(cache.get(&10).is_none());
         assert!(cache.get(&20).is_some());
+    }
+
+    #[test]
+    fn invalidate_all() {
+        let mut cache = Cache::new(100);
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"c"), Some("cindy"));
+        cache.sync();
+
+        cache.invalidate_all();
+        cache.sync();
+
+        cache.insert("d", "david");
+        cache.sync();
+
+        assert!(cache.get(&"a").is_none());
+        assert!(cache.get(&"b").is_none());
+        assert!(cache.get(&"c").is_none());
+        assert_eq!(cache.get(&"d"), Some("david"));
     }
 
     #[test]
