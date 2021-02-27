@@ -1,10 +1,10 @@
-use super::{
-    thread_pool::{ThreadPool, ThreadPoolRegistry},
-    unsafe_weak_pointer::UnsafeWeakPointer,
-};
-use crate::common::base_cache::{
+use super::base_cache::{
     MAX_SYNC_REPEATS, PERIODICAL_SYNC_FAST_PACE_NANOS, PERIODICAL_SYNC_INITIAL_DELAY_MILLIS,
     PERIODICAL_SYNC_NORMAL_PACE_MILLIS,
+};
+use crate::common::{
+    thread_pool::{ThreadPool, ThreadPoolRegistry},
+    unsafe_weak_pointer::UnsafeWeakPointer,
 };
 
 use parking_lot::Mutex;

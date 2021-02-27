@@ -1,5 +1,12 @@
 # Moka &mdash; Release Notes
 
+## Unreleased
+
+### Features
+
+- Introduce an unsync cache.
+
+
 ## Version 0.2.0
 
 ### Features

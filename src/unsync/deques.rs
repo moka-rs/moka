@@ -1,9 +1,7 @@
-use super::{
-    deque::{CacheRegion, DeqNode, Deque},
-    KeyDate, KeyHashDate, ValueEntry,
-};
+use super::{KeyDate, KeyHashDate, ValueEntry};
+use crate::common::deque::{CacheRegion, DeqNode, Deque};
 
-use std::{ptr::NonNull, sync::Arc};
+use std::ptr::NonNull;
 
 pub(crate) struct Deques<K> {
     pub(crate) window: Deque<KeyHashDate<K>>, //    Not used yet.
@@ -11,12 +9,6 @@ pub(crate) struct Deques<K> {
     pub(crate) protected: Deque<KeyHashDate<K>>, // Not used yet.
     pub(crate) write_order: Deque<KeyDate<K>>,
 }
-
-#[cfg(feature = "future")]
-// Multi-threaded async runtimes require base_cache::Inner to be Send, but it will
-// not be without this `unsafe impl`. This is because DeqNodes have NonNull
-// pointers.
-unsafe impl<K> Send for Deques<K> {}
 
 impl<K> Default for Deques<K> {
     fn default() -> Self {
@@ -34,7 +26,7 @@ impl<K> Deques<K> {
         &mut self,
         region: CacheRegion,
         kh: KeyHashDate<K>,
-        entry: &Arc<ValueEntry<K, V>>,
+        entry: &mut ValueEntry<K, V>,
     ) {
         use CacheRegion::*;
         let node = Box::new(DeqNode::new(region, kh));
@@ -47,41 +39,39 @@ impl<K> Deques<K> {
         entry.set_access_order_q_node(Some(node));
     }
 
-    pub(crate) fn push_back_wo<V>(&mut self, kh: KeyDate<K>, entry: &Arc<ValueEntry<K, V>>) {
+    pub(crate) fn push_back_wo<V>(&mut self, kh: KeyDate<K>, entry: &mut ValueEntry<K, V>) {
         let node = Box::new(DeqNode::new(CacheRegion::WriteOrder, kh));
         let node = self.write_order.push_back(node);
         entry.set_write_order_q_node(Some(node));
     }
 
-    pub(crate) fn move_to_back_ao<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
+    pub(crate) fn move_to_back_ao<V>(&mut self, entry: &ValueEntry<K, V>) {
         use CacheRegion::*;
-        if let Some(node) = entry.access_order_q_node() {
-            let p = unsafe { node.as_ref() };
-            match &p.region {
-                Window if self.window.contains(p) => unsafe { self.window.move_to_back(node) },
-                MainProbation if self.probation.contains(p) => unsafe {
-                    self.probation.move_to_back(node)
-                },
-                MainProtected if self.protected.contains(p) => unsafe {
-                    self.protected.move_to_back(node)
-                },
-                _ => {}
-            }
+        let node = entry.access_order_q_node().unwrap();
+        let p = unsafe { node.as_ref() };
+        match &p.region {
+            Window if self.window.contains(p) => unsafe { self.window.move_to_back(node) },
+            MainProbation if self.probation.contains(p) => unsafe {
+                self.probation.move_to_back(node)
+            },
+            MainProtected if self.protected.contains(p) => unsafe {
+                self.protected.move_to_back(node)
+            },
+            _ => {}
         }
     }
 
-    pub(crate) fn move_to_back_wo<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
+    pub(crate) fn move_to_back_wo<V>(&mut self, entry: &ValueEntry<K, V>) {
         use CacheRegion::*;
-        if let Some(node) = entry.write_order_q_node() {
-            let p = unsafe { node.as_ref() };
-            debug_assert_eq!(&p.region, &WriteOrder);
-            if self.write_order.contains(p) {
-                unsafe { self.write_order.move_to_back(node) };
-            }
+        let node = entry.write_order_q_node().unwrap();
+        let p = unsafe { node.as_ref() };
+        debug_assert_eq!(&p.region, &WriteOrder);
+        if self.write_order.contains(p) {
+            unsafe { self.write_order.move_to_back(node) };
         }
     }
 
-    pub(crate) fn unlink_ao<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
+    pub(crate) fn unlink_ao<V>(&mut self, entry: &mut ValueEntry<K, V>) {
         if let Some(node) = entry.take_access_order_q_node() {
             self.unlink_node_ao(node);
         }
@@ -90,16 +80,16 @@ impl<K> Deques<K> {
     pub(crate) fn unlink_ao_from_deque<V>(
         deq_name: &str,
         deq: &mut Deque<KeyHashDate<K>>,
-        entry: Arc<ValueEntry<K, V>>,
+        entry: &mut ValueEntry<K, V>,
     ) {
         if let Some(node) = entry.take_access_order_q_node() {
             unsafe { Self::unlink_node_ao_from_deque(deq_name, deq, node) };
         }
     }
 
-    pub(crate) fn unlink_wo<V>(deq: &mut Deque<KeyDate<K>>, entry: Arc<ValueEntry<K, V>>) {
+    pub(crate) fn unlink_wo<V>(deq: &mut Deque<KeyDate<K>>, entry: &mut ValueEntry<K, V>) {
         if let Some(node) = entry.take_write_order_q_node() {
-            Deques::unlink_node_wo(deq, node);
+            Self::unlink_node_wo(deq, node);
         }
     }
 

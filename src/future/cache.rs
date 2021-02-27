@@ -1,5 +1,5 @@
 use super::ConcurrentCacheExt;
-use crate::common::{
+use crate::sync::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
     housekeeper::InnerSync,
     WriteOp,
@@ -548,28 +548,30 @@ mod tests {
     #[tokio::test]
     async fn basic_multi_async_tasks() {
         let num_threads = 4;
-
-        let mut cache = Cache::new(100);
-        cache.reconfigure_for_testing();
-
-        // Make the cache exterior immutable.
-        let cache: Cache<i32, String> = cache;
+        let cache = Cache::new(100);
 
         let tasks = (0..num_threads)
             .map(|id| {
                 let cache = cache.clone();
-                tokio::spawn(async move {
-                    cache.insert(10, format!("{}-100", id)).await;
-                    cache.get(&10);
-                    cache.sync();
-                    cache.insert(20, format!("{}-200", id)).await;
-                    cache.invalidate(&10).await;
-                })
+                if id == 0 {
+                    tokio::spawn(async move {
+                        cache.blocking_insert(10, format!("{}-100", id));
+                        cache.get(&10);
+                        cache.blocking_insert(20, format!("{}-200", id));
+                        cache.blocking_invalidate(&10);
+                    })
+                } else {
+                    tokio::spawn(async move {
+                        cache.insert(10, format!("{}-100", id)).await;
+                        cache.get(&10);
+                        cache.insert(20, format!("{}-200", id)).await;
+                        cache.invalidate(&10).await;
+                    })
+                }
             })
             .collect::<Vec<_>>();
 
         let _ = futures::future::join_all(tasks).await;
-        cache.sync();
 
         assert!(cache.get(&10).is_none());
         assert!(cache.get(&20).is_some());
