@@ -120,31 +120,29 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let record = |entry, ts| {
-            self.record_read_op(hash, entry, ts)
-                .expect("Failed to record a get op");
+        let record = |op| {
+            self.record_read_op(op).expect("Failed to record a get op");
         };
 
         match self.inner.get(key) {
             None => {
-                record(None, None);
+                record(ReadOp::Miss(hash));
                 None
             }
             Some(entry) => {
-                let ttl = &self.inner.time_to_live();
-                let tti = &self.inner.time_to_idle();
-                let va = self.inner.valid_after();
+                let i = &self.inner;
+                let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), i.valid_after());
                 let now = self.inner.current_time_from_expiration_clock();
                 if is_expired_entry_wo(ttl, va, &entry, now)
                     || is_expired_entry_ao(tti, va, &entry, now)
                 {
                     // Expired entry. Record this access as a cache miss rather than a hit.
-                    record(None, None);
+                    record(ReadOp::Miss(hash));
                     None
                 } else {
                     // Valid entry.
                     let v = entry.value.clone();
-                    record(Some(entry), Some(now));
+                    record(ReadOp::Hit(hash, entry, now));
                     Some(v)
                 }
             }
@@ -202,20 +200,9 @@ where
     S: BuildHasher + Clone,
 {
     #[inline]
-    fn record_read_op(
-        &self,
-        hash: u64,
-        entry: Option<Arc<ValueEntry<K, V>>>,
-        timestamp: Option<Instant>,
-    ) -> Result<(), TrySendError<ReadOp<K, V>>> {
-        use ReadOp::*;
+    fn record_read_op(&self, op: ReadOp<K, V>) -> Result<(), TrySendError<ReadOp<K, V>>> {
         self.apply_reads_if_needed();
         let ch = &self.read_op_ch;
-        let op = if let Some(entry) = entry {
-            Hit(hash, entry, timestamp.unwrap())
-        } else {
-            Miss(hash)
-        };
         match ch.try_send(op) {
             // Discard the ReadOp when the channel is full.
             Ok(()) | Err(TrySendError::Full(_)) => Ok(()),

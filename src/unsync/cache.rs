@@ -78,7 +78,8 @@ where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let hash = self.hash(key);
+        self.frequency_sketch.increment(self.hash(key));
+
         let has_expiry = self.has_expiry();
         let timestamp = if has_expiry {
             Some(self.current_time_from_expiration_clock())
@@ -90,21 +91,14 @@ where
             self.evict(ts);
         }
 
-        let (entry, sketch, deqs) = (
-            self.cache.get_mut(key),
-            &mut self.frequency_sketch,
-            &mut self.deques,
-        );
+        let (entry, deqs) = (self.cache.get_mut(key), &mut self.deques);
 
         match (entry, has_expiry) {
             // Value not found.
-            (None, _) => {
-                Self::record_read(sketch, deqs, hash, None, None);
-                None
-            }
+            (None, _) => None,
             // Value found, no expiry.
             (Some(entry), false) => {
-                Self::record_read(sketch, deqs, hash, Some(entry), None);
+                Self::record_hit(deqs, entry, None);
                 Some(&entry.value)
             }
             // Value found, need to check if expired.
@@ -112,12 +106,9 @@ where
                 if Self::is_expired_entry_wo(&self.time_to_live, entry, timestamp.unwrap())
                     || Self::is_expired_entry_ao(&self.time_to_idle, entry, timestamp.unwrap())
                 {
-                    // Expired entry. Record this access as a cache miss rather than a hit.
-                    Self::record_read(sketch, deqs, hash, None, None);
                     None
                 } else {
-                    // Valid entry.
-                    Self::record_read(sketch, deqs, hash, Some(entry), timestamp);
+                    Self::record_hit(deqs, entry, timestamp);
                     Some(&entry.value)
                 }
             }
@@ -141,7 +132,6 @@ where
         if let Some(old_entry) = self.cache.insert(Rc::clone(&key), entry) {
             self.handle_update(key, timestamp, old_entry);
         } else {
-            // Insert
             let hash = self.hash(&key);
             self.handle_insert(key, hash, timestamp);
         }
@@ -240,20 +230,11 @@ where
         false
     }
 
-    fn record_read(
-        frequency_sketch: &mut FrequencySketch,
-        deques: &mut Deques<K>,
-        hash: u64,
-        entry: Option<&mut ValueEntry<K, V>>,
-        timestamp: Option<Instant>,
-    ) {
-        frequency_sketch.increment(hash);
-        if let Some(entry) = entry {
-            if let Some(ts) = timestamp {
-                entry.set_last_accessed(ts);
-            }
-            deques.move_to_back_ao(entry)
+    fn record_hit(deques: &mut Deques<K>, entry: &mut ValueEntry<K, V>, ts: Option<Instant>) {
+        if let Some(ts) = ts {
+            entry.set_last_accessed(ts);
         }
+        deques.move_to_back_ao(entry)
     }
 
     #[inline]
