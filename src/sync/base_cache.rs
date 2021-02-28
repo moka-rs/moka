@@ -10,7 +10,7 @@ use crate::common::{
 };
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
-use parking_lot::{Mutex, MutexGuard, RwLock};
+use parking_lot::{Mutex, RwLock};
 use quanta::{Clock, Instant};
 use std::{
     borrow::Borrow,
@@ -132,7 +132,8 @@ where
             Some(entry) => {
                 let i = &self.inner;
                 let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), i.valid_after());
-                let now = self.inner.current_time_from_expiration_clock();
+                let now = i.current_time_from_expiration_clock();
+
                 if is_expired_entry_wo(ttl, va, &entry, now)
                     || is_expired_entry_ao(tti, va, &entry, now)
                 {
@@ -461,27 +462,11 @@ where
     S: BuildHasher + Clone,
 {
     fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
-        if self.read_op_ch.is_empty() && self.write_op_ch.is_empty() && !self.has_expiry() {
-            return None;
-        }
+        const EVICTION_BATCH_SIZE: usize = 500;
 
-        let deqs = self.deques.lock();
-        self.do_sync(deqs, max_repeats)
-    }
-}
-
-//
-// private methods
-//
-impl<K, V, S> Inner<K, V, S>
-where
-    K: Hash + Eq,
-    S: BuildHasher + Clone,
-{
-    fn do_sync(&self, mut deqs: MutexGuard<'_, Deques<K>>, max_repeats: usize) -> Option<SyncPace> {
+        let mut deqs = self.deques.lock();
         let mut calls = 0;
         let mut should_sync = true;
-        const EVICTION_BATCH_SIZE: usize = 500;
 
         while should_sync && calls <= max_repeats {
             let r_len = self.read_op_ch.len();
@@ -494,7 +479,7 @@ where
                 self.apply_writes(&mut deqs, w_len);
             }
 
-            if self.has_expiry() {
+            if self.has_expiry() || self.valid_after.load(Ordering::Acquire) > 0 {
                 self.evict(&mut deqs, EVICTION_BATCH_SIZE);
             }
 
@@ -512,7 +497,16 @@ where
             None
         }
     }
+}
 
+//
+// private methods
+//
+impl<K, V, S> Inner<K, V, S>
+where
+    K: Hash + Eq,
+    S: BuildHasher + Clone,
+{
     fn apply_reads(&self, deqs: &mut Deques<K>, count: usize) {
         use ReadOp::*;
         let mut freq = self.frequency_sketch.write();
@@ -637,8 +631,6 @@ where
     }
 
     fn evict(&self, deqs: &mut Deques<K>, batch_size: usize) {
-        debug_assert!(self.has_expiry());
-
         let now = self.current_time_from_expiration_clock();
 
         if self.time_to_live.is_some() {
