@@ -370,7 +370,7 @@ where
     K: Hash + Eq,
     S: BuildHasher + Clone,
 {
-    fn reconfigure_for_testing(&mut self) {
+    pub(crate) fn reconfigure_for_testing(&mut self) {
         self.base.reconfigure_for_testing();
     }
 

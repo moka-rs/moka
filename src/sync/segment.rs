@@ -189,6 +189,23 @@ where
     }
 }
 
+// For unit tests.
+#[cfg(test)]
+impl<K, V, S> SegmentedCache<K, V, S>
+where
+    K: Hash + Eq,
+    S: BuildHasher + Clone,
+{
+    fn reconfigure_for_testing(&mut self) {
+        let inner = Arc::get_mut(&mut self.inner)
+            .expect("There are other strong reference to self.inner Arc");
+
+        for segment in inner.segments.iter_mut() {
+            segment.reconfigure_for_testing();
+        }
+    }
+}
+
 struct Inner<K, V, S> {
     desired_capacity: usize,
     segments: Box<[Cache<K, V, S>]>,
@@ -275,11 +292,11 @@ mod tests {
 
     #[test]
     fn basic_single_thread() {
-        let cache = SegmentedCache::new(3, 1);
-        // cache.reconfigure_for_testing();
+        let mut cache = SegmentedCache::new(3, 1);
+        cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.
-        // let cache = cache;
+        let cache = cache;
 
         cache.insert("a", "alice");
         cache.insert("b", "bob");
@@ -323,11 +340,11 @@ mod tests {
     fn basic_multi_threads() {
         let num_threads = 4;
 
-        let cache = SegmentedCache::new(100, num_threads);
-        // cache.reconfigure_for_testing();
+        let mut cache = SegmentedCache::new(100, num_threads);
+        cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.
-        // let cache = cache;
+        let cache = cache;
 
         let handles = (0..num_threads)
             .map(|id| {
@@ -350,31 +367,31 @@ mod tests {
         assert!(cache.get(&20).is_some());
     }
 
-    // #[test]
-    // fn invalidate_all() {
-    //     let cache = SegmentedCache::new(3, 4);
-    //     // cache.reconfigure_for_testing();
+    #[test]
+    fn invalidate_all() {
+        let mut cache = SegmentedCache::new(100, 4);
+        cache.reconfigure_for_testing();
 
-    //     // Make the cache exterior immutable.
-    //     // let cache = cache;
+        // Make the cache exterior immutable.
+        let cache = cache;
 
-    //     cache.insert("a", "alice");
-    //     cache.insert("b", "bob");
-    //     cache.insert("c", "cindy");
-    //     assert_eq!(cache.get(&"a"), Some("alice"));
-    //     assert_eq!(cache.get(&"b"), Some("bob"));
-    //     assert_eq!(cache.get(&"c"), Some("cindy"));
-    //     cache.sync();
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"c"), Some("cindy"));
+        cache.sync();
 
-    //     cache.invalidate_all();
-    //     cache.sync();
+        cache.invalidate_all();
+        cache.sync();
 
-    //     cache.insert("d", "david");
-    //     cache.sync();
+        cache.insert("d", "david");
+        cache.sync();
 
-    //     assert!(cache.get(&"a").is_none());
-    //     assert!(cache.get(&"b").is_none());
-    //     assert!(cache.get(&"c").is_none());
-    //     assert_eq!(cache.get(&"d"), Some("david"));
-    // }
+        assert!(cache.get(&"a").is_none());
+        assert!(cache.get(&"b").is_none());
+        assert!(cache.get(&"c").is_none());
+        assert_eq!(cache.get(&"d"), Some("david"));
+    }
 }
