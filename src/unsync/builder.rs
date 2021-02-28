@@ -47,7 +47,6 @@ pub struct CacheBuilder<C> {
 impl<K, V> CacheBuilder<Cache<K, V, RandomState>>
 where
     K: Eq + Hash,
-    V: Clone,
 {
     /// Construct a new `CacheBuilder` that will be used to build a `Cache` holding
     /// up to `max_capacity` entries.

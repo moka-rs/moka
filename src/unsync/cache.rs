@@ -123,7 +123,6 @@ pub struct Cache<K, V, S = RandomState> {
 impl<K, V> Cache<K, V, RandomState>
 where
     K: Hash + Eq,
-    V: Clone,
 {
     /// Constructs a new `Cache<K, V>` that will store up to the `max_capacity` entries.
     ///
@@ -143,7 +142,6 @@ where
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq,
-    V: Clone,
     S: BuildHasher + Clone,
 {
     pub(crate) fn with_everything(
@@ -272,7 +270,6 @@ where
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq,
-    V: Clone,
     S: BuildHasher + Clone,
 {
     #[inline]
