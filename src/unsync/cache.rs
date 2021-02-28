@@ -78,33 +78,21 @@ where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
+        let timestamp = self.evict_if_needed();
         self.frequency_sketch.increment(self.hash(key));
 
-        let has_expiry = self.has_expiry();
-        let timestamp = if has_expiry {
-            Some(self.current_time_from_expiration_clock())
-        } else {
-            None
-        };
-
-        if let Some(ts) = timestamp {
-            self.evict(ts);
-        }
-
-        let (entry, deqs) = (self.cache.get_mut(key), &mut self.deques);
-
-        match (entry, has_expiry) {
+        match (self.cache.get_mut(key), timestamp, &mut self.deques) {
             // Value not found.
-            (None, _) => None,
+            (None, _, _) => None,
             // Value found, no expiry.
-            (Some(entry), false) => {
+            (Some(entry), None, deqs) => {
                 Self::record_hit(deqs, entry, None);
                 Some(&entry.value)
             }
-            // Value found, need to check if expired.
-            (Some(entry), true) => {
-                if Self::is_expired_entry_wo(&self.time_to_live, entry, timestamp.unwrap())
-                    || Self::is_expired_entry_ao(&self.time_to_idle, entry, timestamp.unwrap())
+            // Value found, check if expired.
+            (Some(entry), Some(ts), deqs) => {
+                if Self::is_expired_entry_wo(&self.time_to_live, entry, ts)
+                    || Self::is_expired_entry_ao(&self.time_to_idle, entry, ts)
                 {
                     None
                 } else {
@@ -116,16 +104,7 @@ where
     }
 
     pub fn insert(&mut self, key: K, value: V) {
-        let timestamp = if self.has_expiry() {
-            Some(self.current_time_from_expiration_clock())
-        } else {
-            None
-        };
-
-        if let Some(ts) = timestamp {
-            self.evict(ts);
-        }
-
+        let timestamp = self.evict_if_needed();
         let key = Rc::new(key);
         let entry = ValueEntry::new(value);
 
@@ -142,10 +121,7 @@ where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if self.has_expiry() {
-            let ts = self.current_time_from_expiration_clock();
-            self.evict(ts);
-        }
+        self.evict_if_needed();
 
         if let Some(mut entry) = self.cache.remove(key) {
             self.deques.unlink_ao(&mut entry);
@@ -195,6 +171,17 @@ where
     #[inline]
     fn has_expiry(&self) -> bool {
         self.time_to_live.is_some() || self.time_to_idle.is_some()
+    }
+
+    #[inline]
+    fn evict_if_needed(&mut self) -> Option<Instant> {
+        if self.has_expiry() {
+            let ts = self.current_time_from_expiration_clock();
+            self.evict(ts);
+            Some(ts)
+        } else {
+            None
+        }
     }
 
     #[inline]
