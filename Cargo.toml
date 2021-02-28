@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
 
