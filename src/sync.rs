@@ -1,4 +1,4 @@
-//! Provides thread-safe, synchronous (blocking) cache implementations.
+//! Provides thread-safe, blocking cache implementations.
 
 use crate::common::{deque::DeqNode, u64_to_instant, AccessTime};
 

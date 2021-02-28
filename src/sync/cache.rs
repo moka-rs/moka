@@ -30,7 +30,7 @@ use std::{
 /// Cache entries are manually added using `insert` method, and are stored in the
 /// cache until either evicted or manually invalidated.
 ///
-/// Here's an example that reads and updates a cache by using multiple threads:
+/// Here's an example of reading and updating a cache by using multiple threads:
 ///
 /// ```rust
 /// use moka::sync::Cache;
@@ -282,6 +282,16 @@ where
         }
     }
 
+    /// Discards all cached values.
+    ///
+    /// This method returns immediately and a background thread will evict all the
+    /// cached values inserted before the time when this method was called. It is
+    /// guaranteed that the `get` method must not return these invalidated values
+    /// even if they have not been evicted.
+    ///
+    /// Like the `invalidate` method, this method does not clear the historic
+    /// popularity estimator of keys so that it retains the client activities of
+    /// trying to retrieve an item.
     pub fn invalidate_all(&self) {
         self.base.invalidate_all();
     }
