@@ -557,8 +557,8 @@ where
     ) {
         let last_accessed = entry.raw_last_accessed();
         let last_modified = entry.raw_last_modified();
-        last_accessed.store(timestamp.as_u64(), Ordering::Relaxed);
-        last_modified.store(timestamp.as_u64(), Ordering::Relaxed);
+        last_accessed.store(timestamp.as_u64(), Ordering::Release);
+        last_modified.store(timestamp.as_u64(), Ordering::Release);
 
         if self.cache.len() <= self.max_capacity {
             // Add the candidate to the deque.
@@ -681,10 +681,25 @@ where
                 break;
             }
 
-            if let Some(entry) = self.cache.remove(&key.unwrap()) {
+            let key = key.as_ref().unwrap();
+
+            // Remove the key only when the entry is really expired. This is needed because
+            // it is possible that the entry in the map has been updated or deleted but its
+            // deque node we checked above have not been updated yet.
+            let maybe_entry = self
+                .cache
+                .remove_if(key, |_, v| is_expired_entry_ao(tti, va, v, now));
+
+            if let Some(entry) = maybe_entry {
                 Deques::unlink_ao_from_deque(deq_name, deq, Arc::clone(&entry));
                 Deques::unlink_wo(write_order_deq, entry);
+            } else if self.cache.get(key).is_some() {
+                // Key exists. The entry might have been updated. Break from the loop here
+                // because we would better to wait for next sync cycle to get the deque node
+                // updated.
+                break;
             } else {
+                // Key does not exist. The key might have been deleted. Drop the deque node.
                 deq.pop_front();
             }
         }
@@ -711,9 +726,17 @@ where
                 break;
             }
 
-            if let Some(entry) = self.cache.remove(&key.unwrap()) {
+            let key = key.as_ref().unwrap();
+
+            let maybe_entry = self
+                .cache
+                .remove_if(key, |_, v| is_expired_entry_wo(ttl, va, v, now));
+
+            if let Some(entry) = maybe_entry {
                 deqs.unlink_ao(Arc::clone(&entry));
                 Deques::unlink_wo(&mut deqs.write_order, entry);
+            } else if self.cache.get(key).is_some() {
+                break;
             } else {
                 deqs.write_order.pop_front();
             }

@@ -112,10 +112,17 @@ impl<K, V> ValueEntry<K, V> {
                 write_order_q_node: other_nodes.write_order_q_node,
             }
         };
+        let last_accessed = other.last_accessed.clone();
+        let last_modified = other.last_modified.clone();
+        // To prevent this updated ValueEntry from being evicted by a expiration policy,
+        // set the max value to the timestamps. They will be replaced with the real
+        // timestamps when applying writes. 
+        last_accessed.store(std::u64::MAX, Ordering::Release);
+        last_modified.store(std::u64::MAX, Ordering::Release);
         Self {
             value,
-            last_accessed: other.last_accessed.clone(),
-            last_modified: other.last_modified.clone(),
+            last_accessed,
+            last_modified,
             nodes: Mutex::new(nodes),
         }
     }
@@ -162,24 +169,24 @@ impl<K, V> ValueEntry<K, V> {
 impl<K, V> AccessTime for Arc<ValueEntry<K, V>> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
-        u64_to_instant(self.last_accessed.load(Ordering::Relaxed))
+        u64_to_instant(self.last_accessed.load(Ordering::Acquire))
     }
 
     #[inline]
     fn set_last_accessed(&mut self, timestamp: Instant) {
         self.last_accessed
-            .store(timestamp.as_u64(), Ordering::Relaxed);
+            .store(timestamp.as_u64(), Ordering::Release);
     }
 
     #[inline]
     fn last_modified(&self) -> Option<Instant> {
-        u64_to_instant(self.last_modified.load(Ordering::Relaxed))
+        u64_to_instant(self.last_modified.load(Ordering::Acquire))
     }
 
     #[inline]
     fn set_last_modified(&mut self, timestamp: Instant) {
         self.last_modified
-            .store(timestamp.as_u64(), Ordering::Relaxed);
+            .store(timestamp.as_u64(), Ordering::Release);
     }
 }
 
@@ -196,28 +203,28 @@ impl<K> AccessTime for DeqNode<KeyDate<K>> {
 
     #[inline]
     fn last_modified(&self) -> Option<Instant> {
-        u64_to_instant(self.element.timestamp.load(Ordering::Relaxed))
+        u64_to_instant(self.element.timestamp.load(Ordering::Acquire))
     }
 
     #[inline]
     fn set_last_modified(&mut self, timestamp: Instant) {
         self.element
             .timestamp
-            .store(timestamp.as_u64(), Ordering::Relaxed);
+            .store(timestamp.as_u64(), Ordering::Release);
     }
 }
 
 impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
-        u64_to_instant(self.element.timestamp.load(Ordering::Relaxed))
+        u64_to_instant(self.element.timestamp.load(Ordering::Acquire))
     }
 
     #[inline]
     fn set_last_accessed(&mut self, timestamp: Instant) {
         self.element
             .timestamp
-            .store(timestamp.as_u64(), Ordering::Relaxed);
+            .store(timestamp.as_u64(), Ordering::Release);
     }
 
     #[inline]
