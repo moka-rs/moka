@@ -116,7 +116,7 @@ impl<K, V> ValueEntry<K, V> {
         let last_modified = other.last_modified.clone();
         // To prevent this updated ValueEntry from being evicted by a expiration policy,
         // set the max value to the timestamps. They will be replaced with the real
-        // timestamps when applying writes. 
+        // timestamps when applying writes.
         last_accessed.store(std::u64::MAX, Ordering::Release);
         last_modified.store(std::u64::MAX, Ordering::Release);
         Self {
