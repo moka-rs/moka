@@ -7,7 +7,7 @@ use quanta::Instant;
 use std::{
     ptr::NonNull,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -37,6 +37,15 @@ pub(crate) struct KeyHash<K> {
 impl<K> KeyHash<K> {
     pub(crate) fn new(key: Arc<K>, hash: u64) -> Self {
         Self { key, hash }
+    }
+}
+
+impl<K> Clone for KeyHash<K> {
+    fn clone(&self) -> Self {
+        Self {
+            key: Arc::clone(&self.key),
+            hash: self.hash,
+        }
     }
 }
 
@@ -86,6 +95,7 @@ unsafe impl<K> Send for DeqNodes<K> {}
 
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: V,
+    is_admitted: Arc<AtomicBool>,
     last_accessed: Arc<AtomicU64>,
     last_modified: Arc<AtomicU64>,
     nodes: Mutex<DeqNodes<K>>,
@@ -95,6 +105,7 @@ impl<K, V> ValueEntry<K, V> {
     pub(crate) fn new(value: V) -> Self {
         Self {
             value,
+            is_admitted: Arc::new(AtomicBool::new(false)),
             last_accessed: Arc::new(AtomicU64::new(std::u64::MAX)),
             last_modified: Arc::new(AtomicU64::new(std::u64::MAX)),
             nodes: Mutex::new(DeqNodes {
@@ -121,10 +132,19 @@ impl<K, V> ValueEntry<K, V> {
         last_modified.store(std::u64::MAX, Ordering::Release);
         Self {
             value,
+            is_admitted: Arc::clone(&other.is_admitted),
             last_accessed,
             last_modified,
             nodes: Mutex::new(nodes),
         }
+    }
+
+    pub(crate) fn is_admitted(&self) -> bool {
+        self.is_admitted.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_is_admitted(&self, value: bool) {
+        self.is_admitted.store(value, Ordering::Release);
     }
 
     pub(crate) fn raw_last_accessed(&self) -> Arc<AtomicU64> {
@@ -244,7 +264,6 @@ pub(crate) enum ReadOp<K, V> {
 }
 
 pub(crate) enum WriteOp<K, V> {
-    Insert(KeyHash<K>, Arc<ValueEntry<K, V>>),
-    Update(Arc<ValueEntry<K, V>>),
+    Upsert(KeyHash<K>, Arc<ValueEntry<K, V>>),
     Remove(Arc<ValueEntry<K, V>>),
 }

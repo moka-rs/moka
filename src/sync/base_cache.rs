@@ -236,7 +236,7 @@ where
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((
                     cnt,
-                    WriteOp::Insert(KeyHash::new(key, hash), Arc::clone(&entry)),
+                    WriteOp::Upsert(KeyHash::new(Arc::clone(&key), hash), Arc::clone(&entry)),
                 ));
                 entry
             },
@@ -247,7 +247,7 @@ where
                 op2 = Some((
                     cnt,
                     Arc::clone(&old_entry),
-                    WriteOp::Update(Arc::clone(&entry)),
+                    WriteOp::Upsert(KeyHash::new(Arc::clone(&key), hash), Arc::clone(&entry)),
                 ));
                 entry
             },
@@ -537,62 +537,60 @@ where
 
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Insert(kh, entry)) => self.handle_insert(kh, entry, ts, deqs, &freq),
-                Ok(Update(mut entry)) => {
-                    entry.set_last_accessed(ts);
-                    entry.set_last_modified(ts);
-                    deqs.move_to_back_ao(&entry);
-                    deqs.move_to_back_wo(&entry)
-                }
-                Ok(Remove(entry)) => {
-                    Self::handle_remove(deqs, entry);
-                }
+                Ok(Upsert(kh, entry)) => self.handle_upsert(kh, entry, ts, deqs, &freq),
+                Ok(Remove(entry)) => Self::handle_remove(deqs, entry),
                 Err(_) => break,
             };
         }
     }
 
-    fn handle_insert(
+    fn handle_upsert(
         &self,
         kh: KeyHash<K>,
-        entry: Arc<ValueEntry<K, V>>,
+        mut entry: Arc<ValueEntry<K, V>>,
         timestamp: Instant,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
     ) {
+        const MAX_RETRY: usize = 5;
+        let mut tries = 0;
+        let mut done = false;
+
+        entry.set_last_accessed(timestamp);
+        entry.set_last_modified(timestamp);
         let last_accessed = entry.raw_last_accessed();
         let last_modified = entry.raw_last_modified();
-        last_accessed.store(timestamp.as_u64(), Ordering::Release);
-        last_modified.store(timestamp.as_u64(), Ordering::Release);
 
-        loop {
-            if self.cache.len() <= self.max_capacity {
+        while tries < MAX_RETRY {
+            tries += 1;
+
+            if entry.is_admitted() {
+                // The entry has been already admitted, so treat this as an update.
+                deqs.move_to_back_ao(&entry);
+                deqs.move_to_back_wo(&entry);
+                done = true;
+                break;
+            } else if self.cache.len() <= self.max_capacity {
                 // Add the candidate to the deques.
-                self.handle_admit(kh, &entry, last_accessed, last_modified, deqs);
-                break; // Done
+                self.handle_admit(kh.clone(), &entry, last_accessed, last_modified, deqs);
+                done = true;
+                break;
             } else {
                 let victim = match Self::find_cache_victim(deqs, freq) {
                     Some(node) => node,
-                    None => break, // Something wrong.
+                    None => {
+                        // Something has went wrong. Add the candidate to the deques.
+                        self.handle_admit(kh.clone(), &entry, last_accessed, last_modified, deqs);
+                        done = true;
+                        break;
+                    }
                 };
-                let vla = victim.last_accessed();
 
                 if Self::admit(kh.hash, victim, freq) {
                     // Try to remove the victim from the cache.
-                    let maybe_vic_entry = self.cache.remove_if(&victim.element.key, |_, v| {
-                        vla.is_some() && vla == v.last_accessed()
-                    });
-                    if let Some(vic_entry) = maybe_vic_entry {
+                    if let Some(vic_entry) = self.cache.remove(&victim.element.key) {
                         // Remove the victim from the deques.
                         Self::handle_remove(deqs, vic_entry);
-                    } else if let Some(vic_entry) = self.cache.get(&victim.element.key) {
-                        // if vic_entry.last_accessed().is_some() {
-                        //     print!("^");
-                        // }
-                        // The victim entry might have been updated, skip it.
-                        deqs.move_to_back_ao(&vic_entry);
-                        deqs.move_to_back_wo(&vic_entry);
-                        continue; // Retry
                     } else {
                         // The victim entry might have been deleted, skip it.
                         let victim = NonNull::from(victim);
@@ -601,19 +599,27 @@ where
                     }
                     // Add the candidate to the deques.
                     self.handle_admit(
-                        kh,
+                        kh.clone(),
                         &entry,
                         Arc::clone(&last_accessed),
                         Arc::clone(&last_modified),
                         deqs,
                     );
-                    break; // Done
+                    done = true;
+                    break;
                 } else {
                     // Remove the candidate from the cache.
                     self.cache.remove(&Arc::clone(&kh.key));
-                    break; // Done
+                    done = true;
+                    break;
                 }
             }
+        }
+
+        if !done {
+            // print!("%");
+            // Remove the candidate from the cache.
+            self.cache.remove(&Arc::clone(&kh.key));
         }
     }
 
@@ -642,22 +648,24 @@ where
         &self,
         kh: KeyHash<K>,
         entry: &Arc<ValueEntry<K, V>>,
-        last_accessed: Arc<AtomicU64>,
-        last_modified: Arc<AtomicU64>,
+        raw_last_accessed: Arc<AtomicU64>,
+        raw_last_modified: Arc<AtomicU64>,
         deqs: &mut Deques<K>,
     ) {
+        entry.set_is_admitted(true);
         let key = Arc::clone(&kh.key);
         deqs.push_back_ao(
             CacheRegion::MainProbation,
-            KeyHashDate::new(kh, last_accessed),
+            KeyHashDate::new(kh, raw_last_accessed),
             entry,
         );
         if self.time_to_live.is_some() {
-            deqs.push_back_wo(KeyDate::new(key, last_modified), &entry);
+            deqs.push_back_wo(KeyDate::new(key, raw_last_modified), &entry);
         }
     }
 
     fn handle_remove(deqs: &mut Deques<K>, entry: Arc<ValueEntry<K, V>>) {
+        entry.set_is_admitted(false);
         deqs.unlink_ao(&entry);
         Deques::unlink_wo(&mut deqs.write_order, &entry);
     }
