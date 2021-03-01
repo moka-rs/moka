@@ -443,6 +443,11 @@ where
     }
 
     #[inline]
+    fn has_valid_after(&self) -> bool {
+        self.valid_after.load(Ordering::Acquire) > 0
+    }
+
+    #[inline]
     fn current_time_from_expiration_clock(&self) -> Instant {
         if self.has_expiration_clock.load(Ordering::Relaxed) {
             self.expiration_clock
@@ -479,7 +484,7 @@ where
                 self.apply_writes(&mut deqs, w_len);
             }
 
-            if self.has_expiry() || self.valid_after.load(Ordering::Acquire) > 0 {
+            if self.has_expiry() || self.has_valid_after() {
                 self.evict(&mut deqs, EVICTION_BATCH_SIZE);
             }
 
@@ -516,7 +521,7 @@ where
                 Ok(Hit(hash, mut entry, timestamp)) => {
                     freq.increment(hash);
                     entry.set_last_accessed(timestamp);
-                    deqs.move_to_back_ao(entry)
+                    deqs.move_to_back_ao(&entry)
                 }
                 Ok(Miss(hash)) => freq.increment(hash),
                 Err(_) => break,
@@ -536,8 +541,8 @@ where
                 Ok(Update(mut entry)) => {
                     entry.set_last_accessed(ts);
                     entry.set_last_modified(ts);
-                    deqs.move_to_back_ao(Arc::clone(&entry));
-                    deqs.move_to_back_wo(entry)
+                    deqs.move_to_back_ao(&entry);
+                    deqs.move_to_back_wo(&entry)
                 }
                 Ok(Remove(entry)) => {
                     Self::handle_remove(deqs, entry);
@@ -560,46 +565,54 @@ where
         last_accessed.store(timestamp.as_u64(), Ordering::Release);
         last_modified.store(timestamp.as_u64(), Ordering::Release);
 
-        if self.cache.len() <= self.max_capacity {
-            // Add the candidate to the deque.
-            let key = Arc::clone(&kh.key);
-            deqs.push_back_ao(
-                CacheRegion::MainProbation,
-                KeyHashDate::new(kh, last_accessed),
-                &entry,
-            );
-            if self.time_to_live.is_some() {
-                deqs.push_back_wo(KeyDate::new(key, last_modified), &entry);
-            }
-        } else {
-            let victim = Self::find_cache_victim(deqs, freq);
-            if Self::admit(kh.hash, victim, freq) {
-                // Remove the victim from the cache and deque.
-                //
-                // TODO: Check if the selected victim was actually removed. If not,
-                // maybe we should find another victim. This can happen because it
-                // could have been already removed from the cache but the removal
-                // from the deque is still on the write operations queue and is not
-                // yet executed.
-                if let Some(vic_entry) = self.cache.remove(&victim.element.key) {
-                    Self::handle_remove(deqs, vic_entry);
-                } else {
-                    let victim = NonNull::from(victim);
-                    deqs.unlink_node_ao(victim);
-                }
-                // Add the candidate to the deque.
-                let key = Arc::clone(&kh.key);
-                deqs.push_back_ao(
-                    CacheRegion::MainProbation,
-                    KeyHashDate::new(kh, last_accessed),
-                    &entry,
-                );
-                if self.time_to_live.is_some() {
-                    deqs.push_back_wo(KeyDate::new(key, last_modified), &entry);
-                }
+        loop {
+            if self.cache.len() <= self.max_capacity {
+                // Add the candidate to the deques.
+                self.handle_admit(kh, &entry, last_accessed, last_modified, deqs);
+                break; // Done
             } else {
-                // Remove the candidate from the cache.
-                self.cache.remove(&kh.key);
+                let victim = match Self::find_cache_victim(deqs, freq) {
+                    Some(node) => node,
+                    None => break, // Something wrong.
+                };
+                let vla = victim.last_accessed();
+
+                if Self::admit(kh.hash, victim, freq) {
+                    // Try to remove the victim from the cache.
+                    let maybe_vic_entry = self.cache.remove_if(&victim.element.key, |_, v| {
+                        vla.is_some() && vla == v.last_accessed()
+                    });
+                    if let Some(vic_entry) = maybe_vic_entry {
+                        // Remove the victim from the deques.
+                        Self::handle_remove(deqs, vic_entry);
+                    } else if let Some(vic_entry) = self.cache.get(&victim.element.key) {
+                        // if vic_entry.last_accessed().is_some() {
+                        //     print!("^");
+                        // }
+                        // The victim entry might have been updated, skip it.
+                        deqs.move_to_back_ao(&vic_entry);
+                        deqs.move_to_back_wo(&vic_entry);
+                        continue; // Retry
+                    } else {
+                        // The victim entry might have been deleted, skip it.
+                        let victim = NonNull::from(victim);
+                        deqs.unlink_node_ao(victim);
+                        continue; // Retry
+                    }
+                    // Add the candidate to the deques.
+                    self.handle_admit(
+                        kh,
+                        &entry,
+                        Arc::clone(&last_accessed),
+                        Arc::clone(&last_modified),
+                        deqs,
+                    );
+                    break; // Done
+                } else {
+                    // Remove the candidate from the cache.
+                    self.cache.remove(&Arc::clone(&kh.key));
+                    break; // Done
+                }
             }
         }
     }
@@ -608,10 +621,10 @@ where
     fn find_cache_victim<'a>(
         deqs: &'a mut Deques<K>,
         _freq: &FrequencySketch,
-    ) -> &'a DeqNode<KeyHashDate<K>> {
+    ) -> Option<&'a DeqNode<KeyHashDate<K>>> {
         // TODO: Check its frequency. If it is not very low, maybe we should
         // check frequencies of next few others and pick from them.
-        deqs.probation.peek_front().expect("No victim found")
+        deqs.probation.peek_front()
     }
 
     #[inline]
@@ -625,9 +638,28 @@ where
         freq.frequency(candidate_hash) > freq.frequency(victim.element.hash)
     }
 
+    fn handle_admit(
+        &self,
+        kh: KeyHash<K>,
+        entry: &Arc<ValueEntry<K, V>>,
+        last_accessed: Arc<AtomicU64>,
+        last_modified: Arc<AtomicU64>,
+        deqs: &mut Deques<K>,
+    ) {
+        let key = Arc::clone(&kh.key);
+        deqs.push_back_ao(
+            CacheRegion::MainProbation,
+            KeyHashDate::new(kh, last_accessed),
+            entry,
+        );
+        if self.time_to_live.is_some() {
+            deqs.push_back_wo(KeyDate::new(key, last_modified), &entry);
+        }
+    }
+
     fn handle_remove(deqs: &mut Deques<K>, entry: Arc<ValueEntry<K, V>>) {
-        deqs.unlink_ao(Arc::clone(&entry));
-        Deques::unlink_wo(&mut deqs.write_order, entry);
+        deqs.unlink_ao(&entry);
+        Deques::unlink_wo(&mut deqs.write_order, &entry);
     }
 
     fn evict(&self, deqs: &mut Deques<K>, batch_size: usize) {
@@ -637,7 +669,7 @@ where
             self.remove_expired_wo(deqs, batch_size, now);
         }
 
-        if self.time_to_idle.is_some() {
+        if self.time_to_idle.is_some() || self.has_valid_after() {
             let (window, probation, protected, wo) = (
                 &mut deqs.window,
                 &mut deqs.probation,
@@ -666,11 +698,15 @@ where
         let tti = &self.time_to_idle;
         let va = self.valid_after();
         for _ in 0..batch_size {
-            let key = deq
+            // Peek the front node of the deque and check if it is expired.
+            let (key, _ts) = deq
                 .peek_front()
                 .and_then(|node| {
                     if is_expired_entry_ao(tti, va, &*node, now) {
-                        Some(Some(Arc::clone(&node.element.key)))
+                        Some((
+                            Some(Arc::clone(&node.element.key)),
+                            Some(&node.element.timestamp),
+                        ))
                     } else {
                         None
                     }
@@ -683,23 +719,35 @@ where
 
             let key = key.as_ref().unwrap();
 
-            // Remove the key only when the entry is really expired. This is needed because
-            // it is possible that the entry in the map has been updated or deleted but its
-            // deque node we checked above have not been updated yet.
+            // Remove the key from the map only when the entry is really expired. This check
+            // is needed because it is possible that the entry in the map has been updated
+            // or deleted but its deque node we checked above have not been updated yet.
             let maybe_entry = self
                 .cache
                 .remove_if(key, |_, v| is_expired_entry_ao(tti, va, v, now));
 
             if let Some(entry) = maybe_entry {
-                Deques::unlink_ao_from_deque(deq_name, deq, Arc::clone(&entry));
-                Deques::unlink_wo(write_order_deq, entry);
-            } else if self.cache.get(key).is_some() {
-                // Key exists. The entry might have been updated. Break from the loop here
-                // because we would better to wait for next sync cycle to get the deque node
-                // updated.
-                break;
+                // The Key has been removed from the map. Drop the deque nodes of the removed entry.
+                Deques::unlink_ao_from_deque(deq_name, deq, &entry);
+                Deques::unlink_wo(write_order_deq, &entry);
+            } else if let Some(entry) = self.cache.get(key) {
+                let la = entry.last_accessed();
+                if la.is_none() {
+                    // The key exists and the entry has been updated.
+                    Deques::move_to_back_ao_in_deque(deq_name, deq, &entry);
+                    Deques::move_to_back_wo_in_deque(write_order_deq, &entry);
+                } else {
+                    // The key exists but something unexpected. Break.
+                    // print!("@[{}|{}] ", ts.unwrap().load(Ordering::Acquire), la.unwrap().as_u64());
+                    // print!("@");
+                    break;
+                }
             } else {
-                // Key does not exist. The key might have been deleted. Drop the deque node.
+                // The key might have been deleted. Drop the deque node
+                // only from an access-order deque. This is because we cannot get another deque
+                // node for the write-order deque. It will be dropped when pending write ops are
+                // processed.
+                // print!("-");
                 deq.pop_front();
             }
         }
@@ -710,12 +758,15 @@ where
         let ttl = &self.time_to_live;
         let va = self.valid_after();
         for _ in 0..batch_size {
-            let key = deqs
+            let (key, _ts) = deqs
                 .write_order
                 .peek_front()
                 .and_then(|node| {
                     if is_expired_entry_wo(ttl, va, &*node, now) {
-                        Some(Some(Arc::clone(&node.element.key)))
+                        Some((
+                            Some(Arc::clone(&node.element.key)),
+                            Some(&node.element.timestamp),
+                        ))
                     } else {
                         None
                     }
@@ -733,11 +784,25 @@ where
                 .remove_if(key, |_, v| is_expired_entry_wo(ttl, va, v, now));
 
             if let Some(entry) = maybe_entry {
-                deqs.unlink_ao(Arc::clone(&entry));
-                Deques::unlink_wo(&mut deqs.write_order, entry);
-            } else if self.cache.get(key).is_some() {
-                break;
+                deqs.unlink_ao(&entry);
+                Deques::unlink_wo(&mut deqs.write_order, &entry);
+            } else if let Some(entry) = self.cache.get(key) {
+                let lm = entry.last_modified();
+                if lm.is_none() {
+                    deqs.move_to_back_ao(&entry);
+                    deqs.move_to_back_wo(&entry);
+                } else {
+                    // The key exists but something unexpected. Break.
+                    // print!("#[{}|{}] ", ts.unwrap().load(Ordering::Acquire), lm.unwrap().as_u64());
+                    // print!("#");
+                    break;
+                }
             } else {
+                // The key might have been deleted. Drop the deque node
+                // only from the write-order deque. This is because we cannot get another deque
+                // node for an access-order deque. It will be dropped when pending write ops are
+                // processed.
+                // print!("_");
                 deqs.write_order.pop_front();
             }
         }

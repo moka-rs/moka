@@ -112,8 +112,8 @@ impl<K, V> ValueEntry<K, V> {
                 write_order_q_node: other_nodes.write_order_q_node,
             }
         };
-        let last_accessed = other.last_accessed.clone();
-        let last_modified = other.last_modified.clone();
+        let last_accessed = Arc::clone(&other.last_accessed);
+        let last_modified = Arc::clone(&other.last_modified);
         // To prevent this updated ValueEntry from being evicted by a expiration policy,
         // set the max value to the timestamps. They will be replaced with the real
         // timestamps when applying writes.
@@ -128,11 +128,11 @@ impl<K, V> ValueEntry<K, V> {
     }
 
     pub(crate) fn raw_last_accessed(&self) -> Arc<AtomicU64> {
-        self.last_accessed.clone()
+        Arc::clone(&self.last_accessed)
     }
 
     pub(crate) fn raw_last_modified(&self) -> Arc<AtomicU64> {
-        self.last_modified.clone()
+        Arc::clone(&self.last_modified)
     }
 
     pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
