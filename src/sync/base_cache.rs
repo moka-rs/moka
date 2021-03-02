@@ -571,15 +571,19 @@ where
                 done = true;
                 break;
             } else if self.cache.len() <= self.max_capacity {
-                // Add the candidate to the deques.
+                // There are some room in the cache. Add the candidate to the deques.
                 self.handle_admit(kh.clone(), &entry, last_accessed, last_modified, deqs);
                 done = true;
                 break;
             } else {
                 let victim = match Self::find_cache_victim(deqs, freq) {
+                    // Found a victim.
                     Some(node) => node,
+                    // Not found a victim. This condition should be unreachable
+                    // because there was no room in the cache. But rather than
+                    // panicking here, admit the candidate as there might be some
+                    // room in te cache now.
                     None => {
-                        // Something has went wrong. Add the candidate to the deques.
                         self.handle_admit(kh.clone(), &entry, last_accessed, last_modified, deqs);
                         done = true;
                         break;
@@ -587,14 +591,20 @@ where
                 };
 
                 if Self::admit(kh.hash, victim, freq) {
-                    // Try to remove the victim from the cache.
+                    // The candidate is admitted. Try to remove the victim from the
+                    // cache (hash map).
                     if let Some(vic_entry) = self.cache.remove(&victim.element.key) {
-                        // Remove the victim from the deques.
+                        // And then remove the victim from the deques.
                         Self::handle_remove(deqs, vic_entry);
                     } else {
-                        // The victim entry might have been deleted, skip it.
+                        // Could not remove the victim from the cache. Skip this
+                        // victim node as its ValueEntry might have been
+                        // invalidated. Since the invalidated ValueEntry (which
+                        // should be still in the write op queue) has a pointer to
+                        // this node, we move the node to the back of the deque
+                        // instead of unlinking (dropping) it.
                         let victim = NonNull::from(victim);
-                        deqs.unlink_node_ao(victim);
+                        unsafe { deqs.probation.move_to_back(victim) };
                         continue; // Retry
                     }
                     // Add the candidate to the deques.
@@ -608,7 +618,7 @@ where
                     done = true;
                     break;
                 } else {
-                    // Remove the candidate from the cache.
+                    // The candidate is not admitted. Remove it from the cache (hash map).
                     self.cache.remove(&Arc::clone(&kh.key));
                     done = true;
                     break;
@@ -617,15 +627,14 @@ where
         }
 
         if !done {
-            // print!("%");
-            // Remove the candidate from the cache.
+            // Too mary retries. Remove the candidate from the cache.
             self.cache.remove(&Arc::clone(&kh.key));
         }
     }
 
     #[inline]
     fn find_cache_victim<'a>(
-        deqs: &'a mut Deques<K>,
+        deqs: &'a Deques<K>,
         _freq: &FrequencySketch,
     ) -> Option<&'a DeqNode<KeyHashDate<K>>> {
         // TODO: Check its frequency. If it is not very low, maybe we should
@@ -652,7 +661,6 @@ where
         raw_last_modified: Arc<AtomicU64>,
         deqs: &mut Deques<K>,
     ) {
-        entry.set_is_admitted(true);
         let key = Arc::clone(&kh.key);
         deqs.push_back_ao(
             CacheRegion::MainProbation,
@@ -662,12 +670,30 @@ where
         if self.time_to_live.is_some() {
             deqs.push_back_wo(KeyDate::new(key, raw_last_modified), &entry);
         }
+        entry.set_is_admitted(true);
     }
 
     fn handle_remove(deqs: &mut Deques<K>, entry: Arc<ValueEntry<K, V>>) {
-        entry.set_is_admitted(false);
-        deqs.unlink_ao(&entry);
-        Deques::unlink_wo(&mut deqs.write_order, &entry);
+        if entry.is_admitted() {
+            entry.set_is_admitted(false);
+            deqs.unlink_ao(&entry);
+            Deques::unlink_wo(&mut deqs.write_order, &entry);
+        }
+        entry.unset_q_nodes();
+    }
+
+    fn handle_remove_with_deques(
+        ao_deq_name: &str,
+        ao_deq: &mut Deque<KeyHashDate<K>>,
+        wo_deq: &mut Deque<KeyDate<K>>,
+        entry: Arc<ValueEntry<K, V>>,
+    ) {
+        if entry.is_admitted() {
+            entry.set_is_admitted(false);
+            Deques::unlink_ao_from_deque(ao_deq_name, ao_deq, &entry);
+            Deques::unlink_wo(wo_deq, &entry);
+        }
+        entry.unset_q_nodes();
     }
 
     fn evict(&self, deqs: &mut Deques<K>, batch_size: usize) {
@@ -727,20 +753,19 @@ where
 
             let key = key.as_ref().unwrap();
 
-            // Remove the key from the map only when the entry is really expired. This check
-            // is needed because it is possible that the entry in the map has been updated
-            // or deleted but its deque node we checked above have not been updated yet.
+            // Remove the key from the map only when the entry is really
+            // expired. This check is needed because it is possible that the entry in
+            // the map has been updated or deleted but its deque node we checked
+            // above have not been updated yet.
             let maybe_entry = self
                 .cache
                 .remove_if(key, |_, v| is_expired_entry_ao(tti, va, v, now));
 
             if let Some(entry) = maybe_entry {
-                // The Key has been removed from the map. Drop the deque nodes of the removed entry.
-                Deques::unlink_ao_from_deque(deq_name, deq, &entry);
-                Deques::unlink_wo(write_order_deq, &entry);
+                Self::handle_remove_with_deques(deq_name, deq, write_order_deq, entry);
             } else if let Some(entry) = self.cache.get(key) {
-                let la = entry.last_accessed();
-                if la.is_none() {
+                let ts = entry.last_accessed();
+                if ts.is_none() {
                     // The key exists and the entry has been updated.
                     Deques::move_to_back_ao_in_deque(deq_name, deq, &entry);
                     Deques::move_to_back_wo_in_deque(write_order_deq, &entry);
@@ -751,12 +776,14 @@ where
                     break;
                 }
             } else {
-                // The key might have been deleted. Drop the deque node
-                // only from an access-order deque. This is because we cannot get another deque
-                // node for the write-order deque. It will be dropped when pending write ops are
-                // processed.
-                // print!("-");
-                deq.pop_front();
+                // Skip this entry as the key might have been invalidated. Since the
+                // invalidated ValueEntry (which should be still in the write op
+                // queue) has a pointer to this node, move the node to the back of
+                // the deque instead of popping (dropping) it.
+                if let Some(node) = deq.peek_front() {
+                    let node = NonNull::from(node);
+                    unsafe { deq.move_to_back(node) };
+                }
             }
         }
     }
@@ -792,26 +819,27 @@ where
                 .remove_if(key, |_, v| is_expired_entry_wo(ttl, va, v, now));
 
             if let Some(entry) = maybe_entry {
-                deqs.unlink_ao(&entry);
-                Deques::unlink_wo(&mut deqs.write_order, &entry);
+                Self::handle_remove(deqs, entry);
             } else if let Some(entry) = self.cache.get(key) {
-                let lm = entry.last_modified();
-                if lm.is_none() {
+                let ts = entry.last_modified();
+                if ts.is_none() {
                     deqs.move_to_back_ao(&entry);
                     deqs.move_to_back_wo(&entry);
                 } else {
                     // The key exists but something unexpected. Break.
-                    // print!("#[{}|{}] ", ts.unwrap().load(Ordering::Acquire), lm.unwrap().as_u64());
+                    // print!("#[{}|{}] ", ts.unwrap().load(Ordering::Acquire), ts.unwrap().as_u64());
                     // print!("#");
                     break;
                 }
             } else {
-                // The key might have been deleted. Drop the deque node
-                // only from the write-order deque. This is because we cannot get another deque
-                // node for an access-order deque. It will be dropped when pending write ops are
-                // processed.
-                // print!("_");
-                deqs.write_order.pop_front();
+                // Skip this entry as the key might have been invalidated. Since the
+                // invalidated ValueEntry (which should be still in the write op
+                // queue) has a pointer to this node, move the node to the back of
+                // the deque instead of popping (dropping) it.
+                if let Some(node) = deqs.write_order.peek_front() {
+                    let node = NonNull::from(node);
+                    unsafe { deqs.write_order.move_to_back(node) };
+                }
             }
         }
     }

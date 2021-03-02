@@ -75,8 +75,10 @@ impl<K> Deques<K> {
     ) {
         if let Some(node) = entry.access_order_q_node() {
             let p = unsafe { node.as_ref() };
-            if deq.contains(p) {
-                unsafe { deq.move_to_back(node) };
+            if &p.region == deq.region() {
+                if deq.contains(p) {
+                    unsafe { deq.move_to_back(node) };
+                }
             } else {
                 panic!(
                     "move_to_back_ao_in_deque - node is not a member of {} deque. {:?}",
@@ -103,8 +105,10 @@ impl<K> Deques<K> {
     ) {
         if let Some(node) = entry.write_order_q_node() {
             let p = unsafe { node.as_ref() };
-            if deq.contains(p) {
-                unsafe { deq.move_to_back(node) };
+            if &p.region == deq.region() {
+                if deq.contains(p) {
+                    unsafe { deq.move_to_back(node) };
+                }
             } else {
                 panic!(
                     "move_to_back_wo_in_deque - node is not a member of write_order deque. {:?}",
@@ -157,24 +161,26 @@ impl<K> Deques<K> {
         deq: &mut Deque<KeyHashDate<K>>,
         node: NonNull<DeqNode<KeyHashDate<K>>>,
     ) {
-        if deq.contains(node.as_ref()) {
-            deq.unlink(node);
+        let p = node.as_ref();
+        if &p.region == deq.region() {
+            if deq.contains(p) {
+                deq.unlink(node);
+            }
         } else {
             panic!(
                 "unlink_node - node is not a member of {} deque. {:?}",
-                deq_name,
-                node.as_ref()
+                deq_name, p
             )
         }
     }
 
     pub(crate) fn unlink_node_wo(deq: &mut Deque<KeyDate<K>>, node: NonNull<DeqNode<KeyDate<K>>>) {
-        use CacheRegion::*;
         unsafe {
             let p = node.as_ref();
-            debug_assert_eq!(&p.region, &WriteOrder);
-            if deq.contains(p) {
-                deq.unlink(node);
+            if &p.region == deq.region() {
+                if deq.contains(p) {
+                    deq.unlink(node);
+                }
             } else {
                 panic!(
                     "unlink_node - node is not a member of write_order deque. {:?}",
