@@ -10,7 +10,7 @@
 //! [cht][cht-crate] crate for the central key-value storage.
 //!
 //! Moka also provides an in-memory, not thread-safe cache implementation for single
-//! threaded applications.
+//! thread applications.
 //!
 //! All cache implementations perform a best-effort bounding of the map using an entry
 //! replacement algorithm to determine which entries to evict when the capacity is
@@ -26,7 +26,7 @@
 //!     - Blocking caches that can be shared across OS threads.
 //!     - An asynchronous (futures aware) cache that can be accessed inside and
 //!       outside of asynchronous contexts.
-//! - A not thread-safe, in-memory cache implementation for single threaded applications.
+//! - A not thread-safe, in-memory cache implementation for single thread applications.
 //! - Caches are bounded by the maximum number of entries.
 //! - Maintains good hit rate by using entry replacement algorithms inspired by
 //!   [Caffeine][caffeine-git]:
@@ -131,7 +131,8 @@
 //!
 //! A future release will support the following:
 //!
-//! - The variable expiration
+//! - The variable expiration (which allows to set different expiration on each
+//!   cached entry)
 //!
 //! These policies are provided with _O(1)_ time complexity:
 //!

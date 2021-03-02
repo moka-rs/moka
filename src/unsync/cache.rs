@@ -26,7 +26,7 @@ type CacheStore<K, V, S> = std::collections::HashMap<Rc<K>, ValueEntry<K, V>, S>
 ///
 /// # Characteristic difference between `unsync` and `sync`/`future` caches
 ///
-/// If you use a cache from a single threaded application, `unsync::Cache` may
+/// If you use a cache from a single thread application, `unsync::Cache` may
 /// outperform other caches for updates and retrievals because other caches have some
 /// overhead on syncing internal data structures between threads.
 ///
