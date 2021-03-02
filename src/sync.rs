@@ -1,13 +1,13 @@
-//! Provides thread-safe, synchronous (blocking) cache implementations.
+//! Provides thread-safe, blocking cache implementations.
 
-use crate::common::{deque::DeqNode, AccessTime};
+use crate::common::{deque::DeqNode, u64_to_instant, AccessTime};
 
 use parking_lot::Mutex;
 use quanta::Instant;
 use std::{
     ptr::NonNull,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
     },
 };
@@ -40,13 +40,22 @@ impl<K> KeyHash<K> {
     }
 }
 
+impl<K> Clone for KeyHash<K> {
+    fn clone(&self) -> Self {
+        Self {
+            key: Arc::clone(&self.key),
+            hash: self.hash,
+        }
+    }
+}
+
 pub(crate) struct KeyDate<K> {
     pub(crate) key: Arc<K>,
-    pub(crate) timestamp: Option<Arc<AtomicU64>>,
+    pub(crate) timestamp: Arc<AtomicU64>,
 }
 
 impl<K> KeyDate<K> {
-    pub(crate) fn new(key: Arc<K>, timestamp: Option<Arc<AtomicU64>>) -> Self {
+    pub(crate) fn new(key: Arc<K>, timestamp: Arc<AtomicU64>) -> Self {
         Self { key, timestamp }
     }
 }
@@ -54,11 +63,11 @@ impl<K> KeyDate<K> {
 pub(crate) struct KeyHashDate<K> {
     pub(crate) key: Arc<K>,
     pub(crate) hash: u64,
-    pub(crate) timestamp: Option<Arc<AtomicU64>>,
+    pub(crate) timestamp: Arc<AtomicU64>,
 }
 
 impl<K> KeyHashDate<K> {
-    pub(crate) fn new(kh: KeyHash<K>, timestamp: Option<Arc<AtomicU64>>) -> Self {
+    pub(crate) fn new(kh: KeyHash<K>, timestamp: Arc<AtomicU64>) -> Self {
         Self {
             key: kh.key,
             hash: kh.hash,
@@ -86,21 +95,19 @@ unsafe impl<K> Send for DeqNodes<K> {}
 
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: V,
-    last_accessed: Option<Arc<AtomicU64>>,
-    last_modified: Option<Arc<AtomicU64>>,
+    is_admitted: Arc<AtomicBool>,
+    last_accessed: Arc<AtomicU64>,
+    last_modified: Arc<AtomicU64>,
     nodes: Mutex<DeqNodes<K>>,
 }
 
 impl<K, V> ValueEntry<K, V> {
-    pub(crate) fn new(
-        value: V,
-        last_accessed: Option<Instant>,
-        last_modified: Option<Instant>,
-    ) -> Self {
+    pub(crate) fn new(value: V) -> Self {
         Self {
             value,
-            last_accessed: last_accessed.map(|ts| Arc::new(AtomicU64::new(ts.as_u64()))),
-            last_modified: last_modified.map(|ts| Arc::new(AtomicU64::new(ts.as_u64()))),
+            is_admitted: Arc::new(AtomicBool::new(false)),
+            last_accessed: Arc::new(AtomicU64::new(std::u64::MAX)),
+            last_modified: Arc::new(AtomicU64::new(std::u64::MAX)),
             nodes: Mutex::new(DeqNodes {
                 access_order_q_node: None,
                 write_order_q_node: None,
@@ -116,20 +123,36 @@ impl<K, V> ValueEntry<K, V> {
                 write_order_q_node: other_nodes.write_order_q_node,
             }
         };
+        let last_accessed = Arc::clone(&other.last_accessed);
+        let last_modified = Arc::clone(&other.last_modified);
+        // To prevent this updated ValueEntry from being evicted by a expiration policy,
+        // set the max value to the timestamps. They will be replaced with the real
+        // timestamps when applying writes.
+        last_accessed.store(std::u64::MAX, Ordering::Release);
+        last_modified.store(std::u64::MAX, Ordering::Release);
         Self {
             value,
-            last_accessed: other.last_accessed.clone(),
-            last_modified: other.last_modified.clone(),
+            is_admitted: Arc::clone(&other.is_admitted),
+            last_accessed,
+            last_modified,
             nodes: Mutex::new(nodes),
         }
     }
 
-    pub(crate) fn raw_last_accessed(&self) -> Option<Arc<AtomicU64>> {
-        self.last_accessed.clone()
+    pub(crate) fn is_admitted(&self) -> bool {
+        self.is_admitted.load(Ordering::Acquire)
     }
 
-    pub(crate) fn raw_last_modified(&self) -> Option<Arc<AtomicU64>> {
-        self.last_modified.clone()
+    pub(crate) fn set_is_admitted(&self, value: bool) {
+        self.is_admitted.store(value, Ordering::Release);
+    }
+
+    pub(crate) fn raw_last_accessed(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.last_accessed)
+    }
+
+    pub(crate) fn raw_last_modified(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.last_modified)
     }
 
     pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
@@ -166,44 +189,24 @@ impl<K, V> ValueEntry<K, V> {
 impl<K, V> AccessTime for Arc<ValueEntry<K, V>> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
-        self.last_accessed
-            .as_ref()
-            .map(|ts| ts.load(Ordering::Relaxed))
-            .and_then(|ts| {
-                if ts == u64::MAX {
-                    None
-                } else {
-                    Some(unsafe { std::mem::transmute(ts) })
-                }
-            })
+        u64_to_instant(self.last_accessed.load(Ordering::Acquire))
     }
 
     #[inline]
     fn set_last_accessed(&mut self, timestamp: Instant) {
-        if let Some(ts) = &self.last_accessed {
-            ts.store(timestamp.as_u64(), Ordering::Relaxed);
-        }
+        self.last_accessed
+            .store(timestamp.as_u64(), Ordering::Release);
     }
 
     #[inline]
     fn last_modified(&self) -> Option<Instant> {
-        self.last_modified
-            .as_ref()
-            .map(|ts| ts.load(Ordering::Relaxed))
-            .and_then(|ts| {
-                if ts == u64::MAX {
-                    None
-                } else {
-                    Some(unsafe { std::mem::transmute(ts) })
-                }
-            })
+        u64_to_instant(self.last_modified.load(Ordering::Acquire))
     }
 
     #[inline]
     fn set_last_modified(&mut self, timestamp: Instant) {
-        if let Some(ts) = &self.last_modified {
-            ts.store(timestamp.as_u64(), Ordering::Relaxed);
-        }
+        self.last_modified
+            .store(timestamp.as_u64(), Ordering::Release);
     }
 }
 
@@ -220,48 +223,28 @@ impl<K> AccessTime for DeqNode<KeyDate<K>> {
 
     #[inline]
     fn last_modified(&self) -> Option<Instant> {
-        self.element
-            .timestamp
-            .as_ref()
-            .map(|ts| ts.load(Ordering::Relaxed))
-            .and_then(|ts| {
-                if ts == u64::MAX {
-                    None
-                } else {
-                    Some(unsafe { std::mem::transmute(ts) })
-                }
-            })
+        u64_to_instant(self.element.timestamp.load(Ordering::Acquire))
     }
 
     #[inline]
     fn set_last_modified(&mut self, timestamp: Instant) {
-        if let Some(ts) = self.element.timestamp.as_ref() {
-            ts.store(timestamp.as_u64(), Ordering::Relaxed);
-        }
+        self.element
+            .timestamp
+            .store(timestamp.as_u64(), Ordering::Release);
     }
 }
 
 impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
-        self.element
-            .timestamp
-            .as_ref()
-            .map(|ts| ts.load(Ordering::Relaxed))
-            .and_then(|ts| {
-                if ts == u64::MAX {
-                    None
-                } else {
-                    Some(unsafe { std::mem::transmute(ts) })
-                }
-            })
+        u64_to_instant(self.element.timestamp.load(Ordering::Acquire))
     }
 
     #[inline]
     fn set_last_accessed(&mut self, timestamp: Instant) {
-        if let Some(ts) = self.element.timestamp.as_ref() {
-            ts.store(timestamp.as_u64(), Ordering::Relaxed);
-        }
+        self.element
+            .timestamp
+            .store(timestamp.as_u64(), Ordering::Release);
     }
 
     #[inline]
@@ -276,12 +259,11 @@ impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
 }
 
 pub(crate) enum ReadOp<K, V> {
-    Hit(u64, Arc<ValueEntry<K, V>>, Option<Instant>),
+    Hit(u64, Arc<ValueEntry<K, V>>, Instant),
     Miss(u64),
 }
 
 pub(crate) enum WriteOp<K, V> {
-    Insert(KeyHash<K>, Arc<ValueEntry<K, V>>),
-    Update(Arc<ValueEntry<K, V>>),
+    Upsert(KeyHash<K>, Arc<ValueEntry<K, V>>),
     Remove(Arc<ValueEntry<K, V>>),
 }

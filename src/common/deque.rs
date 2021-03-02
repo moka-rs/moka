@@ -91,6 +91,10 @@ impl<T> Deque<T> {
         }
     }
 
+    pub(crate) fn region(&self) -> &CacheRegion {
+        &self.region
+    }
+
     pub(crate) fn contains(&self, node: &DeqNode<T>) -> bool {
         self.region == node.region && (node.prev.is_some() || self.is_head(node))
     }

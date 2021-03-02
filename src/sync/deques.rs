@@ -31,11 +31,11 @@ impl<K> Deques<K> {
     pub(crate) fn push_back_ao<V>(
         &mut self,
         region: CacheRegion,
-        kh: KeyHashDate<K>,
+        khd: KeyHashDate<K>,
         entry: &Arc<ValueEntry<K, V>>,
     ) {
         use CacheRegion::*;
-        let node = Box::new(DeqNode::new(region, kh));
+        let node = Box::new(DeqNode::new(region, khd));
         let node = match node.as_ref().region {
             Window => self.window.push_back(node),
             MainProbation => self.probation.push_back(node),
@@ -45,13 +45,13 @@ impl<K> Deques<K> {
         entry.set_access_order_q_node(Some(node));
     }
 
-    pub(crate) fn push_back_wo<V>(&mut self, kh: KeyDate<K>, entry: &Arc<ValueEntry<K, V>>) {
-        let node = Box::new(DeqNode::new(CacheRegion::WriteOrder, kh));
+    pub(crate) fn push_back_wo<V>(&mut self, kd: KeyDate<K>, entry: &Arc<ValueEntry<K, V>>) {
+        let node = Box::new(DeqNode::new(CacheRegion::WriteOrder, kd));
         let node = self.write_order.push_back(node);
         entry.set_write_order_q_node(Some(node));
     }
 
-    pub(crate) fn move_to_back_ao<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
+    pub(crate) fn move_to_back_ao<V>(&mut self, entry: &Arc<ValueEntry<K, V>>) {
         use CacheRegion::*;
         if let Some(node) = entry.access_order_q_node() {
             let p = unsafe { node.as_ref() };
@@ -68,7 +68,27 @@ impl<K> Deques<K> {
         }
     }
 
-    pub(crate) fn move_to_back_wo<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
+    pub(crate) fn move_to_back_ao_in_deque<V>(
+        deq_name: &str,
+        deq: &mut Deque<KeyHashDate<K>>,
+        entry: &Arc<ValueEntry<K, V>>,
+    ) {
+        if let Some(node) = entry.access_order_q_node() {
+            let p = unsafe { node.as_ref() };
+            if &p.region == deq.region() {
+                if deq.contains(p) {
+                    unsafe { deq.move_to_back(node) };
+                }
+            } else {
+                panic!(
+                    "move_to_back_ao_in_deque - node is not a member of {} deque. {:?}",
+                    deq_name, p,
+                )
+            }
+        }
+    }
+
+    pub(crate) fn move_to_back_wo<V>(&mut self, entry: &Arc<ValueEntry<K, V>>) {
         use CacheRegion::*;
         if let Some(node) = entry.write_order_q_node() {
             let p = unsafe { node.as_ref() };
@@ -79,7 +99,26 @@ impl<K> Deques<K> {
         }
     }
 
-    pub(crate) fn unlink_ao<V>(&mut self, entry: Arc<ValueEntry<K, V>>) {
+    pub(crate) fn move_to_back_wo_in_deque<V>(
+        deq: &mut Deque<KeyDate<K>>,
+        entry: &Arc<ValueEntry<K, V>>,
+    ) {
+        if let Some(node) = entry.write_order_q_node() {
+            let p = unsafe { node.as_ref() };
+            if &p.region == deq.region() {
+                if deq.contains(p) {
+                    unsafe { deq.move_to_back(node) };
+                }
+            } else {
+                panic!(
+                    "move_to_back_wo_in_deque - node is not a member of write_order deque. {:?}",
+                    p,
+                )
+            }
+        }
+    }
+
+    pub(crate) fn unlink_ao<V>(&mut self, entry: &Arc<ValueEntry<K, V>>) {
         if let Some(node) = entry.take_access_order_q_node() {
             self.unlink_node_ao(node);
         }
@@ -88,14 +127,14 @@ impl<K> Deques<K> {
     pub(crate) fn unlink_ao_from_deque<V>(
         deq_name: &str,
         deq: &mut Deque<KeyHashDate<K>>,
-        entry: Arc<ValueEntry<K, V>>,
+        entry: &Arc<ValueEntry<K, V>>,
     ) {
         if let Some(node) = entry.take_access_order_q_node() {
             unsafe { Self::unlink_node_ao_from_deque(deq_name, deq, node) };
         }
     }
 
-    pub(crate) fn unlink_wo<V>(deq: &mut Deque<KeyDate<K>>, entry: Arc<ValueEntry<K, V>>) {
+    pub(crate) fn unlink_wo<V>(deq: &mut Deque<KeyDate<K>>, entry: &Arc<ValueEntry<K, V>>) {
         if let Some(node) = entry.take_write_order_q_node() {
             Self::unlink_node_wo(deq, node);
         }
@@ -122,24 +161,26 @@ impl<K> Deques<K> {
         deq: &mut Deque<KeyHashDate<K>>,
         node: NonNull<DeqNode<KeyHashDate<K>>>,
     ) {
-        if deq.contains(node.as_ref()) {
-            deq.unlink(node);
+        let p = node.as_ref();
+        if &p.region == deq.region() {
+            if deq.contains(p) {
+                deq.unlink(node);
+            }
         } else {
             panic!(
                 "unlink_node - node is not a member of {} deque. {:?}",
-                deq_name,
-                node.as_ref()
+                deq_name, p
             )
         }
     }
 
     pub(crate) fn unlink_node_wo(deq: &mut Deque<KeyDate<K>>, node: NonNull<DeqNode<KeyDate<K>>>) {
-        use CacheRegion::*;
         unsafe {
             let p = node.as_ref();
-            debug_assert_eq!(&p.region, &WriteOrder);
-            if deq.contains(p) {
-                deq.unlink(node);
+            if &p.region == deq.region() {
+                if deq.contains(p) {
+                    deq.unlink(node);
+                }
             } else {
                 panic!(
                     "unlink_node - node is not a member of write_order deque. {:?}",

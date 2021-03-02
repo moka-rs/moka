@@ -40,7 +40,7 @@ use std::{
 ///   [`blocking_invalidate`](#method.blocking_invalidate) methods. They will block
 ///   for a short time under heavy updates.
 ///
-/// Here's an example that reads and updates a cache by using multiple asynchronous
+/// Here's an example of reading and updating a cache by using multiple asynchronous
 /// tasks with [Tokio][tokio-crate] runtime:
 ///
 /// [tokio-crate]: https://crates.io/crates/tokio
@@ -49,7 +49,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.2", features = ["future"] }
+/// // moka = { version = "0.3", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures = "0.3"
 ///
@@ -327,6 +327,20 @@ where
         }
     }
 
+    /// Discards all cached values.
+    ///
+    /// This method returns immediately and a background thread will evict all the
+    /// cached values inserted before the time when this method was called. It is
+    /// guaranteed that the `get` method must not return these invalidated values
+    /// even if they have not been evicted.
+    ///
+    /// Like the `invalidate` method, this method does not clear the historic
+    /// popularity estimator of keys so that it retains the client activities of
+    /// trying to retrieve an item.
+    pub fn invalidate_all(&self) {
+        self.base.invalidate_all();
+    }
+
     /// Returns the `max_capacity` of this cache.
     pub fn max_capacity(&self) -> usize {
         self.base.max_capacity()
@@ -575,6 +589,34 @@ mod tests {
 
         assert!(cache.get(&10).is_none());
         assert!(cache.get(&20).is_some());
+    }
+
+    #[tokio::test]
+    async fn invalidate_all() {
+        let mut cache = Cache::new(100);
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice").await;
+        cache.insert("b", "bob").await;
+        cache.insert("c", "cindy").await;
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"c"), Some("cindy"));
+        cache.sync();
+
+        cache.invalidate_all();
+        cache.sync();
+
+        cache.insert("d", "david").await;
+        cache.sync();
+
+        assert!(cache.get(&"a").is_none());
+        assert!(cache.get(&"b").is_none());
+        assert!(cache.get(&"c").is_none());
+        assert_eq!(cache.get(&"d"), Some("david"));
     }
 
     #[tokio::test]

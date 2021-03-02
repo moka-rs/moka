@@ -22,6 +22,13 @@ impl<K> Default for Deques<K> {
 }
 
 impl<K> Deques<K> {
+    pub(crate) fn clear(&mut self) {
+        self.window = Deque::new(CacheRegion::Window);
+        self.probation = Deque::new(CacheRegion::MainProbation);
+        self.protected = Deque::new(CacheRegion::MainProtected);
+        self.write_order = Deque::new(CacheRegion::WriteOrder);
+    }
+
     pub(crate) fn push_back_ao<V>(
         &mut self,
         region: CacheRegion,

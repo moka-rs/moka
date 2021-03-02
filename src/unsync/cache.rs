@@ -17,6 +17,98 @@ use std::{
 
 type CacheStore<K, V, S> = std::collections::HashMap<Rc<K>, ValueEntry<K, V>, S>;
 
+/// An in-memory cache that is _not_ thread-safe.
+///
+/// `Cache` utilizes a hash table `std::collections::HashMap` from the standard
+/// library for the central key-value storage. `Cache` performs a best-effort
+/// bounding of the map using an entry replacement algorithm to determine which
+/// entries to evict when the capacity is exceeded.
+///
+/// # Characteristic difference between `unsync` and `sync`/`future` caches
+///
+/// If you use a cache from a single thread application, `unsync::Cache` may
+/// outperform other caches for updates and retrievals because other caches have some
+/// overhead on syncing internal data structures between threads.
+///
+/// However, other caches may outperform `unsync::Cache` on the same operations when
+/// expiration polices are configured on a multi-core system. `unsync::Cache` evicts
+/// expired entries as a part of update and retrieval operations while others evict
+/// them using a dedicated background thread.
+///
+/// # Examples
+///
+/// Cache entries are manually added using an insert method, and are stored in the
+/// cache until either evicted or manually invalidated.
+///
+/// Here's an example of reading and updating a cache by using the main thread:
+///
+///```rust
+/// use moka::unsync::Cache;
+///
+/// const NUM_KEYS: usize = 64;
+///
+/// fn value(n: usize) -> String {
+///     format!("value {}", n)
+/// }
+///
+/// // Create a cache that can store up to 10,000 entries.
+/// let mut cache = Cache::new(10_000);
+///
+/// // Insert 64 entries.
+/// for key in 0..NUM_KEYS {
+///     cache.insert(key, value(key));
+/// }
+///
+/// // Invalidate every 4 element of the inserted entries.
+/// for key in (0..NUM_KEYS).step_by(4) {
+///     cache.invalidate(&key);
+/// }
+///
+/// // Verify the result.
+/// for key in 0..NUM_KEYS {
+///     if key % 4 == 0 {
+///         assert_eq!(cache.get(&key), None);
+///     } else {
+///         assert_eq!(cache.get(&key), Some(&value(key)));
+///     }
+/// }
+/// ```
+///
+/// # Expiration Policies
+///
+/// `Cache` supports the following expiration policies:
+///
+/// - **Time to live**: A cached entry will be expired after the specified duration
+///   past from `insert`.
+/// - **Time to idle**: A cached entry will be expired after the specified duration
+///   past from `get` or `insert`.
+///
+/// See the [`CacheBuilder`][builder-struct]'s doc for how to configure a cache
+/// with them.
+///
+/// [builder-struct]: ./struct.CacheBuilder.html
+///
+/// # Hashing Algorithm
+///
+/// By default, `Cache` uses a hashing algorithm selected to provide resistance
+/// against HashDoS attacks.
+///
+/// The default hashing algorithm is the one used by `std::collections::HashMap`,
+/// which is currently SipHash 1-3.
+///
+/// While its performance is very competitive for medium sized keys, other hashing
+/// algorithms will outperform it for small keys such as integers as well as large
+/// keys such as long strings. However those algorithms will typically not protect
+/// against attacks such as HashDoS.
+///
+/// The hashing algorithm can be replaced on a per-`Cache` basis using the
+/// [`build_with_hasher`][build-with-hasher-method] method of the
+/// `CacheBuilder`. Many alternative algorithms are available on crates.io, such
+/// as the [aHash][ahash-crate] crate.
+///
+/// [build-with-hasher-method]: ./struct.CacheBuilder.html#method.build_with_hasher
+/// [ahash-crate]: https://crates.io/crates/ahash
+///
 pub struct Cache<K, V, S = RandomState> {
     max_capacity: usize,
     cache: CacheStore<K, V, S>,
@@ -31,8 +123,13 @@ pub struct Cache<K, V, S = RandomState> {
 impl<K, V> Cache<K, V, RandomState>
 where
     K: Hash + Eq,
-    V: Clone,
 {
+    /// Constructs a new `Cache<K, V>` that will store up to the `max_capacity` entries.
+    ///
+    /// To adjust various configuration knobs such as `initial_capacity` or
+    /// `time_to_live`, use the [`CacheBuilder`][builder-struct].
+    ///
+    /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: usize) -> Self {
         let build_hasher = RandomState::default();
         Self::with_everything(max_capacity, None, build_hasher, None, None)
@@ -45,7 +142,6 @@ where
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq,
-    V: Clone,
     S: BuildHasher + Clone,
 {
     pub(crate) fn with_everything(
@@ -73,89 +169,68 @@ where
         }
     }
 
+    /// Returns an immutable reference of the value corresponding to the key.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
+    /// on the borrowed form _must_ match those for the key type.
+    ///
+    /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
     pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let hash = self.hash(key);
-        let has_expiry = self.has_expiry();
-        let timestamp = if has_expiry {
-            Some(self.current_time_from_expiration_clock())
-        } else {
-            None
-        };
+        let timestamp = self.evict_if_needed();
+        self.frequency_sketch.increment(self.hash(key));
 
-        if let Some(ts) = timestamp {
-            self.evict(ts);
-        }
-
-        let (entry, sketch, deqs) = (
-            self.cache.get_mut(key),
-            &mut self.frequency_sketch,
-            &mut self.deques,
-        );
-
-        match (entry, has_expiry) {
+        match (self.cache.get_mut(key), timestamp, &mut self.deques) {
             // Value not found.
-            (None, _) => {
-                Self::record_read(sketch, deqs, hash, None, None);
-                None
-            }
+            (None, _, _) => None,
             // Value found, no expiry.
-            (Some(entry), false) => {
-                Self::record_read(sketch, deqs, hash, Some(entry), None);
+            (Some(entry), None, deqs) => {
+                Self::record_hit(deqs, entry, None);
                 Some(&entry.value)
             }
-            // Value found, need to check if expired.
-            (Some(entry), true) => {
-                if Self::is_expired_entry_wo(&self.time_to_live, entry, timestamp.unwrap())
-                    || Self::is_expired_entry_ao(&self.time_to_idle, entry, timestamp.unwrap())
+            // Value found, check if expired.
+            (Some(entry), Some(ts), deqs) => {
+                if Self::is_expired_entry_wo(&self.time_to_live, entry, ts)
+                    || Self::is_expired_entry_ao(&self.time_to_idle, entry, ts)
                 {
-                    // Expired entry. Record this access as a cache miss rather than a hit.
-                    Self::record_read(sketch, deqs, hash, None, None);
                     None
                 } else {
-                    // Valid entry.
-                    Self::record_read(sketch, deqs, hash, Some(entry), timestamp);
+                    Self::record_hit(deqs, entry, timestamp);
                     Some(&entry.value)
                 }
             }
         }
     }
 
+    /// Inserts a key-value pair into the cache.
+    ///
+    /// If the cache has this key present, the value is updated.
     pub fn insert(&mut self, key: K, value: V) {
-        let timestamp = if self.has_expiry() {
-            Some(self.current_time_from_expiration_clock())
-        } else {
-            None
-        };
-
-        if let Some(ts) = timestamp {
-            self.evict(ts);
-        }
-
+        let timestamp = self.evict_if_needed();
         let key = Rc::new(key);
         let entry = ValueEntry::new(value);
 
         if let Some(old_entry) = self.cache.insert(Rc::clone(&key), entry) {
             self.handle_update(key, timestamp, old_entry);
         } else {
-            // Insert
             let hash = self.hash(&key);
             self.handle_insert(key, hash, timestamp);
         }
     }
 
+    /// Discards any cached value for the key.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
+    /// on the borrowed form _must_ match those for the key type.
     pub fn invalidate<Q>(&mut self, key: &Q)
     where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if self.has_expiry() {
-            let ts = self.current_time_from_expiration_clock();
-            self.evict(ts);
-        }
+        self.evict_if_needed();
 
         if let Some(mut entry) = self.cache.remove(key) {
             self.deques.unlink_ao(&mut entry);
@@ -163,10 +238,22 @@ where
         }
     }
 
+    /// Discards all cached values.
+    ///
+    /// Like the `invalidate` method, this method does not clear the historic
+    /// popularity estimator of keys so that it retains the client activities of
+    /// trying to retrieve an item.
+    pub fn invalidate_all(&mut self) {
+        self.cache.clear();
+        self.deques.clear();
+    }
+
+    /// Returns the `max_capacity` of this cache.
     pub fn max_capacity(&self) -> usize {
         self.max_capacity
     }
 
+    /// Returns the `time_to_live` of this cache.
     pub fn time_to_live(&self) -> Option<Duration> {
         self.time_to_live
     }
@@ -183,7 +270,6 @@ where
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq,
-    V: Clone,
     S: BuildHasher + Clone,
 {
     #[inline]
@@ -203,6 +289,17 @@ where
     }
 
     #[inline]
+    fn evict_if_needed(&mut self) -> Option<Instant> {
+        if self.has_expiry() {
+            let ts = self.current_time_from_expiration_clock();
+            self.evict(ts);
+            Some(ts)
+        } else {
+            None
+        }
+    }
+
+    #[inline]
     fn current_time_from_expiration_clock(&self) -> Instant {
         if let Some(clock) = &self.expiration_clock {
             clock.now()
@@ -218,9 +315,7 @@ where
         now: Instant,
     ) -> bool {
         if let (Some(ts), Some(tti)) = (entry.last_accessed(), time_to_idle) {
-            if ts + *tti <= now {
-                return true;
-            }
+            return ts + *tti <= now;
         }
         false
     }
@@ -232,27 +327,16 @@ where
         now: Instant,
     ) -> bool {
         if let (Some(ts), Some(ttl)) = (entry.last_modified(), time_to_live) {
-            if ts + *ttl <= now {
-                return true;
-            }
+            return ts + *ttl <= now;
         }
         false
     }
 
-    fn record_read(
-        frequency_sketch: &mut FrequencySketch,
-        deques: &mut Deques<K>,
-        hash: u64,
-        entry: Option<&mut ValueEntry<K, V>>,
-        timestamp: Option<Instant>,
-    ) {
-        frequency_sketch.increment(hash);
-        if let Some(entry) = entry {
-            if let Some(ts) = timestamp {
-                entry.set_last_accessed(ts);
-            }
-            deques.move_to_back_ao(entry)
+    fn record_hit(deques: &mut Deques<K>, entry: &mut ValueEntry<K, V>, ts: Option<Instant>) {
+        if let Some(ts) = ts {
+            entry.set_last_accessed(ts);
         }
+        deques.move_to_back_ao(entry)
     }
 
     #[inline]
@@ -506,6 +590,27 @@ mod tests {
 
         cache.invalidate(&"b");
         assert_eq!(cache.get(&"b"), None);
+    }
+
+    #[test]
+    fn invalidate_all() {
+        let mut cache = Cache::new(100);
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+        assert_eq!(cache.get(&"a"), Some(&"alice"));
+        assert_eq!(cache.get(&"b"), Some(&"bob"));
+        assert_eq!(cache.get(&"c"), Some(&"cindy"));
+
+        cache.invalidate_all();
+
+        cache.insert("d", "david");
+
+        assert!(cache.get(&"a").is_none());
+        assert!(cache.get(&"b").is_none());
+        assert!(cache.get(&"c").is_none());
+        assert_eq!(cache.get(&"d"), Some(&"david"));
     }
 
     #[test]

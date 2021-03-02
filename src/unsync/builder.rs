@@ -47,10 +47,9 @@ pub struct CacheBuilder<C> {
 impl<K, V> CacheBuilder<Cache<K, V, RandomState>>
 where
     K: Eq + Hash,
-    V: Clone,
 {
-    /// Construct a new `CacheBuilder` that will be used to build a `Cache` or
-    /// `SegmentedCache` holding up to `max_capacity` entries.
+    /// Construct a new `CacheBuilder` that will be used to build a `Cache` holding
+    /// up to `max_capacity` entries.
     pub fn new(max_capacity: usize) -> Self {
         Self {
             max_capacity,
@@ -62,9 +61,6 @@ where
     }
 
     /// Builds a `Cache<K, V>`.
-    ///
-    /// If you want to build a `SegmentedCache<K, V>`, call `segments` method before
-    /// calling this method.
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
         Cache::with_everything(
@@ -77,9 +73,6 @@ where
     }
 
     /// Builds a `Cache<K, V, S>`, with the given `hasher`.
-    ///
-    /// If you want to build a `SegmentedCache<K, V>`, call `segments` method  before
-    /// calling this method.
     pub fn build_with_hasher<S>(self, hasher: S) -> Cache<K, V, S>
     where
         S: BuildHasher + Clone,

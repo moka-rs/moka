@@ -30,7 +30,7 @@ use std::{
 /// Cache entries are manually added using `insert` method, and are stored in the
 /// cache until either evicted or manually invalidated.
 ///
-/// Here's an example that reads and updates a cache by using multiple threads:
+/// Here's an example of reading and updating a cache by using multiple threads:
 ///
 /// ```rust
 /// use moka::sync::Cache;
@@ -282,6 +282,20 @@ where
         }
     }
 
+    /// Discards all cached values.
+    ///
+    /// This method returns immediately and a background thread will evict all the
+    /// cached values inserted before the time when this method was called. It is
+    /// guaranteed that the `get` method must not return these invalidated values
+    /// even if they have not been evicted.
+    ///
+    /// Like the `invalidate` method, this method does not clear the historic
+    /// popularity estimator of keys so that it retains the client activities of
+    /// trying to retrieve an item.
+    pub fn invalidate_all(&self) {
+        self.base.invalidate_all();
+    }
+
     /// Returns the `max_capacity` of this cache.
     pub fn max_capacity(&self) -> usize {
         self.base.max_capacity()
@@ -356,7 +370,7 @@ where
     K: Hash + Eq,
     S: BuildHasher + Clone,
 {
-    fn reconfigure_for_testing(&mut self) {
+    pub(crate) fn reconfigure_for_testing(&mut self) {
         self.base.reconfigure_for_testing();
     }
 
@@ -442,6 +456,34 @@ mod tests {
 
         assert!(cache.get(&10).is_none());
         assert!(cache.get(&20).is_some());
+    }
+
+    #[test]
+    fn invalidate_all() {
+        let mut cache = Cache::new(100);
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"c"), Some("cindy"));
+        cache.sync();
+
+        cache.invalidate_all();
+        cache.sync();
+
+        cache.insert("d", "david");
+        cache.sync();
+
+        assert!(cache.get(&"a").is_none());
+        assert!(cache.get(&"b").is_none());
+        assert!(cache.get(&"c").is_none());
+        assert_eq!(cache.get(&"d"), Some("david"));
     }
 
     #[test]

@@ -1,3 +1,5 @@
+//! Provides a *not* thread-safe, blocking cache implementation.
+
 pub(crate) mod builder;
 pub(crate) mod cache;
 mod deques;

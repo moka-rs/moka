@@ -5,12 +5,16 @@
 //! [Caffeine][caffeine-git] (Java) and [Ristretto][ristretto-git] (Go).
 //!
 //! Moka provides in-memory concurrent cache implementations that support full
-//! concurrency of retrievals and a high expected concurrency for updates.
-//! <!-- , and multiple ways to bound the cache. -->
+//! concurrency of retrievals and a high expected concurrency for updates. <!-- , and multiple ways to bound the cache. -->
 //! They utilize a lock-free concurrent hash table `cht::SegmentedHashMap` from the
-//! [cht][cht-crate] crate for the central key-value storage. These caches perform a
-//! best-effort bounding of the map using an entry replacement algorithm to determine
-//! which entries to evict when the capacity is exceeded.
+//! [cht][cht-crate] crate for the central key-value storage.
+//!
+//! Moka also provides an in-memory, not thread-safe cache implementation for single
+//! thread applications.
+//!
+//! All cache implementations perform a best-effort bounding of the map using an entry
+//! replacement algorithm to determine which entries to evict when the capacity is
+//! exceeded.
 //!
 //! [caffeine-git]: https://github.com/ben-manes/caffeine
 //! [ristretto-git]: https://github.com/dgraph-io/ristretto
@@ -19,9 +23,10 @@
 //! # Features
 //!
 //! - Thread-safe, highly concurrent in-memory cache implementations:
-//!     - Synchronous (blocking) caches that can be shared across OS threads.
+//!     - Blocking caches that can be shared across OS threads.
 //!     - An asynchronous (futures aware) cache that can be accessed inside and
 //!       outside of asynchronous contexts.
+//! - A not thread-safe, in-memory cache implementation for single thread applications.
 //! - Caches are bounded by the maximum number of entries.
 //! - Maintains good hit rate by using entry replacement algorithms inspired by
 //!   [Caffeine][caffeine-git]:
@@ -33,35 +38,38 @@
 //!
 //! # Examples
 //!
-//! See the followings:
+//! See the following document:
 //!
-//! - Synchronous (blocking) caches:
-//!     - The document for the [`sync::Cache`][sync-cache-struct] and
+//! - Thread-safe, blocking caches:
+//!     - [`sync::Cache`][sync-cache-struct] and
 //!       [`sync::SegmentedCache`][sync-seg-cache-struct].
-//! - Asynchronous (futures aware) cache:
-//!     - The document for the [`future::Cache`][future-cache-struct].
+//! - An asynchronous (futures aware) cache:
+//!     - [`future::Cache`][future-cache-struct].
+//! - A not thread-safe, blocking cache for single threaded applications:
+//!     - [`unsync::Cache`][unsync-cache-struct].
 //!
 //! [future-cache-struct]: ./future/struct.Cache.html
 //! [sync-cache-struct]: ./sync/struct.Cache.html
 //! [sync-seg-cache-struct]: ./sync/struct.SegmentedCache.html
+//! [unsync-cache-struct]: ./unsync/struct.Cache.html
 //!
 //! # Minimum Supported Rust Version
 //!
 //! This crate's minimum supported Rust version (MSRV) is 1.45.2.
 //!
-//! If no feature is enabled, MSRV will be updated conservatively. When using other
-//! features, like `async` (which is not available yet), MSRV might be updated more
-//! frequently, up to the latest stable. In both cases, increasing MSRV is _not_
-//! considered a semver-breaking change.
+//! If no crate feature is enabled, MSRV will be updated conservatively. When using
+//! features like `future`, MSRV might be updated more frequently, up to the latest
+//! stable. In both cases, increasing MSRV is _not_ considered a semver-breaking
+//! change.
 //!
 //! # Implementation Details
 //!
 //! ## Concurrency
 //!
-//! The entry replacement algorithms are kept eventually consistent with the
-//! map. While updates to the cache are immediately applied to the map, recording of
-//! reads and writes may not be immediately reflected on the cache policy's data
-//! structures.
+//! In a concurrent cache (`sync` or `future` cache), the entry replacement
+//! algorithms are kept eventually consistent with the map. While updates to the
+//! cache are immediately applied to the map, recording of reads and writes may not
+//! be immediately reflected on the cache policy's data structures.
 //!
 //! These structures are guarded by a lock and operations are applied in batches to
 //! avoid lock contention. There are bounded inter-thread channels to hold these
@@ -95,12 +103,11 @@
 //! retained in a historic popularity estimator. This estimator has a tiny memory
 //! footprint as it uses hashing to probabilistically estimate an item's frequency.
 //!
-//! Both `Cache` and `SegmentedCache` employ [TinyLFU] (Least Frequently Used) as the
-//! admission policy. When a new entry is inserted to the cache, it is temporary
-//! admitted to the cache, and a recording of this insertion is added to the write
-//! queue. When the write queue is drained and the main space of the cache is already
-//! full, then the historic popularity estimator determines to evict one of the
-//! following entries:
+//! All caches employ [TinyLFU] (Least Frequently Used) as the admission policy. When
+//! a new entry is inserted to the cache, it is temporary admitted to the cache, and
+//! a recording of this insertion is added to the write queue. When the write queue
+//! is drained and the main space of the cache is already full, then the historic
+//! popularity estimator determines to evict one of the following entries:
 //!
 //! - The temporary admitted entry.
 //! - Or, an entry that is selected from the main cache space by LRU (Least Recently
@@ -124,7 +131,8 @@
 //!
 //! A future release will support the following:
 //!
-//! - The variable expiration
+//! - The variable expiration (which allows to set different expiration on each
+//!   cached entry)
 //!
 //! These policies are provided with _O(1)_ time complexity:
 //!

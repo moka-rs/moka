@@ -11,9 +11,12 @@ Moka is a fast, concurrent cache library for Rust. Moka is inspired by
 [Caffeine][caffeine-git] (Java) and [Ristretto][ristretto-git] (Go).
 
 Moka provides cache implementations that support full concurrency of retrievals and
-a high expected concurrency for updates. They perform a best-effort bounding of a
-concurrent hash map using an entry replacement algorithm to determine which entries
-to evict when the capacity is exceeded.
+a high expected concurrency for updates. Moka also provides a not thread-safe cache
+implementation for single thread applications.
+
+All caches perform a best-effort bounding of a  hash map using an entry
+replacement algorithm to determine which entries to evict when the capacity is
+exceeded.
 
 [gh-actions-badge]: https://github.com/moka-rs/moka/workflows/CI/badge.svg
 [release-badge]: https://img.shields.io/crates/v/moka.svg
@@ -35,9 +38,10 @@ to evict when the capacity is exceeded.
 ## Features
 
 - Thread-safe, highly concurrent in-memory cache implementations:
-    - Synchronous (blocking) caches that can be shared across OS threads.
+    - Blocking caches that can be shared across OS threads.
     - An asynchronous (futures aware) cache that can be accessed inside and outside
       of asynchronous contexts.
+- A not thread-safe, in-memory cache implementation for single thread applications.
 - Caches are bounded by the maximum number of entries.
 - Maintains good hit rate by using an entry replacement algorithms inspired by
   [Caffeine][caffeine-git]:
@@ -54,25 +58,25 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-moka = "0.2"
+moka = "0.3"
 ```
 
 To use the asynchronous cache, enable a crate feature called "future".
 
 ```toml
 [dependencies]
-moka = { version = "0.2", features = ["future"] }
+moka = { version = "0.3", features = ["future"] }
 ```
 
 
 ## Example: Synchronous Cache
 
-The synchronous (blocking) caches are defined in the `sync` module.
+The thread-safe, blocking caches are defined in the `sync` module.
 
 Cache entries are manually added using `insert` method, and are stored in the cache
 until either evicted or manually invalidated.
 
-Here's an example that reads and updates a cache by using multiple threads:
+Here's an example of reading and updating a cache by using multiple threads:
 
 ```rust
 // Use the synchronous cache.
@@ -157,7 +161,7 @@ Here is a similar program to the previous example, but using asynchronous cache 
 // Cargo.toml
 //
 // [dependencies]
-// moka = { version = "0.2", features = ["future"] }
+// moka = { version = "0.3", features = ["future"] }
 // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 // futures = "0.3"
 
@@ -220,12 +224,13 @@ async fn main() {
 
 ## Avoiding to clone the value at `get`
 
-The return type of `get` method is `Option<V>` instead of `Option<&V>`, where `V` is
-the value type. Every time `get` is called for an existing key, it creates a clone of
-the stored value `V` and returns it. This is because the `Cache` allows concurrent
-updates from threads so a value stored in the cache can be dropped or replaced at any
-time by any other thread. `get` cannot return a reference `&V` as it is impossible to
-guarantee the value outlives the reference.
+For the concurrent caches (`sync` and `future` caches), the return type of `get`
+method is `Option<V>` instead of `Option<&V>`, where `V` is the value type. Every
+time `get` is called for an existing key, it creates a clone of the stored value `V`
+and returns it. This is because the `Cache` allows concurrent updates from threads so
+a value stored in the cache can be dropped or replaced at any time by any other
+thread. `get` cannot return a reference `&V` as it is impossible to guarantee the
+value outlives the reference.
 
 If you want to store values that will be expensive to clone, wrap them by
 `std::sync::Arc` before storing in a cache. [`Arc`][rustdoc-std-arc] is a thread-safe

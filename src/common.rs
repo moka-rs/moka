@@ -11,3 +11,11 @@ pub(crate) trait AccessTime {
     fn last_modified(&self) -> Option<Instant>;
     fn set_last_modified(&mut self, timestamp: Instant);
 }
+
+pub(crate) fn u64_to_instant(ts: u64) -> Option<Instant> {
+    if ts == u64::MAX {
+        None
+    } else {
+        Some(unsafe { std::mem::transmute(ts) })
+    }
+}
