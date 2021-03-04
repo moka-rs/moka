@@ -9,8 +9,8 @@ license = "MIT OR Apache-2.0"
 # homepage = "https://"
 documentation = "https://docs.rs/moka/"
 repository = "https://github.com/moka-rs/moka"
-keywords = ["concurrent", "cache"]
-categories = ["concurrency", "caching"]
+keywords = ["cache", "concurrent"]
+categories = ["caching", "concurrency"]
 readme = "README.md"
 exclude = [".devcontainer", ".github", ".vscode"]
 build = "build.rs"
@@ -33,6 +33,7 @@ parking_lot = "0.11"
 # https://github.com/metrics-rs/quanta/pull/38
 quanta = "0.7.1"
 scheduled-thread-pool = "0.2"
+thiserror = "1.0"
 
 # Optional dependencies
 async-io = { version = "1", optional = true }

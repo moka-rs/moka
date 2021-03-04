@@ -17,6 +17,7 @@ mod builder;
 pub(crate) mod cache;
 pub(crate) mod deques;
 pub(crate) mod housekeeper;
+mod invalidator;
 mod segment;
 
 pub use builder::CacheBuilder;

@@ -21,11 +21,13 @@
         "mpsc",
         "nanos",
         "nocapture",
+        "preds",
         "runtimes",
         "rustdoc",
         "rustfmt",
         "semver",
         "structs",
+        "thiserror",
         "toolchain",
         "unsync",
         "usize"
