@@ -14,8 +14,8 @@ use std::{
 
 pub(crate) mod base_cache;
 mod builder;
-pub(crate) mod cache;
-pub(crate) mod deques;
+mod cache;
+mod deques;
 pub(crate) mod housekeeper;
 mod invalidator;
 mod segment;

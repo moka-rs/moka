@@ -1,7 +1,7 @@
 //! Provides a *not* thread-safe, blocking cache implementation.
 
-pub(crate) mod builder;
-pub(crate) mod cache;
+mod builder;
+mod cache;
 mod deques;
 
 use std::{ptr::NonNull, rc::Rc};

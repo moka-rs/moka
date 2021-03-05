@@ -605,6 +605,7 @@ where
                         // instead of unlinking (dropping) it.
                         let victim = NonNull::from(victim);
                         unsafe { deqs.probation.move_to_back(victim) };
+
                         continue; // Retry
                     }
                     // Add the candidate to the deques.

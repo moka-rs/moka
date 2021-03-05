@@ -3,7 +3,7 @@
 //! To use this module, enable a crate feature called "future".
 
 mod builder;
-pub(crate) mod cache;
+mod cache;
 
 pub use builder::CacheBuilder;
 pub use cache::Cache;
