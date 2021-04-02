@@ -53,9 +53,14 @@
 //! [sync-seg-cache-struct]: ./sync/struct.SegmentedCache.html
 //! [unsync-cache-struct]: ./unsync/struct.Cache.html
 //!
-//! # Minimum Supported Rust Version
+//! # Minimum Supported Rust Versions
 //!
-//! This crate's minimum supported Rust version (MSRV) is 1.45.2.
+//! This crate's minimum supported Rust versions (MSRV) are the followings:
+//!
+//! | Enabled Feature      | MSRV        |
+//! |:---------------------|:------------|
+//! | no feature (default) | Rust 1.45.2 |
+//! | `future`             | Rust 1.46.0 |
 //!
 //! If no crate feature is enabled, MSRV will be updated conservatively. When using
 //! features like `future`, MSRV might be updated more frequently, up to the latest
