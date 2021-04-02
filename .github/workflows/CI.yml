@@ -21,7 +21,8 @@ jobs:
         rust:
           - stable
           - beta
-          - 1.45.2  # MSRV
+          - 1.46.0  # MSRV (future)
+          - 1.45.2  # MSRV (no features)
 
     steps:
       - name: Checkout Moka
@@ -50,6 +51,7 @@ jobs:
 
       - name: Run tests (future)
         uses: actions-rs/cargo@v1
+        if: ${{ matrix.rust != '1.45.2' }}
         with:
           command: test
           args: --release --features future
