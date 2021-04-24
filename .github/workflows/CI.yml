@@ -4,10 +4,12 @@ on:
   push:
     paths-ignore:
     - '.devcontainer/**'
+    - '.gitpod.yml'
     - '.vscode/**'
   pull_request:
     paths-ignore:
     - '.devcontainer/**'
+    - '.gitpod.yml'
     - '.vscode/**'
   schedule:
     # Run against the last commit on the default branch on Friday at 8pm (UTC?)
