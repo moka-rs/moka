@@ -41,7 +41,7 @@ async-io = { version = "1", optional = true }
 [dev-dependencies]
 actix-rt2 = { package = "actix-rt", version = "2", default-features = false }
 actix-rt1 = { package = "actix-rt", version = "1", default-features = false }
-async-std = { version = "1", features = ["attributes"] }
+async-std = { version = "1", default-features = false, features = ["attributes"] }
 futures = "0.3"
 getrandom = "0.2"
 skeptic = "0.13"
