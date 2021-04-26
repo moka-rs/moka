@@ -238,6 +238,7 @@ impl<T> Deque<T> {
         self.len -= 1;
     }
 
+    #[allow(unused)]
     pub(crate) fn reset_cursor(&mut self) {
         self.cursor = None;
     }
