@@ -1,5 +1,13 @@
 # Moka &mdash; Change Log
 
+## Version 0.4.0
+
+### Added
+
+- Add `invalidate_entries_if` method to `sync`, `future` and `unsync` caches.
+  ([#12][gh-pull-0012]) &mdash; **IN-PROGRESS**
+
+
 ## Version 0.3.0
 
 ### Added
@@ -43,6 +51,7 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[gh-pull-0012]: https://github.com/moka-rs/moka/pull/12/
 [gh-pull-0011]: https://github.com/moka-rs/moka/pull/11/
 [gh-pull-0009]: https://github.com/moka-rs/moka/pull/9/
 [gh-pull-0007]: https://github.com/moka-rs/moka/pull/7/
