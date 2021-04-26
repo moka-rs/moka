@@ -51,11 +51,18 @@ impl<T> DeqNode<T> {
     }
 }
 
+/// Cursor is used to remember the current iterating position.
+enum DeqCursor<T> {
+    Node(NonNull<DeqNode<T>>),
+    Done,
+}
+
 pub(crate) struct Deque<T> {
     region: CacheRegion,
     len: usize,
     head: Option<NonNull<DeqNode<T>>>,
     tail: Option<NonNull<DeqNode<T>>>,
+    cursor: Option<DeqCursor<T>>,
     marker: PhantomData<Box<DeqNode<T>>>,
 }
 
@@ -84,9 +91,10 @@ impl<T> Deque<T> {
     pub(crate) fn new(region: CacheRegion) -> Self {
         Self {
             region,
+            len: 0,
             head: None,
             tail: None,
-            len: 0,
+            cursor: None,
             marker: PhantomData::default(),
         }
     }
@@ -110,6 +118,10 @@ impl<T> Deque<T> {
         // This method takes care not to create mutable references to whole nodes,
         // to maintain validity of aliasing pointers into `element`.
         self.head.map(|node| unsafe {
+            if self.is_at_cursor(node.as_ref()) {
+                self.advance_cursor();
+            }
+    
             let mut node = Box::from_raw(node.as_ptr());
             self.head = node.next;
 
@@ -155,10 +167,14 @@ impl<T> Deque<T> {
         }
     }
 
-    /// Panics:
     pub(crate) unsafe fn move_to_back(&mut self, mut node: NonNull<DeqNode<T>>) {
         if self.is_tail(node.as_ref()) {
+            // Already at the tail. Nothing to do.
             return;
+        }
+
+        if self.is_at_cursor(node.as_ref()) {
+            self.advance_cursor();
         }
 
         let node = node.as_mut(); // this one is ours now, we can create an &mut.
@@ -197,6 +213,10 @@ impl<T> Deque<T> {
     pub(crate) unsafe fn unlink(&mut self, mut node: NonNull<DeqNode<T>>) {
         assert_eq!(self.region, node.as_ref().region);
 
+        if self.is_at_cursor(node.as_ref()) {
+            self.advance_cursor();
+        }
+
         let node = node.as_mut(); // this one is ours now, we can create an &mut.
 
         // Not creating new mutable (unique!) references overlapping `element`.
@@ -217,6 +237,29 @@ impl<T> Deque<T> {
 
         self.len -= 1;
     }
+
+    pub(crate) fn reset_cursor(&mut self) {
+        self.cursor = None;
+    }
+}
+
+impl<'a, T> Iterator for &'a mut Deque<T> {
+    type Item = &'a T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cursor.is_none() {
+            if let Some(head) = self.head {
+                self.cursor = Some(DeqCursor::Node(head));
+            }
+        }
+        let elem = if let Some(DeqCursor::Node(node)) = self.cursor {
+            unsafe { Some(&(*node.as_ptr()).element) }
+        } else {
+            None
+        };
+        self.advance_cursor();
+        elem
+    }
 }
 
 // Private function/methods
@@ -234,6 +277,30 @@ impl<T> Deque<T> {
             std::ptr::eq(unsafe { tail.as_ref() }, node)
         } else {
             false
+        }
+    }
+
+    fn is_at_cursor(&self, node: &DeqNode<T>) -> bool {
+        if let Some(DeqCursor::Node(cur_node)) = self.cursor {
+            std::ptr::eq(unsafe { cur_node.as_ref() }, node)
+        } else {
+            false
+        }
+    }
+
+    fn advance_cursor(&mut self) {
+        match self.cursor.take() {
+            None => (),
+            Some(DeqCursor::Node(node)) => unsafe {
+                if let Some(next) = (*node.as_ptr()).next {
+                    self.cursor = Some(DeqCursor::Node(next));
+                } else {
+                    self.cursor = Some(DeqCursor::Done);
+                }
+            },
+            Some(DeqCursor::Done) => {
+                self.cursor = None;
+            }
         }
     }
 
@@ -506,6 +573,81 @@ mod tests {
         // peek_back() -> node1
         let tail_e = deque.peek_back();
         assert!(tail_e.is_none());
+    }
+
+    #[test]
+    fn iter() {
+        let mut deque: Deque<String> = Deque::new(MainProbation);
+        assert!((&mut deque).next().is_none());
+
+        let node1 = DeqNode::new(MainProbation, "a".into());
+        deque.push_back(Box::new(node1));
+        let node2 = DeqNode::new(MainProbation, "b".into());
+        let node2_ptr = deque.push_back(Box::new(node2));
+        let node3 = DeqNode::new(MainProbation, "c".into());
+        let node3_ptr = deque.push_back(Box::new(node3));
+
+        // -------------------------------------------------------
+        // First iteration.
+        assert_eq!((&mut deque).next(), Some(&"a".into()));
+        assert_eq!((&mut deque).next(), Some(&"b".into()));
+        assert_eq!((&mut deque).next(), Some(&"c".into()));
+        assert!((&mut deque).next().is_none());
+
+        // -------------------------------------------------------
+        // Ensure the iterator restarts.
+        assert_eq!((&mut deque).next(), Some(&"a".into()));
+        assert_eq!((&mut deque).next(), Some(&"b".into()));
+        assert_eq!((&mut deque).next(), Some(&"c".into()));
+        assert!((&mut deque).next().is_none());
+
+        // -------------------------------------------------------
+        // Ensure reset_cursor works.
+        assert_eq!((&mut deque).next(), Some(&"a".into()));
+        assert_eq!((&mut deque).next(), Some(&"b".into()));
+        deque.reset_cursor();
+        assert_eq!((&mut deque).next(), Some(&"a".into()));
+        assert_eq!((&mut deque).next(), Some(&"b".into()));
+        assert_eq!((&mut deque).next(), Some(&"c".into()));
+        assert!((&mut deque).next().is_none());
+
+        // -------------------------------------------------------
+        // Try to move_to_back during iteration.
+        assert_eq!((&mut deque).next(), Some(&"a".into()));
+        // Next will be "b", but we move it to the back.
+        unsafe { deque.move_to_back(node2_ptr) };
+        // Now, next should be "c", and then "b".
+        assert_eq!((&mut deque).next(), Some(&"c".into()));
+        assert_eq!((&mut deque).next(), Some(&"b".into()));
+        assert!((&mut deque).next().is_none());
+
+        // -------------------------------------------------------
+        // Try to unlink during iteration.
+        assert_eq!((&mut deque).next(), Some(&"a".into()));
+        // Next will be "c", but we unlink it.
+        unsafe { deque.unlink(node3_ptr) };
+        // Now, next should be "b".
+        assert_eq!((&mut deque).next(), Some(&"b".into()));
+        assert!((&mut deque).next().is_none());
+
+        // -------------------------------------------------------
+        // Try pop_front during iteration.
+        let node3 = DeqNode::new(MainProbation, "c".into());
+        deque.push_back(Box::new(node3));
+
+        assert_eq!((&mut deque).next(), Some(&"a".into()));
+        // Next will be "b", but we call pop_front twice to remove "a" and "b".
+        deque.pop_front(); // "a"
+        deque.pop_front(); // "b"
+        // Now, next should be "c".
+        assert_eq!((&mut deque).next(), Some(&"c".into()));
+        assert!((&mut deque).next().is_none());
+
+        // -------------------------------------------------------
+        // Check iterating on an empty deque.
+        deque.pop_front(); // "c"
+        assert!((&mut deque).next().is_none());
+        assert!((&mut deque).next().is_none());
     }
 
     #[test]
