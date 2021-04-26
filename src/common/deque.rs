@@ -121,7 +121,7 @@ impl<T> Deque<T> {
             if self.is_at_cursor(node.as_ref()) {
                 self.advance_cursor();
             }
-    
+
             let mut node = Box::from_raw(node.as_ptr());
             self.head = node.next;
 
@@ -639,7 +639,7 @@ mod tests {
         // Next will be "b", but we call pop_front twice to remove "a" and "b".
         deque.pop_front(); // "a"
         deque.pop_front(); // "b"
-        // Now, next should be "c".
+                           // Now, next should be "c".
         assert_eq!((&mut deque).next(), Some(&"c".into()));
         assert!((&mut deque).next().is_none());
 
