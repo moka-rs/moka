@@ -96,7 +96,8 @@ where
             time_to_live,
             time_to_idle,
         ));
-        let housekeeper = Housekeeper::new(Arc::downgrade(&inner));
+        let enable_invalidator = false;
+        let housekeeper = Housekeeper::new(Arc::downgrade(&inner), enable_invalidator);
 
         Self {
             inner,

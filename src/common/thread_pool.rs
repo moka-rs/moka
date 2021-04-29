@@ -3,19 +3,31 @@ use parking_lot::RwLock;
 use scheduled_thread_pool::ScheduledThreadPool;
 use std::{collections::HashMap, sync::Arc};
 
-// TODO: Use enum. e.g. Pool::{Default, Name(String)}.
-const DEFAULT_POOL_NAME: &str = "$$default$$";
-
 static REGISTRY: Lazy<ThreadPoolRegistry> = Lazy::new(ThreadPoolRegistry::default);
 
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub(crate) enum PoolName {
+    Housekeeper,
+    Invalidator,
+}
+
+impl PoolName {
+    fn thread_name_template(&self) -> &'static str {
+        match self {
+            PoolName::Housekeeper => "moka-housekeeper-{}",
+            PoolName::Invalidator => "moka-invalidator-{}",
+        }
+    }
+}
+
 pub(crate) struct ThreadPool {
-    pub(crate) name: String,
+    pub(crate) name: PoolName,
     pub(crate) pool: ScheduledThreadPool,
     // pub(crate) num_threads: usize,
 }
 
 pub(crate) struct ThreadPoolRegistry {
-    pools: RwLock<HashMap<String, Arc<ThreadPool>>>,
+    pools: RwLock<HashMap<PoolName, Arc<ThreadPool>>>,
 }
 
 impl Default for ThreadPoolRegistry {
@@ -27,27 +39,28 @@ impl Default for ThreadPoolRegistry {
 }
 
 impl ThreadPoolRegistry {
-    pub(crate) fn acquire_default_pool() -> Arc<ThreadPool> {
+    pub(crate) fn acquire_pool(name: PoolName) -> Arc<ThreadPool> {
         // Maybe it is enough to use Mutex and the entry API `get_or_else()`.
         // Or just use cht crate.
         loop {
             {
                 let pools = REGISTRY.pools.read();
-                if let Some(pool) = pools.get(DEFAULT_POOL_NAME) {
+                if let Some(pool) = pools.get(&name) {
                     return Arc::clone(pool);
                 }
             }
             {
                 let mut pools = REGISTRY.pools.write();
-                if !pools.contains_key(DEFAULT_POOL_NAME) {
+                if !pools.contains_key(&name) {
                     let num_threads = num_cpus::get();
-                    let pool = ScheduledThreadPool::with_name("moka-default-{}", num_threads);
+                    let pool =
+                        ScheduledThreadPool::with_name(name.thread_name_template(), num_threads);
                     let t_pool = ThreadPool {
-                        name: DEFAULT_POOL_NAME.to_string(),
+                        name,
                         pool,
                         // num_threads,
                     };
-                    pools.insert(DEFAULT_POOL_NAME.to_string(), Arc::new(t_pool));
+                    pools.insert(name, Arc::new(t_pool));
                 }
             }
         }
@@ -57,7 +70,7 @@ impl ThreadPoolRegistry {
         if Arc::strong_count(&pool) <= 2 {
             // No other client exists; only this Arc and the registry are
             // the owners. Let's remove and drop the one in the registry.
-            let name = pool.name.clone();
+            let name = pool.name;
             let mut pools = REGISTRY.pools.write();
             if let Some(pool) = pools.get(&name) {
                 if Arc::strong_count(pool) <= 2 {
