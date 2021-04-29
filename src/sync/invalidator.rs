@@ -1,19 +1,20 @@
 #![allow(unused)]
 
-use crate::common::AccessTime;
+use crate::common::{
+    thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
+    unsafe_weak_pointer::UnsafeWeakPointer,
+    AccessTime,
+};
 
 use super::ValueEntry;
 
-use crossbeam_channel::{Receiver, Sender};
+// use crossbeam_channel::{Receiver, Sender};
 use parking_lot::{Mutex, RwLock};
 use quanta::Instant;
-use std::{
-    collections::HashMap,
-    sync::{
+use std::{collections::HashMap, hash::{BuildHasher, Hash}, sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
-    },
-};
+    }};
 
 // TODO: Do a research on concurrent/persistent data structures that could
 // replace RwLock<HashMap<_, _>> to store predicates.
@@ -30,29 +31,69 @@ use std::{
 // - im crate's Vector or HashMap.
 // - rpds crate's Vector or RedBlackTreeMap.
 
+type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 'static>;
+
+pub(crate) struct KeyDateLite<K> {
+    key: Arc<K>,
+    timestamp: Instant,
+}
+
+impl<K> Clone for KeyDateLite<K> {
+    fn clone(&self) -> Self {
+        Self {
+            key: Arc::clone(&self.key),
+            timestamp: self.timestamp,
+        }
+    }
+}
+
+impl<K> KeyDateLite<K> {
+    pub(crate) fn new(key: &Arc<K>, timestamp: Instant) -> Self {
+        Self {
+            key: Arc::clone(key),
+            timestamp,
+        }
+    }
+}
+
 pub(crate) struct Invalidator<K, V> {
     predicates: RwLock<HashMap<u64, PredicateImpl<K, V>>>,
     is_empty: AtomicBool,
     last_key: AtomicU64,
     scan_context: ScanContext<K, V>,
+    scan_result: Arc<Mutex<Option<InvalidationResult<K>>>>,
+    thread_pool: Arc<ThreadPool>,
 }
 
 impl<K, V> Default for Invalidator<K, V> {
     fn default() -> Self {
+        let thread_pool = ThreadPoolRegistry::acquire_pool(PoolName::Invalidator);
+
         Self {
             predicates: RwLock::new(HashMap::new()),
             is_empty: AtomicBool::new(true),
             last_key: AtomicU64::new(std::u64::MAX),
             scan_context: ScanContext::default(),
+            scan_result: Arc::new(Mutex::new(None)),
+            thread_pool,
         }
     }
 }
 
-impl<K, V> Invalidator<K, V>
-where
-    K: 'static,
-    V: 'static,
-{
+impl<K, V> Drop for Invalidator<K, V> {
+    fn drop(&mut self) {
+        ThreadPoolRegistry::release_pool(&self.thread_pool);
+    }
+}
+
+//
+// Crate public methods.
+//
+impl<K, V> Invalidator<K, V> {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.is_empty.load(Ordering::Acquire)
+    }
+
     pub(crate) fn register_predicate(
         &self,
         predicate: PredicateFun<K, V>,
@@ -89,58 +130,76 @@ where
     }
 
     // This method will be called by the get method of Cache.
+    #[inline]
     pub(crate) fn apply_predicates(&self, key: &Arc<K>, entry: &Arc<ValueEntry<K, V>>) -> bool {
-        if self.is_empty.load(Ordering::Acquire) {
+        if self.is_empty() {
             false
+        } else if let Some(ts) = entry.last_modified() {
+            Self::do_apply_predicates(self.predicates.read().values(), key, &entry.value, ts)
         } else {
-            Self::do_apply_predicates(self.predicates.read().values(), key, entry)
+            false
         }
     }
 
-    // This method will be called by eviction scan.
-    pub(crate) fn process_candidates(&self, remover: impl Fn(K, &PredicateFun<K, V>) -> Option<V>) {
+    pub(crate) fn submit_invalidation_task<C>(
+        &self,
+        cache: Arc<C>,
+        candidates: Vec<KeyDateLite<K>>,
+        is_truncated: bool,
+    ) where
+        K: Send + Sync + 'static,
+        V: 'static,
+        C: GetOrRemoveEntry<K, V> + Send + Sync + 'static,
+    {
+        // let _task = InvalidationTask {
+        //     cache,
+        //     scan_context: self.scan_context.clone(),
+        //     candidates,
+        //     is_truncated,
+        // };
+        // self.thread_pool.pool.execute(move || {_task.execute2(); });
         todo!()
     }
+}
 
-    fn do_apply_predicates<'a, I, P>(
-        predicates: I,
-        key: &Arc<K>,
-        entry: &Arc<ValueEntry<K, V>>,
-    ) -> bool
+//
+// Private methods.
+//
+impl<K, V> Invalidator<K, V> {
+    #[inline]
+    fn do_apply_predicates<'a, I, P>(predicates: I, key: &K, value: &V, ts: Instant) -> bool
     where
         I: Iterator<Item = &'a P>,
-        P: Predicate<K, V> + 'static,
+        P: Predicate<K, V> + 'a,
     {
-        if let Some(ts) = entry.last_modified() {
-            predicates
-                .filter(|pred| pred.is_applicable(ts))
-                .any(|pred| pred.apply(key, &entry.value))
-        } else {
-            false
+        for predicate in predicates {
+            if predicate.is_applicable(ts) && predicate.apply(key, value) {
+                return true;
+            }
         }
+        false
     }
 }
 
 struct ScanContext<K, V> {
-    predicates: Mutex<Vec<PredicateImplLite<K, V>>>,
-    newest_timestamp: AtomicU64,
-    snd: Sender<CacheEntry<K>>,
-    rcv: Receiver<CacheEntry<K>>,
+    predicates: Arc<Mutex<Vec<PredicateImplLite<K, V>>>>,
 }
 
-impl<K, V> Default for ScanContext<K, V> {
-    fn default() -> Self {
-        let (snd, rcv) = crossbeam_channel::unbounded();
+impl<K, V> Clone for ScanContext<K, V> {
+    fn clone(&self) -> Self {
         Self {
-            predicates: Mutex::new(Vec::default()),
-            newest_timestamp: AtomicU64::new(0),
-            snd,
-            rcv,
+            predicates: Arc::clone(&self.predicates),
         }
     }
 }
 
-type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 'static>;
+impl<K, V> Default for ScanContext<K, V> {
+    fn default() -> Self {
+        Self {
+            predicates: Arc::new(Mutex::new(Vec::default())),
+        }
+    }
+}
 
 trait Predicate<K, V> {
     fn is_applicable(&self, last_modified: Instant) -> bool;
@@ -179,7 +238,7 @@ impl<K, V> Predicate<K, V> for PredicateImpl<K, V> {
     }
 }
 
-// PredicateImplLite is optimized for batch eviction process. Unlike PredicateImpl, it has
+// PredicateImplLite is optimized for batch invalidation. Unlike PredicateImpl, it has
 // no synchronization primitives such as AtomicU64.
 struct PredicateImplLite<K, V> {
     f: PredicateFun<K, V>,
@@ -212,13 +271,107 @@ impl<K, V> Predicate<K, V> for PredicateImplLite<K, V> {
     }
 }
 
-enum CacheEntry<K> {
-    // The timestamp of the first entry of a scan.
-    Begin(u64),
-    // Entry's key
-    Item(Arc<K>),
-    // The timestamp of the last entry of a scan.
-    End(u64),
+pub(crate) trait GetOrRemoveEntry<K, V> {
+    fn get_value_entry(&self, key: &Arc<K>) -> Option<Arc<ValueEntry<K, V>>>;
+
+    fn remove_key_value_if<F>(&self, key: &Arc<K>, condition: F) -> bool
+    where
+        F: FnMut(&Arc<K>, &Arc<ValueEntry<K, V>>) -> bool;
+}
+
+// impl<K, V, S> GetOrRemoveEntry<K, V> for cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S> 
+// where K: Hash + Eq,
+// S: BuildHasher,
+
+// {
+//     fn get_value_entry(&self, key: &Arc<K>) -> Option<Arc<ValueEntry<K, V>>> {
+//         self.get(key)
+//     }
+
+//     fn remove_key_value_if<F>(&self, key: &Arc<K>, condition: F) -> bool
+//     where
+//         F: FnMut(&Arc<K>, &Arc<ValueEntry<K, V>>) -> bool {
+//         self.remove_if(key, condition).is_some()
+//     }
+// }
+
+struct InvalidationTask<C, K, V> {
+    cache: Arc<C>,
+    scan_context: ScanContext<K, V>,
+    candidates: Vec<KeyDateLite<K>>,
+    is_truncated: bool,
+}
+
+impl<'task, C, K, V> InvalidationTask<C, K, V>
+where
+    C: GetOrRemoveEntry<K, V>,
+{
+    // fn execute(unsafe_weak_ptr: UnsafeWeakPointer) {
+    //     let task = unsafe { unsafe_weak_ptr.as_weak_arc::<Self>() };
+    //     if let Some(task) = task.upgrade() {
+    //         task.execute2();
+    //     }
+    // }
+
+    fn execute(&self) -> InvalidationResult<K> {
+        let predicates = self.scan_context.predicates.lock();
+        let mut invalidated = Vec::default();
+
+        for candidate in &self.candidates {
+            let key = &candidate.key;
+            let ts = candidate.timestamp;
+            if Self::apply(&predicates, &*self.cache, key, ts)
+                && Self::invalidate(&*self.cache, key, ts)
+            {
+                invalidated.push(candidate.clone())
+            }
+        }
+
+        // TODO:
+        let is_done = false;
+
+        InvalidationResult {
+            invalidated,
+            is_done,
+        }
+    }
+
+    fn apply(
+        predicates: &[PredicateImplLite<K, V>],
+        cache: &impl GetOrRemoveEntry<K, V>,
+        key: &Arc<K>,
+        ts: Instant,
+    ) -> bool {
+        if let Some(entry) = cache.get_value_entry(key) {
+            if let Some(lm) = entry.last_modified() {
+                if lm == ts {
+                    return Invalidator::do_apply_predicates(
+                        predicates.iter(),
+                        key,
+                        &entry.value,
+                        lm,
+                    );
+                }
+            }
+        }
+
+        false
+    }
+
+    fn invalidate(cache: &impl GetOrRemoveEntry<K, V>, key: &Arc<K>, ts: Instant) -> bool {
+        cache.remove_key_value_if(key, |_, v| {
+            if let Some(lm) = v.last_modified() {
+                lm == ts
+            } else {
+                false
+            }
+        })
+    }
+}
+
+struct InvalidationResult<K> {
+    invalidated: Vec<KeyDateLite<K>>,
+    is_done: bool,
 }
 
 #[derive(thiserror::Error, Debug)]

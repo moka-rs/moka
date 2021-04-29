@@ -21,6 +21,7 @@
         "mpsc",
         "nanos",
         "nocapture",
+        "peekable",
         "preds",
         "runtimes",
         "rustdoc",

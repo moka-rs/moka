@@ -40,10 +40,7 @@ pub(crate) trait InnerSync {
 
 pub(crate) struct Housekeeper<T> {
     inner: Arc<Mutex<UnsafeWeakPointer>>,
-    // A shared thead pool for housekeepers.
-    hk_thread_pool: Arc<ThreadPool>,
-    // An optional shared thead pool for invalidators.
-    iv_thread_pool: Option<Arc<ThreadPool>>,
+    thread_pool: Arc<ThreadPool>,
     is_shutting_down: Arc<AtomicBool>,
     periodical_sync_job: Mutex<Option<JobHandle>>,
     periodical_sync_running: Arc<Mutex<()>>,
@@ -55,10 +52,6 @@ impl<T> Drop for Housekeeper<T> {
     fn drop(&mut self) {
         // Disallow to create and/or run sync jobs by now.
         self.is_shutting_down.store(true, Ordering::Release);
-
-        if let Some(pool) = &self.iv_thread_pool {
-            ThreadPoolRegistry::release_pool(pool);
-        }
 
         // Cancel the periodical sync job. (This will not abort the job if it is
         // already running)
@@ -75,29 +68,23 @@ impl<T> Drop for Housekeeper<T> {
         }
 
         // All sync jobs should have been finished by now. Clean other stuff up.
-        ThreadPoolRegistry::release_pool(&self.hk_thread_pool);
+        ThreadPoolRegistry::release_pool(&self.thread_pool);
         std::mem::drop(unsafe { self.inner.lock().as_weak_arc::<T>() });
     }
 }
 
 // functions/methods used by Cache
 impl<T: InnerSync> Housekeeper<T> {
-    pub(crate) fn new(inner: Weak<T>, enable_invalidator: bool) -> Self {
+    pub(crate) fn new(inner: Weak<T>) -> Self {
         use crate::common::thread_pool::PoolName;
 
-        let hk_thread_pool = ThreadPoolRegistry::acquire_pool(PoolName::Housekeeper);
-        let iv_thread_pool = if enable_invalidator {
-            Some(ThreadPoolRegistry::acquire_pool(PoolName::Invalidator))
-        } else {
-            None
-        };
-
+        let thread_pool = ThreadPoolRegistry::acquire_pool(PoolName::Housekeeper);
         let inner_ptr = Arc::new(Mutex::new(UnsafeWeakPointer::from_weak_arc(inner)));
         let is_shutting_down = Arc::new(AtomicBool::new(false));
         let periodical_sync_running = Arc::new(Mutex::new(()));
 
         let sync_job = Self::start_periodical_sync_job(
-            &hk_thread_pool,
+            &thread_pool,
             Arc::clone(&inner_ptr),
             Arc::clone(&is_shutting_down),
             Arc::clone(&periodical_sync_running),
@@ -105,8 +92,7 @@ impl<T: InnerSync> Housekeeper<T> {
 
         Self {
             inner: inner_ptr,
-            hk_thread_pool,
-            iv_thread_pool,
+            thread_pool,
             is_shutting_down,
             periodical_sync_job: Mutex::new(Some(sync_job)),
             periodical_sync_running,
@@ -165,7 +151,7 @@ impl<T: InnerSync> Housekeeper<T> {
                 let unsafe_weak_ptr = Arc::clone(&self.inner);
                 let sync_scheduled = Arc::clone(&self.on_demand_sync_scheduled);
                 // Execute a task in a worker thread.
-                self.hk_thread_pool.pool.execute(move || {
+                self.thread_pool.pool.execute(move || {
                     Self::call_sync(&unsafe_weak_ptr);
                     sync_scheduled.store(false, Ordering::Release);
                 });

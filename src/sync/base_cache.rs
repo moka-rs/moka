@@ -1,6 +1,7 @@
 use super::{
     deques::Deques,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
+    invalidator::{Invalidator, KeyDateLite},
     KeyDate, KeyHash, KeyHashDate, ReadOp, ValueEntry, WriteOp,
 };
 use crate::common::{
@@ -96,8 +97,7 @@ where
             time_to_live,
             time_to_idle,
         ));
-        let enable_invalidator = false;
-        let housekeeper = Housekeeper::new(Arc::downgrade(&inner), enable_invalidator);
+        let housekeeper = Housekeeper::new(Arc::downgrade(&inner));
 
         Self {
             inner,
@@ -337,6 +337,7 @@ pub(crate) struct Inner<K, V, S> {
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     valid_after: AtomicU64,
+    invalidator: Option<Invalidator<K, V>>,
     has_expiration_clock: AtomicBool,
     expiration_clock: RwLock<Option<Clock>>,
 }
@@ -367,6 +368,8 @@ where
         );
         let skt_capacity = usize::max(max_capacity * 32, 100);
         let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
+        let invalidator = None;
+
         Self {
             max_capacity,
             cache,
@@ -378,6 +381,7 @@ where
             time_to_live,
             time_to_idle,
             valid_after: AtomicU64::new(0),
+            invalidator,
             has_expiration_clock: AtomicBool::new(false),
             expiration_clock: RwLock::new(None),
         }
@@ -462,6 +466,23 @@ where
     }
 }
 
+// impl<K, V, S> GetOrRemoveEntry<K, V> for &Inner<K, V, S>
+// where
+//     K: Hash + Eq,
+//     S: BuildHasher + Clone,
+// {
+//     fn get(&self, key: &Arc<K>) -> Option<Arc<ValueEntry<K, V>>> {
+//         self.cache.get(key)
+//     }
+
+//     fn remove_if<F>(&self, key: &Arc<K>, condition: F) -> bool
+//     where
+//         F: FnMut(&Arc<K>, &Arc<ValueEntry<K, V>>) -> bool,
+//     {
+//         self.cache.remove_if(key, condition).is_some()
+//     }
+// }
+
 impl<K, V, S> InnerSync for Inner<K, V, S>
 where
     K: Hash + Eq,
@@ -469,6 +490,7 @@ where
 {
     fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
         const EVICTION_BATCH_SIZE: usize = 500;
+        const INVALIDATION_BATCH_SIZE: usize = 500;
 
         let mut deqs = self.deques.lock();
         let mut calls = 0;
@@ -484,14 +506,19 @@ where
             if w_len > 0 {
                 self.apply_writes(&mut deqs, w_len);
             }
+            calls += 1;
+            should_sync = self.read_op_ch.len() >= READ_LOG_FLUSH_POINT
+                || self.write_op_ch.len() >= WRITE_LOG_FLUSH_POINT;
+        }
 
             if self.has_expiry() || self.has_valid_after() {
                 self.evict(&mut deqs, EVICTION_BATCH_SIZE);
             }
 
-            calls += 1;
-            should_sync = self.read_op_ch.len() >= READ_LOG_FLUSH_POINT
-                || self.write_op_ch.len() >= WRITE_LOG_FLUSH_POINT;
+        if let Some(inv) = &self.invalidator {
+            if !inv.is_empty() {
+                self.invalidate_entries(inv, &mut deqs.write_order, INVALIDATION_BATCH_SIZE);
+            }
         }
 
         if should_sync {
@@ -773,8 +800,6 @@ where
                     Deques::move_to_back_wo_in_deque(write_order_deq, &entry);
                 } else {
                     // The key exists but something unexpected. Break.
-                    // print!("@[{}|{}] ", ts.unwrap().load(Ordering::Acquire), la.unwrap().as_u64());
-                    // print!("@");
                     break;
                 }
             } else {
@@ -829,8 +854,6 @@ where
                     deqs.move_to_back_wo(&entry);
                 } else {
                     // The key exists but something unexpected. Break.
-                    // print!("#[{}|{}] ", ts.unwrap().load(Ordering::Acquire), ts.unwrap().as_u64());
-                    // print!("#");
                     break;
                 }
             } else {
@@ -844,6 +867,38 @@ where
                 }
             }
         }
+    }
+
+    fn invalidate_entries(
+        &self,
+        invalidator: &Invalidator<K, V>,
+        write_order: &mut Deque<KeyDate<K>>,
+        batch_size: usize,
+    ) {
+        self.submit_invalidation_task(invalidator, write_order, batch_size);
+    }
+
+    fn submit_invalidation_task(
+        &self,
+        _invalidator: &Invalidator<K, V>,
+        write_order: &mut Deque<KeyDate<K>>,
+        batch_size: usize,
+    ) {
+        let mut candidates = Vec::with_capacity(batch_size);
+        let mut iter = write_order.peekable();
+
+        while candidates.len() < batch_size {
+            if let Some(kd) = iter.next() {
+                if let Some(ts) = kd.timestamp() {
+                    candidates.push(KeyDateLite::new(&kd.key, ts));
+                }
+            } else {
+                break;
+            }
+        }
+
+        let _is_truncated = candidates.len() == batch_size && iter.peek().is_some();
+        // invalidator.submit_invalidation_task(&self.cache, candidates, is_truncated);
     }
 }
 

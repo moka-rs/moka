@@ -59,6 +59,10 @@ impl<K> KeyDate<K> {
     pub(crate) fn new(key: Arc<K>, timestamp: Arc<AtomicU64>) -> Self {
         Self { key, timestamp }
     }
+
+    pub(crate) fn timestamp(&self) -> Option<Instant> {
+        u64_to_instant(self.timestamp.load(Ordering::Acquire))
+    }
 }
 
 pub(crate) struct KeyHashDate<K> {
