@@ -11,10 +11,14 @@ use super::ValueEntry;
 // use crossbeam_channel::{Receiver, Sender};
 use parking_lot::{Mutex, RwLock};
 use quanta::Instant;
-use std::{collections::HashMap, hash::{BuildHasher, Hash}, sync::{
+use std::{
+    collections::HashMap,
+    hash::{BuildHasher, Hash},
+    sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc,
-    }};
+    },
+};
 
 // TODO: Do a research on concurrent/persistent data structures that could
 // replace RwLock<HashMap<_, _>> to store predicates.
@@ -279,7 +283,7 @@ pub(crate) trait GetOrRemoveEntry<K, V> {
         F: FnMut(&Arc<K>, &Arc<ValueEntry<K, V>>) -> bool;
 }
 
-// impl<K, V, S> GetOrRemoveEntry<K, V> for cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S> 
+// impl<K, V, S> GetOrRemoveEntry<K, V> for cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>
 // where K: Hash + Eq,
 // S: BuildHasher,
 

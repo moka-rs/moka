@@ -511,9 +511,9 @@ where
                 || self.write_op_ch.len() >= WRITE_LOG_FLUSH_POINT;
         }
 
-            if self.has_expiry() || self.has_valid_after() {
-                self.evict(&mut deqs, EVICTION_BATCH_SIZE);
-            }
+        if self.has_expiry() || self.has_valid_after() {
+            self.evict(&mut deqs, EVICTION_BATCH_SIZE);
+        }
 
         if let Some(inv) = &self.invalidator {
             if !inv.is_empty() {
