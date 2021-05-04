@@ -50,7 +50,7 @@ pub struct CacheBuilder<C> {
 impl<K, V> CacheBuilder<Cache<K, V, RandomState>>
 where
     K: Eq + Hash + Send + Sync + 'static,
-    V: Clone + 'static,
+    V: Clone + Send + Sync + 'static,
 {
     /// Construct a new `CacheBuilder` that will be used to build a `Cache` or
     /// `SegmentedCache` holding up to `max_capacity` entries.
@@ -119,7 +119,7 @@ where
 impl<K, V> CacheBuilder<SegmentedCache<K, V, RandomState>>
 where
     K: Eq + Hash + Send + Sync + 'static,
-    V: Clone + 'static,
+    V: Clone + Send + Sync + 'static,
 {
     /// Builds a `SegmentedCache<K, V>`.
     ///

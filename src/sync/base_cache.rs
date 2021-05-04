@@ -2,7 +2,8 @@ use super::{
     deques::Deques,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
     invalidator::{
-        GetOrRemoveEntry, Invalidator, KeyDateLite, PredicateFun, PredicateRegistrationError,
+        GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun,
+        PredicateRegistrationError,
     },
     KeyDate, KeyHash, KeyHashDate, ReadOp, ValueEntry, WriteOp,
 };
@@ -78,7 +79,7 @@ impl<K, V, S> Drop for BaseCache<K, V, S> {
 impl<K, V, S> BaseCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Clone + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + 'static,
 {
     pub(crate) fn new(
@@ -209,7 +210,7 @@ where
 impl<K, V, S> BaseCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Clone + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + 'static,
 {
     #[inline]
@@ -309,7 +310,7 @@ where
 impl<K, V, S> BaseCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: 'static,
+    V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + 'static,
 {
     pub(crate) fn is_empty(&self) -> bool {
@@ -510,7 +511,7 @@ where
 impl<K, V, S> InnerSync for Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: 'static,
+    V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + 'static,
 {
     fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
@@ -541,9 +542,9 @@ where
             self.evict(&mut deqs, EVICTION_BATCH_SIZE);
         }
 
-        if let Some(inv) = &*inv {
-            if !inv.is_empty() {
-                self.invalidate_entries(inv, &mut deqs.write_order, INVALIDATION_BATCH_SIZE);
+        if let Some(invalidator) = &*inv {
+            if !invalidator.is_empty() && !invalidator.is_task_running() {
+                self.invalidate_entries(invalidator, &mut deqs, INVALIDATION_BATCH_SIZE);
             }
         }
 
@@ -564,7 +565,7 @@ where
 impl<K, V, S> Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: 'static,
+    V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + 'static,
 {
     fn apply_reads(&self, deqs: &mut Deques<K>, count: usize) {
@@ -899,10 +900,30 @@ where
     fn invalidate_entries(
         &self,
         invalidator: &Invalidator<K, V, S>,
-        write_order: &mut Deque<KeyDate<K>>,
+        deqs: &mut Deques<K>,
         batch_size: usize,
     ) {
-        self.submit_invalidation_task(invalidator, write_order, batch_size);
+        self.process_invalidation_result(invalidator, deqs);
+        self.submit_invalidation_task(invalidator, &mut deqs.write_order, batch_size);
+    }
+
+    fn process_invalidation_result(
+        &self,
+        invalidator: &Invalidator<K, V, S>,
+        deqs: &mut Deques<K>,
+    ) {
+        if let Some(InvalidationResult {
+            invalidated,
+            is_done,
+        }) = invalidator.task_result()
+        {
+            for entry in invalidated {
+                Self::handle_remove(deqs, entry);
+            }
+            if is_done {
+                deqs.write_order.reset_cursor();
+            }
+        }
     }
 
     fn submit_invalidation_task(
@@ -926,8 +947,10 @@ where
             }
         }
 
-        let is_truncated = len == batch_size && iter.peek().is_some();
-        invalidator.submit_invalidation_task(candidates, is_truncated);
+        if len > 0 {
+            let is_truncated = len == batch_size && iter.peek().is_some();
+            invalidator.submit_task(candidates, is_truncated);
+        }
     }
 }
 

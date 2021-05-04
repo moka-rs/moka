@@ -189,7 +189,7 @@ where
 impl<K, V> Cache<K, V, RandomState>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Clone + 'static,
+    V: Clone + Send + Sync + 'static,
 {
     /// Constructs a new `Cache<K, V>` that will store up to the `max_capacity` entries.
     ///
@@ -206,7 +206,7 @@ where
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Clone + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + 'static,
 {
     pub(crate) fn with_everything(
@@ -330,7 +330,7 @@ where
 impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: 'static,
+    V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + 'static,
 {
     fn sync(&self) {
@@ -342,7 +342,7 @@ where
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Clone + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + 'static,
 {
     #[inline]
@@ -377,7 +377,7 @@ where
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: 'static,
+    V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + 'static,
 {
     pub(crate) fn reconfigure_for_testing(&mut self) {
@@ -531,8 +531,10 @@ mod tests {
         cache.insert(3, "alice");
 
         // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
-        cache.sync();
-        std::thread::sleep(Duration::from_millis(500));
+        cache.sync(); // To submit the invalidation task.
+        std::thread::sleep(Duration::from_millis(200));
+        cache.sync(); // To process the task result.
+        std::thread::sleep(Duration::from_millis(200));
 
         assert!(cache.get(&0).is_none());
         assert!(cache.get(&2).is_none());

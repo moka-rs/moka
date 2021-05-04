@@ -48,7 +48,7 @@ pub struct CacheBuilder<C> {
 impl<K, V> CacheBuilder<Cache<K, V, RandomState>>
 where
     K: Eq + Hash + Send + Sync + 'static,
-    V: Clone + 'static,
+    V: Clone + Send + Sync + 'static,
 {
     /// Construct a new `CacheBuilder` that will be used to build a `Cache` holding
     /// up to `max_capacity` entries.

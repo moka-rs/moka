@@ -53,7 +53,7 @@ impl<K, V, S> Clone for SegmentedCache<K, V, S> {
 impl<K, V> SegmentedCache<K, V, RandomState>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Clone + 'static,
+    V: Clone + Send + Sync + 'static,
 {
     /// Constructs a new `SegmentedCache<K, V>` that has multiple internal
     /// segments and will store up to the `max_capacity` entries.
@@ -75,7 +75,7 @@ where
 impl<K, V, S> SegmentedCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Clone + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + 'static,
 {
     /// # Panics
@@ -180,7 +180,7 @@ where
 impl<K, V, S> ConcurrentCacheExt<K, V> for SegmentedCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: 'static,
+    V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + 'static,
 {
     fn sync(&self) {
@@ -195,7 +195,7 @@ where
 impl<K, V, S> SegmentedCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: 'static,
+    V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + 'static,
 {
     fn reconfigure_for_testing(&mut self) {
@@ -218,7 +218,7 @@ struct Inner<K, V, S> {
 impl<K, V, S> Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Clone + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + 'static,
 {
     /// # Panics

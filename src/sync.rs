@@ -92,10 +92,7 @@ struct DeqNodes<K> {
     write_order_q_node: Option<KeyDeqNodeWo<K>>,
 }
 
-#[cfg(feature = "future")]
-// Multi-threaded async runtimes require ValueEntry to be Send, but it will
-// not be without this `unsafe impl`. This is because DeqNodes have NonNull
-// pointers.
+// We need this `unsafe impl` as DeqNodes have NonNull pointers.
 unsafe impl<K> Send for DeqNodes<K> {}
 
 pub(crate) struct ValueEntry<K, V> {
