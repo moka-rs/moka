@@ -209,8 +209,8 @@ where
 
 impl<K, V> Cache<K, V, RandomState>
 where
-    K: Hash + Eq,
-    V: Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + 'static,
 {
     /// Constructs a new `Cache<K, V>` that will store up to the `max_capacity` entries.
     ///
@@ -226,9 +226,9 @@ where
 
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Hash + Eq,
-    V: Clone,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + 'static,
+    S: BuildHasher + Clone + Send + 'static,
 {
     pub(crate) fn with_everything(
         max_capacity: usize,
@@ -366,8 +366,9 @@ where
 
 impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
 where
-    K: Hash + Eq,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: 'static,
+    S: BuildHasher + Clone + Send + 'static,
 {
     fn sync(&self) {
         self.base.inner.sync(MAX_SYNC_REPEATS);
@@ -377,9 +378,9 @@ where
 // private methods
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Hash + Eq,
-    V: Clone,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + 'static,
+    S: BuildHasher + Clone + Send + 'static,
 {
     async fn insert_with_hash(&self, key: K, hash: u64, value: V) {
         let op = self.base.do_insert_with_hash(key, hash, value);
@@ -444,8 +445,9 @@ where
 #[cfg(test)]
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Hash + Eq,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: 'static,
+    S: BuildHasher + Clone + Send + 'static,
 {
     fn reconfigure_for_testing(&mut self) {
         self.base.reconfigure_for_testing();

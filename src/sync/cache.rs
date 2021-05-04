@@ -1,6 +1,7 @@
 use super::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
     housekeeper::InnerSync,
+    invalidator::PredicateRegistrationError,
     ConcurrentCacheExt, WriteOp,
 };
 
@@ -187,8 +188,8 @@ where
 
 impl<K, V> Cache<K, V, RandomState>
 where
-    K: Hash + Eq,
-    V: Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + 'static,
 {
     /// Constructs a new `Cache<K, V>` that will store up to the `max_capacity` entries.
     ///
@@ -204,9 +205,9 @@ where
 
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Hash + Eq,
-    V: Clone,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + 'static,
+    S: BuildHasher + Clone + Send + 'static,
 {
     pub(crate) fn with_everything(
         max_capacity: usize,
@@ -296,6 +297,13 @@ where
         self.base.invalidate_all();
     }
 
+    pub fn invalidate_entries_if<F>(&self, predicate: F) -> Result<u64, PredicateRegistrationError>
+    where
+        F: Fn(&K, &V) -> bool + Send + Sync + 'static,
+    {
+        self.base.invalidate_entries_if(Arc::new(predicate))
+    }
+
     /// Returns the `max_capacity` of this cache.
     pub fn max_capacity(&self) -> usize {
         self.base.max_capacity()
@@ -321,8 +329,9 @@ where
 
 impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
 where
-    K: Hash + Eq,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: 'static,
+    S: BuildHasher + Clone + Send + 'static,
 {
     fn sync(&self) {
         self.base.inner.sync(MAX_SYNC_REPEATS);
@@ -332,9 +341,9 @@ where
 // private methods
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Hash + Eq,
-    V: Clone,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + 'static,
+    S: BuildHasher + Clone + Send + 'static,
 {
     #[inline]
     fn schedule_write_op(
@@ -367,8 +376,9 @@ where
 #[cfg(test)]
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Hash + Eq,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: 'static,
+    S: BuildHasher + Clone + Send + 'static,
 {
     pub(crate) fn reconfigure_for_testing(&mut self) {
         self.base.reconfigure_for_testing();
@@ -484,6 +494,54 @@ mod tests {
         assert!(cache.get(&"b").is_none());
         assert!(cache.get(&"c").is_none());
         assert_eq!(cache.get(&"d"), Some("david"));
+    }
+
+    #[test]
+    fn invalidate_entries_if() -> Result<(), Box<dyn std::error::Error>> {
+        use std::collections::HashSet;
+
+        let mut cache = CacheBuilder::new(100)
+            .time_to_live(Duration::from_secs(60 * 60))
+            .build();
+        cache.reconfigure_for_testing();
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert(0, "alice");
+        cache.insert(1, "bob");
+        cache.insert(2, "alex");
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        cache.sync();
+
+        assert_eq!(cache.get(&0), Some("alice"));
+        assert_eq!(cache.get(&1), Some("bob"));
+        assert_eq!(cache.get(&2), Some("alex"));
+
+        let names = ["alice", "alex"].iter().cloned().collect::<HashSet<_>>();
+        cache.invalidate_entries_if(move |_k, &v| names.contains(v))?;
+
+        mock.increment(Duration::from_secs(5)); // 10 secs from the start.
+
+        cache.insert(3, "alice");
+
+        // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
+        cache.sync();
+        std::thread::sleep(Duration::from_millis(500));
+
+        assert!(cache.get(&0).is_none());
+        assert!(cache.get(&2).is_none());
+        assert_eq!(cache.get(&1), Some("bob"));
+        // This should survive as it was inserted after calling invalidate_entries_if.
+        assert_eq!(cache.get(&3), Some("alice"));
+        assert_eq!(cache.base.len(), 2);
+
+        Ok(())
     }
 
     #[test]

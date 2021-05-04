@@ -1,7 +1,9 @@
 use super::{
     deques::Deques,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
-    invalidator::{Invalidator, KeyDateLite},
+    invalidator::{
+        GetOrRemoveEntry, Invalidator, KeyDateLite, PredicateFun, PredicateRegistrationError,
+    },
     KeyDate, KeyHash, KeyHashDate, ReadOp, ValueEntry, WriteOp,
 };
 use crate::common::{
@@ -75,9 +77,9 @@ impl<K, V, S> Drop for BaseCache<K, V, S> {
 
 impl<K, V, S> BaseCache<K, V, S>
 where
-    K: Hash + Eq,
-    V: Clone,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + 'static,
+    S: BuildHasher + Clone + Send + 'static,
 {
     pub(crate) fn new(
         max_capacity: usize,
@@ -97,6 +99,7 @@ where
             time_to_live,
             time_to_idle,
         ));
+        *inner.invalidator.lock() = Some(Invalidator::new(Arc::downgrade(&Arc::clone(&inner))));
         let housekeeper = Housekeeper::new(Arc::downgrade(&inner));
 
         Self {
@@ -179,6 +182,14 @@ where
         self.inner.set_valid_after(now);
     }
 
+    pub(crate) fn invalidate_entries_if(
+        &self,
+        predicate: PredicateFun<K, V>,
+    ) -> Result<u64, PredicateRegistrationError> {
+        let now = self.inner.current_time_from_expiration_clock();
+        self.inner.register_invalidation_predicate(predicate, now)
+    }
+
     pub(crate) fn max_capacity(&self) -> usize {
         self.inner.max_capacity()
     }
@@ -197,9 +208,9 @@ where
 //
 impl<K, V, S> BaseCache<K, V, S>
 where
-    K: Hash + Eq,
-    V: Clone,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + 'static,
+    S: BuildHasher + Clone + Send + 'static,
 {
     #[inline]
     fn record_read_op(&self, op: ReadOp<K, V>) -> Result<(), TrySendError<ReadOp<K, V>>> {
@@ -297,8 +308,9 @@ where
 #[cfg(test)]
 impl<K, V, S> BaseCache<K, V, S>
 where
-    K: Hash + Eq,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: 'static,
+    S: BuildHasher + Clone + Send + 'static,
 {
     pub(crate) fn is_empty(&self) -> bool {
         self.inner.len() == 0
@@ -337,7 +349,7 @@ pub(crate) struct Inner<K, V, S> {
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     valid_after: AtomicU64,
-    invalidator: Option<Invalidator<K, V>>,
+    invalidator: Mutex<Option<Invalidator<K, V, S>>>,
     has_expiration_clock: AtomicBool,
     expiration_clock: RwLock<Option<Clock>>,
 }
@@ -368,7 +380,6 @@ where
         );
         let skt_capacity = usize::max(max_capacity * 32, 100);
         let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
-        let invalidator = None;
 
         Self {
             max_capacity,
@@ -381,7 +392,7 @@ where
             time_to_live,
             time_to_idle,
             valid_after: AtomicU64::new(0),
-            invalidator,
+            invalidator: Mutex::new(None),
             has_expiration_clock: AtomicBool::new(false),
             expiration_clock: RwLock::new(None),
         }
@@ -448,6 +459,19 @@ where
     }
 
     #[inline]
+    fn register_invalidation_predicate(
+        &self,
+        predicate: PredicateFun<K, V>,
+        registered_at: Instant,
+    ) -> Result<u64, PredicateRegistrationError> {
+        if let Some(inv) = &*self.invalidator.lock() {
+            inv.register_predicate(predicate, registered_at)
+        } else {
+            Err(PredicateRegistrationError::WriteOrderQueueDisabled)
+        }
+    }
+
+    #[inline]
     fn has_valid_after(&self) -> bool {
         self.valid_after.load(Ordering::Acquire) > 0
     }
@@ -466,33 +490,35 @@ where
     }
 }
 
-// impl<K, V, S> GetOrRemoveEntry<K, V> for &Inner<K, V, S>
-// where
-//     K: Hash + Eq,
-//     S: BuildHasher + Clone,
-// {
-//     fn get(&self, key: &Arc<K>) -> Option<Arc<ValueEntry<K, V>>> {
-//         self.cache.get(key)
-//     }
+impl<K, V, S> GetOrRemoveEntry<K, V> for Arc<Inner<K, V, S>>
+where
+    K: Hash + Eq,
+    S: BuildHasher,
+{
+    fn get_value_entry(&self, key: &Arc<K>) -> Option<Arc<ValueEntry<K, V>>> {
+        self.cache.get(key)
+    }
 
-//     fn remove_if<F>(&self, key: &Arc<K>, condition: F) -> bool
-//     where
-//         F: FnMut(&Arc<K>, &Arc<ValueEntry<K, V>>) -> bool,
-//     {
-//         self.cache.remove_if(key, condition).is_some()
-//     }
-// }
+    fn remove_key_value_if<F>(&self, key: &Arc<K>, condition: F) -> Option<Arc<ValueEntry<K, V>>>
+    where
+        F: FnMut(&Arc<K>, &Arc<ValueEntry<K, V>>) -> bool,
+    {
+        self.cache.remove_if(key, condition)
+    }
+}
 
 impl<K, V, S> InnerSync for Inner<K, V, S>
 where
-    K: Hash + Eq,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: 'static,
+    S: BuildHasher + Clone + Send + 'static,
 {
     fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
         const EVICTION_BATCH_SIZE: usize = 500;
         const INVALIDATION_BATCH_SIZE: usize = 500;
 
         let mut deqs = self.deques.lock();
+        let inv = self.invalidator.lock();
         let mut calls = 0;
         let mut should_sync = true;
 
@@ -515,7 +541,7 @@ where
             self.evict(&mut deqs, EVICTION_BATCH_SIZE);
         }
 
-        if let Some(inv) = &self.invalidator {
+        if let Some(inv) = &*inv {
             if !inv.is_empty() {
                 self.invalidate_entries(inv, &mut deqs.write_order, INVALIDATION_BATCH_SIZE);
             }
@@ -537,8 +563,9 @@ where
 //
 impl<K, V, S> Inner<K, V, S>
 where
-    K: Hash + Eq,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: 'static,
+    S: BuildHasher + Clone + Send + 'static,
 {
     fn apply_reads(&self, deqs: &mut Deques<K>, count: usize) {
         use ReadOp::*;
@@ -871,7 +898,7 @@ where
 
     fn invalidate_entries(
         &self,
-        invalidator: &Invalidator<K, V>,
+        invalidator: &Invalidator<K, V, S>,
         write_order: &mut Deque<KeyDate<K>>,
         batch_size: usize,
     ) {
@@ -880,25 +907,27 @@ where
 
     fn submit_invalidation_task(
         &self,
-        _invalidator: &Invalidator<K, V>,
+        invalidator: &Invalidator<K, V, S>,
         write_order: &mut Deque<KeyDate<K>>,
         batch_size: usize,
     ) {
         let mut candidates = Vec::with_capacity(batch_size);
         let mut iter = write_order.peekable();
+        let mut len = 0;
 
-        while candidates.len() < batch_size {
+        while len < batch_size {
             if let Some(kd) = iter.next() {
                 if let Some(ts) = kd.timestamp() {
                     candidates.push(KeyDateLite::new(&kd.key, ts));
+                    len += 1;
                 }
             } else {
                 break;
             }
         }
 
-        let _is_truncated = candidates.len() == batch_size && iter.peek().is_some();
-        // invalidator.submit_invalidation_task(&self.cache, candidates, is_truncated);
+        let is_truncated = len == batch_size && iter.peek().is_some();
+        invalidator.submit_invalidation_task(candidates, is_truncated);
     }
 }
 
