@@ -543,6 +543,21 @@ mod tests {
         assert_eq!(cache.get(&3), Some("alice"));
         assert_eq!(cache.base.len(), 2);
 
+        mock.increment(Duration::from_secs(5)); // 15 secs from the start.
+
+        cache.invalidate_entries_if(|_k, &v| v == "alice")?;
+        cache.invalidate_entries_if(|_k, &v| v == "bob")?;
+
+        // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
+        cache.sync(); // To submit the invalidation task.
+        std::thread::sleep(Duration::from_millis(200));
+        cache.sync(); // To process the task result.
+        std::thread::sleep(Duration::from_millis(200));
+
+        assert!(cache.get(&1).is_none());
+        assert!(cache.get(&3).is_none());
+        assert_eq!(cache.base.len(), 0);
+
         Ok(())
     }
 
