@@ -61,7 +61,7 @@ impl<K> KeyDateLite<K> {
 }
 
 pub(crate) struct Invalidator<K, V, S> {
-    predicates: RwLock<HashMap<u64, PredicateImpl<K, V>>>,
+    predicates: RwLock<HashMap<u64, Predicate<K, V>>>,
     is_empty: AtomicBool,
     last_key: AtomicU64,
     scan_context: ScanContext<K, V>,
@@ -120,7 +120,7 @@ impl<K, V, S> Invalidator<K, V, S> {
 
                 continue; // Retry
             }
-            let pred = PredicateImpl::new(id, predicate, registered_at);
+            let pred = Predicate::new(id, predicate, registered_at);
             preds.insert(id, pred);
             self.is_empty.store(false, Ordering::Release);
 
@@ -167,12 +167,7 @@ impl<K, V, S> Invalidator<K, V, S> {
         {
             let mut ctx_predicates = self.scan_context.predicates.lock();
             if ctx_predicates.is_empty() {
-                let predicates = self
-                    .predicates
-                    .read()
-                    .values()
-                    .map(|p| PredicateImplLite::new(p))
-                    .collect();
+                let predicates = self.predicates.read().values().cloned().collect();
                 *ctx_predicates = predicates;
             }
         }
@@ -209,7 +204,7 @@ impl<K, V, S> Invalidator<K, V, S> {
                     if let Some(ts) = newest_timestamp {
                         // Remove the predicates from the predicate registry.
                         for p in &*predicates {
-                            if p.registered_at < ts {
+                            if !p.is_applicable(ts) {
                                 self.remove_predicate(p.id());
                             }
                         }
@@ -217,7 +212,7 @@ impl<K, V, S> Invalidator<K, V, S> {
                         // Remove the predicates from from the scan context.
                         let ps = predicates
                             .drain(..)
-                            .filter(|p| p.registered_at >= ts)
+                            .filter(|p| p.is_applicable(ts))
                             .collect();
                         *predicates = ps;
                     }
@@ -248,10 +243,9 @@ impl<K, V, S> Invalidator<K, V, S> {
 //
 impl<K, V, S> Invalidator<K, V, S> {
     #[inline]
-    fn do_apply_predicates<'a, I, P>(predicates: I, key: &K, value: &V, ts: Instant) -> bool
+    fn do_apply_predicates<'a, I>(predicates: I, key: &'a K, value: &'a V, ts: Instant) -> bool
     where
-        I: Iterator<Item = &'a P>,
-        P: Predicate<K, V> + 'a,
+        I: Iterator<Item = &'a Predicate<K, V>>,
     {
         for predicate in predicates {
             if predicate.is_applicable(ts) && predicate.apply(key, value) {
@@ -263,7 +257,7 @@ impl<K, V, S> Invalidator<K, V, S> {
 }
 
 struct ScanContext<K, V> {
-    predicates: Arc<Mutex<Vec<PredicateImplLite<K, V>>>>,
+    predicates: Arc<Mutex<Vec<Predicate<K, V>>>>,
 }
 
 impl<K, V> Clone for ScanContext<K, V> {
@@ -282,82 +276,37 @@ impl<K, V> Default for ScanContext<K, V> {
     }
 }
 
-trait Predicate<K, V> {
-    fn id(&self) -> u64;
-    fn is_applicable(&self, last_modified: Instant) -> bool;
-    fn apply(&self, key: &K, value: &V) -> bool;
-}
-
-struct PredicateImpl<K, V> {
+struct Predicate<K, V> {
     id: u64,
     f: PredicateFun<K, V>,
     registered_at: Instant,
-    // The oldest timestamp of the entries checked by this predicate.
-    oldest: AtomicU64,
-    // The newest timestamp of the entries checked by this predicate.
-    newest: AtomicU64,
 }
 
-impl<K, V> PredicateImpl<K, V> {
+impl<K, V> Clone for Predicate<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            f: Arc::clone(&self.f),
+            registered_at: self.registered_at,
+        }
+    }
+}
+
+impl<K, V> Predicate<K, V> {
     fn new(id: u64, f: PredicateFun<K, V>, registered_at: Instant) -> Self {
         Self {
             id,
             f,
             registered_at,
-            oldest: AtomicU64::new(std::u64::MAX),
-            newest: AtomicU64::new(std::u64::MIN),
         }
     }
-}
 
-impl<K, V> Predicate<K, V> for PredicateImpl<K, V> {
     fn id(&self) -> u64 {
         self.id
     }
 
     fn is_applicable(&self, last_modified: Instant) -> bool {
         last_modified <= self.registered_at
-            && (last_modified.as_u64() < self.oldest.load(Ordering::Acquire)
-                || last_modified.as_u64() > self.newest.load(Ordering::Acquire))
-    }
-
-    fn apply(&self, key: &K, value: &V) -> bool {
-        (self.f)(key, value)
-    }
-}
-
-// PredicateImplLite is optimized for batch invalidation. Unlike PredicateImpl, it has
-// no synchronization primitives such as AtomicU64.
-struct PredicateImplLite<K, V> {
-    id: u64,
-    f: PredicateFun<K, V>,
-    registered_at: Instant,
-    // The oldest timestamp of the entries checked by this predicate.
-    oldest: Instant,
-    // The newest timestamp of the entries checked by this predicate.
-    newest: Instant,
-}
-
-impl<K, V> PredicateImplLite<K, V> {
-    fn new(pred: &PredicateImpl<K, V>) -> Self {
-        Self {
-            id: pred.id,
-            f: Arc::clone(&pred.f),
-            registered_at: pred.registered_at,
-            oldest: unsafe { std::mem::transmute(pred.oldest.load(Ordering::Acquire)) },
-            newest: unsafe { std::mem::transmute(pred.newest.load(Ordering::Acquire)) },
-        }
-    }
-}
-
-impl<K, V> Predicate<K, V> for PredicateImplLite<K, V> {
-    fn id(&self) -> u64 {
-        self.id
-    }
-
-    fn is_applicable(&self, last_modified: Instant) -> bool {
-        last_modified <= self.registered_at
-            && (last_modified < self.oldest || last_modified > self.newest)
     }
 
     fn apply(&self, key: &K, value: &V) -> bool {
@@ -434,12 +383,7 @@ where
         }
     }
 
-    fn apply<C>(
-        predicates: &[PredicateImplLite<K, V>],
-        cache: &Arc<C>,
-        key: &Arc<K>,
-        ts: Instant,
-    ) -> bool
+    fn apply<C>(predicates: &[Predicate<K, V>], cache: &Arc<C>, key: &Arc<K>, ts: Instant) -> bool
     where
         Arc<C>: GetOrRemoveEntry<K, V>,
     {
