@@ -1,11 +1,8 @@
 use super::{deques::Deques, KeyDate, KeyHashDate, ValueEntry};
-use crate::{
-    common::{
-        deque::{CacheRegion, DeqNode, Deque},
-        frequency_sketch::FrequencySketch,
-        AccessTime,
-    },
-    PredicateRegistrationError,
+use crate::common::{
+    deque::{CacheRegion, DeqNode, Deque},
+    frequency_sketch::FrequencySketch,
+    AccessTime,
 };
 
 use quanta::{Clock, Instant};
@@ -120,7 +117,6 @@ pub struct Cache<K, V, S = RandomState> {
     frequency_sketch: FrequencySketch,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
-    invalidator_enabled: bool,
     expiration_clock: Option<Clock>,
 }
 
@@ -136,7 +132,7 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(max_capacity, None, build_hasher, None, None, false)
+        Self::with_everything(max_capacity, None, build_hasher, None, None)
     }
 }
 
@@ -154,7 +150,6 @@ where
         build_hasher: S,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
-        invalidator_enabled: bool,
     ) -> Self {
         let cache = HashMap::with_capacity_and_hasher(
             initial_capacity.unwrap_or_default(),
@@ -170,7 +165,6 @@ where
             frequency_sketch,
             time_to_live,
             time_to_idle,
-            invalidator_enabled,
             expiration_clock: None,
         }
     }
@@ -254,16 +248,24 @@ where
         self.deques.clear();
     }
 
-    pub fn invalidate_entries_if(
-        &mut self,
-        predicate: impl FnMut(&K, &V) -> bool,
-    ) -> Result<(), PredicateRegistrationError> {
-        if self.invalidator_enabled {
-            self.do_invalidate_entries(predicate);
-            Ok(())
-        } else {
-            Err(PredicateRegistrationError::InvalidationClosuresDisabled)
-        }
+    // Avoid a false Clippy warning about needless collect to create keys_to_invalidate.
+    // clippy 0.1.52 (9a1dfd2dc5c 2021-04-30) in Rust 1.52.0-beta.7
+    #[allow(clippy::needless_collect)]
+    pub fn invalidate_entries_if(&mut self, mut predicate: impl FnMut(&K, &V) -> bool) {
+        let Self { cache, deques, .. } = self;
+
+        let keys_to_invalidate = cache
+            .iter()
+            .filter(|(key, entry)| (predicate)(key, &entry.value))
+            .map(|(key, _)| Rc::clone(&key))
+            .collect::<Vec<_>>();
+
+        keys_to_invalidate.into_iter().for_each(|k| {
+            if let Some(mut entry) = cache.remove(&k) {
+                deques.unlink_ao(&mut entry);
+                Deques::unlink_wo(&mut deques.write_order, &mut entry);
+            }
+        });
     }
 
     /// Returns the `max_capacity` of this cache.
@@ -371,7 +373,7 @@ where
                 KeyHashDate::new(Rc::clone(&key), hash, timestamp),
                 &mut entry,
             );
-            if self.time_to_live.is_some() || self.invalidator_enabled {
+            if self.time_to_live.is_some() {
                 deqs.push_back_wo(KeyDate::new(key, timestamp), &mut entry);
             }
         } else {
@@ -400,7 +402,7 @@ where
                     KeyHashDate::new(Rc::clone(&key), hash, timestamp),
                     &mut entry,
                 );
-                if self.time_to_live.is_some() || self.invalidator_enabled {
+                if self.time_to_live.is_some() {
                     deqs.push_back_wo(KeyDate::new(key, timestamp), &mut entry);
                 }
             } else {
@@ -548,31 +550,6 @@ where
             }
         }
     }
-
-    // Avoid a false Clippy warning about needless collect to create keys_to_invalidate.
-    // clippy 0.1.52 (9a1dfd2dc5c 2021-04-30) in Rust 1.52.0-beta.7
-    #[allow(clippy::needless_collect)]
-    fn do_invalidate_entries(&mut self, mut predicate: impl FnMut(&K, &V) -> bool) {
-        let Self { cache, deques, .. } = self;
-
-        let keys_to_invalidate = (&mut deques.write_order)
-            .filter(|kd| {
-                if let Some((k, entry)) = cache.get_key_value(&kd.key) {
-                    (predicate)(k, &entry.value)
-                } else {
-                    false
-                }
-            })
-            .map(|kd| Rc::clone(&kd.key))
-            .collect::<Vec<_>>();
-
-        keys_to_invalidate.into_iter().for_each(|k| {
-            if let Some(mut entry) = cache.remove(&k) {
-                deques.unlink_ao(&mut entry);
-                Deques::unlink_wo(&mut deques.write_order, &mut entry);
-            }
-        });
-    }
 }
 
 //
@@ -657,12 +634,10 @@ mod tests {
     }
 
     #[test]
-    fn invalidate_entries_if() -> Result<(), Box<dyn std::error::Error>> {
+    fn invalidate_entries_if() {
         use std::collections::HashSet;
 
-        let mut cache = CacheBuilder::new(100)
-            .support_invalidation_closures()
-            .build();
+        let mut cache = Cache::new(100);
 
         let (clock, mock) = Clock::mock();
         cache.set_expiration_clock(Some(clock));
@@ -678,7 +653,7 @@ mod tests {
         assert_eq!(cache.get(&2), Some(&"alex"));
 
         let names = ["alice", "alex"].iter().cloned().collect::<HashSet<_>>();
-        cache.invalidate_entries_if(move |_k, &v| names.contains(v))?;
+        cache.invalidate_entries_if(move |_k, &v| names.contains(v));
 
         mock.increment(Duration::from_secs(5)); // 10 secs from the start.
 
@@ -693,14 +668,12 @@ mod tests {
 
         mock.increment(Duration::from_secs(5)); // 15 secs from the start.
 
-        cache.invalidate_entries_if(|_k, &v| v == "alice")?;
-        cache.invalidate_entries_if(|_k, &v| v == "bob")?;
+        cache.invalidate_entries_if(|_k, &v| v == "alice");
+        cache.invalidate_entries_if(|_k, &v| v == "bob");
 
         assert!(cache.get(&1).is_none());
         assert!(cache.get(&3).is_none());
         assert_eq!(cache.cache.len(), 0);
-
-        Ok(())
     }
 
     #[test]
