@@ -68,7 +68,15 @@ where
     /// Panics if `num_segments` is 0.
     pub fn new(max_capacity: usize, num_segments: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(max_capacity, None, num_segments, build_hasher, None, None)
+        Self::with_everything(
+            max_capacity,
+            None,
+            num_segments,
+            build_hasher,
+            None,
+            None,
+            false,
+        )
     }
 }
 
@@ -88,6 +96,7 @@ where
         build_hasher: S,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        invalidator_enabled: bool,
     ) -> Self {
         Self {
             inner: Arc::new(Inner::new(
@@ -97,6 +106,7 @@ where
                 build_hasher,
                 time_to_live,
                 time_to_idle,
+                invalidator_enabled,
             )),
         }
     }
@@ -231,6 +241,7 @@ where
         build_hasher: S,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        invalidator_enabled: bool,
     ) -> Self {
         assert!(num_segments > 0);
 
@@ -249,6 +260,7 @@ where
                     build_hasher.clone(),
                     time_to_live,
                     time_to_idle,
+                    invalidator_enabled,
                 )
             })
             .collect::<Vec<_>>();

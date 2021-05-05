@@ -1,8 +1,11 @@
 use super::ConcurrentCacheExt;
-use crate::sync::{
-    base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
-    housekeeper::InnerSync,
-    WriteOp,
+use crate::{
+    sync::{
+        base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
+        housekeeper::InnerSync,
+        WriteOp,
+    },
+    PredicateRegistrationError,
 };
 
 use crossbeam_channel::{Sender, TrySendError};
@@ -220,7 +223,7 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(max_capacity, None, build_hasher, None, None)
+        Self::with_everything(max_capacity, None, build_hasher, None, None, false)
     }
 }
 
@@ -236,6 +239,7 @@ where
         build_hasher: S,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        invalidator_enabled: bool,
     ) -> Self {
         Self {
             base: BaseCache::new(
@@ -244,6 +248,7 @@ where
                 build_hasher,
                 time_to_live,
                 time_to_idle,
+                invalidator_enabled,
             ),
         }
     }
@@ -339,6 +344,13 @@ where
     /// trying to retrieve an item.
     pub fn invalidate_all(&self) {
         self.base.invalidate_all();
+    }
+
+    pub fn invalidate_entries_if<F>(&self, predicate: F) -> Result<u64, PredicateRegistrationError>
+    where
+        F: Fn(&K, &V) -> bool + Send + Sync + 'static,
+    {
+        self.base.invalidate_entries_if(Arc::new(predicate))
     }
 
     /// Returns the `max_capacity` of this cache.
@@ -619,6 +631,75 @@ mod tests {
         assert!(cache.get(&"b").is_none());
         assert!(cache.get(&"c").is_none());
         assert_eq!(cache.get(&"d"), Some("david"));
+    }
+
+    #[tokio::test]
+    async fn invalidate_entries_if() -> Result<(), Box<dyn std::error::Error>> {
+        use std::collections::HashSet;
+
+        let mut cache = CacheBuilder::new(100)
+            .support_invalidation_closures()
+            .build();
+        cache.reconfigure_for_testing();
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert(0, "alice").await;
+        cache.insert(1, "bob").await;
+        cache.insert(2, "alex").await;
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        cache.sync();
+
+        assert_eq!(cache.get(&0), Some("alice"));
+        assert_eq!(cache.get(&1), Some("bob"));
+        assert_eq!(cache.get(&2), Some("alex"));
+
+        let names = ["alice", "alex"].iter().cloned().collect::<HashSet<_>>();
+        cache.invalidate_entries_if(move |_k, &v| names.contains(v))?;
+        assert_eq!(cache.base.invalidation_predicate_count(), 1);
+
+        mock.increment(Duration::from_secs(5)); // 10 secs from the start.
+
+        cache.insert(3, "alice").await;
+
+        // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
+        cache.sync(); // To submit the invalidation task.
+        std::thread::sleep(Duration::from_millis(200));
+        cache.sync(); // To process the task result.
+        std::thread::sleep(Duration::from_millis(200));
+
+        assert!(cache.get(&0).is_none());
+        assert!(cache.get(&2).is_none());
+        assert_eq!(cache.get(&1), Some("bob"));
+        // This should survive as it was inserted after calling invalidate_entries_if.
+        assert_eq!(cache.get(&3), Some("alice"));
+        assert_eq!(cache.base.len(), 2);
+        assert_eq!(cache.base.invalidation_predicate_count(), 0);
+
+        mock.increment(Duration::from_secs(5)); // 15 secs from the start.
+
+        cache.invalidate_entries_if(|_k, &v| v == "alice")?;
+        cache.invalidate_entries_if(|_k, &v| v == "bob")?;
+        assert_eq!(cache.base.invalidation_predicate_count(), 2);
+
+        // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
+        cache.sync(); // To submit the invalidation task.
+        std::thread::sleep(Duration::from_millis(200));
+        cache.sync(); // To process the task result.
+        std::thread::sleep(Duration::from_millis(200));
+
+        assert!(cache.get(&1).is_none());
+        assert!(cache.get(&3).is_none());
+        assert_eq!(cache.base.len(), 0);
+        assert_eq!(cache.base.invalidation_predicate_count(), 0);
+
+        Ok(())
     }
 
     #[tokio::test]

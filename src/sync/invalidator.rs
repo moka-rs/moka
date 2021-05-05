@@ -1,9 +1,12 @@
 #![allow(unused)]
 
-use crate::common::{
-    thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
-    unsafe_weak_pointer::UnsafeWeakPointer,
-    AccessTime,
+use crate::{
+    common::{
+        thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
+        unsafe_weak_pointer::UnsafeWeakPointer,
+        AccessTime,
+    },
+    PredicateRegistrationError,
 };
 
 use super::{base_cache::Inner, ValueEntry};
@@ -448,12 +451,4 @@ impl<K, V> Default for ScanResult<K, V> {
             newest_timestamp: None,
         }
     }
-}
-
-#[derive(thiserror::Error, Debug)]
-pub enum PredicateRegistrationError {
-    #[error("The write-order queue is disabled. Please enable it using the builder at the cache creation time")]
-    WriteOrderQueueDisabled,
-    #[error("No space left in the predicate registry")]
-    NoSpaceLeft,
 }

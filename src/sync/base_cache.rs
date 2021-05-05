@@ -1,16 +1,16 @@
 use super::{
     deques::Deques,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
-    invalidator::{
-        GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun,
-        PredicateRegistrationError,
-    },
+    invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
     KeyDate, KeyHash, KeyHashDate, ReadOp, ValueEntry, WriteOp,
 };
-use crate::common::{
-    deque::{CacheRegion, DeqNode, Deque},
-    frequency_sketch::FrequencySketch,
-    AccessTime,
+use crate::{
+    common::{
+        deque::{CacheRegion, DeqNode, Deque},
+        frequency_sketch::FrequencySketch,
+        AccessTime,
+    },
+    PredicateRegistrationError,
 };
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
@@ -88,6 +88,7 @@ where
         build_hasher: S,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        invalidator_enabled: bool,
     ) -> Self {
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
@@ -99,10 +100,12 @@ where
             w_rcv,
             time_to_live,
             time_to_idle,
+            invalidator_enabled,
         ));
-        *inner.invalidator.lock() = Some(Invalidator::new(Arc::downgrade(&Arc::clone(&inner))));
+        if invalidator_enabled {
+            inner.set_invalidator(&inner);
+        }
         let housekeeper = Housekeeper::new(Arc::downgrade(&inner));
-
         Self {
             inner,
             read_op_ch: r_snd,
@@ -357,6 +360,7 @@ pub(crate) struct Inner<K, V, S> {
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     valid_after: AtomicU64,
+    invalidator_enabled: bool,
     invalidator: Mutex<Option<Invalidator<K, V, S>>>,
     has_expiration_clock: AtomicBool,
     expiration_clock: RwLock<Option<Clock>>,
@@ -368,6 +372,9 @@ where
     K: Hash + Eq,
     S: BuildHasher + Clone,
 {
+    // Disable a Clippy warning for having more than seven arguments.
+    // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+    #[allow(clippy::too_many_arguments)]
     fn new(
         max_capacity: usize,
         initial_capacity: Option<usize>,
@@ -376,6 +383,7 @@ where
         write_op_ch: Receiver<WriteOp<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        invalidator_enabled: bool,
     ) -> Self {
         let initial_capacity = initial_capacity
             .map(|cap| cap + WRITE_LOG_SIZE * 4)
@@ -400,10 +408,16 @@ where
             time_to_live,
             time_to_idle,
             valid_after: AtomicU64::new(0),
+            invalidator_enabled,
+            // When enabled, this field will be set later via the set_invalidator method.
             invalidator: Mutex::new(None),
             has_expiration_clock: AtomicBool::new(false),
             expiration_clock: RwLock::new(None),
         }
+    }
+
+    fn set_invalidator(&self, self_ref: &Arc<Self>) {
+        *self.invalidator.lock() = Some(Invalidator::new(Arc::downgrade(&Arc::clone(self_ref))));
     }
 
     #[inline]
@@ -455,6 +469,11 @@ where
     }
 
     #[inline]
+    fn is_write_order_queue_enabled(&self) -> bool {
+        self.time_to_live.is_some() || self.invalidator_enabled
+    }
+
+    #[inline]
     fn valid_after(&self) -> Instant {
         let ts = self.valid_after.load(Ordering::Acquire);
         unsafe { std::mem::transmute(ts) }
@@ -475,7 +494,7 @@ where
         if let Some(inv) = &*self.invalidator.lock() {
             inv.register_predicate(predicate, registered_at)
         } else {
-            Err(PredicateRegistrationError::WriteOrderQueueDisabled)
+            Err(PredicateRegistrationError::InvalidationClosuresDisabled)
         }
     }
 
@@ -526,7 +545,11 @@ where
         const INVALIDATION_BATCH_SIZE: usize = 500;
 
         let mut deqs = self.deques.lock();
-        let inv = self.invalidator.lock();
+        let inv = if self.invalidator_enabled {
+            Some(self.invalidator.lock())
+        } else {
+            None
+        };
         let mut calls = 0;
         let mut should_sync = true;
 
@@ -549,9 +572,11 @@ where
             self.evict(&mut deqs, EVICTION_BATCH_SIZE);
         }
 
-        if let Some(invalidator) = &*inv {
-            if !invalidator.is_empty() && !invalidator.is_task_running() {
-                self.invalidate_entries(invalidator, &mut deqs, INVALIDATION_BATCH_SIZE);
+        if self.invalidator_enabled {
+            if let Some(invalidator) = &*inv.unwrap() {
+                if !invalidator.is_empty() && !invalidator.is_task_running() {
+                    self.invalidate_entries(invalidator, &mut deqs, INVALIDATION_BATCH_SIZE);
+                }
             }
         }
 
@@ -731,7 +756,7 @@ where
             KeyHashDate::new(kh, raw_last_accessed),
             entry,
         );
-        if self.time_to_live.is_some() {
+        if self.is_write_order_queue_enabled() {
             deqs.push_back_wo(KeyDate::new(key, raw_last_modified), &entry);
         }
         entry.set_is_admitted(true);
@@ -763,7 +788,7 @@ where
     fn evict(&self, deqs: &mut Deques<K>, batch_size: usize) {
         let now = self.current_time_from_expiration_clock();
 
-        if self.time_to_live.is_some() {
+        if self.is_write_order_queue_enabled() {
             self.remove_expired_wo(deqs, batch_size, now);
         }
 

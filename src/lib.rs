@@ -157,3 +157,5 @@ pub mod sync;
 pub mod unsync;
 
 pub(crate) mod common;
+
+pub use common::error::PredicateRegistrationError;

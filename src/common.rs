@@ -1,6 +1,7 @@
 use quanta::Instant;
 
 pub(crate) mod deque;
+pub(crate) mod error;
 pub(crate) mod frequency_sketch;
 pub(crate) mod thread_pool;
 pub(crate) mod unsafe_weak_pointer;

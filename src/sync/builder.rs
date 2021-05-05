@@ -44,6 +44,7 @@ pub struct CacheBuilder<C> {
     num_segments: Option<usize>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
+    invalidator_enabled: bool,
     cache_type: PhantomData<C>,
 }
 
@@ -61,6 +62,7 @@ where
             num_segments: None,
             time_to_live: None,
             time_to_idle: None,
+            invalidator_enabled: false,
             cache_type: PhantomData::default(),
         }
     }
@@ -79,6 +81,7 @@ where
             num_segments: Some(num_segments),
             time_to_live: self.time_to_live,
             time_to_idle: self.time_to_idle,
+            invalidator_enabled: self.invalidator_enabled,
             cache_type: PhantomData::default(),
         }
     }
@@ -95,6 +98,7 @@ where
             build_hasher,
             self.time_to_live,
             self.time_to_idle,
+            self.invalidator_enabled,
         )
     }
 
@@ -112,6 +116,7 @@ where
             hasher,
             self.time_to_live,
             self.time_to_idle,
+            self.invalidator_enabled,
         )
     }
 }
@@ -134,6 +139,7 @@ where
             build_hasher,
             self.time_to_live,
             self.time_to_idle,
+            self.invalidator_enabled,
         )
     }
 
@@ -152,6 +158,7 @@ where
             hasher,
             self.time_to_live,
             self.time_to_idle,
+            self.invalidator_enabled,
         )
     }
 }
@@ -183,6 +190,13 @@ impl<C> CacheBuilder<C> {
     pub fn time_to_idle(self, duration: Duration) -> Self {
         Self {
             time_to_idle: Some(duration),
+            ..self
+        }
+    }
+
+    pub fn support_invalidation_closures(self) -> Self {
+        Self {
+            invalidator_enabled: true,
             ..self
         }
     }

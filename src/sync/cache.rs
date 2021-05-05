@@ -1,9 +1,9 @@
 use super::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
     housekeeper::InnerSync,
-    invalidator::PredicateRegistrationError,
     ConcurrentCacheExt, WriteOp,
 };
+use crate::PredicateRegistrationError;
 
 use crossbeam_channel::{Sender, TrySendError};
 use std::{
@@ -199,7 +199,7 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(max_capacity, None, build_hasher, None, None)
+        Self::with_everything(max_capacity, None, build_hasher, None, None, false)
     }
 }
 
@@ -215,6 +215,7 @@ where
         build_hasher: S,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        invalidator_enabled: bool,
     ) -> Self {
         Self {
             base: BaseCache::new(
@@ -223,6 +224,7 @@ where
                 build_hasher,
                 time_to_live,
                 time_to_idle,
+                invalidator_enabled,
             ),
         }
     }
@@ -501,7 +503,7 @@ mod tests {
         use std::collections::HashSet;
 
         let mut cache = CacheBuilder::new(100)
-            .time_to_live(Duration::from_secs(60 * 60))
+            .support_invalidation_closures()
             .build();
         cache.reconfigure_for_testing();
 
