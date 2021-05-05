@@ -306,6 +306,9 @@ where
     }
 }
 
+//
+// for testing
+//
 #[cfg(test)]
 impl<K, V, S> BaseCache<K, V, S>
 where
@@ -319,6 +322,10 @@ where
 
     pub(crate) fn len(&self) -> usize {
         self.inner.len()
+    }
+
+    pub(crate) fn invalidation_predicate_count(&self) -> usize {
+        self.inner.invalidation_predicate_count()
     }
 
     pub(crate) fn reconfigure_for_testing(&mut self) {
@@ -965,6 +972,14 @@ where
 {
     fn len(&self) -> usize {
         self.cache.len()
+    }
+
+    fn invalidation_predicate_count(&self) -> usize {
+        self.invalidator
+            .lock()
+            .as_ref()
+            .map(|inv| inv.predicate_count())
+            .unwrap_or(0)
     }
 
     fn set_expiration_clock(&self, clock: Option<quanta::Clock>) {

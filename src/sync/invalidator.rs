@@ -209,7 +209,7 @@ impl<K, V, S> Invalidator<K, V, S> {
                             }
                         }
 
-                        // Remove the predicates from from the scan context.
+                        // Remove the predicates from the scan context.
                         let ps = predicates
                             .drain(..)
                             .filter(|p| p.is_applicable(ts))
@@ -253,6 +253,16 @@ impl<K, V, S> Invalidator<K, V, S> {
             }
         }
         false
+    }
+}
+
+//
+// for testing
+//
+#[cfg(test)]
+impl<K, V, S> Invalidator<K, V, S> {
+    pub(crate) fn predicate_count(&self) -> usize {
+        self.predicates.read().len()
     }
 }
 

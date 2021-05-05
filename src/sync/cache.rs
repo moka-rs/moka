@@ -525,6 +525,7 @@ mod tests {
 
         let names = ["alice", "alex"].iter().cloned().collect::<HashSet<_>>();
         cache.invalidate_entries_if(move |_k, &v| names.contains(v))?;
+        assert_eq!(cache.base.invalidation_predicate_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 10 secs from the start.
 
@@ -542,11 +543,13 @@ mod tests {
         // This should survive as it was inserted after calling invalidate_entries_if.
         assert_eq!(cache.get(&3), Some("alice"));
         assert_eq!(cache.base.len(), 2);
+        assert_eq!(cache.base.invalidation_predicate_count(), 0);
 
         mock.increment(Duration::from_secs(5)); // 15 secs from the start.
 
         cache.invalidate_entries_if(|_k, &v| v == "alice")?;
         cache.invalidate_entries_if(|_k, &v| v == "bob")?;
+        assert_eq!(cache.base.invalidation_predicate_count(), 2);
 
         // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
         cache.sync(); // To submit the invalidation task.
@@ -557,6 +560,7 @@ mod tests {
         assert!(cache.get(&1).is_none());
         assert!(cache.get(&3).is_none());
         assert_eq!(cache.base.len(), 0);
+        assert_eq!(cache.base.invalidation_predicate_count(), 0);
 
         Ok(())
     }
