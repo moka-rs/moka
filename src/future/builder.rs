@@ -78,7 +78,7 @@ where
     /// Builds a `Cache<K, V, S>`, with the given `hasher`.
     pub fn build_with_hasher<S>(self, hasher: S) -> Cache<K, V, S>
     where
-        S: BuildHasher + Clone + Send + 'static,
+        S: BuildHasher + Clone + Send + Sync + 'static,
     {
         Cache::with_everything(
             self.max_capacity,

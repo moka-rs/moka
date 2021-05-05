@@ -207,7 +207,7 @@ impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn with_everything(
         max_capacity: usize,
@@ -331,7 +331,7 @@ impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn sync(&self) {
         self.base.inner.sync(MAX_SYNC_REPEATS);
@@ -343,7 +343,7 @@ impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     #[inline]
     fn schedule_write_op(
@@ -378,7 +378,7 @@ impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn reconfigure_for_testing(&mut self) {
         self.base.reconfigure_for_testing();

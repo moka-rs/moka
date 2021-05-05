@@ -80,7 +80,7 @@ impl<K, V, S> BaseCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn new(
         max_capacity: usize,
@@ -211,7 +211,7 @@ impl<K, V, S> BaseCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     #[inline]
     fn record_read_op(&self, op: ReadOp<K, V>) -> Result<(), TrySendError<ReadOp<K, V>>> {
@@ -314,7 +314,7 @@ impl<K, V, S> BaseCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn is_empty(&self) -> bool {
         self.inner.len() == 0
@@ -519,7 +519,7 @@ impl<K, V, S> InnerSync for Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
         const EVICTION_BATCH_SIZE: usize = 500;
@@ -573,7 +573,7 @@ impl<K, V, S> Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn apply_reads(&self, deqs: &mut Deques<K>, count: usize) {
         use ReadOp::*;

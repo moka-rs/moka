@@ -18,6 +18,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Weak,
     },
+    time::Duration,
 };
 
 // TODO: Do a research on concurrent/persistent data structures that could
@@ -36,6 +37,14 @@ use std::{
 // - rpds crate's Vector or RedBlackTreeMap.
 
 pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 'static>;
+
+pub(crate) trait GetOrRemoveEntry<K, V> {
+    fn get_value_entry(&self, key: &Arc<K>) -> Option<Arc<ValueEntry<K, V>>>;
+
+    fn remove_key_value_if<F>(&self, key: &Arc<K>, condition: F) -> Option<Arc<ValueEntry<K, V>>>
+    where
+        F: FnMut(&Arc<K>, &Arc<ValueEntry<K, V>>) -> bool;
+}
 
 pub(crate) struct KeyDateLite<K> {
     key: Arc<K>,
@@ -60,20 +69,39 @@ impl<K> KeyDateLite<K> {
     }
 }
 
+pub(crate) struct InvalidationResult<K, V> {
+    pub(crate) invalidated: Vec<Arc<ValueEntry<K, V>>>,
+    pub(crate) is_done: bool,
+}
+
+impl<K, V> InvalidationResult<K, V> {
+    fn new(invalidated: Vec<Arc<ValueEntry<K, V>>>, is_done: bool) -> Self {
+        Self {
+            invalidated,
+            is_done,
+        }
+    }
+}
+
 pub(crate) struct Invalidator<K, V, S> {
     predicates: RwLock<HashMap<u64, Predicate<K, V>>>,
     is_empty: AtomicBool,
-    last_key: AtomicU64,
-    scan_context: ScanContext<K, V>,
-    task_result: Arc<Mutex<Option<InternalInvalidationResult<K, V>>>>,
-    is_task_running: Arc<AtomicBool>,
+    last_predicate_id: AtomicU64,
+    scan_context: Arc<ScanContext<K, V, S>>,
     thread_pool: Arc<ThreadPool>,
-    cache: Arc<Mutex<UnsafeWeakPointer>>,
-    _marker: PhantomData<S>,
 }
 
 impl<K, V, S> Drop for Invalidator<K, V, S> {
     fn drop(&mut self) {
+        let ctx = &self.scan_context;
+        // Disallow to create and run a scanning task by now.
+        ctx.is_shutting_down.store(true, Ordering::Release);
+
+        // Wait for the scanning task to finish. (busy loop)
+        while ctx.is_running.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+
         ThreadPoolRegistry::release_pool(&self.thread_pool);
     }
 }
@@ -84,18 +112,12 @@ impl<K, V, S> Drop for Invalidator<K, V, S> {
 impl<K, V, S> Invalidator<K, V, S> {
     pub(crate) fn new(cache: Weak<Inner<K, V, S>>) -> Self {
         let thread_pool = ThreadPoolRegistry::acquire_pool(PoolName::Invalidator);
-        let cache = Arc::new(Mutex::new(UnsafeWeakPointer::from_weak_arc(cache)));
-
         Self {
             predicates: RwLock::new(HashMap::new()),
             is_empty: AtomicBool::new(true),
-            last_key: AtomicU64::new(std::u64::MAX),
-            scan_context: ScanContext::default(),
-            task_result: Arc::new(Mutex::new(None)),
-            is_task_running: Arc::new(AtomicBool::new(false)),
+            last_predicate_id: AtomicU64::new(std::u64::MAX),
+            scan_context: Arc::new(ScanContext::new(cache)),
             thread_pool,
-            cache,
-            _marker: PhantomData::default(),
         }
     }
 
@@ -114,7 +136,7 @@ impl<K, V, S> Invalidator<K, V, S> {
 
         while tries < MAX_RETRY {
             // NOTE: fetch_add operation wraps around on overflow.
-            let id = self.last_key.fetch_add(1, Ordering::SeqCst);
+            let id = self.last_predicate_id.fetch_add(1, Ordering::SeqCst);
             if preds.contains_key(&id) {
                 tries += 1;
 
@@ -130,14 +152,6 @@ impl<K, V, S> Invalidator<K, V, S> {
         Err(PredicateRegistrationError::NoSpaceLeft)
     }
 
-    pub(crate) fn remove_predicate(&self, id: u64) {
-        let mut preds = self.predicates.write();
-        preds.remove(&id);
-        if preds.is_empty() {
-            self.is_empty.store(true, Ordering::Release);
-        }
-    }
-
     // This method will be called by the get method of Cache.
     #[inline]
     pub(crate) fn apply_predicates(&self, key: &Arc<K>, entry: &Arc<ValueEntry<K, V>>) -> bool {
@@ -151,39 +165,37 @@ impl<K, V, S> Invalidator<K, V, S> {
     }
 
     pub(crate) fn is_task_running(&self) -> bool {
-        self.is_task_running.load(Ordering::Acquire)
+        self.scan_context.is_running.load(Ordering::Acquire)
     }
 
     pub(crate) fn submit_task(&self, candidates: Vec<KeyDateLite<K>>, is_truncated: bool)
     where
         K: Hash + Eq + Send + Sync + 'static,
         V: Send + Sync + 'static,
-        S: BuildHasher + Send + 'static,
+        S: BuildHasher + Send + Sync + 'static,
     {
+        let ctx = &self.scan_context;
+
+        // Do not submit a task if this invalidator is about to be dropped.
+        if ctx.is_shutting_down.load(Ordering::Acquire) {
+            return;
+        }
+
         // Ensure there is no pending task and result.
         assert!(!self.is_task_running());
-        assert!(self.task_result.lock().is_none());
+        assert!(ctx.result.lock().is_none());
 
+        // Populate ctx.predicates if it is empty.
         {
-            let mut ctx_predicates = self.scan_context.predicates.lock();
-            if ctx_predicates.is_empty() {
-                let predicates = self.predicates.read().values().cloned().collect();
-                *ctx_predicates = predicates;
+            let mut ps = ctx.predicates.lock();
+            if ps.is_empty() {
+                *ps = self.predicates.read().values().cloned().collect();
             }
         }
 
-        let task = InvalidationTask {
-            cache: Arc::clone(&self.cache),
-            scan_context: self.scan_context.clone(),
-            candidates,
-            is_truncated,
-            task_result: Arc::clone(&self.task_result),
-            is_running: Arc::clone(&self.is_task_running),
-            _marker: PhantomData::<S>::default(),
-        };
+        self.scan_context.is_running.store(true, Ordering::Release);
 
-        self.is_task_running.store(true, Ordering::Release);
-
+        let task = ScanTask::new(&self.scan_context, candidates, is_truncated);
         self.thread_pool.pool.execute(move || {
             task.execute();
         });
@@ -191,50 +203,13 @@ impl<K, V, S> Invalidator<K, V, S> {
 
     pub(crate) fn task_result(&self) -> Option<InvalidationResult<K, V>> {
         assert!(!self.is_task_running());
-        match self.task_result.lock().take() {
-            Some(InternalInvalidationResult {
-                invalidated,
-                is_truncated,
-                newest_timestamp,
-            }) => {
-                let mut is_done = false;
-                let mut predicates = self.scan_context.predicates.lock();
+        let ctx = &self.scan_context;
 
-                if is_truncated {
-                    if let Some(ts) = newest_timestamp {
-                        // Remove the predicates from the predicate registry.
-                        for p in &*predicates {
-                            if !p.is_applicable(ts) {
-                                self.remove_predicate(p.id());
-                            }
-                        }
-
-                        // Remove the predicates from the scan context.
-                        let ps = predicates
-                            .drain(..)
-                            .filter(|p| p.is_applicable(ts))
-                            .collect();
-                        *predicates = ps;
-                    }
-                    is_done = predicates.is_empty();
-                } else {
-                    // Remove the predicates from the predicate registry.
-                    for p in &*predicates {
-                        self.remove_predicate(p.id());
-                    }
-
-                    // Clear the predicates in the scan context.
-                    predicates.clear();
-                    is_done = true;
-                }
-
-                Some(InvalidationResult {
-                    invalidated,
-                    is_done,
-                })
-            }
-            None => None,
-        }
+        ctx.result.lock().take().map(|result| {
+            self.remove_finished_predicates(ctx, &result);
+            let is_done = ctx.predicates.lock().is_empty();
+            InvalidationResult::new(result.invalidated, is_done)
+        })
     }
 }
 
@@ -254,6 +229,36 @@ impl<K, V, S> Invalidator<K, V, S> {
         }
         false
     }
+
+    fn remove_finished_predicates(&self, ctx: &ScanContext<K, V, S>, result: &ScanResult<K, V>) {
+        let mut predicates = ctx.predicates.lock();
+
+        if result.is_truncated {
+            if let Some(ts) = result.newest_timestamp {
+                let (active, finished): (Vec<_>, Vec<_>) =
+                    predicates.drain(..).partition(|p| p.is_applicable(ts));
+
+                // Remove finished predicates from the predicate registry.
+                self.remove_predicates(&finished);
+                // Set the active predicates to the scan context.
+                *predicates = active;
+            }
+        } else {
+            // Remove all the predicates from the predicate registry and scan context.
+            self.remove_predicates(&predicates);
+            predicates.clear();
+        }
+    }
+
+    fn remove_predicates(&self, predicates: &[Predicate<K, V>]) {
+        let mut pred_map = self.predicates.write();
+        predicates.iter().for_each(|p| {
+            pred_map.remove(&p.id());
+        });
+        if pred_map.is_empty() {
+            self.is_empty.store(true, Ordering::Release);
+        }
+    }
 }
 
 //
@@ -266,22 +271,24 @@ impl<K, V, S> Invalidator<K, V, S> {
     }
 }
 
-struct ScanContext<K, V> {
-    predicates: Arc<Mutex<Vec<Predicate<K, V>>>>,
+struct ScanContext<K, V, S> {
+    predicates: Mutex<Vec<Predicate<K, V>>>,
+    cache: Mutex<UnsafeWeakPointer>,
+    result: Mutex<Option<ScanResult<K, V>>>,
+    is_running: AtomicBool,
+    is_shutting_down: AtomicBool,
+    _marker: PhantomData<S>,
 }
 
-impl<K, V> Clone for ScanContext<K, V> {
-    fn clone(&self) -> Self {
+impl<K, V, S> ScanContext<K, V, S> {
+    fn new(cache: Weak<Inner<K, V, S>>) -> Self {
         Self {
-            predicates: Arc::clone(&self.predicates),
-        }
-    }
-}
-
-impl<K, V> Default for ScanContext<K, V> {
-    fn default() -> Self {
-        Self {
-            predicates: Arc::new(Mutex::new(Vec::default())),
+            predicates: Mutex::new(Vec::default()),
+            cache: Mutex::new(UnsafeWeakPointer::from_weak_arc(cache)),
+            result: Mutex::new(None),
+            is_running: AtomicBool::new(false),
+            is_shutting_down: AtomicBool::new(false),
+            _marker: PhantomData::default(),
         }
     }
 }
@@ -324,50 +331,50 @@ impl<K, V> Predicate<K, V> {
     }
 }
 
-pub(crate) trait GetOrRemoveEntry<K, V> {
-    fn get_value_entry(&self, key: &Arc<K>) -> Option<Arc<ValueEntry<K, V>>>;
-
-    fn remove_key_value_if<F>(&self, key: &Arc<K>, condition: F) -> Option<Arc<ValueEntry<K, V>>>
-    where
-        F: FnMut(&Arc<K>, &Arc<ValueEntry<K, V>>) -> bool;
-}
-
-struct InvalidationTask<K, V, S> {
-    cache: Arc<Mutex<UnsafeWeakPointer>>,
-    scan_context: ScanContext<K, V>,
+struct ScanTask<K, V, S> {
+    scan_context: Arc<ScanContext<K, V, S>>,
     candidates: Vec<KeyDateLite<K>>,
     is_truncated: bool,
-    task_result: Arc<Mutex<Option<InternalInvalidationResult<K, V>>>>,
-    is_running: Arc<AtomicBool>,
-    _marker: PhantomData<S>,
 }
 
-impl<K, V, S> InvalidationTask<K, V, S>
+impl<K, V, S> ScanTask<K, V, S>
 where
     K: Hash + Eq,
     S: BuildHasher,
 {
+    fn new(
+        scan_context: &Arc<ScanContext<K, V, S>>,
+        candidates: Vec<KeyDateLite<K>>,
+        is_truncated: bool,
+    ) -> Self {
+        Self {
+            scan_context: Arc::clone(scan_context),
+            candidates,
+            is_truncated,
+        }
+    }
+
     fn execute(&self) {
-        let result;
-        let lock = self.cache.lock();
+        let cache_lock = self.scan_context.cache.lock();
+        let mut result = self.scan_context.result.lock();
+
         // Restore the Weak pointer to Inner<K, V, S>.
-        let weak = unsafe { lock.as_weak_arc::<Inner<K, V, S>>() };
+        let weak = unsafe { cache_lock.as_weak_arc::<Inner<K, V, S>>() };
         if let Some(inner_cache) = weak.upgrade() {
             // TODO: Protect this call with catch_unwind().
-            result = self.do_execute(&inner_cache);
+            *result = Some(self.do_execute(&inner_cache));
             // Avoid to drop the Arc<Inner<K, V, S>>.
             UnsafeWeakPointer::forget_arc(inner_cache);
         } else {
-            result = InternalInvalidationResult::default();
+            *result = Some(ScanResult::default());
             // Avoid to drop the Weak<Inner<K, V, S>>.
             UnsafeWeakPointer::forget_weak_arc(weak);
         }
 
-        *self.task_result.lock() = Some(result);
-        self.is_running.store(false, Ordering::Release);
+        self.scan_context.is_running.store(false, Ordering::Release);
     }
 
-    fn do_execute<C>(&self, cache: &Arc<C>) -> InternalInvalidationResult<K, V>
+    fn do_execute<C>(&self, cache: &Arc<C>) -> ScanResult<K, V>
     where
         Arc<C>: GetOrRemoveEntry<K, V>,
     {
@@ -386,7 +393,7 @@ where
             newest_timestamp = Some(ts);
         }
 
-        InternalInvalidationResult {
+        ScanResult {
             invalidated,
             is_truncated: self.is_truncated,
             newest_timestamp,
@@ -427,18 +434,13 @@ where
     }
 }
 
-pub(crate) struct InvalidationResult<K, V> {
-    pub(crate) invalidated: Vec<Arc<ValueEntry<K, V>>>,
-    pub(crate) is_done: bool,
-}
-
-struct InternalInvalidationResult<K, V> {
+struct ScanResult<K, V> {
     invalidated: Vec<Arc<ValueEntry<K, V>>>,
     is_truncated: bool,
     newest_timestamp: Option<Instant>,
 }
 
-impl<K, V> Default for InternalInvalidationResult<K, V> {
+impl<K, V> Default for ScanResult<K, V> {
     fn default() -> Self {
         Self {
             invalidated: Vec::default(),

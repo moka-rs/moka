@@ -76,7 +76,7 @@ impl<K, V, S> SegmentedCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     /// # Panics
     ///
@@ -181,7 +181,7 @@ impl<K, V, S> ConcurrentCacheExt<K, V> for SegmentedCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn sync(&self) {
         for segment in self.inner.segments.iter() {
@@ -196,7 +196,7 @@ impl<K, V, S> SegmentedCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn reconfigure_for_testing(&mut self) {
         let inner = Arc::get_mut(&mut self.inner)
@@ -219,7 +219,7 @@ impl<K, V, S> Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     /// # Panics
     ///
