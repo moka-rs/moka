@@ -132,20 +132,22 @@ where
             self.record_read_op(op).expect("Failed to record a get op");
         };
 
-        match self.inner.get(key) {
+        match self.inner.get_key_value(key) {
             None => {
                 record(ReadOp::Miss(hash));
                 None
             }
-            Some(entry) => {
+            Some((arc_key, entry)) => {
                 let i = &self.inner;
                 let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), i.valid_after());
                 let now = i.current_time_from_expiration_clock();
 
                 if is_expired_entry_wo(ttl, va, &entry, now)
                     || is_expired_entry_ao(tti, va, &entry, now)
+                    || self.inner.is_invalidated_entry(&arc_key, &entry)
                 {
-                    // Expired entry. Record this access as a cache miss rather than a hit.
+                    // Expired or invalidated entry. Record this access as a cache miss
+                    // rather than a hit.
                     record(ReadOp::Miss(hash));
                     None
                 } else {
@@ -349,6 +351,8 @@ where
 
 type CacheStore<K, V, S> = cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
 
+type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
+
 pub(crate) struct Inner<K, V, S> {
     max_capacity: usize,
     cache: CacheStore<K, V, S>,
@@ -361,7 +365,7 @@ pub(crate) struct Inner<K, V, S> {
     time_to_idle: Option<Duration>,
     valid_after: AtomicU64,
     invalidator_enabled: bool,
-    invalidator: Mutex<Option<Invalidator<K, V, S>>>,
+    invalidator: RwLock<Option<Invalidator<K, V, S>>>,
     has_expiration_clock: AtomicBool,
     expiration_clock: RwLock<Option<Clock>>,
 }
@@ -410,14 +414,14 @@ where
             valid_after: AtomicU64::new(0),
             invalidator_enabled,
             // When enabled, this field will be set later via the set_invalidator method.
-            invalidator: Mutex::new(None),
+            invalidator: RwLock::new(None),
             has_expiration_clock: AtomicBool::new(false),
             expiration_clock: RwLock::new(None),
         }
     }
 
     fn set_invalidator(&self, self_ref: &Arc<Self>) {
-        *self.invalidator.lock() = Some(Invalidator::new(Arc::downgrade(&Arc::clone(self_ref))));
+        *self.invalidator.write() = Some(Invalidator::new(Arc::downgrade(&Arc::clone(self_ref))));
     }
 
     #[inline]
@@ -432,12 +436,12 @@ where
     }
 
     #[inline]
-    fn get<Q>(&self, key: &Q) -> Option<Arc<ValueEntry<K, V>>>
+    fn get_key_value<Q>(&self, key: &Q) -> Option<CacheEntry<K, V>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.cache.get(key)
+        self.cache.get_key_value(key)
     }
 
     #[inline]
@@ -486,12 +490,17 @@ where
     }
 
     #[inline]
+    fn has_valid_after(&self) -> bool {
+        self.valid_after.load(Ordering::Acquire) > 0
+    }
+
+    #[inline]
     fn register_invalidation_predicate(
         &self,
         predicate: PredicateFun<K, V>,
         registered_at: Instant,
     ) -> Result<u64, PredicateRegistrationError> {
-        if let Some(inv) = &*self.invalidator.lock() {
+        if let Some(inv) = &*self.invalidator.read() {
             inv.register_predicate(predicate, registered_at)
         } else {
             Err(PredicateRegistrationError::InvalidationClosuresDisabled)
@@ -499,8 +508,13 @@ where
     }
 
     #[inline]
-    fn has_valid_after(&self) -> bool {
-        self.valid_after.load(Ordering::Acquire) > 0
+    fn is_invalidated_entry(&self, key: &Arc<K>, entry: &Arc<ValueEntry<K, V>>) -> bool {
+        if self.invalidator_enabled {
+            if let Some(inv) = &*self.invalidator.read() {
+                return inv.apply_predicates(key, entry);
+            }
+        }
+        false
     }
 
     #[inline]
@@ -545,11 +559,6 @@ where
         const INVALIDATION_BATCH_SIZE: usize = 500;
 
         let mut deqs = self.deques.lock();
-        let inv = if self.invalidator_enabled {
-            Some(self.invalidator.lock())
-        } else {
-            None
-        };
         let mut calls = 0;
         let mut should_sync = true;
 
@@ -573,7 +582,7 @@ where
         }
 
         if self.invalidator_enabled {
-            if let Some(invalidator) = &*inv.unwrap() {
+            if let Some(invalidator) = &*self.invalidator.read() {
                 if !invalidator.is_empty() && !invalidator.is_task_running() {
                     self.invalidate_entries(invalidator, &mut deqs, INVALIDATION_BATCH_SIZE);
                 }
@@ -1001,7 +1010,7 @@ where
 
     fn invalidation_predicate_count(&self) -> usize {
         self.invalidator
-            .lock()
+            .read()
             .as_ref()
             .map(|inv| inv.predicate_count())
             .unwrap_or(0)

@@ -24,21 +24,6 @@ use std::{
     time::Duration,
 };
 
-// TODO: Do a research on concurrent/persistent data structures that could
-// replace RwLock<HashMap<_, _>> to store predicates.
-//
-// Requirements:
-// - A write will not block reads or other writes.
-// - Provides a way to iterate through the predicates.
-//
-// Candidates (concurrent data structure):
-// - cht crate's HashMap, once iterator is implemented.
-//     - https://github.com/Gregory-Meyer/cht/issues/20
-//
-// Candidates (persistent data structure):
-// - im crate's Vector or HashMap.
-// - rpds crate's Vector or RedBlackTreeMap.
-
 pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 'static>;
 
 pub(crate) trait GetOrRemoveEntry<K, V> {
@@ -87,6 +72,8 @@ impl<K, V> InvalidationResult<K, V> {
 }
 
 pub(crate) struct Invalidator<K, V, S> {
+    // TODO: Replace this RwLock<std::collections::HashMap<_, _>> with cht::HashMap
+    // once iterator is implemented. https://github.com/Gregory-Meyer/cht/issues/20
     predicates: RwLock<HashMap<u64, Predicate<K, V>>>,
     is_empty: AtomicBool,
     last_predicate_id: AtomicU64,
