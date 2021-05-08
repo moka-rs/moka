@@ -616,14 +616,12 @@ where
                         Arc::clone(&last_modified),
                         deqs,
                     );
-                    done = true;
-                    break;
                 } else {
                     // The candidate is not admitted. Remove it from the cache (hash map).
                     self.cache.remove(&Arc::clone(&kh.key));
-                    done = true;
-                    break;
                 }
+                done = true;
+                break;
             }
         }
 
