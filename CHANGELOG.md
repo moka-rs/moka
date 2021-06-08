@@ -1,5 +1,11 @@
 # Moka &mdash; Change Log
 
+## Version 0.3.1
+
+### Changed
+
+- Stop skeptic from having to be compiled by all downstream users. ([#16][gh-pull-0016])
+
 ## Version 0.3.0
 
 ### Added
@@ -43,6 +49,7 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[gh-pull-0016]: https://github.com/moka-rs/moka/pull/16/
 [gh-pull-0011]: https://github.com/moka-rs/moka/pull/11/
 [gh-pull-0009]: https://github.com/moka-rs/moka/pull/9/
 [gh-pull-0007]: https://github.com/moka-rs/moka/pull/7/

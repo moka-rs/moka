@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
 
@@ -9,8 +9,8 @@ license = "MIT OR Apache-2.0"
 # homepage = "https://"
 documentation = "https://docs.rs/moka/"
 repository = "https://github.com/moka-rs/moka"
-keywords = ["concurrent", "cache"]
-categories = ["concurrency", "caching"]
+keywords = ["cache", "concurrent"]
+categories = ["caching", "concurrency"]
 readme = "README.md"
 exclude = [".devcontainer", ".github", ".vscode"]
 build = "build.rs"
