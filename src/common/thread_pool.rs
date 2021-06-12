@@ -40,18 +40,19 @@ impl Default for ThreadPoolRegistry {
 
 impl ThreadPoolRegistry {
     pub(crate) fn acquire_pool(name: PoolName) -> Arc<ThreadPool> {
-        // Maybe it is enough to use Mutex and the entry API `get_or_else()`.
-        // Or just use cht crate.
         loop {
             {
+                // Acquire a read lock and get the pool.
                 let pools = REGISTRY.pools.read();
                 if let Some(pool) = pools.get(&name) {
                     return Arc::clone(pool);
                 }
             }
             {
+                // Acquire the write lock, double check the pool still does not exist,
+                // and insert a new pool.
                 let mut pools = REGISTRY.pools.write();
-                if !pools.contains_key(&name) {
+                pools.entry(name).or_insert_with(|| {
                     let num_threads = num_cpus::get();
                     let pool =
                         ScheduledThreadPool::with_name(name.thread_name_template(), num_threads);
@@ -60,8 +61,8 @@ impl ThreadPoolRegistry {
                         pool,
                         // num_threads,
                     };
-                    pools.insert(name, Arc::new(t_pool));
-                }
+                    Arc::new(t_pool)
+                });
             }
         }
     }
