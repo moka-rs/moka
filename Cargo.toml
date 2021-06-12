@@ -47,5 +47,5 @@ getrandom = "0.2"
 skeptic = "0.13"
 tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 
-[build-dependencies]
+[target.'cfg(skeptic)'.build-dependencies]
 skeptic = "0.13"

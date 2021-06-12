@@ -665,13 +665,9 @@ where
                 // The entry has been already admitted, so treat this as an update.
                 deqs.move_to_back_ao(&entry);
                 deqs.move_to_back_wo(&entry);
-                done = true;
-                break;
             } else if self.cache.len() <= self.max_capacity {
                 // There are some room in the cache. Add the candidate to the deques.
                 self.handle_admit(kh.clone(), &entry, last_accessed, last_modified, deqs);
-                done = true;
-                break;
             } else {
                 let victim = match Self::find_cache_victim(deqs, freq) {
                     // Found a victim.
@@ -713,15 +709,13 @@ where
                         Arc::clone(&last_modified),
                         deqs,
                     );
-                    done = true;
-                    break;
                 } else {
                     // The candidate is not admitted. Remove it from the cache (hash map).
                     self.cache.remove(&Arc::clone(&kh.key));
-                    done = true;
-                    break;
                 }
             }
+            done = true;
+            break;
         }
 
         if !done {
