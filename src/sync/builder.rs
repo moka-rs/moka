@@ -49,8 +49,8 @@ pub struct CacheBuilder<C> {
 
 impl<K, V> CacheBuilder<Cache<K, V, RandomState>>
 where
-    K: Eq + Hash,
-    V: Clone,
+    K: Eq + Hash + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
 {
     /// Construct a new `CacheBuilder` that will be used to build a `Cache` or
     /// `SegmentedCache` holding up to `max_capacity` entries.
@@ -104,7 +104,7 @@ where
     /// calling this method.
     pub fn build_with_hasher<S>(self, hasher: S) -> Cache<K, V, S>
     where
-        S: BuildHasher + Clone,
+        S: BuildHasher + Clone + Send + Sync + 'static,
     {
         Cache::with_everything(
             self.max_capacity,
@@ -118,8 +118,8 @@ where
 
 impl<K, V> CacheBuilder<SegmentedCache<K, V, RandomState>>
 where
-    K: Eq + Hash,
-    V: Clone,
+    K: Eq + Hash + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
 {
     /// Builds a `SegmentedCache<K, V>`.
     ///
@@ -143,7 +143,7 @@ where
     /// calling this method.
     pub fn build_with_hasher<S>(self, hasher: S) -> SegmentedCache<K, V, S>
     where
-        S: BuildHasher + Clone,
+        S: BuildHasher + Clone + Send + Sync + 'static,
     {
         SegmentedCache::with_everything(
             self.max_capacity,
