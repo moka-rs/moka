@@ -251,9 +251,8 @@ where
     /// Discards cached values that satisfy a predicate.
     ///
     /// `invalidate_entries_if` takes a closure that returns `true` or
-    /// `false`. `invalidate_entries_if` will apply the closure to each value
-    /// inserted before the time when it was called. If the closure returns `true` on
-    /// a value, that value will be invalidated.
+    /// `false`. `invalidate_entries_if` will apply the closure to each value,
+    /// and if the closure returns `true`, the value will be invalidated.
     ///
     /// Like the `invalidate` method, this method does not clear the historic
     /// popularity estimator of keys so that it retains the client activities of
