@@ -6,6 +6,7 @@
 [![dependency status][deps-rs-badge]][deps-rs]
 [![coverage status][coveralls-badge]][coveralls]
 [![license][license-badge]](#license)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_shield)
 
 Moka is a fast, concurrent cache library for Rust. Moka is inspired by
 [Caffeine][caffeine-git] (Java) and [Ristretto][ristretto-git] (Go).
@@ -366,3 +367,6 @@ MEMO:
 - Column width is 85. (Emacs: C-x f)
 
 -->
+
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_large)
