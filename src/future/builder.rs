@@ -47,8 +47,8 @@ pub struct CacheBuilder<C> {
 
 impl<K, V> CacheBuilder<Cache<K, V, RandomState>>
 where
-    K: Eq + Hash,
-    V: Clone,
+    K: Eq + Hash + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
 {
     /// Construct a new `CacheBuilder` that will be used to build a `Cache` holding
     /// up to `max_capacity` entries.
@@ -78,7 +78,7 @@ where
     /// Builds a `Cache<K, V, S>`, with the given `hasher`.
     pub fn build_with_hasher<S>(self, hasher: S) -> Cache<K, V, S>
     where
-        S: BuildHasher + Clone,
+        S: BuildHasher + Clone + Send + Sync + 'static,
     {
         Cache::with_everything(
             self.max_capacity,

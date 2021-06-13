@@ -107,20 +107,15 @@ use std::{
 ///     }
 /// }
 /// ```
+///
 /// # Thread Safety
 ///
 /// All methods provided by the `Cache` are considered thread-safe, and can be safely
 /// accessed by multiple concurrent threads.
 ///
-/// `Cache<K, V, S>` will implement `Send` when all of the following conditions meet:
-///
-/// - `K` (key) and `V` (value) implement `Send` and `Sync`.
-/// - `S` (the hash-map state) implements `Send`.
-///
-/// and will implement `Sync` when all of the following conditions meet:
-///
-/// - `K` (key) and `V` (value) implement `Send` and `Sync`.
-/// - `S` (the hash-map state) implements `Sync`.
+/// - `Cache<K, V, S>` requires trait bounds `Send`, `Sync` and `'static` for `K`
+///   (key), `V` (value) and `S` (hasher state).
+/// - `Cache<K, V, S>` will implement `Send` and `Sync`.
 ///
 /// # Sharing a cache across asynchronous tasks
 ///
@@ -209,8 +204,8 @@ where
 
 impl<K, V> Cache<K, V, RandomState>
 where
-    K: Hash + Eq,
-    V: Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
 {
     /// Constructs a new `Cache<K, V>` that will store up to the `max_capacity` entries.
     ///
@@ -226,9 +221,9 @@ where
 
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Hash + Eq,
-    V: Clone,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn with_everything(
         max_capacity: usize,
@@ -366,8 +361,9 @@ where
 
 impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
 where
-    K: Hash + Eq,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn sync(&self) {
         self.base.inner.sync(MAX_SYNC_REPEATS);
@@ -377,9 +373,9 @@ where
 // private methods
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Hash + Eq,
-    V: Clone,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     async fn insert_with_hash(&self, key: K, hash: u64, value: V) {
         let op = self.base.do_insert_with_hash(key, hash, value);
@@ -444,8 +440,9 @@ where
 #[cfg(test)]
 impl<K, V, S> Cache<K, V, S>
 where
-    K: Hash + Eq,
-    S: BuildHasher + Clone,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn reconfigure_for_testing(&mut self) {
         self.base.reconfigure_for_testing();
