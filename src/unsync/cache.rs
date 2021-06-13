@@ -248,7 +248,6 @@ where
         self.deques.clear();
     }
 
-
     /// Discards cached values that satisfy a predicate.
     ///
     /// `invalidate_entries_if` takes a closure that returns `true` or

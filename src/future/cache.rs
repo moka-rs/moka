@@ -3,9 +3,9 @@ use crate::{
     sync::{
         base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
         housekeeper::InnerSync,
-        WriteOp,
+        PredicateId, WriteOp,
     },
-    PredicateRegistrationError,
+    PredicateError,
 };
 
 use crossbeam_channel::{Sender, TrySendError};
@@ -363,15 +363,15 @@ where
     /// at the cache creation time as the cache will maintain additional internal
     /// data structures to support this method. Otherwise, calling this method will
     /// fail with a
-    /// [`PredicateRegistrationError::InvalidationClosuresDisabled`][invalidation-disabled-error].
+    /// [`PredicateError::InvalidationClosuresDisabled`][invalidation-disabled-error].
     ///
     /// Like the `invalidate` method, this method does not clear the historic
     /// popularity estimator of keys so that it retains the client activities of
     /// trying to retrieve an item.
     ///
     /// [enable-invalidation-closures]: ./struct.CacheBuilder.html#method.enable_invalidation_with_closures
-    /// [invalidation-disabled-error]: ../enum.PredicateRegistrationError.html#variant.InvalidationClosuresDisabled
-    pub fn invalidate_entries_if<F>(&self, predicate: F) -> Result<u64, PredicateRegistrationError>
+    /// [invalidation-disabled-error]: ../enum.PredicateError.html#variant.InvalidationClosuresDisabled
+    pub fn invalidate_entries_if<F>(&self, predicate: F) -> Result<PredicateId, PredicateError>
     where
         F: Fn(&K, &V) -> bool + Send + Sync + 'static,
     {

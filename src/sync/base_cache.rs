@@ -2,7 +2,7 @@ use super::{
     deques::Deques,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
-    KeyDate, KeyHash, KeyHashDate, ReadOp, ValueEntry, WriteOp,
+    KeyDate, KeyHash, KeyHashDate, PredicateId, ReadOp, ValueEntry, WriteOp,
 };
 use crate::{
     common::{
@@ -10,7 +10,7 @@ use crate::{
         frequency_sketch::FrequencySketch,
         AccessTime,
     },
-    PredicateRegistrationError,
+    PredicateError,
 };
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
@@ -191,7 +191,7 @@ where
     pub(crate) fn invalidate_entries_if(
         &self,
         predicate: PredicateFun<K, V>,
-    ) -> Result<u64, PredicateRegistrationError> {
+    ) -> Result<PredicateId, PredicateError> {
         let now = self.inner.current_time_from_expiration_clock();
         self.inner.register_invalidation_predicate(predicate, now)
     }
@@ -499,11 +499,11 @@ where
         &self,
         predicate: PredicateFun<K, V>,
         registered_at: Instant,
-    ) -> Result<u64, PredicateRegistrationError> {
+    ) -> Result<PredicateId, PredicateError> {
         if let Some(inv) = &*self.invalidator.read() {
             inv.register_predicate(predicate, registered_at)
         } else {
-            Err(PredicateRegistrationError::InvalidationClosuresDisabled)
+            Err(PredicateError::InvalidationClosuresDisabled)
         }
     }
 

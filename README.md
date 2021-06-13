@@ -25,12 +25,14 @@ exceeded.
 [deps-rs-badge]: https://deps.rs/repo/github/moka-rs/moka/status.svg
 [coveralls-badge]: https://coveralls.io/repos/github/moka-rs/moka/badge.svg?branch=master
 [license-badge]: https://img.shields.io/crates/l/moka.svg
+[fossa-badge]: https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=shield
 
 [gh-actions]: https://github.com/moka-rs/moka/actions?query=workflow%3ACI
 [crate]: https://crates.io/crates/moka
 [docs]: https://docs.rs/moka
 [deps-rs]: https://deps.rs/repo/github/moka-rs/moka
 [coveralls]: https://coveralls.io/github/moka-rs/moka?branch=master
+[fossa]: https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_shield
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 [ristretto-git]: https://github.com/dgraph-io/ristretto
@@ -333,6 +335,18 @@ change.
 -->
 
 
+## Developing Moka
+
+**Running All Tests**
+
+To run all tests including `futures` feature and doc tests on the README, use the
+following command:
+
+```console
+$ RUSTFLAGS='--cfg skeptic' cargo test --all-features
+```
+
+
 ## Road Map
 
 - [x] `async` optimized caches. (`v0.2.0`)
@@ -360,6 +374,7 @@ at your option.
 
 See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.
 
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_large)
 
 <!--
 
@@ -367,6 +382,3 @@ MEMO:
 - Column width is 85. (Emacs: C-x f)
 
 -->
-
-
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_large)

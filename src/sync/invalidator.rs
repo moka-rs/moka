@@ -6,10 +6,10 @@ use crate::{
         unsafe_weak_pointer::UnsafeWeakPointer,
         AccessTime,
     },
-    PredicateRegistrationError,
+    PredicateError,
 };
 
-use super::{base_cache::Inner, ValueEntry};
+use super::{base_cache::Inner, PredicateId, PredicateIdStr, ValueEntry};
 
 use parking_lot::{Mutex, RwLock};
 use quanta::Instant;
@@ -23,6 +23,7 @@ use std::{
     },
     time::Duration,
 };
+use uuid::Uuid;
 
 pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 'static>;
 
@@ -74,7 +75,7 @@ impl<K, V> InvalidationResult<K, V> {
 pub(crate) struct Invalidator<K, V, S> {
     // TODO: Replace this RwLock<std::collections::HashMap<_, _>> with cht::HashMap
     // once iterator is implemented. https://github.com/Gregory-Meyer/cht/issues/20
-    predicates: RwLock<HashMap<u64, Predicate<K, V>>>,
+    predicates: RwLock<HashMap<PredicateId, Predicate<K, V>>>,
     is_empty: AtomicBool,
     last_predicate_id: AtomicU64,
     scan_context: Arc<ScanContext<K, V, S>>,
@@ -119,27 +120,29 @@ impl<K, V, S> Invalidator<K, V, S> {
         &self,
         predicate: PredicateFun<K, V>,
         registered_at: Instant,
-    ) -> Result<u64, PredicateRegistrationError> {
-        const MAX_RETRY: usize = 10_000;
+    ) -> Result<PredicateId, PredicateError> {
+        const MAX_RETRY: usize = 1_000;
         let mut tries = 0;
         let mut preds = self.predicates.write();
 
         while tries < MAX_RETRY {
-            // NOTE: fetch_add operation wraps around on overflow.
-            let id = self.last_predicate_id.fetch_add(1, Ordering::SeqCst);
+            let id = Uuid::new_v4().to_hyphenated().to_string();
             if preds.contains_key(&id) {
                 tries += 1;
 
                 continue; // Retry
             }
-            let pred = Predicate::new(id, predicate, registered_at);
-            preds.insert(id, pred);
+            let pred = Predicate::new(&id, predicate, registered_at);
+            preds.insert(id.clone(), pred);
             self.is_empty.store(false, Ordering::Release);
 
             return Ok(id);
         }
 
-        Err(PredicateRegistrationError::NoSpaceLeft)
+        // Since we are using 128-bit UUID for the ID and we do retries for MAX_RETRY
+        // times, this panic should extremely unlikely occur (unless there is a bug in
+        // UUID generation).
+        panic!("Cannot assign a new PredicateId to a predicate");
     }
 
     // This method will be called by the get method of Cache.
@@ -243,7 +246,7 @@ impl<K, V, S> Invalidator<K, V, S> {
     fn remove_predicates(&self, predicates: &[Predicate<K, V>]) {
         let mut pred_map = self.predicates.write();
         predicates.iter().for_each(|p| {
-            pred_map.remove(&p.id());
+            pred_map.remove(p.id());
         });
         if pred_map.is_empty() {
             self.is_empty.store(true, Ordering::Release);
@@ -284,7 +287,7 @@ impl<K, V, S> ScanContext<K, V, S> {
 }
 
 struct Predicate<K, V> {
-    id: u64,
+    id: PredicateId,
     f: PredicateFun<K, V>,
     registered_at: Instant,
 }
@@ -292,7 +295,7 @@ struct Predicate<K, V> {
 impl<K, V> Clone for Predicate<K, V> {
     fn clone(&self) -> Self {
         Self {
-            id: self.id,
+            id: self.id.clone(),
             f: Arc::clone(&self.f),
             registered_at: self.registered_at,
         }
@@ -300,16 +303,16 @@ impl<K, V> Clone for Predicate<K, V> {
 }
 
 impl<K, V> Predicate<K, V> {
-    fn new(id: u64, f: PredicateFun<K, V>, registered_at: Instant) -> Self {
+    fn new(id: PredicateIdStr<'_>, f: PredicateFun<K, V>, registered_at: Instant) -> Self {
         Self {
-            id,
+            id: id.to_string(),
             f,
             registered_at,
         }
     }
 
-    fn id(&self) -> u64 {
-        self.id
+    fn id(&self) -> PredicateIdStr<'_> {
+        &self.id
     }
 
     fn is_applicable(&self, last_modified: Instant) -> bool {
