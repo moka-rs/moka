@@ -1,5 +1,16 @@
 # Moka &mdash; Change Log
 
+## Version 0.4.0
+
+### Fixed
+
+- **Breaking change**: Now `sync::{Cache, SegmentedCache}` and `future::Cache`
+  require `Send`, `Sync` and `'static` bounds for the generic parameters `K` (key),
+  `V` (value) and `S` (hasher state). This is necessary to prevent potential
+  undefined behaviors in applications using single-threaded async runtime such as
+  Actix-rt. ([#19][gh-pull-0019])
+
+
 ## Version 0.3.1
 
 ### Changed
@@ -49,6 +60,7 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[gh-pull-0019]: https://github.com/moka-rs/moka/pull/19/
 [gh-pull-0016]: https://github.com/moka-rs/moka/pull/16/
 [gh-pull-0011]: https://github.com/moka-rs/moka/pull/11/
 [gh-pull-0009]: https://github.com/moka-rs/moka/pull/9/
