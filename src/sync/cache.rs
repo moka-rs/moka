@@ -299,6 +299,31 @@ where
         self.base.invalidate_all();
     }
 
+    /// Discards cached values that satisfy a predicate.
+    ///
+    /// `invalidate_entries_if` takes a closure that returns `true` or `false`. This
+    /// method returns immediately and a background thread will apply the closure to
+    /// each value inserted before the time when `invalidate_entries_if` was
+    /// called. If the closure returns `true` on a value, that value will be evicted
+    /// from the cache.
+    ///
+    /// Also the `get` method will apply the closure to a value to determine if it
+    /// has been invalidated. Therefore, it is guaranteed that the `get` method must
+    /// not return invalidated values.
+    ///
+    /// Note that you must call
+    /// [`CacheBuilder::enable_invalidation_with_closures`][enable-invalidation-closures]
+    /// at the cache creation time as the cache will maintain additional internal
+    /// data structures to support this method. Otherwise, calling this method will
+    /// fail with a
+    /// [`PredicateRegistrationError::InvalidationClosuresDisabled`][invalidation-disabled-error].
+    ///
+    /// Like the `invalidate` method, this method does not clear the historic
+    /// popularity estimator of keys so that it retains the client activities of
+    /// trying to retrieve an item.
+    ///
+    /// [enable-invalidation-closures]: ./struct.CacheBuilder.html#method.enable_invalidation_with_closures
+    /// [invalidation-disabled-error]: ../enum.PredicateRegistrationError.html#variant.InvalidationClosuresDisabled
     pub fn invalidate_entries_if<F>(&self, predicate: F) -> Result<u64, PredicateRegistrationError>
     where
         F: Fn(&K, &V) -> bool + Send + Sync + 'static,
@@ -503,7 +528,7 @@ mod tests {
         use std::collections::HashSet;
 
         let mut cache = CacheBuilder::new(100)
-            .support_invalidation_closures()
+            .enable_invalidation_with_closures()
             .build();
         cache.reconfigure_for_testing();
 

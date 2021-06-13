@@ -248,7 +248,20 @@ where
         self.deques.clear();
     }
 
-    // Avoid a false Clippy warning about needless collect to create keys_to_invalidate.
+
+    /// Discards cached values that satisfy a predicate.
+    ///
+    /// `invalidate_entries_if` takes a closure that returns `true` or
+    /// `false`. `invalidate_entries_if` will apply the closure to each value
+    /// inserted before the time when it was called. If the closure returns `true` on
+    /// a value, that value will be invalidated.
+    ///
+    /// Like the `invalidate` method, this method does not clear the historic
+    /// popularity estimator of keys so that it retains the client activities of
+    /// trying to retrieve an item.
+
+    // We need this #[allow(...)] to avoid a false Clippy warning about needless
+    // collect to create keys_to_invalidate.
     // clippy 0.1.52 (9a1dfd2dc5c 2021-04-30) in Rust 1.52.0-beta.7
     #[allow(clippy::needless_collect)]
     pub fn invalidate_entries_if(&mut self, mut predicate: impl FnMut(&K, &V) -> bool) {

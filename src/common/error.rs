@@ -2,7 +2,7 @@
 pub enum PredicateRegistrationError {
     #[error(
         "Support for invalidation closures is disabled. \
-    Please enable it by calling the support_invalidation_closures method \
+    Please enable it by calling the enable_invalidation_with_closures method \
     of the builder at the cache creation time"
     )]
     InvalidationClosuresDisabled,

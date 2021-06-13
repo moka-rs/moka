@@ -194,7 +194,14 @@ impl<C> CacheBuilder<C> {
         }
     }
 
-    pub fn support_invalidation_closures(self) -> Self {
+    /// Enables support for [Cache::invalidate_entries_if][cache-invalidate-if]
+    /// method.
+    ///
+    /// The cache will maintain additional internal data structures to support
+    /// `invalidate_entries_if` method.
+    ///
+    /// [cache-invalidate-if]: ./struct.Cache.html#method.invalidate_entries_if
+    pub fn enable_invalidation_with_closures(self) -> Self {
         Self {
             invalidator_enabled: true,
             ..self
