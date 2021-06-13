@@ -110,20 +110,15 @@ use std::{
 ///     }
 /// }
 /// ```
+///
 /// # Thread Safety
 ///
 /// All methods provided by the `Cache` are considered thread-safe, and can be safely
 /// accessed by multiple concurrent threads.
 ///
-/// `Cache<K, V, S>` will implement `Send` when all of the following conditions meet:
-///
-/// - `K` (key) and `V` (value) implement `Send` and `Sync`.
-/// - `S` (the hash-map state) implements `Send`.
-///
-/// and will implement `Sync` when all of the following conditions meet:
-///
-/// - `K` (key) and `V` (value) implement `Send` and `Sync`.
-/// - `S` (the hash-map state) implements `Sync`.
+/// - `Cache<K, V, S>` requires trait bounds `Send`, `Sync` and `'static` for `K`
+///   (key), `V` (value) and `S` (hasher state).
+/// - `Cache<K, V, S>` will implement `Send` and `Sync`.
 ///
 /// # Sharing a cache across asynchronous tasks
 ///

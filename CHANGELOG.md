@@ -2,11 +2,18 @@
 
 ## Version 0.4.0
 
+### Fixed
+
+- **Breaking change**: Now `sync::{Cache, SegmentedCache}` and `future::Cache`
+  require `Send`, `Sync` and `'static` bounds for the generic parameters `K` (key),
+  `V` (value) and `S` (hasher state). This is necessary to prevent potential
+  undefined behaviors in applications using single-threaded async runtime such as
+  Actix-rt. ([#19][gh-pull-0019])
+
 ### Added
 
 - Add `invalidate_entries_if` method to `sync`, `future` and `unsync` caches.
   ([#12][gh-pull-0012]) &mdash; **IN-PROGRESS**
-
 
 ## Version 0.3.1
 
@@ -58,6 +65,7 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[gh-pull-0019]: https://github.com/moka-rs/moka/pull/19/
 [gh-pull-0016]: https://github.com/moka-rs/moka/pull/16/
 [gh-pull-0012]: https://github.com/moka-rs/moka/pull/12/
 [gh-pull-0011]: https://github.com/moka-rs/moka/pull/11/
