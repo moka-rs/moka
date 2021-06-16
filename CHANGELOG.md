@@ -5,7 +5,7 @@
 ### Fixed
 
 - **Breaking change**: Now `sync::{Cache, SegmentedCache}` and `future::Cache`
-  require `Send`, `Sync` and `'static` bounds for the generic parameters `K` (key),
+  require `Send`, `Sync` and `'static` for the generic parameters `K` (key),
   `V` (value) and `S` (hasher state). This is necessary to prevent potential
   undefined behaviors in applications using single-threaded async runtime such as
   Actix-rt. ([#19][gh-pull-0019])
@@ -13,7 +13,7 @@
 ### Added
 
 - Add `invalidate_entries_if` method to `sync`, `future` and `unsync` caches.
-  ([#12][gh-pull-0012]) &mdash; **IN-PROGRESS**
+  ([#12][gh-pull-0012])
 
 ## Version 0.3.1
 

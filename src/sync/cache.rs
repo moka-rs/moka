@@ -306,7 +306,7 @@ where
     /// not return invalidated values.
     ///
     /// Note that you must call
-    /// [`CacheBuilder::enable_invalidation_with_closures`][enable-invalidation-closures]
+    /// [`CacheBuilder::support_invalidation_closures`][support-invalidation-closures]
     /// at the cache creation time as the cache will maintain additional internal
     /// data structures to support this method. Otherwise, calling this method will
     /// fail with a
@@ -316,7 +316,7 @@ where
     /// popularity estimator of keys so that it retains the client activities of
     /// trying to retrieve an item.
     ///
-    /// [enable-invalidation-closures]: ./struct.CacheBuilder.html#method.enable_invalidation_with_closures
+    /// [support-invalidation-closures]: ./struct.CacheBuilder.html#method.support_invalidation_closures
     /// [invalidation-disabled-error]: ../enum.PredicateError.html#variant.InvalidationClosuresDisabled
     pub fn invalidate_entries_if<F>(&self, predicate: F) -> Result<PredicateId, PredicateError>
     where
@@ -522,7 +522,7 @@ mod tests {
         use std::collections::HashSet;
 
         let mut cache = CacheBuilder::new(100)
-            .enable_invalidation_with_closures()
+            .support_invalidation_closures()
             .build();
         cache.reconfigure_for_testing();
 

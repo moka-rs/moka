@@ -265,6 +265,11 @@ where
     pub fn invalidate_entries_if(&mut self, mut predicate: impl FnMut(&K, &V) -> bool) {
         let Self { cache, deques, .. } = self;
 
+        // Since we can't do cache.iter() and cache.remove() at the same time,
+        // invalidation needs to run in two steps:
+        // 1. Examine all entries in this cache and collect keys to invalidate.
+        // 2. Remove entries for the keys.
+
         let keys_to_invalidate = cache
             .iter()
             .filter(|(key, entry)| (predicate)(key, &entry.value))

@@ -77,7 +77,6 @@ pub(crate) struct Invalidator<K, V, S> {
     // once iterator is implemented. https://github.com/Gregory-Meyer/cht/issues/20
     predicates: RwLock<HashMap<PredicateId, Predicate<K, V>>>,
     is_empty: AtomicBool,
-    last_predicate_id: AtomicU64,
     scan_context: Arc<ScanContext<K, V, S>>,
     thread_pool: Arc<ThreadPool>,
 }
@@ -106,7 +105,6 @@ impl<K, V, S> Invalidator<K, V, S> {
         Self {
             predicates: RwLock::new(HashMap::new()),
             is_empty: AtomicBool::new(true),
-            last_predicate_id: AtomicU64::new(std::u64::MAX),
             scan_context: Arc::new(ScanContext::new(cache)),
             thread_pool,
         }
