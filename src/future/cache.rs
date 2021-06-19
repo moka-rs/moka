@@ -345,17 +345,17 @@ where
     ///
     /// `invalidate_entries_if` takes a closure that returns `true` or `false`. This
     /// method returns immediately and a background thread will apply the closure to
-    /// each value inserted before the time when `invalidate_entries_if` was
+    /// each cached value inserted before the time when `invalidate_entries_if` was
     /// called. If the closure returns `true` on a value, that value will be evicted
     /// from the cache.
     ///
     /// Also the `get` method will apply the closure to a value to determine if it
-    /// has been invalidated. Therefore, it is guaranteed that the `get` method must
-    /// not return invalidated values.
+    /// should have been invalidated. Therefore, it is guaranteed that the `get`
+    /// method must not return invalidated values.
     ///
     /// Note that you must call
     /// [`CacheBuilder::support_invalidation_closures`][support-invalidation-closures]
-    /// at the cache creation time as the cache will maintain additional internal
+    /// at the cache creation time as the cache needs to maintain additional internal
     /// data structures to support this method. Otherwise, calling this method will
     /// fail with a
     /// [`PredicateError::InvalidationClosuresDisabled`][invalidation-disabled-error].
@@ -481,6 +481,18 @@ where
     V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
+    fn is_table_empty(&self) -> bool {
+        self.table_size() == 0
+    }
+
+    fn table_size(&self) -> usize {
+        self.base.table_size()
+    }
+
+    fn invalidation_predicate_count(&self) -> usize {
+        self.base.invalidation_predicate_count()
+    }
+
     fn reconfigure_for_testing(&mut self) {
         self.base.reconfigure_for_testing();
     }
@@ -682,7 +694,7 @@ mod tests {
 
         let names = ["alice", "alex"].iter().cloned().collect::<HashSet<_>>();
         cache.invalidate_entries_if(move |_k, &v| names.contains(v))?;
-        assert_eq!(cache.base.invalidation_predicate_count(), 1);
+        assert_eq!(cache.invalidation_predicate_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 10 secs from the start.
 
@@ -699,14 +711,14 @@ mod tests {
         assert_eq!(cache.get(&1), Some("bob"));
         // This should survive as it was inserted after calling invalidate_entries_if.
         assert_eq!(cache.get(&3), Some("alice"));
-        assert_eq!(cache.base.len(), 2);
-        assert_eq!(cache.base.invalidation_predicate_count(), 0);
+        assert_eq!(cache.table_size(), 2);
+        assert_eq!(cache.invalidation_predicate_count(), 0);
 
         mock.increment(Duration::from_secs(5)); // 15 secs from the start.
 
         cache.invalidate_entries_if(|_k, &v| v == "alice")?;
         cache.invalidate_entries_if(|_k, &v| v == "bob")?;
-        assert_eq!(cache.base.invalidation_predicate_count(), 2);
+        assert_eq!(cache.invalidation_predicate_count(), 2);
 
         // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
         cache.sync(); // To submit the invalidation task.
@@ -716,8 +728,8 @@ mod tests {
 
         assert!(cache.get(&1).is_none());
         assert!(cache.get(&3).is_none());
-        assert_eq!(cache.base.len(), 0);
-        assert_eq!(cache.base.invalidation_predicate_count(), 0);
+        assert_eq!(cache.table_size(), 0);
+        assert_eq!(cache.invalidation_predicate_count(), 0);
 
         Ok(())
     }
@@ -748,18 +760,18 @@ mod tests {
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
-        assert!(cache.base.is_empty());
+        assert!(cache.is_table_empty());
 
         cache.insert("b", "bob").await;
         cache.sync();
 
-        assert_eq!(cache.base.len(), 1);
+        assert_eq!(cache.table_size(), 1);
 
         mock.increment(Duration::from_secs(5)); // 15 secs.
         cache.sync();
 
         assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.base.len(), 1);
+        assert_eq!(cache.table_size(), 1);
 
         cache.insert("b", "bill").await;
         cache.sync();
@@ -768,14 +780,14 @@ mod tests {
         cache.sync();
 
         assert_eq!(cache.get(&"b"), Some("bill"));
-        assert_eq!(cache.base.len(), 1);
+        assert_eq!(cache.table_size(), 1);
 
         mock.increment(Duration::from_secs(5)); // 25 secs
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
-        assert!(cache.base.is_empty());
+        assert!(cache.is_table_empty());
     }
 
     #[tokio::test]
@@ -806,20 +818,20 @@ mod tests {
         cache.insert("b", "bob").await;
         cache.sync();
 
-        assert_eq!(cache.base.len(), 2);
+        assert_eq!(cache.table_size(), 2);
 
         mock.increment(Duration::from_secs(5)); // 15 secs.
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.base.len(), 1);
+        assert_eq!(cache.table_size(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
-        assert!(cache.base.is_empty());
+        assert!(cache.is_table_empty());
     }
 }

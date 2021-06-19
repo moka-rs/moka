@@ -321,11 +321,7 @@ where
     V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.inner.len() == 0
-    }
-
-    pub(crate) fn len(&self) -> usize {
+    pub(crate) fn table_size(&self) -> usize {
         self.inner.len()
     }
 
@@ -967,6 +963,15 @@ where
         write_order: &mut Deque<KeyDate<K>>,
         batch_size: usize,
     ) {
+        let now = self.current_time_from_expiration_clock();
+
+        // If the write order queue is empty, we are done and can remove the predicates
+        // that have been registered by now.
+        if write_order.len() == 0 {
+            invalidator.remove_predicates_registered_before(now);
+            return;
+        }
+
         let mut candidates = Vec::with_capacity(batch_size);
         let mut iter = write_order.peekable();
         let mut len = 0;

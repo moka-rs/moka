@@ -114,6 +114,25 @@ impl<K, V, S> Invalidator<K, V, S> {
         self.is_empty.load(Ordering::Acquire)
     }
 
+    pub(crate) fn remove_predicates_registered_before(&self, ts: Instant) {
+        let mut pred_map = self.predicates.write();
+
+        let removing_ids = pred_map
+            .iter()
+            .filter(|(_, pred)| pred.registered_at <= ts)
+            .map(|(id, _)| id)
+            .cloned()
+            .collect::<Vec<_>>();
+
+        for id in removing_ids {
+            pred_map.remove(&id);
+        }
+
+        if pred_map.is_empty() {
+            self.is_empty.store(true, Ordering::Release);
+        }
+    }
+
     pub(crate) fn register_predicate(
         &self,
         predicate: PredicateFun<K, V>,

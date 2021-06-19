@@ -250,8 +250,8 @@ where
 
     /// Discards cached values that satisfy a predicate.
     ///
-    /// `invalidate_entries_if` takes a closure that returns `true` or
-    /// `false`. `invalidate_entries_if` will apply the closure to each value,
+    /// `invalidate_entries_if` takes a closure that returns `true` or `false`.
+    /// `invalidate_entries_if` will apply the closure to each cached value,
     /// and if the closure returns `true`, the value will be invalidated.
     ///
     /// Like the `invalidate` method, this method does not clear the historic

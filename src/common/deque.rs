@@ -103,6 +103,10 @@ impl<T> Deque<T> {
         &self.region
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.len
+    }
+
     pub(crate) fn contains(&self, node: &DeqNode<T>) -> bool {
         self.region == node.region && (node.prev.is_some() || self.is_head(node))
     }
@@ -303,11 +307,6 @@ impl<T> Deque<T> {
                 self.cursor = None;
             }
         }
-    }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.len
     }
 }
 
