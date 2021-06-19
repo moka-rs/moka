@@ -1,5 +1,5 @@
-use crate::PredicateError;
 use super::{cache::Cache, ConcurrentCacheExt};
+use crate::PredicateError;
 
 use std::{
     borrow::Borrow,
