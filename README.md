@@ -339,7 +339,7 @@ change.
 
 **Running All Tests**
 
-To run all tests including `futures` feature and doc tests on the README, use the
+To run all tests including `future` feature and doc tests on the README, use the
 following command:
 
 ```console
