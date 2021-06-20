@@ -366,22 +366,26 @@ where
 
     fn execute(&self) {
         let cache_lock = self.scan_context.cache.lock();
-        let mut result = self.scan_context.result.lock();
 
         // Restore the Weak pointer to Inner<K, V, S>.
         let weak = unsafe { cache_lock.as_weak_arc::<Inner<K, V, S>>() };
         if let Some(inner_cache) = weak.upgrade() {
             // TODO: Protect this call with catch_unwind().
-            *result = Some(self.do_execute(&inner_cache));
+            *self.scan_context.result.lock() = Some(self.do_execute(&inner_cache));
+
+            // Change this flag here (before downgrading the Arc to a Weak) to avoid a (soft)
+            // deadlock. (forget_arc might trigger to drop the cache, which is in turn to drop
+            // this invalidator. To do it, this flag must be false, otherwise dropping self
+            // will be blocked forever)
+            self.scan_context.is_running.store(false, Ordering::Release);
             // Avoid to drop the Arc<Inner<K, V, S>>.
             UnsafeWeakPointer::forget_arc(inner_cache);
         } else {
-            *result = Some(ScanResult::default());
+            *self.scan_context.result.lock() = Some(ScanResult::default());
+            self.scan_context.is_running.store(false, Ordering::Release);
             // Avoid to drop the Weak<Inner<K, V, S>>.
             UnsafeWeakPointer::forget_weak_arc(weak);
         }
-
-        self.scan_context.is_running.store(false, Ordering::Release);
     }
 
     fn do_execute<C>(&self, cache: &Arc<C>) -> ScanResult<K, V>
