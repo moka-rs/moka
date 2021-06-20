@@ -76,32 +76,50 @@ impl<T> Drop for Housekeeper<T> {
 // functions/methods used by Cache
 impl<T: InnerSync> Housekeeper<T> {
     pub(crate) fn new(inner: Weak<T>) -> Self {
-        let thread_pool = ThreadPoolRegistry::acquire_default_pool();
+        use crate::common::thread_pool::PoolName;
 
+        let thread_pool = ThreadPoolRegistry::acquire_pool(PoolName::Housekeeper);
         let inner_ptr = Arc::new(Mutex::new(UnsafeWeakPointer::from_weak_arc(inner)));
         let is_shutting_down = Arc::new(AtomicBool::new(false));
         let periodical_sync_running = Arc::new(Mutex::new(()));
-        let periodical_sync_pace = Arc::new(Mutex::new(SyncPace::Normal));
+
+        let sync_job = Self::start_periodical_sync_job(
+            &thread_pool,
+            Arc::clone(&inner_ptr),
+            Arc::clone(&is_shutting_down),
+            Arc::clone(&periodical_sync_running),
+        );
+
+        Self {
+            inner: inner_ptr,
+            thread_pool,
+            is_shutting_down,
+            periodical_sync_job: Mutex::new(Some(sync_job)),
+            periodical_sync_running,
+            on_demand_sync_scheduled: Arc::new(AtomicBool::new(false)),
+            _marker: PhantomData::default(),
+        }
+    }
+
+    fn start_periodical_sync_job(
+        thread_pool: &Arc<ThreadPool>,
+        unsafe_weak_ptr: Arc<Mutex<UnsafeWeakPointer>>,
+        is_shutting_down: Arc<AtomicBool>,
+        periodical_sync_running: Arc<Mutex<()>>,
+    ) -> JobHandle {
+        let mut sync_pace = SyncPace::Normal;
 
         let housekeeper_closure = {
-            // The following Arc clones will be moved into the housekeeper closure.
-            let unsafe_weak_ptr = Arc::clone(&inner_ptr);
-            let shutting_down = Arc::clone(&is_shutting_down);
-            let sync_running = Arc::clone(&periodical_sync_running);
-            let sync_pace = Arc::clone(&periodical_sync_pace);
-
             move || {
-                // To avoid dead-locking with other thread, acquire the lock at very beginning.
-                let mut sync_pace = sync_pace.lock();
-                if !shutting_down.load(Ordering::Acquire) {
-                    let _lock = sync_running.lock();
+                if !is_shutting_down.load(Ordering::Acquire) {
+                    let _lock = periodical_sync_running.lock();
                     if let Some(new_pace) = Self::call_sync(&unsafe_weak_ptr) {
-                        if *sync_pace != new_pace {
-                            *sync_pace = new_pace
+                        if sync_pace != new_pace {
+                            sync_pace = new_pace
                         }
                     }
                 }
-                // TODO: Check what would happen if the closure returns None.
+
                 Some(sync_pace.make_duration())
             }
         };
@@ -109,19 +127,9 @@ impl<T: InnerSync> Housekeeper<T> {
         let initial_delay = Duration::from_millis(PERIODICAL_SYNC_INITIAL_DELAY_MILLIS);
 
         // Execute a task in a worker thread.
-        let job = thread_pool
+        thread_pool
             .pool
-            .execute_with_dynamic_delay(initial_delay, housekeeper_closure);
-
-        Self {
-            inner: inner_ptr,
-            thread_pool,
-            is_shutting_down,
-            periodical_sync_job: Mutex::new(Some(job)),
-            periodical_sync_running,
-            on_demand_sync_scheduled: Arc::new(AtomicBool::new(false)),
-            _marker: PhantomData::default(),
-        }
+            .execute_with_dynamic_delay(initial_delay, housekeeper_closure)
     }
 
     pub(crate) fn try_schedule_sync(&self) -> bool {

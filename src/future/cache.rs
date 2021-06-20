@@ -1,8 +1,11 @@
 use super::ConcurrentCacheExt;
-use crate::sync::{
-    base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
-    housekeeper::InnerSync,
-    WriteOp,
+use crate::{
+    sync::{
+        base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
+        housekeeper::InnerSync,
+        PredicateId, WriteOp,
+    },
+    PredicateError,
 };
 
 use crossbeam_channel::{Sender, TrySendError};
@@ -49,7 +52,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.3", features = ["future"] }
+/// // moka = { version = "0.4", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures = "0.3"
 ///
@@ -215,7 +218,7 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(max_capacity, None, build_hasher, None, None)
+        Self::with_everything(max_capacity, None, build_hasher, None, None, false)
     }
 }
 
@@ -231,6 +234,7 @@ where
         build_hasher: S,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        invalidator_enabled: bool,
     ) -> Self {
         Self {
             base: BaseCache::new(
@@ -239,6 +243,7 @@ where
                 build_hasher,
                 time_to_live,
                 time_to_idle,
+                invalidator_enabled,
             ),
         }
     }
@@ -334,6 +339,38 @@ where
     /// trying to retrieve an item.
     pub fn invalidate_all(&self) {
         self.base.invalidate_all();
+    }
+
+    /// Discards cached values that satisfy a predicate.
+    ///
+    /// `invalidate_entries_if` takes a closure that returns `true` or `false`. This
+    /// method returns immediately and a background thread will apply the closure to
+    /// each cached value inserted before the time when `invalidate_entries_if` was
+    /// called. If the closure returns `true` on a value, that value will be evicted
+    /// from the cache.
+    ///
+    /// Also the `get` method will apply the closure to a value to determine if it
+    /// should have been invalidated. Therefore, it is guaranteed that the `get`
+    /// method must not return invalidated values.
+    ///
+    /// Note that you must call
+    /// [`CacheBuilder::support_invalidation_closures`][support-invalidation-closures]
+    /// at the cache creation time as the cache needs to maintain additional internal
+    /// data structures to support this method. Otherwise, calling this method will
+    /// fail with a
+    /// [`PredicateError::InvalidationClosuresDisabled`][invalidation-disabled-error].
+    ///
+    /// Like the `invalidate` method, this method does not clear the historic
+    /// popularity estimator of keys so that it retains the client activities of
+    /// trying to retrieve an item.
+    ///
+    /// [support-invalidation-closures]: ./struct.CacheBuilder.html#method.support_invalidation_closures
+    /// [invalidation-disabled-error]: ../enum.PredicateError.html#variant.InvalidationClosuresDisabled
+    pub fn invalidate_entries_if<F>(&self, predicate: F) -> Result<PredicateId, PredicateError>
+    where
+        F: Fn(&K, &V) -> bool + Send + Sync + 'static,
+    {
+        self.base.invalidate_entries_if(Arc::new(predicate))
     }
 
     /// Returns the `max_capacity` of this cache.
@@ -444,6 +481,18 @@ where
     V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
+    fn is_table_empty(&self) -> bool {
+        self.table_size() == 0
+    }
+
+    fn table_size(&self) -> usize {
+        self.base.table_size()
+    }
+
+    fn invalidation_predicate_count(&self) -> usize {
+        self.base.invalidation_predicate_count()
+    }
+
     fn reconfigure_for_testing(&mut self) {
         self.base.reconfigure_for_testing();
     }
@@ -617,6 +666,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalidate_entries_if() -> Result<(), Box<dyn std::error::Error>> {
+        use std::collections::HashSet;
+
+        let mut cache = CacheBuilder::new(100)
+            .support_invalidation_closures()
+            .build();
+        cache.reconfigure_for_testing();
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert(0, "alice").await;
+        cache.insert(1, "bob").await;
+        cache.insert(2, "alex").await;
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        cache.sync();
+
+        assert_eq!(cache.get(&0), Some("alice"));
+        assert_eq!(cache.get(&1), Some("bob"));
+        assert_eq!(cache.get(&2), Some("alex"));
+
+        let names = ["alice", "alex"].iter().cloned().collect::<HashSet<_>>();
+        cache.invalidate_entries_if(move |_k, &v| names.contains(v))?;
+        assert_eq!(cache.invalidation_predicate_count(), 1);
+
+        mock.increment(Duration::from_secs(5)); // 10 secs from the start.
+
+        cache.insert(3, "alice").await;
+
+        // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
+        cache.sync(); // To submit the invalidation task.
+        std::thread::sleep(Duration::from_millis(200));
+        cache.sync(); // To process the task result.
+        std::thread::sleep(Duration::from_millis(200));
+
+        assert!(cache.get(&0).is_none());
+        assert!(cache.get(&2).is_none());
+        assert_eq!(cache.get(&1), Some("bob"));
+        // This should survive as it was inserted after calling invalidate_entries_if.
+        assert_eq!(cache.get(&3), Some("alice"));
+        assert_eq!(cache.table_size(), 2);
+        assert_eq!(cache.invalidation_predicate_count(), 0);
+
+        mock.increment(Duration::from_secs(5)); // 15 secs from the start.
+
+        cache.invalidate_entries_if(|_k, &v| v == "alice")?;
+        cache.invalidate_entries_if(|_k, &v| v == "bob")?;
+        assert_eq!(cache.invalidation_predicate_count(), 2);
+
+        // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
+        cache.sync(); // To submit the invalidation task.
+        std::thread::sleep(Duration::from_millis(200));
+        cache.sync(); // To process the task result.
+        std::thread::sleep(Duration::from_millis(200));
+
+        assert!(cache.get(&1).is_none());
+        assert!(cache.get(&3).is_none());
+        assert_eq!(cache.table_size(), 0);
+        assert_eq!(cache.invalidation_predicate_count(), 0);
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn time_to_live() {
         let mut cache = CacheBuilder::new(100)
             .time_to_live(Duration::from_secs(10))
@@ -642,18 +760,18 @@ mod tests {
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
-        assert!(cache.base.is_empty());
+        assert!(cache.is_table_empty());
 
         cache.insert("b", "bob").await;
         cache.sync();
 
-        assert_eq!(cache.base.len(), 1);
+        assert_eq!(cache.table_size(), 1);
 
         mock.increment(Duration::from_secs(5)); // 15 secs.
         cache.sync();
 
         assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.base.len(), 1);
+        assert_eq!(cache.table_size(), 1);
 
         cache.insert("b", "bill").await;
         cache.sync();
@@ -662,14 +780,14 @@ mod tests {
         cache.sync();
 
         assert_eq!(cache.get(&"b"), Some("bill"));
-        assert_eq!(cache.base.len(), 1);
+        assert_eq!(cache.table_size(), 1);
 
         mock.increment(Duration::from_secs(5)); // 25 secs
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
-        assert!(cache.base.is_empty());
+        assert!(cache.is_table_empty());
     }
 
     #[tokio::test]
@@ -700,20 +818,20 @@ mod tests {
         cache.insert("b", "bob").await;
         cache.sync();
 
-        assert_eq!(cache.base.len(), 2);
+        assert_eq!(cache.table_size(), 2);
 
         mock.increment(Duration::from_secs(5)); // 15 secs.
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.base.len(), 1);
+        assert_eq!(cache.table_size(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
-        assert!(cache.base.is_empty());
+        assert!(cache.is_table_empty());
     }
 }

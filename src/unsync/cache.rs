@@ -248,6 +248,42 @@ where
         self.deques.clear();
     }
 
+    /// Discards cached values that satisfy a predicate.
+    ///
+    /// `invalidate_entries_if` takes a closure that returns `true` or `false`.
+    /// `invalidate_entries_if` will apply the closure to each cached value,
+    /// and if the closure returns `true`, the value will be invalidated.
+    ///
+    /// Like the `invalidate` method, this method does not clear the historic
+    /// popularity estimator of keys so that it retains the client activities of
+    /// trying to retrieve an item.
+
+    // We need this #[allow(...)] to avoid a false Clippy warning about needless
+    // collect to create keys_to_invalidate.
+    // clippy 0.1.52 (9a1dfd2dc5c 2021-04-30) in Rust 1.52.0-beta.7
+    #[allow(clippy::needless_collect)]
+    pub fn invalidate_entries_if(&mut self, mut predicate: impl FnMut(&K, &V) -> bool) {
+        let Self { cache, deques, .. } = self;
+
+        // Since we can't do cache.iter() and cache.remove() at the same time,
+        // invalidation needs to run in two steps:
+        // 1. Examine all entries in this cache and collect keys to invalidate.
+        // 2. Remove entries for the keys.
+
+        let keys_to_invalidate = cache
+            .iter()
+            .filter(|(key, entry)| (predicate)(key, &entry.value))
+            .map(|(key, _)| Rc::clone(&key))
+            .collect::<Vec<_>>();
+
+        keys_to_invalidate.into_iter().for_each(|k| {
+            if let Some(mut entry) = cache.remove(&k) {
+                deques.unlink_ao(&mut entry);
+                Deques::unlink_wo(&mut deques.write_order, &mut entry);
+            }
+        });
+    }
+
     /// Returns the `max_capacity` of this cache.
     pub fn max_capacity(&self) -> usize {
         self.max_capacity
@@ -611,6 +647,49 @@ mod tests {
         assert!(cache.get(&"b").is_none());
         assert!(cache.get(&"c").is_none());
         assert_eq!(cache.get(&"d"), Some(&"david"));
+    }
+
+    #[test]
+    fn invalidate_entries_if() {
+        use std::collections::HashSet;
+
+        let mut cache = Cache::new(100);
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        cache.insert(0, "alice");
+        cache.insert(1, "bob");
+        cache.insert(2, "alex");
+
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+
+        assert_eq!(cache.get(&0), Some(&"alice"));
+        assert_eq!(cache.get(&1), Some(&"bob"));
+        assert_eq!(cache.get(&2), Some(&"alex"));
+
+        let names = ["alice", "alex"].iter().cloned().collect::<HashSet<_>>();
+        cache.invalidate_entries_if(move |_k, &v| names.contains(v));
+
+        mock.increment(Duration::from_secs(5)); // 10 secs from the start.
+
+        cache.insert(3, "alice");
+
+        assert!(cache.get(&0).is_none());
+        assert!(cache.get(&2).is_none());
+        assert_eq!(cache.get(&1), Some(&"bob"));
+        // This should survive as it was inserted after calling invalidate_entries_if.
+        assert_eq!(cache.get(&3), Some(&"alice"));
+        assert_eq!(cache.cache.len(), 2);
+
+        mock.increment(Duration::from_secs(5)); // 15 secs from the start.
+
+        cache.invalidate_entries_if(|_k, &v| v == "alice");
+        cache.invalidate_entries_if(|_k, &v| v == "bob");
+
+        assert!(cache.get(&1).is_none());
+        assert!(cache.get(&3).is_none());
+        assert_eq!(cache.cache.len(), 0);
     }
 
     #[test]

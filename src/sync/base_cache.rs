@@ -1,12 +1,16 @@
 use super::{
     deques::Deques,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
-    KeyDate, KeyHash, KeyHashDate, ReadOp, ValueEntry, WriteOp,
+    invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
+    KeyDate, KeyHash, KeyHashDate, PredicateId, ReadOp, ValueEntry, WriteOp,
 };
-use crate::common::{
-    deque::{CacheRegion, DeqNode, Deque},
-    frequency_sketch::FrequencySketch,
-    AccessTime,
+use crate::{
+    common::{
+        deque::{CacheRegion, DeqNode, Deque},
+        frequency_sketch::FrequencySketch,
+        AccessTime,
+    },
+    PredicateError,
 };
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
@@ -84,6 +88,7 @@ where
         build_hasher: S,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        invalidator_enabled: bool,
     ) -> Self {
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
@@ -95,9 +100,12 @@ where
             w_rcv,
             time_to_live,
             time_to_idle,
+            invalidator_enabled,
         ));
+        if invalidator_enabled {
+            inner.set_invalidator(&inner);
+        }
         let housekeeper = Housekeeper::new(Arc::downgrade(&inner));
-
         Self {
             inner,
             read_op_ch: r_snd,
@@ -124,20 +132,22 @@ where
             self.record_read_op(op).expect("Failed to record a get op");
         };
 
-        match self.inner.get(key) {
+        match self.inner.get_key_value(key) {
             None => {
                 record(ReadOp::Miss(hash));
                 None
             }
-            Some(entry) => {
+            Some((arc_key, entry)) => {
                 let i = &self.inner;
                 let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), i.valid_after());
                 let now = i.current_time_from_expiration_clock();
 
                 if is_expired_entry_wo(ttl, va, &entry, now)
                     || is_expired_entry_ao(tti, va, &entry, now)
+                    || self.inner.is_invalidated_entry(&arc_key, &entry)
                 {
-                    // Expired entry. Record this access as a cache miss rather than a hit.
+                    // Expired or invalidated entry. Record this access as a cache miss
+                    // rather than a hit.
                     record(ReadOp::Miss(hash));
                     None
                 } else {
@@ -176,6 +186,14 @@ where
     pub(crate) fn invalidate_all(&self) {
         let now = self.inner.current_time_from_expiration_clock();
         self.inner.set_valid_after(now);
+    }
+
+    pub(crate) fn invalidate_entries_if(
+        &self,
+        predicate: PredicateFun<K, V>,
+    ) -> Result<PredicateId, PredicateError> {
+        let now = self.inner.current_time_from_expiration_clock();
+        self.inner.register_invalidation_predicate(predicate, now)
     }
 
     pub(crate) fn max_capacity(&self) -> usize {
@@ -293,6 +311,9 @@ where
     }
 }
 
+//
+// for testing
+//
 #[cfg(test)]
 impl<K, V, S> BaseCache<K, V, S>
 where
@@ -300,12 +321,12 @@ where
     V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.inner.len() == 0
+    pub(crate) fn table_size(&self) -> usize {
+        self.inner.len()
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.inner.len()
+    pub(crate) fn invalidation_predicate_count(&self) -> usize {
+        self.inner.invalidation_predicate_count()
     }
 
     pub(crate) fn reconfigure_for_testing(&mut self) {
@@ -326,6 +347,8 @@ where
 
 type CacheStore<K, V, S> = cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
 
+type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
+
 pub(crate) struct Inner<K, V, S> {
     max_capacity: usize,
     cache: CacheStore<K, V, S>,
@@ -337,6 +360,8 @@ pub(crate) struct Inner<K, V, S> {
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     valid_after: AtomicU64,
+    invalidator_enabled: bool,
+    invalidator: RwLock<Option<Invalidator<K, V, S>>>,
     has_expiration_clock: AtomicBool,
     expiration_clock: RwLock<Option<Clock>>,
 }
@@ -347,6 +372,9 @@ where
     K: Hash + Eq,
     S: BuildHasher + Clone,
 {
+    // Disable a Clippy warning for having more than seven arguments.
+    // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+    #[allow(clippy::too_many_arguments)]
     fn new(
         max_capacity: usize,
         initial_capacity: Option<usize>,
@@ -355,6 +383,7 @@ where
         write_op_ch: Receiver<WriteOp<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        invalidator_enabled: bool,
     ) -> Self {
         let initial_capacity = initial_capacity
             .map(|cap| cap + WRITE_LOG_SIZE * 4)
@@ -367,6 +396,7 @@ where
         );
         let skt_capacity = usize::max(max_capacity * 32, 100);
         let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
+
         Self {
             max_capacity,
             cache,
@@ -378,9 +408,16 @@ where
             time_to_live,
             time_to_idle,
             valid_after: AtomicU64::new(0),
+            invalidator_enabled,
+            // When enabled, this field will be set later via the set_invalidator method.
+            invalidator: RwLock::new(None),
             has_expiration_clock: AtomicBool::new(false),
             expiration_clock: RwLock::new(None),
         }
+    }
+
+    fn set_invalidator(&self, self_ref: &Arc<Self>) {
+        *self.invalidator.write() = Some(Invalidator::new(Arc::downgrade(&Arc::clone(self_ref))));
     }
 
     #[inline]
@@ -395,12 +432,12 @@ where
     }
 
     #[inline]
-    fn get<Q>(&self, key: &Q) -> Option<Arc<ValueEntry<K, V>>>
+    fn get_key_value<Q>(&self, key: &Q) -> Option<CacheEntry<K, V>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.cache.get(key)
+        self.cache.get_key_value(key)
     }
 
     #[inline]
@@ -432,6 +469,11 @@ where
     }
 
     #[inline]
+    fn is_write_order_queue_enabled(&self) -> bool {
+        self.time_to_live.is_some() || self.invalidator_enabled
+    }
+
+    #[inline]
     fn valid_after(&self) -> Instant {
         let ts = self.valid_after.load(Ordering::Acquire);
         unsafe { std::mem::transmute(ts) }
@@ -449,6 +491,29 @@ where
     }
 
     #[inline]
+    fn register_invalidation_predicate(
+        &self,
+        predicate: PredicateFun<K, V>,
+        registered_at: Instant,
+    ) -> Result<PredicateId, PredicateError> {
+        if let Some(inv) = &*self.invalidator.read() {
+            inv.register_predicate(predicate, registered_at)
+        } else {
+            Err(PredicateError::InvalidationClosuresDisabled)
+        }
+    }
+
+    #[inline]
+    fn is_invalidated_entry(&self, key: &Arc<K>, entry: &Arc<ValueEntry<K, V>>) -> bool {
+        if self.invalidator_enabled {
+            if let Some(inv) = &*self.invalidator.read() {
+                return inv.apply_predicates(key, entry);
+            }
+        }
+        false
+    }
+
+    #[inline]
     fn current_time_from_expiration_clock(&self) -> Instant {
         if self.has_expiration_clock.load(Ordering::Relaxed) {
             self.expiration_clock
@@ -462,6 +527,23 @@ where
     }
 }
 
+impl<K, V, S> GetOrRemoveEntry<K, V> for Arc<Inner<K, V, S>>
+where
+    K: Hash + Eq,
+    S: BuildHasher,
+{
+    fn get_value_entry(&self, key: &Arc<K>) -> Option<Arc<ValueEntry<K, V>>> {
+        self.cache.get(key)
+    }
+
+    fn remove_key_value_if<F>(&self, key: &Arc<K>, condition: F) -> Option<Arc<ValueEntry<K, V>>>
+    where
+        F: FnMut(&Arc<K>, &Arc<ValueEntry<K, V>>) -> bool,
+    {
+        self.cache.remove_if(key, condition)
+    }
+}
+
 impl<K, V, S> InnerSync for Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -470,6 +552,7 @@ where
 {
     fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
         const EVICTION_BATCH_SIZE: usize = 500;
+        const INVALIDATION_BATCH_SIZE: usize = 500;
 
         let mut deqs = self.deques.lock();
         let mut calls = 0;
@@ -485,14 +568,21 @@ where
             if w_len > 0 {
                 self.apply_writes(&mut deqs, w_len);
             }
-
-            if self.has_expiry() || self.has_valid_after() {
-                self.evict(&mut deqs, EVICTION_BATCH_SIZE);
-            }
-
             calls += 1;
             should_sync = self.read_op_ch.len() >= READ_LOG_FLUSH_POINT
                 || self.write_op_ch.len() >= WRITE_LOG_FLUSH_POINT;
+        }
+
+        if self.has_expiry() || self.has_valid_after() {
+            self.evict(&mut deqs, EVICTION_BATCH_SIZE);
+        }
+
+        if self.invalidator_enabled {
+            if let Some(invalidator) = &*self.invalidator.read() {
+                if !invalidator.is_empty() && !invalidator.is_task_running() {
+                    self.invalidate_entries(invalidator, &mut deqs, INVALIDATION_BATCH_SIZE);
+                }
+            }
         }
 
         if should_sync {
@@ -665,7 +755,7 @@ where
             KeyHashDate::new(kh, raw_last_accessed),
             entry,
         );
-        if self.time_to_live.is_some() {
+        if self.is_write_order_queue_enabled() {
             deqs.push_back_wo(KeyDate::new(key, raw_last_modified), &entry);
         }
         entry.set_is_admitted(true);
@@ -697,7 +787,7 @@ where
     fn evict(&self, deqs: &mut Deques<K>, batch_size: usize) {
         let now = self.current_time_from_expiration_clock();
 
-        if self.time_to_live.is_some() {
+        if self.is_write_order_queue_enabled() {
             self.remove_expired_wo(deqs, batch_size, now);
         }
 
@@ -769,8 +859,6 @@ where
                     Deques::move_to_back_wo_in_deque(write_order_deq, &entry);
                 } else {
                     // The key exists but something unexpected. Break.
-                    // print!("@[{}|{}] ", ts.unwrap().load(Ordering::Acquire), la.unwrap().as_u64());
-                    // print!("@");
                     break;
                 }
             } else {
@@ -825,8 +913,6 @@ where
                     deqs.move_to_back_wo(&entry);
                 } else {
                     // The key exists but something unexpected. Break.
-                    // print!("#[{}|{}] ", ts.unwrap().load(Ordering::Acquire), ts.unwrap().as_u64());
-                    // print!("#");
                     break;
                 }
             } else {
@@ -839,6 +925,71 @@ where
                     unsafe { deqs.write_order.move_to_back(node) };
                 }
             }
+        }
+    }
+
+    fn invalidate_entries(
+        &self,
+        invalidator: &Invalidator<K, V, S>,
+        deqs: &mut Deques<K>,
+        batch_size: usize,
+    ) {
+        self.process_invalidation_result(invalidator, deqs);
+        self.submit_invalidation_task(invalidator, &mut deqs.write_order, batch_size);
+    }
+
+    fn process_invalidation_result(
+        &self,
+        invalidator: &Invalidator<K, V, S>,
+        deqs: &mut Deques<K>,
+    ) {
+        if let Some(InvalidationResult {
+            invalidated,
+            is_done,
+        }) = invalidator.task_result()
+        {
+            for entry in invalidated {
+                Self::handle_remove(deqs, entry);
+            }
+            if is_done {
+                deqs.write_order.reset_cursor();
+            }
+        }
+    }
+
+    fn submit_invalidation_task(
+        &self,
+        invalidator: &Invalidator<K, V, S>,
+        write_order: &mut Deque<KeyDate<K>>,
+        batch_size: usize,
+    ) {
+        let now = self.current_time_from_expiration_clock();
+
+        // If the write order queue is empty, we are done and can remove the predicates
+        // that have been registered by now.
+        if write_order.len() == 0 {
+            invalidator.remove_predicates_registered_before(now);
+            return;
+        }
+
+        let mut candidates = Vec::with_capacity(batch_size);
+        let mut iter = write_order.peekable();
+        let mut len = 0;
+
+        while len < batch_size {
+            if let Some(kd) = iter.next() {
+                if let Some(ts) = kd.timestamp() {
+                    candidates.push(KeyDateLite::new(&kd.key, ts));
+                    len += 1;
+                }
+            } else {
+                break;
+            }
+        }
+
+        if len > 0 {
+            let is_truncated = len == batch_size && iter.peek().is_some();
+            invalidator.submit_task(candidates, is_truncated);
         }
     }
 }
@@ -854,6 +1005,14 @@ where
 {
     fn len(&self) -> usize {
         self.cache.len()
+    }
+
+    fn invalidation_predicate_count(&self) -> usize {
+        self.invalidator
+            .read()
+            .as_ref()
+            .map(|inv| inv.predicate_count())
+            .unwrap_or(0)
     }
 
     fn set_expiration_clock(&self, clock: Option<quanta::Clock>) {

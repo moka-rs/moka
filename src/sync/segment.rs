@@ -1,4 +1,5 @@
 use super::{cache::Cache, ConcurrentCacheExt};
+use crate::PredicateError;
 
 use std::{
     borrow::Borrow,
@@ -68,7 +69,15 @@ where
     /// Panics if `num_segments` is 0.
     pub fn new(max_capacity: usize, num_segments: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(max_capacity, None, num_segments, build_hasher, None, None)
+        Self::with_everything(
+            max_capacity,
+            None,
+            num_segments,
+            build_hasher,
+            None,
+            None,
+            false,
+        )
     }
 }
 
@@ -88,6 +97,7 @@ where
         build_hasher: S,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        invalidator_enabled: bool,
     ) -> Self {
         Self {
             inner: Arc::new(Inner::new(
@@ -97,6 +107,7 @@ where
                 build_hasher,
                 time_to_live,
                 time_to_idle,
+                invalidator_enabled,
             )),
         }
     }
@@ -141,10 +152,56 @@ where
         self.inner.select(hash).invalidate(key);
     }
 
+    /// Discards all cached values.
+    ///
+    /// This method returns immediately and a background thread will evict all the
+    /// cached values inserted before the time when this method was called. It is
+    /// guaranteed that the `get` method must not return these invalidated values
+    /// even if they have not been evicted.
+    ///
+    /// Like the `invalidate` method, this method does not clear the historic
+    /// popularity estimator of keys so that it retains the client activities of
+    /// trying to retrieve an item.
     pub fn invalidate_all(&self) {
         for segment in self.inner.segments.iter() {
             segment.invalidate_all();
         }
+    }
+
+    /// Discards cached values that satisfy a predicate.
+    ///
+    /// `invalidate_entries_if` takes a closure that returns `true` or `false`. This
+    /// method returns immediately and a background thread will apply the closure to
+    /// each cached value inserted before the time when `invalidate_entries_if` was
+    /// called. If the closure returns `true` on a value, that value will be evicted
+    /// from the cache.
+    ///
+    /// Also the `get` method will apply the closure to a value to determine if it
+    /// should have been invalidated. Therefore, it is guaranteed that the `get`
+    /// method must not return invalidated values.
+    ///
+    /// Note that you must call
+    /// [`CacheBuilder::support_invalidation_closures`][support-invalidation-closures]
+    /// at the cache creation time as the cache needs to maintain additional internal
+    /// data structures to support this method. Otherwise, calling this method will
+    /// fail with a
+    /// [`PredicateError::InvalidationClosuresDisabled`][invalidation-disabled-error].
+    ///
+    /// Like the `invalidate` method, this method does not clear the historic
+    /// popularity estimator of keys so that it retains the client activities of
+    /// trying to retrieve an item.
+    ///
+    /// [support-invalidation-closures]: ./struct.CacheBuilder.html#method.support_invalidation_closures
+    /// [invalidation-disabled-error]: ../enum.PredicateError.html#variant.InvalidationClosuresDisabled
+    pub fn invalidate_entries_if<F>(&self, predicate: F) -> Result<(), PredicateError>
+    where
+        F: Fn(&K, &V) -> bool + Send + Sync + 'static,
+    {
+        let pred = Arc::new(predicate);
+        for segment in self.inner.segments.iter() {
+            segment.invalidate_entries_with_arc_fun(Arc::clone(&pred))?;
+        }
+        Ok(())
     }
 
     /// Returns the `max_capacity` of this cache.
@@ -198,12 +255,52 @@ where
     V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
+    fn table_size(&self) -> usize {
+        self.inner.segments.iter().map(|seg| seg.table_size()).sum()
+    }
+
+    fn invalidation_predicate_count(&self) -> usize {
+        self.inner
+            .segments
+            .iter()
+            .map(|seg| seg.invalidation_predicate_count())
+            .sum()
+    }
+
     fn reconfigure_for_testing(&mut self) {
         let inner = Arc::get_mut(&mut self.inner)
             .expect("There are other strong reference to self.inner Arc");
 
         for segment in inner.segments.iter_mut() {
             segment.reconfigure_for_testing();
+        }
+    }
+
+    fn create_mock_expiration_clock(&self) -> MockExpirationClock {
+        let mut exp_clock = MockExpirationClock::default();
+
+        for segment in self.inner.segments.iter() {
+            let (clock, mock) = quanta::Clock::mock();
+            segment.set_expiration_clock(Some(clock));
+            exp_clock.mocks.push(mock);
+        }
+
+        exp_clock
+    }
+}
+
+// For unit tests.
+#[cfg(test)]
+#[derive(Default)]
+struct MockExpirationClock {
+    mocks: Vec<Arc<quanta::Mock>>,
+}
+
+#[cfg(test)]
+impl MockExpirationClock {
+    fn increment(&mut self, duration: Duration) {
+        for mock in &mut self.mocks {
+            mock.increment(duration);
         }
     }
 }
@@ -231,6 +328,7 @@ where
         build_hasher: S,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        invalidator_enabled: bool,
     ) -> Self {
         assert!(num_segments > 0);
 
@@ -249,6 +347,7 @@ where
                     build_hasher.clone(),
                     time_to_live,
                     time_to_idle,
+                    invalidator_enabled,
                 )
             })
             .collect::<Vec<_>>();
@@ -291,6 +390,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{ConcurrentCacheExt, SegmentedCache};
+    use crate::sync::CacheBuilder;
+    use std::time::Duration;
 
     #[test]
     fn basic_single_thread() {
@@ -395,5 +496,75 @@ mod tests {
         assert!(cache.get(&"b").is_none());
         assert!(cache.get(&"c").is_none());
         assert_eq!(cache.get(&"d"), Some("david"));
+    }
+
+    #[test]
+    fn invalidate_entries_if() -> Result<(), Box<dyn std::error::Error>> {
+        use std::collections::HashSet;
+
+        const SEGMENTS: usize = 4;
+
+        let mut cache = CacheBuilder::new(100)
+            .segments(SEGMENTS)
+            .support_invalidation_closures()
+            .build();
+        cache.reconfigure_for_testing();
+
+        let mut mock = cache.create_mock_expiration_clock();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert(0, "alice");
+        cache.insert(1, "bob");
+        cache.insert(2, "alex");
+        cache.sync();
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        cache.sync();
+
+        assert_eq!(cache.get(&0), Some("alice"));
+        assert_eq!(cache.get(&1), Some("bob"));
+        assert_eq!(cache.get(&2), Some("alex"));
+
+        let names = ["alice", "alex"].iter().cloned().collect::<HashSet<_>>();
+        cache.invalidate_entries_if(move |_k, &v| names.contains(v))?;
+        assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 1);
+
+        mock.increment(Duration::from_secs(5)); // 10 secs from the start.
+
+        cache.insert(3, "alice");
+
+        // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
+        cache.sync(); // To submit the invalidation task.
+        std::thread::sleep(Duration::from_millis(200));
+        cache.sync(); // To process the task result.
+        std::thread::sleep(Duration::from_millis(200));
+
+        assert!(cache.get(&0).is_none());
+        assert!(cache.get(&2).is_none());
+        assert_eq!(cache.get(&1), Some("bob"));
+        // This should survive as it was inserted after calling invalidate_entries_if.
+        assert_eq!(cache.get(&3), Some("alice"));
+        assert_eq!(cache.table_size(), 2);
+        assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 0);
+
+        mock.increment(Duration::from_secs(5)); // 15 secs from the start.
+
+        cache.invalidate_entries_if(|_k, &v| v == "alice")?;
+        cache.invalidate_entries_if(|_k, &v| v == "bob")?;
+        assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 2);
+
+        // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
+        cache.sync(); // To submit the invalidation task.
+        std::thread::sleep(Duration::from_millis(200));
+        cache.sync(); // To process the task result.
+        std::thread::sleep(Duration::from_millis(200));
+
+        assert!(cache.get(&1).is_none());
+        assert!(cache.get(&3).is_none());
+        assert_eq!(cache.table_size(), 0);
+        assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 0);
+
+        Ok(())
     }
 }

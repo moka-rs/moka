@@ -17,11 +17,22 @@ mod builder;
 mod cache;
 mod deques;
 pub(crate) mod housekeeper;
+mod invalidator;
 mod segment;
 
 pub use builder::CacheBuilder;
 pub use cache::Cache;
 pub use segment::SegmentedCache;
+
+/// The type of the unique ID to identify a predicate used by
+/// [`Cache#invalidate_entries_if`][invalidate-if] method.
+///
+/// A `PredicateId` is a `String` of UUID (version 4).
+///
+/// [invalidate-if]: ./struct.Cache.html#method.invalidate_entries_if
+pub type PredicateId = String;
+
+pub(crate) type PredicateIdStr<'a> = &'a str;
 
 /// Provides extra methods that will be useful for testing.
 pub trait ConcurrentCacheExt<K, V> {
@@ -58,6 +69,10 @@ impl<K> KeyDate<K> {
     pub(crate) fn new(key: Arc<K>, timestamp: Arc<AtomicU64>) -> Self {
         Self { key, timestamp }
     }
+
+    pub(crate) fn timestamp(&self) -> Option<Instant> {
+        u64_to_instant(self.timestamp.load(Ordering::Acquire))
+    }
 }
 
 pub(crate) struct KeyHashDate<K> {
@@ -87,10 +102,7 @@ struct DeqNodes<K> {
     write_order_q_node: Option<KeyDeqNodeWo<K>>,
 }
 
-#[cfg(feature = "future")]
-// Multi-threaded async runtimes require ValueEntry to be Send, but it will
-// not be without this `unsafe impl`. This is because DeqNodes have NonNull
-// pointers.
+// We need this `unsafe impl` as DeqNodes have NonNull pointers.
 unsafe impl<K> Send for DeqNodes<K> {}
 
 pub(crate) struct ValueEntry<K, V> {

@@ -5,17 +5,22 @@
 ### Fixed
 
 - **Breaking change**: Now `sync::{Cache, SegmentedCache}` and `future::Cache`
-  require `Send`, `Sync` and `'static` bounds for the generic parameters `K` (key),
+  require `Send`, `Sync` and `'static` for the generic parameters `K` (key),
   `V` (value) and `S` (hasher state). This is necessary to prevent potential
   undefined behaviors in applications using single-threaded async runtime such as
   Actix-rt. ([#19][gh-pull-0019])
 
+### Added
+
+- Add `invalidate_entries_if` method to `sync`, `future` and `unsync` caches.
+  ([#12][gh-pull-0012])
 
 ## Version 0.3.1
 
 ### Changed
 
 - Stop skeptic from having to be compiled by all downstream users. ([#16][gh-pull-0016])
+
 
 ## Version 0.3.0
 
@@ -62,6 +67,7 @@
 
 [gh-pull-0019]: https://github.com/moka-rs/moka/pull/19/
 [gh-pull-0016]: https://github.com/moka-rs/moka/pull/16/
+[gh-pull-0012]: https://github.com/moka-rs/moka/pull/12/
 [gh-pull-0011]: https://github.com/moka-rs/moka/pull/11/
 [gh-pull-0009]: https://github.com/moka-rs/moka/pull/9/
 [gh-pull-0007]: https://github.com/moka-rs/moka/pull/7/
