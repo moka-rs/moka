@@ -273,7 +273,7 @@ where
         let keys_to_invalidate = cache
             .iter()
             .filter(|(key, entry)| (predicate)(key, &entry.value))
-            .map(|(key, _)| Rc::clone(&key))
+            .map(|(key, _)| Rc::clone(key))
             .collect::<Vec<_>>();
 
         keys_to_invalidate.into_iter().for_each(|k| {
@@ -462,8 +462,8 @@ where
             entry.set_last_modified(ts);
         }
         let deqs = &mut self.deques;
-        deqs.move_to_back_ao(&entry);
-        deqs.move_to_back_wo(&entry)
+        deqs.move_to_back_ao(entry);
+        deqs.move_to_back_wo(entry)
     }
 
     fn evict(&mut self, now: Instant) {

@@ -68,7 +68,7 @@ impl ThreadPoolRegistry {
     }
 
     pub(crate) fn release_pool(pool: &Arc<ThreadPool>) {
-        if Arc::strong_count(&pool) <= 2 {
+        if Arc::strong_count(pool) <= 2 {
             // No other client exists; only this Arc and the registry are
             // the owners. Let's remove and drop the one in the registry.
             let name = pool.name;

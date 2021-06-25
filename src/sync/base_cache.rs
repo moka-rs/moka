@@ -64,7 +64,7 @@ impl<K, V, S> Clone for BaseCache<K, V, S> {
             inner: Arc::clone(&self.inner),
             read_op_ch: self.read_op_ch.clone(),
             write_op_ch: self.write_op_ch.clone(),
-            housekeeper: self.housekeeper.as_ref().map(|h| Arc::clone(&h)),
+            housekeeper: self.housekeeper.as_ref().map(|h| Arc::clone(h)),
         }
     }
 }
@@ -264,7 +264,7 @@ where
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((
                     cnt,
-                    Arc::clone(&old_entry),
+                    Arc::clone(old_entry),
                     WriteOp::Upsert(KeyHash::new(Arc::clone(&key), hash), Arc::clone(&entry)),
                 ));
                 entry
@@ -756,7 +756,7 @@ where
             entry,
         );
         if self.is_write_order_queue_enabled() {
-            deqs.push_back_wo(KeyDate::new(key, raw_last_modified), &entry);
+            deqs.push_back_wo(KeyDate::new(key, raw_last_modified), entry);
         }
         entry.set_is_admitted(true);
     }
