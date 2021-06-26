@@ -254,10 +254,11 @@ where
     /// If the cache has this key present, the value is updated.
     pub fn insert(&self, key: K, value: V) {
         let hash = self.base.hash(&key);
+        let key = Arc::new(key);
         self.insert_with_hash(key, hash, value)
     }
 
-    pub(crate) fn insert_with_hash(&self, key: K, hash: u64, value: V) {
+    pub(crate) fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
         let op = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
         Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to insert");

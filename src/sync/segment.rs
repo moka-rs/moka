@@ -136,6 +136,7 @@ where
     /// If the cache has this key present, the value is updated.
     pub fn insert(&self, key: K, value: V) {
         let hash = self.inner.hash(&key);
+        let key = Arc::new(key);
         self.inner.select(hash).insert_with_hash(key, hash, value);
     }
 

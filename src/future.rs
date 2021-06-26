@@ -4,6 +4,7 @@
 
 mod builder;
 mod cache;
+mod value_initializer;
 
 pub use builder::CacheBuilder;
 pub use cache::Cache;
