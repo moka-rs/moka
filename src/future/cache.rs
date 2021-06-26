@@ -57,7 +57,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.4", features = ["future"] }
+/// // moka = { version = "0.5", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures = "0.3"
 ///

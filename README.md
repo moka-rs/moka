@@ -61,14 +61,14 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-moka = "0.4"
+moka = "0.5"
 ```
 
 To use the asynchronous cache, enable a crate feature called "future".
 
 ```toml
 [dependencies]
-moka = { version = "0.4", features = ["future"] }
+moka = { version = "0.5", features = ["future"] }
 ```
 
 
@@ -164,7 +164,7 @@ Here is a similar program to the previous example, but using asynchronous cache 
 // Cargo.toml
 //
 // [dependencies]
-// moka = { version = "0.4", features = ["future"] }
+// moka = { version = "0.5", features = ["future"] }
 // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 // futures = "0.3"
 
