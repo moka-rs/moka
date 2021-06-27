@@ -455,7 +455,8 @@ where
             .await
         {
             InitResult::Initialized(v) => {
-                self.insert_with_hash(Arc::clone(&key), hash, v.clone()).await;
+                self.insert_with_hash(Arc::clone(&key), hash, v.clone())
+                    .await;
                 self.value_initializer.remove_waiter(&key);
                 v
             }
@@ -484,7 +485,8 @@ where
         {
             InitResult::Initialized(v) => {
                 let hash = self.base.hash(&key);
-                self.insert_with_hash(Arc::clone(&key), hash, v.clone()).await;
+                self.insert_with_hash(Arc::clone(&key), hash, v.clone())
+                    .await;
                 self.value_initializer.remove_waiter(&key);
                 Ok(v)
             }
