@@ -29,7 +29,7 @@ where
         }
     }
 
-    pub(crate) fn insert_with(&self, key: Arc<K>, mut init: impl FnMut() -> V) -> InitResult<V> {
+    pub(crate) fn insert_with(&self, key: Arc<K>, init: impl FnOnce() -> V) -> InitResult<V> {
         use InitResult::*;
 
         let waiter = Arc::new(RwLock::new(None));
@@ -55,9 +55,9 @@ where
         }
     }
 
-    pub(crate) fn try_insert_with<F>(&self, key: Arc<K>, mut init: F) -> InitResult<V>
+    pub(crate) fn try_insert_with<F>(&self, key: Arc<K>, init: F) -> InitResult<V>
     where
-        F: FnMut() -> Result<V, Box<dyn Error>>,
+        F: FnOnce() -> Result<V, Box<dyn Error>>,
     {
         use InitResult::*;
 

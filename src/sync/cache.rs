@@ -253,7 +253,14 @@ where
         self.base.get_with_hash(key, hash)
     }
 
-    pub fn get_or_insert_with(&self, key: K, init: impl FnMut() -> V) -> V {
+    /// Ensures the value of the key exists by inserting the result of the init
+    /// function if not exist, and returns a _clone_ of the value.
+    ///
+    /// This method prevents to evaluate the init function multiple times on the same
+    /// key even if the method is concurrently called by many threads; only one of
+    /// the calls evaluates its function, and other calls wait for that function to
+    /// complete.
+    pub fn get_or_insert_with(&self, key: K, init: impl FnOnce() -> V) -> V {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         self.get_or_insert_with_hash_and_fun(key, hash, init)
@@ -263,7 +270,7 @@ where
         &self,
         key: Arc<K>,
         hash: u64,
-        init: impl FnMut() -> V,
+        init: impl FnOnce() -> V,
     ) -> V {
         if let Some(v) = self.get_with_hash(&key, hash) {
             return v;
@@ -280,9 +287,17 @@ where
         }
     }
 
+    /// Try to ensure the value of the key exists by inserting an `Ok` result of the
+    /// init function if not exist, and returns a _clone_ of the value or the `Err`
+    /// returned by the function.
+    ///
+    /// This method prevents to evaluate the init function multiple times on the same
+    /// key even if the method is concurrently called by many threads; only one of
+    /// the calls evaluates its function, and other calls wait for that function to
+    /// complete.
     pub fn get_or_try_insert_with<F>(&self, key: K, init: F) -> Result<V, Arc<Box<dyn Error>>>
     where
-        F: FnMut() -> Result<V, Box<dyn Error>>,
+        F: FnOnce() -> Result<V, Box<dyn Error>>,
     {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
@@ -296,7 +311,7 @@ where
         init: F,
     ) -> Result<V, Arc<Box<dyn Error>>>
     where
-        F: FnMut() -> Result<V, Box<dyn Error>>,
+        F: FnOnce() -> Result<V, Box<dyn Error>>,
     {
         if let Some(v) = self.get_with_hash(&key, hash) {
             return Ok(v);

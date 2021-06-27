@@ -273,12 +273,27 @@ where
         self.base.get_with_hash(key, self.base.hash(key))
     }
 
+    /// Ensures the value of the key exists by inserting the output of the init
+    /// future if not exist, and returns a _clone_ of the value.
+    ///
+    /// This method prevents to resolve the init future multiple times on the same
+    /// key even if the method is concurrently called by many async tasks; only one
+    /// of the calls resolves its future, and other calls wait for that future to
+    /// complete.
     pub async fn get_or_insert_with(&self, key: K, init: impl Future<Output = V>) -> V {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         self.get_or_insert_with_hash_and_fun(key, hash, init).await
     }
 
+    /// Try to ensure the value of the key exists by inserting an `Ok` output of the
+    /// init future if not exist, and returns a _clone_ of the value or the `Err`
+    /// produced by the future.
+    ///
+    /// This method prevents to resolve the init future multiple times on the same
+    /// key even if the method is concurrently called by many async tasks; only one
+    /// of the calls resolves its future, and other calls wait for that future to
+    /// complete.
     pub async fn get_or_try_insert_with<F>(&self, key: K, init: F) -> Result<V, Arc<Box<dyn Error>>>
     where
         F: Future<Output = Result<V, Box<dyn Error>>>,
