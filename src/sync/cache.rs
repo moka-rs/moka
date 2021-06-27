@@ -254,14 +254,23 @@ where
     }
 
     pub fn get_or_insert_with(&self, key: K, init: impl FnMut() -> V) -> V {
-        if let Some(v) = self.get(&key) {
+        let hash = self.base.hash(&key);
+        let key = Arc::new(key);
+        self.get_or_insert_with_hash_and_fun(key, hash, init)
+    }
+
+    pub(crate) fn get_or_insert_with_hash_and_fun(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        init: impl FnMut() -> V,
+    ) -> V {
+        if let Some(v) = self.get_with_hash(&key, hash) {
             return v;
         }
 
-        let key = Arc::new(key);
         match self.value_initializer.insert_with(Arc::clone(&key), init) {
             InitResult::Initialized(v) => {
-                let hash = self.base.hash(&key);
                 self.insert_with_hash(key, hash, v.clone());
                 v
             }
@@ -274,17 +283,29 @@ where
     where
         F: FnMut() -> Result<V, Box<dyn Error>>,
     {
-        if let Some(v) = self.get(&key) {
+        let hash = self.base.hash(&key);
+        let key = Arc::new(key);
+        self.get_or_try_insert_with_hash_and_fun(key, hash, init)
+    }
+
+    pub(crate) fn get_or_try_insert_with_hash_and_fun<F>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        init: F,
+    ) -> Result<V, Arc<Box<dyn Error>>>
+    where
+        F: FnMut() -> Result<V, Box<dyn Error>>,
+    {
+        if let Some(v) = self.get_with_hash(&key, hash) {
             return Ok(v);
         }
 
-        let key = Arc::new(key);
         match self
             .value_initializer
             .try_insert_with(Arc::clone(&key), init)
         {
             InitResult::Initialized(v) => {
-                let hash = self.base.hash(&key);
                 self.insert_with_hash(key, hash, v.clone());
                 Ok(v)
             }

@@ -274,48 +274,19 @@ where
     }
 
     pub async fn get_or_insert_with(&self, key: K, init: impl Future<Output = V>) -> V {
-        if let Some(v) = self.get(&key) {
-            return v;
-        }
-
+        let hash = self.base.hash(&key);
         let key = Arc::new(key);
-        match self
-            .value_initializer
-            .insert_with(Arc::clone(&key), init)
-            .await
-        {
-            InitResult::Initialized(v) => {
-                let hash = self.base.hash(&key);
-                self.insert_with_hash(key, hash, v.clone()).await;
-                v
-            }
-            InitResult::ReadExisting(v) => v,
-            InitResult::InitErr(_) => unreachable!(),
-        }
+        self.get_or_insert_with_hash_and_fun(key, hash, init).await
     }
 
     pub async fn get_or_try_insert_with<F>(&self, key: K, init: F) -> Result<V, Arc<Box<dyn Error>>>
     where
         F: Future<Output = Result<V, Box<dyn Error>>>,
     {
-        if let Some(v) = self.get(&key) {
-            return Ok(v);
-        }
-
+        let hash = self.base.hash(&key);
         let key = Arc::new(key);
-        match self
-            .value_initializer
-            .try_insert_with(Arc::clone(&key), init)
+        self.get_or_try_insert_with_hash_and_fun(key, hash, init)
             .await
-        {
-            InitResult::Initialized(v) => {
-                let hash = self.base.hash(&key);
-                self.insert_with_hash(key, hash, v.clone()).await;
-                Ok(v)
-            }
-            InitResult::ReadExisting(v) => Ok(v),
-            InitResult::InitErr(e) => Err(e),
-        }
     }
 
     /// Inserts a key-value pair into the cache.
@@ -468,6 +439,58 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
+    async fn get_or_insert_with_hash_and_fun(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        init: impl Future<Output = V>,
+    ) -> V {
+        if let Some(v) = self.base.get_with_hash(&key, hash) {
+            return v;
+        }
+
+        match self
+            .value_initializer
+            .insert_with(Arc::clone(&key), init)
+            .await
+        {
+            InitResult::Initialized(v) => {
+                self.insert_with_hash(key, hash, v.clone()).await;
+                v
+            }
+            InitResult::ReadExisting(v) => v,
+            InitResult::InitErr(_) => unreachable!(),
+        }
+    }
+
+    async fn get_or_try_insert_with_hash_and_fun<F>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        init: F,
+    ) -> Result<V, Arc<Box<dyn Error>>>
+    where
+        F: Future<Output = Result<V, Box<dyn Error>>>,
+    {
+        if let Some(v) = self.base.get_with_hash(&key, hash) {
+            return Ok(v);
+        }
+
+        match self
+            .value_initializer
+            .try_insert_with(Arc::clone(&key), init)
+            .await
+        {
+            InitResult::Initialized(v) => {
+                let hash = self.base.hash(&key);
+                self.insert_with_hash(key, hash, v.clone()).await;
+                Ok(v)
+            }
+            InitResult::ReadExisting(v) => Ok(v),
+            InitResult::InitErr(e) => Err(e),
+        }
+    }
+
     async fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
         let op = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
