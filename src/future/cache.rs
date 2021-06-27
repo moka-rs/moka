@@ -892,9 +892,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_or_insert_with() {
-        const KEY: u32 = 0;
-
         let cache = Cache::new(100);
+        const KEY: u32 = 0;
 
         // This test will run five async tasks:
         //
@@ -980,7 +979,7 @@ mod tests {
         let cache = Cache::new(100);
         const KEY: u32 = 0;
 
-        // This test will run seven async tasks:
+        // This test will run eight async tasks:
         //
         // Task1 will be the first task to call `get_or_insert_with` for a key, so
         // its async block will be evaluated and then an error will be returned.

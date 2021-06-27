@@ -1,7 +1,6 @@
-use async_lock::RwLock;
+use parking_lot::RwLock;
 use std::{
     error::Error,
-    future::Future,
     hash::{BuildHasher, Hash},
     sync::Arc,
 };
@@ -30,19 +29,16 @@ where
         }
     }
 
-    pub(crate) async fn insert_with<F>(&self, key: Arc<K>, init: F) -> InitResult<V>
-    where
-        F: Future<Output = V>,
-    {
+    pub(crate) fn insert_with(&self, key: Arc<K>, mut init: impl FnMut() -> V) -> InitResult<V> {
         use InitResult::*;
 
         let waiter = Arc::new(RwLock::new(None));
-        let mut lock = waiter.write().await;
+        let mut lock = waiter.write();
 
         match self.insert_or_modify(&key, &waiter) {
             None => {
                 // Inserted. Resolve the init future.
-                let value = init.await;
+                let value = init();
                 *lock = Some(Ok(value.clone()));
                 self.waiters.remove(&key);
                 Initialized(value)
@@ -51,7 +47,7 @@ where
                 // Value already exists. Drop our write lock and wait for a read lock
                 // to become available.
                 std::mem::drop(lock);
-                match &*res.read().await {
+                match &*res.read() {
                     Some(Ok(value)) => ReadExisting(value.clone()),
                     Some(Err(_)) | None => unreachable!(),
                 }
@@ -59,19 +55,19 @@ where
         }
     }
 
-    pub(crate) async fn try_insert_with<F>(&self, key: Arc<K>, init: F) -> InitResult<V>
+    pub(crate) fn try_insert_with<F>(&self, key: Arc<K>, mut init: F) -> InitResult<V>
     where
-        F: Future<Output = Result<V, Box<dyn Error>>>,
+        F: FnMut() -> Result<V, Box<dyn Error>>,
     {
         use InitResult::*;
 
         let waiter = Arc::new(RwLock::new(None));
-        let mut lock = waiter.write().await;
+        let mut lock = waiter.write();
 
         match self.insert_or_modify(&key, &waiter) {
             None => {
                 // Inserted. Resolve the init future.
-                match init.await {
+                match init() {
                     Ok(value) => {
                         *lock = Some(Ok(value.clone()));
                         self.waiters.remove(&key);
@@ -89,7 +85,7 @@ where
                 // Value already exists. Drop our write lock and wait for a read lock
                 // to become available.
                 std::mem::drop(lock);
-                match &*res.read().await {
+                match &*res.read() {
                     Some(Ok(value)) => ReadExisting(value.clone()),
                     Some(Err(e)) => InitErr(Arc::clone(e)),
                     None => unreachable!(),

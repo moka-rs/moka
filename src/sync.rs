@@ -19,6 +19,7 @@ mod deques;
 pub(crate) mod housekeeper;
 mod invalidator;
 mod segment;
+mod value_initializer;
 
 pub use builder::CacheBuilder;
 pub use cache::Cache;
