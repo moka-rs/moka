@@ -74,13 +74,12 @@ where
                 match init.await {
                     Ok(value) => {
                         *lock = Some(Ok(value.clone()));
-                        self.waiters.remove(&key);
                         Initialized(value)
                     }
                     Err(e) => {
                         let err = Arc::new(e);
                         *lock = Some(Err(Arc::clone(&err)));
-                        self.waiters.remove(&key);
+                        self.remove_waiter(&key);
                         InitErr(err)
                     }
                 }
@@ -96,6 +95,11 @@ where
                 }
             }
         }
+    }
+
+    #[inline]
+    pub(crate) fn remove_waiter(&self, key: &Arc<K>) {
+        self.waiters.remove(key);
     }
 
     fn insert_or_modify(&self, key: &Arc<K>, waiter: &Waiter<V>) -> Option<Waiter<V>> {

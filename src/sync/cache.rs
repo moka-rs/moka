@@ -271,7 +271,8 @@ where
 
         match self.value_initializer.insert_with(Arc::clone(&key), init) {
             InitResult::Initialized(v) => {
-                self.insert_with_hash(key, hash, v.clone());
+                self.insert_with_hash(Arc::clone(&key), hash, v.clone());
+                self.value_initializer.remove_waiter(&key);
                 v
             }
             InitResult::ReadExisting(v) => v,
@@ -306,7 +307,8 @@ where
             .try_insert_with(Arc::clone(&key), init)
         {
             InitResult::Initialized(v) => {
-                self.insert_with_hash(key, hash, v.clone());
+                self.insert_with_hash(Arc::clone(&key), hash, v.clone());
+                self.value_initializer.remove_waiter(&key);
                 Ok(v)
             }
             InitResult::ReadExisting(v) => Ok(v),
