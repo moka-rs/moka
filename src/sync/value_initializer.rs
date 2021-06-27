@@ -29,13 +29,13 @@ where
         }
     }
 
-    pub(crate) fn insert_with(&self, key: Arc<K>, init: impl FnOnce() -> V) -> InitResult<V> {
+    pub(crate) fn init_or_read(&self, key: Arc<K>, init: impl FnOnce() -> V) -> InitResult<V> {
         use InitResult::*;
 
         let waiter = Arc::new(RwLock::new(None));
         let mut lock = waiter.write();
 
-        match self.insert_or_modify(&key, &waiter) {
+        match self.try_insert_waiter(&key, &waiter) {
             None => {
                 // Inserted. Resolve the init future.
                 let value = init();
@@ -55,7 +55,7 @@ where
         }
     }
 
-    pub(crate) fn try_insert_with<F>(&self, key: Arc<K>, init: F) -> InitResult<V>
+    pub(crate) fn try_init_or_read<F>(&self, key: Arc<K>, init: F) -> InitResult<V>
     where
         F: FnOnce() -> Result<V, Box<dyn Error>>,
     {
@@ -64,7 +64,7 @@ where
         let waiter = Arc::new(RwLock::new(None));
         let mut lock = waiter.write();
 
-        match self.insert_or_modify(&key, &waiter) {
+        match self.try_insert_waiter(&key, &waiter) {
             None => {
                 // Inserted. Resolve the init future.
                 match init() {
@@ -98,7 +98,7 @@ where
         self.waiters.remove(key);
     }
 
-    fn insert_or_modify(&self, key: &Arc<K>, waiter: &Waiter<V>) -> Option<Waiter<V>> {
+    fn try_insert_waiter(&self, key: &Arc<K>, waiter: &Waiter<V>) -> Option<Waiter<V>> {
         let key = Arc::clone(key);
         let waiter = Arc::clone(waiter);
 

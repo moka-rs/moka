@@ -30,7 +30,7 @@ where
         }
     }
 
-    pub(crate) async fn insert_with<F>(&self, key: Arc<K>, init: F) -> InitResult<V>
+    pub(crate) async fn init_or_read<F>(&self, key: Arc<K>, init: F) -> InitResult<V>
     where
         F: Future<Output = V>,
     {
@@ -39,7 +39,7 @@ where
         let waiter = Arc::new(RwLock::new(None));
         let mut lock = waiter.write().await;
 
-        match self.insert_or_modify(&key, &waiter) {
+        match self.try_insert_waiter(&key, &waiter) {
             None => {
                 // Inserted. Resolve the init future.
                 let value = init.await;
@@ -59,7 +59,7 @@ where
         }
     }
 
-    pub(crate) async fn try_insert_with<F>(&self, key: Arc<K>, init: F) -> InitResult<V>
+    pub(crate) async fn try_init_or_read<F>(&self, key: Arc<K>, init: F) -> InitResult<V>
     where
         F: Future<Output = Result<V, Box<dyn Error>>>,
     {
@@ -68,7 +68,7 @@ where
         let waiter = Arc::new(RwLock::new(None));
         let mut lock = waiter.write().await;
 
-        match self.insert_or_modify(&key, &waiter) {
+        match self.try_insert_waiter(&key, &waiter) {
             None => {
                 // Inserted. Resolve the init future.
                 match init.await {
@@ -102,7 +102,7 @@ where
         self.waiters.remove(key);
     }
 
-    fn insert_or_modify(&self, key: &Arc<K>, waiter: &Waiter<V>) -> Option<Waiter<V>> {
+    fn try_insert_waiter(&self, key: &Arc<K>, waiter: &Waiter<V>) -> Option<Waiter<V>> {
         let key = Arc::clone(key);
         let waiter = Arc::clone(waiter);
 

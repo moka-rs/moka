@@ -466,7 +466,7 @@ where
 
         match self
             .value_initializer
-            .insert_with(Arc::clone(&key), init)
+            .init_or_read(Arc::clone(&key), init)
             .await
         {
             InitResult::Initialized(v) => {
@@ -495,7 +495,7 @@ where
 
         match self
             .value_initializer
-            .try_insert_with(Arc::clone(&key), init)
+            .try_init_or_read(Arc::clone(&key), init)
             .await
         {
             InitResult::Initialized(v) => {
