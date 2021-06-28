@@ -294,9 +294,13 @@ where
     /// key even if the method is concurrently called by many async tasks; only one
     /// of the calls resolves its future, and other calls wait for that future to
     /// complete.
-    pub async fn get_or_try_insert_with<F>(&self, key: K, init: F) -> Result<V, Arc<Box<dyn Error>>>
+    pub async fn get_or_try_insert_with<F>(
+        &self,
+        key: K,
+        init: F,
+    ) -> Result<V, Arc<Box<dyn Error + Send + Sync + 'static>>>
     where
-        F: Future<Output = Result<V, Box<dyn Error>>>,
+        F: Future<Output = Result<V, Box<dyn Error + Send + Sync + 'static>>>,
     {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
@@ -485,9 +489,9 @@ where
         key: Arc<K>,
         hash: u64,
         init: F,
-    ) -> Result<V, Arc<Box<dyn Error>>>
+    ) -> Result<V, Arc<Box<dyn Error + Send + Sync + 'static>>>
     where
-        F: Future<Output = Result<V, Box<dyn Error>>>,
+        F: Future<Output = Result<V, Box<dyn Error + Send + Sync + 'static>>>,
     {
         if let Some(v) = self.base.get_with_hash(&key, hash) {
             return Ok(v);

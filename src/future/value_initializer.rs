@@ -6,12 +6,12 @@ use std::{
     sync::Arc,
 };
 
-type Waiter<V> = Arc<RwLock<Option<Result<V, Arc<Box<dyn Error>>>>>>;
+type Waiter<V> = Arc<RwLock<Option<Result<V, Arc<Box<dyn Error + Send + Sync + 'static>>>>>>;
 
 pub(crate) enum InitResult<V> {
     Initialized(V),
     ReadExisting(V),
-    InitErr(Arc<Box<dyn Error>>),
+    InitErr(Arc<Box<dyn Error + Send + Sync + 'static>>),
 }
 
 pub(crate) struct ValueInitializer<K, V, S> {
@@ -61,7 +61,7 @@ where
 
     pub(crate) async fn try_init_or_read<F>(&self, key: Arc<K>, init: F) -> InitResult<V>
     where
-        F: Future<Output = Result<V, Box<dyn Error>>>,
+        F: Future<Output = Result<V, Box<dyn Error + Send + Sync + 'static>>>,
     {
         use InitResult::*;
 

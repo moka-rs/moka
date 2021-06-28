@@ -155,9 +155,13 @@ where
     /// key even if the method is concurrently called by many threads; only one of
     /// the calls evaluates its function, and other calls wait for that function to
     /// complete.
-    pub fn get_or_try_insert_with<F>(&self, key: K, init: F) -> Result<V, Arc<Box<dyn Error>>>
+    pub fn get_or_try_insert_with<F>(
+        &self,
+        key: K,
+        init: F,
+    ) -> Result<V, Arc<Box<dyn Error + Send + Sync + 'static>>>
     where
-        F: FnOnce() -> Result<V, Box<dyn Error>>,
+        F: FnOnce() -> Result<V, Box<dyn Error + Send + Sync + 'static>>,
     {
         let hash = self.inner.hash(&key);
         let key = Arc::new(key);
