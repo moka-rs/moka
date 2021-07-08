@@ -44,7 +44,6 @@ where
                 // Inserted. Resolve the init future.
                 let value = init.await;
                 *lock = Some(Ok(value.clone()));
-                self.waiters.remove(&key);
                 Initialized(value)
             }
             Some(res) => {
