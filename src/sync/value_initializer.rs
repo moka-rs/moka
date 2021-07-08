@@ -37,7 +37,7 @@ where
 
         match self.try_insert_waiter(&key, &waiter) {
             None => {
-                // Inserted. Resolve the init future.
+                // Inserted. Evaluate the init closure.
                 let value = init();
                 *lock = Some(Ok(value.clone()));
                 Initialized(value)
@@ -65,7 +65,7 @@ where
 
         match self.try_insert_waiter(&key, &waiter) {
             None => {
-                // Inserted. Resolve the init future.
+                // Inserted. Evaluate the init closure.
                 match init() {
                     Ok(value) => {
                         *lock = Some(Ok(value.clone()));
