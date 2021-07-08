@@ -1,6 +1,6 @@
 # Moka &mdash; Change Log
 
-## Version 0.5.0 (Not released yet)
+## Version 0.5.0
 
 ### Added
 
