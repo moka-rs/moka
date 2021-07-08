@@ -230,9 +230,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn do_insert_with_hash(&self, key: K, hash: u64, value: V) -> WriteOp<K, V> {
-        let key = Arc::new(key);
-
+    pub(crate) fn do_insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) -> WriteOp<K, V> {
         let op_cnt1 = Rc::new(AtomicU8::new(0));
         let op_cnt2 = Rc::clone(&op_cnt1);
         let mut op1 = None;

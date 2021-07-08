@@ -1,4 +1,7 @@
-use super::ConcurrentCacheExt;
+use super::{
+    value_initializer::{InitResult, ValueInitializer},
+    ConcurrentCacheExt,
+};
 use crate::{
     sync::{
         base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
@@ -12,6 +15,8 @@ use crossbeam_channel::{Sender, TrySendError};
 use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
+    error::Error,
+    future::Future,
     hash::{BuildHasher, Hash},
     sync::Arc,
     time::Duration,
@@ -52,7 +57,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.4", features = ["future"] }
+/// // moka = { version = "0.5", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures = "0.3"
 ///
@@ -187,6 +192,7 @@ use std::{
 #[derive(Clone)]
 pub struct Cache<K, V, S = RandomState> {
     base: BaseCache<K, V, S>,
+    value_initializer: Arc<ValueInitializer<K, V, S>>,
 }
 
 unsafe impl<K, V, S> Send for Cache<K, V, S>
@@ -240,11 +246,12 @@ where
             base: BaseCache::new(
                 max_capacity,
                 initial_capacity,
-                build_hasher,
+                build_hasher.clone(),
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
             ),
+            value_initializer: Arc::new(ValueInitializer::with_hasher(build_hasher)),
         }
     }
 
@@ -266,11 +273,47 @@ where
         self.base.get_with_hash(key, self.base.hash(key))
     }
 
+    /// Ensures the value of the key exists by inserting the output of the init
+    /// future if not exist, and returns a _clone_ of the value.
+    ///
+    /// This method prevents to resolve the init future multiple times on the same
+    /// key even if the method is concurrently called by many async tasks; only one
+    /// of the calls resolves its future, and other calls wait for that future to
+    /// complete.
+    pub async fn get_or_insert_with(&self, key: K, init: impl Future<Output = V>) -> V {
+        let hash = self.base.hash(&key);
+        let key = Arc::new(key);
+        self.get_or_insert_with_hash_and_fun(key, hash, init).await
+    }
+
+    /// Try to ensure the value of the key exists by inserting an `Ok` output of the
+    /// init future if not exist, and returns a _clone_ of the value or the `Err`
+    /// produced by the future.
+    ///
+    /// This method prevents to resolve the init future multiple times on the same
+    /// key even if the method is concurrently called by many async tasks; only one
+    /// of the calls resolves its future, and other calls wait for that future to
+    /// complete.
+    pub async fn get_or_try_insert_with<F>(
+        &self,
+        key: K,
+        init: F,
+    ) -> Result<V, Arc<Box<dyn Error + Send + Sync + 'static>>>
+    where
+        F: Future<Output = Result<V, Box<dyn Error + Send + Sync + 'static>>>,
+    {
+        let hash = self.base.hash(&key);
+        let key = Arc::new(key);
+        self.get_or_try_insert_with_hash_and_fun(key, hash, init)
+            .await
+    }
+
     /// Inserts a key-value pair into the cache.
     ///
     /// If the cache has this key present, the value is updated.
     pub async fn insert(&self, key: K, value: V) {
         let hash = self.base.hash(&key);
+        let key = Arc::new(key);
         self.insert_with_hash(key, hash, value).await
     }
 
@@ -280,6 +323,7 @@ where
     /// synchronous code.
     pub fn blocking_insert(&self, key: K, value: V) {
         let hash = self.base.hash(&key);
+        let key = Arc::new(key);
         let op = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
         if Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk).is_err() {
@@ -414,7 +458,63 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    async fn insert_with_hash(&self, key: K, hash: u64, value: V) {
+    async fn get_or_insert_with_hash_and_fun(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        init: impl Future<Output = V>,
+    ) -> V {
+        if let Some(v) = self.base.get_with_hash(&key, hash) {
+            return v;
+        }
+
+        match self
+            .value_initializer
+            .init_or_read(Arc::clone(&key), init)
+            .await
+        {
+            InitResult::Initialized(v) => {
+                self.insert_with_hash(Arc::clone(&key), hash, v.clone())
+                    .await;
+                self.value_initializer.remove_waiter(&key);
+                v
+            }
+            InitResult::ReadExisting(v) => v,
+            InitResult::InitErr(_) => unreachable!(),
+        }
+    }
+
+    async fn get_or_try_insert_with_hash_and_fun<F>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        init: F,
+    ) -> Result<V, Arc<Box<dyn Error + Send + Sync + 'static>>>
+    where
+        F: Future<Output = Result<V, Box<dyn Error + Send + Sync + 'static>>>,
+    {
+        if let Some(v) = self.base.get_with_hash(&key, hash) {
+            return Ok(v);
+        }
+
+        match self
+            .value_initializer
+            .try_init_or_read(Arc::clone(&key), init)
+            .await
+        {
+            InitResult::Initialized(v) => {
+                let hash = self.base.hash(&key);
+                self.insert_with_hash(Arc::clone(&key), hash, v.clone())
+                    .await;
+                self.value_initializer.remove_waiter(&key);
+                Ok(v)
+            }
+            InitResult::ReadExisting(v) => Ok(v),
+            InitResult::InitErr(e) => Err(e),
+        }
+    }
+
+    async fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
         let op = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
         if Self::schedule_write_op(&self.base.write_op_ch, op, hk)
@@ -508,6 +608,7 @@ mod tests {
     use super::{Cache, ConcurrentCacheExt};
     use crate::future::CacheBuilder;
 
+    use async_io::Timer;
     use quanta::Clock;
     use std::time::Duration;
 
@@ -833,5 +934,222 @@ mod tests {
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
         assert!(cache.is_table_empty());
+    }
+
+    #[tokio::test]
+    async fn get_or_insert_with() {
+        let cache = Cache::new(100);
+        const KEY: u32 = 0;
+
+        // This test will run five async tasks:
+        //
+        // Task1 will be the first task to call `get_or_insert_with` for a key, so
+        // its async block will be evaluated and then a &str value "task1" will be
+        // inserted to the cache.
+        let task1 = {
+            let cache1 = cache.clone();
+            async move {
+                // Call `get_or_insert_with` immediately.
+                let v = cache1
+                    .get_or_insert_with(KEY, async {
+                        // Wait for 300 ms and return a &str value.
+                        Timer::after(Duration::from_millis(300)).await;
+                        "task1"
+                    })
+                    .await;
+                assert_eq!(v, "task1");
+            }
+        };
+
+        // Task2 will be the second task to call `get_or_insert_with` for the same
+        // key, so its async block will not be evaluated. Once task1's async block
+        // finishes, it will get the value inserted by task1's async block.
+        let task2 = {
+            let cache2 = cache.clone();
+            async move {
+                // Wait for 100 ms before calling `get_or_insert_with`.
+                Timer::after(Duration::from_millis(100)).await;
+                let v = cache2
+                    .get_or_insert_with(KEY, async { unreachable!() })
+                    .await;
+                assert_eq!(v, "task1");
+            }
+        };
+
+        // Task3 will be the third task to call `get_or_insert_with` for the same
+        // key. By the time it calls, task1's async block should have finished
+        // already and the value should be already inserted to the cache. So its
+        // async block will not be evaluated and will get the value insert by task1's
+        // async block immediately.
+        let task3 = {
+            let cache3 = cache.clone();
+            async move {
+                // Wait for 400 ms before calling `get_or_insert_with`.
+                Timer::after(Duration::from_millis(400)).await;
+                let v = cache3
+                    .get_or_insert_with(KEY, async { unreachable!() })
+                    .await;
+                assert_eq!(v, "task1");
+            }
+        };
+
+        // Task4 will call `get` for the same key. It will call when task1's async
+        // block is still running, so it will get none for the key.
+        let task4 = {
+            let cache4 = cache.clone();
+            async move {
+                // Wait for 200 ms before calling `get`.
+                Timer::after(Duration::from_millis(200)).await;
+                let maybe_v = cache4.get(&KEY);
+                assert!(maybe_v.is_none());
+            }
+        };
+
+        // Task5 will call `get` for the same key. It will call after task1's async
+        // block finished, so it will get the value insert by task1's async block.
+        let task5 = {
+            let cache5 = cache.clone();
+            async move {
+                // Wait for 400 ms before calling `get`.
+                Timer::after(Duration::from_millis(400)).await;
+                let maybe_v = cache5.get(&KEY);
+                assert_eq!(maybe_v, Some("task1"));
+            }
+        };
+
+        futures::join!(task1, task2, task3, task4, task5);
+    }
+
+    #[tokio::test]
+    async fn get_or_try_insert_with() {
+        let cache = Cache::new(100);
+        const KEY: u32 = 0;
+
+        // This test will run eight async tasks:
+        //
+        // Task1 will be the first task to call `get_or_insert_with` for a key, so
+        // its async block will be evaluated and then an error will be returned.
+        // Nothing will be inserted to the cache.
+        let task1 = {
+            let cache1 = cache.clone();
+            async move {
+                // Call `get_or_try_insert_with` immediately.
+                let v = cache1
+                    .get_or_try_insert_with(KEY, async {
+                        // Wait for 300 ms and return an error.
+                        Timer::after(Duration::from_millis(300)).await;
+                        Err("task1 error".into())
+                    })
+                    .await;
+                assert!(v.is_err());
+            }
+        };
+
+        // Task2 will be the second task to call `get_or_insert_with` for the same
+        // key, so its async block will not be evaluated. Once task1's async block
+        // finishes, it will get the same error value returned by task1's async
+        // block.
+        let task2 = {
+            let cache2 = cache.clone();
+            async move {
+                // Wait for 100 ms before calling `get_or_try_insert_with`.
+                Timer::after(Duration::from_millis(100)).await;
+                let v = cache2
+                    .get_or_try_insert_with(KEY, async { unreachable!() })
+                    .await;
+                assert!(v.is_err());
+            }
+        };
+
+        // Task3 will be the third task to call `get_or_insert_with` for the same
+        // key. By the time it calls, task1's async block should have finished
+        // already, but the key still does not exist in the cache. So its async block
+        // will be evaluated and then an okay &str value will be returned. That value
+        // will be inserted to the cache.
+        let task3 = {
+            let cache3 = cache.clone();
+            async move {
+                // Wait for 400 ms before calling `get_or_try_insert_with`.
+                Timer::after(Duration::from_millis(400)).await;
+                let v = cache3
+                    .get_or_try_insert_with(KEY, async {
+                        // Wait for 300 ms and return an Ok(&str) value.
+                        Timer::after(Duration::from_millis(300)).await;
+                        Ok("task3")
+                    })
+                    .await;
+                assert_eq!(v.unwrap(), "task3");
+            }
+        };
+
+        // Task4 will be the fourth task to call `get_or_insert_with` for the same
+        // key. So its async block will not be evaluated. Once task3's async block
+        // finishes, it will get the same okay &str value.
+        let task4 = {
+            let cache4 = cache.clone();
+            async move {
+                // Wait for 500 ms before calling `get_or_try_insert_with`.
+                Timer::after(Duration::from_millis(500)).await;
+                let v = cache4
+                    .get_or_try_insert_with(KEY, async { unreachable!() })
+                    .await;
+                assert_eq!(v.unwrap(), "task3");
+            }
+        };
+
+        // Task5 will be the fifth task to call `get_or_insert_with` for the same
+        // key. So its async block will not be evaluated. By the time it calls,
+        // task3's async block should have finished already, so its async block will
+        // not be evaluated and will get the value insert by task3's async block
+        // immediately.
+        let task5 = {
+            let cache5 = cache.clone();
+            async move {
+                // Wait for 800 ms before calling `get_or_try_insert_with`.
+                Timer::after(Duration::from_millis(800)).await;
+                let v = cache5
+                    .get_or_try_insert_with(KEY, async { unreachable!() })
+                    .await;
+                assert_eq!(v.unwrap(), "task3");
+            }
+        };
+
+        // Task6 will call `get` for the same key. It will call when task1's async
+        // block is still running, so it will get none for the key.
+        let task6 = {
+            let cache6 = cache.clone();
+            async move {
+                // Wait for 200 ms before calling `get`.
+                Timer::after(Duration::from_millis(200)).await;
+                let maybe_v = cache6.get(&KEY);
+                assert!(maybe_v.is_none());
+            }
+        };
+
+        // Task7 will call `get` for the same key. It will call after task1's async
+        // block finished with an error. So it will get none for the key.
+        let task7 = {
+            let cache7 = cache.clone();
+            async move {
+                // Wait for 400 ms before calling `get`.
+                Timer::after(Duration::from_millis(400)).await;
+                let maybe_v = cache7.get(&KEY);
+                assert!(maybe_v.is_none());
+            }
+        };
+
+        // Task8 will call `get` for the same key. It will call after task3's async
+        // block finished, so it will get the value insert by task3's async block.
+        let task8 = {
+            let cache8 = cache.clone();
+            async move {
+                // Wait for 800 ms before calling `get`.
+                Timer::after(Duration::from_millis(800)).await;
+                let maybe_v = cache8.get(&KEY);
+                assert_eq!(maybe_v, Some("task3"));
+            }
+        };
+
+        futures::join!(task1, task2, task3, task4, task5, task6, task7, task8);
     }
 }

@@ -4,6 +4,7 @@ use crate::PredicateError;
 use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
+    error::Error,
     hash::{BuildHasher, Hash, Hasher},
     sync::Arc,
     time::Duration,
@@ -131,11 +132,50 @@ where
         self.inner.select(hash).get_with_hash(key, hash)
     }
 
+    /// Ensures the value of the key exists by inserting the result of the init
+    /// function if not exist, and returns a _clone_ of the value.
+    ///
+    /// This method prevents to evaluate the init function multiple times on the same
+    /// key even if the method is concurrently called by many threads; only one of
+    /// the calls evaluates its function, and other calls wait for that function to
+    /// complete.
+    pub fn get_or_insert_with(&self, key: K, init: impl FnOnce() -> V) -> V {
+        let hash = self.inner.hash(&key);
+        let key = Arc::new(key);
+        self.inner
+            .select(hash)
+            .get_or_insert_with_hash_and_fun(key, hash, init)
+    }
+
+    /// Try to ensure the value of the key exists by inserting an `Ok` result of the
+    /// init function if not exist, and returns a _clone_ of the value or the `Err`
+    /// returned by the function.
+    ///
+    /// This method prevents to evaluate the init function multiple times on the same
+    /// key even if the method is concurrently called by many threads; only one of
+    /// the calls evaluates its function, and other calls wait for that function to
+    /// complete.
+    pub fn get_or_try_insert_with<F>(
+        &self,
+        key: K,
+        init: F,
+    ) -> Result<V, Arc<Box<dyn Error + Send + Sync + 'static>>>
+    where
+        F: FnOnce() -> Result<V, Box<dyn Error + Send + Sync + 'static>>,
+    {
+        let hash = self.inner.hash(&key);
+        let key = Arc::new(key);
+        self.inner
+            .select(hash)
+            .get_or_try_insert_with_hash_and_fun(key, hash, init)
+    }
+
     /// Inserts a key-value pair into the cache.
     ///
     /// If the cache has this key present, the value is updated.
     pub fn insert(&self, key: K, value: V) {
         let hash = self.inner.hash(&key);
+        let key = Arc::new(key);
         self.inner.select(hash).insert_with_hash(key, hash, value);
     }
 
@@ -566,5 +606,216 @@ mod tests {
         assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 0);
 
         Ok(())
+    }
+
+    #[test]
+    fn get_or_insert_with() {
+        use std::thread::{sleep, spawn};
+
+        let cache = SegmentedCache::new(100, 4);
+        const KEY: u32 = 0;
+
+        // This test will run five threads:
+        //
+        // Thread1 will be the first thread to call `get_or_insert_with` for a key, so
+        // its async block will be evaluated and then a &str value "thread1" will be
+        // inserted to the cache.
+        let thread1 = {
+            let cache1 = cache.clone();
+            spawn(move || {
+                // Call `get_or_insert_with` immediately.
+                let v = cache1.get_or_insert_with(KEY, || {
+                    // Wait for 300 ms and return a &str value.
+                    sleep(Duration::from_millis(300));
+                    "thread1"
+                });
+                assert_eq!(v, "thread1");
+            })
+        };
+
+        // Thread2 will be the second thread to call `get_or_insert_with` for the same
+        // key, so its async block will not be evaluated. Once thread1's async block
+        // finishes, it will get the value inserted by thread1's async block.
+        let thread2 = {
+            let cache2 = cache.clone();
+            spawn(move || {
+                // Wait for 100 ms before calling `get_or_insert_with`.
+                sleep(Duration::from_millis(100));
+                let v = cache2.get_or_insert_with(KEY, || unreachable!());
+                assert_eq!(v, "thread1");
+            })
+        };
+
+        // Thread3 will be the third thread to call `get_or_insert_with` for the same
+        // key. By the time it calls, thread1's async block should have finished
+        // already and the value should be already inserted to the cache. So its
+        // async block will not be evaluated and will get the value insert by thread1's
+        // async block immediately.
+        let thread3 = {
+            let cache3 = cache.clone();
+            spawn(move || {
+                // Wait for 400 ms before calling `get_or_insert_with`.
+                sleep(Duration::from_millis(400));
+                let v = cache3.get_or_insert_with(KEY, || unreachable!());
+                assert_eq!(v, "thread1");
+            })
+        };
+
+        // Thread4 will call `get` for the same key. It will call when thread1's async
+        // block is still running, so it will get none for the key.
+        let thread4 = {
+            let cache4 = cache.clone();
+            spawn(move || {
+                // Wait for 200 ms before calling `get`.
+                sleep(Duration::from_millis(200));
+                let maybe_v = cache4.get(&KEY);
+                assert!(maybe_v.is_none());
+            })
+        };
+
+        // Thread5 will call `get` for the same key. It will call after thread1's async
+        // block finished, so it will get the value insert by thread1's async block.
+        let thread5 = {
+            let cache5 = cache.clone();
+            spawn(move || {
+                // Wait for 400 ms before calling `get`.
+                sleep(Duration::from_millis(400));
+                let maybe_v = cache5.get(&KEY);
+                assert_eq!(maybe_v, Some("thread1"));
+            })
+        };
+
+        for t in vec![thread1, thread2, thread3, thread4, thread5] {
+            t.join().expect("Failed to join");
+        }
+    }
+
+    #[test]
+    fn get_or_try_insert_with() {
+        use std::thread::{sleep, spawn};
+
+        let cache = SegmentedCache::new(100, 4);
+        const KEY: u32 = 0;
+
+        // This test will run eight async threads:
+        //
+        // Thread1 will be the first thread to call `get_or_insert_with` for a key, so
+        // its async block will be evaluated and then an error will be returned.
+        // Nothing will be inserted to the cache.
+        let thread1 = {
+            let cache1 = cache.clone();
+            spawn(move || {
+                // Call `get_or_try_insert_with` immediately.
+                let v = cache1.get_or_try_insert_with(KEY, || {
+                    // Wait for 300 ms and return an error.
+                    sleep(Duration::from_millis(300));
+                    Err("thread1 error".into())
+                });
+                assert!(v.is_err());
+            })
+        };
+
+        // Thread2 will be the second thread to call `get_or_insert_with` for the same
+        // key, so its async block will not be evaluated. Once thread1's async block
+        // finishes, it will get the same error value returned by thread1's async
+        // block.
+        let thread2 = {
+            let cache2 = cache.clone();
+            spawn(move || {
+                // Wait for 100 ms before calling `get_or_try_insert_with`.
+                sleep(Duration::from_millis(100));
+                let v = cache2.get_or_try_insert_with(KEY, || unreachable!());
+                assert!(v.is_err());
+            })
+        };
+
+        // Thread3 will be the third thread to call `get_or_insert_with` for the same
+        // key. By the time it calls, thread1's async block should have finished
+        // already, but the key still does not exist in the cache. So its async block
+        // will be evaluated and then an okay &str value will be returned. That value
+        // will be inserted to the cache.
+        let thread3 = {
+            let cache3 = cache.clone();
+            spawn(move || {
+                // Wait for 400 ms before calling `get_or_try_insert_with`.
+                sleep(Duration::from_millis(400));
+                let v = cache3.get_or_try_insert_with(KEY, || {
+                    // Wait for 300 ms and return an Ok(&str) value.
+                    sleep(Duration::from_millis(300));
+                    Ok("thread3")
+                });
+                assert_eq!(v.unwrap(), "thread3");
+            })
+        };
+
+        // thread4 will be the fourth thread to call `get_or_insert_with` for the same
+        // key. So its async block will not be evaluated. Once thread3's async block
+        // finishes, it will get the same okay &str value.
+        let thread4 = {
+            let cache4 = cache.clone();
+            spawn(move || {
+                // Wait for 500 ms before calling `get_or_try_insert_with`.
+                sleep(Duration::from_millis(500));
+                let v = cache4.get_or_try_insert_with(KEY, || unreachable!());
+                assert_eq!(v.unwrap(), "thread3");
+            })
+        };
+
+        // Thread5 will be the fifth thread to call `get_or_insert_with` for the same
+        // key. So its async block will not be evaluated. By the time it calls,
+        // thread3's async block should have finished already, so its async block will
+        // not be evaluated and will get the value insert by thread3's async block
+        // immediately.
+        let thread5 = {
+            let cache5 = cache.clone();
+            spawn(move || {
+                // Wait for 800 ms before calling `get_or_try_insert_with`.
+                sleep(Duration::from_millis(800));
+                let v = cache5.get_or_try_insert_with(KEY, || unreachable!());
+                assert_eq!(v.unwrap(), "thread3");
+            })
+        };
+
+        // Thread6 will call `get` for the same key. It will call when thread1's async
+        // block is still running, so it will get none for the key.
+        let thread6 = {
+            let cache6 = cache.clone();
+            spawn(move || {
+                // Wait for 200 ms before calling `get`.
+                sleep(Duration::from_millis(200));
+                let maybe_v = cache6.get(&KEY);
+                assert!(maybe_v.is_none());
+            })
+        };
+
+        // Thread7 will call `get` for the same key. It will call after thread1's async
+        // block finished with an error. So it will get none for the key.
+        let thread7 = {
+            let cache7 = cache.clone();
+            spawn(move || {
+                // Wait for 400 ms before calling `get`.
+                sleep(Duration::from_millis(400));
+                let maybe_v = cache7.get(&KEY);
+                assert!(maybe_v.is_none());
+            })
+        };
+
+        // Thread8 will call `get` for the same key. It will call after thread3's async
+        // block finished, so it will get the value insert by thread3's async block.
+        let thread8 = {
+            let cache8 = cache.clone();
+            spawn(move || {
+                // Wait for 800 ms before calling `get`.
+                sleep(Duration::from_millis(800));
+                let maybe_v = cache8.get(&KEY);
+                assert_eq!(maybe_v, Some("thread3"));
+            })
+        };
+
+        for t in vec![
+            thread1, thread2, thread3, thread4, thread5, thread6, thread7, thread8,
+        ] {
+            t.join().expect("Failed to join");
+        }
     }
 }

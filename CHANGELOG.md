@@ -1,5 +1,13 @@
 # Moka &mdash; Change Log
 
+## Version 0.5.0 (Not released yet)
+
+### Added
+
+- Add `get_or_insert_with` and `get_or_try_insert_with` methods to `sync` and
+  `future` caches. ([#20][gh-pull-0020])
+
+
 ## Version 0.4.0
 
 ### Fixed
@@ -14,6 +22,7 @@
 
 - Add `invalidate_entries_if` method to `sync`, `future` and `unsync` caches.
   ([#12][gh-pull-0012])
+
 
 ## Version 0.3.1
 
@@ -65,6 +74,7 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[gh-pull-0020]: https://github.com/moka-rs/moka/pull/20/
 [gh-pull-0019]: https://github.com/moka-rs/moka/pull/19/
 [gh-pull-0016]: https://github.com/moka-rs/moka/pull/16/
 [gh-pull-0012]: https://github.com/moka-rs/moka/pull/12/

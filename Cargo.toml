@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.4.0"
+version = "0.5.0"
 authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
 
@@ -21,7 +21,7 @@ features = ["future"]
 
 [features]
 default = []
-future = ["async-io"]
+future = ["async-io", "async-lock"]
 
 [dependencies]
 cht = "0.4"
@@ -35,7 +35,8 @@ thiserror = "1.0"
 uuid = { version = "0.8", features = ["v4"] }
 
 # Optional dependencies
-async-io = { version = "1", optional = true }
+async-io = { version = "1.4", optional = true }
+async-lock = { version = "2.4", optional = true }
 
 [dev-dependencies]
 actix-rt2 = { package = "actix-rt", version = "2", default-features = false }
