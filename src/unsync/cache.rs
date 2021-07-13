@@ -91,15 +91,13 @@ type CacheStore<K, V, S> = std::collections::HashMap<Rc<K>, ValueEntry<K, V>, S>
 /// # Hashing Algorithm
 ///
 /// By default, `Cache` uses a hashing algorithm selected to provide resistance
-/// against HashDoS attacks.
+/// against HashDoS attacks. It will the same one used by
+/// `std::collections::HashMap`, which is currently SipHash 1-3.
 ///
-/// The default hashing algorithm is the one used by `std::collections::HashMap`,
-/// which is currently SipHash 1-3.
-///
-/// While its performance is very competitive for medium sized keys, other hashing
-/// algorithms will outperform it for small keys such as integers as well as large
-/// keys such as long strings. However those algorithms will typically not protect
-/// against attacks such as HashDoS.
+/// While SipHash's performance is very competitive for medium sized keys, other
+/// hashing algorithms will outperform it for small keys such as integers as well as
+/// large keys such as long strings. However those algorithms will typically not
+/// protect against attacks such as HashDoS.
 ///
 /// The hashing algorithm can be replaced on a per-`Cache` basis using the
 /// [`build_with_hasher`][build-with-hasher-method] method of the

@@ -21,12 +21,12 @@ use std::{
 /// `Cache` supports full concurrency of retrievals and a high expected concurrency
 /// for updates.
 ///
-/// `Cache` utilizes a lock-free concurrent hash table `cht::SegmentedHashMap` from
-/// the [cht][cht-crate] crate for the central key-value storage. `Cache` performs a
-/// best-effort bounding of the map using an entry replacement algorithm to determine
-/// which entries to evict when the capacity is exceeded.
+/// `Cache` utilizes a lock-free concurrent hash table `SegmentedHashMap` from the
+/// [moka-cht][moka-cht-crate] crate for the central key-value storage. `Cache`
+/// performs a best-effort bounding of the map using an entry replacement algorithm
+/// to determine which entries to evict when the capacity is exceeded.
 ///
-/// [cht-crate]: https://crates.io/crates/cht
+/// [moka-cht-crate]: https://crates.io/crates/moka-cht
 ///
 /// # Examples
 ///
@@ -143,15 +143,13 @@ use std::{
 /// # Hashing Algorithm
 ///
 /// By default, `Cache` uses a hashing algorithm selected to provide resistance
-/// against HashDoS attacks.
+/// against HashDoS attacks. It will be the same one used by
+/// `std::collections::HashMap`, which is currently SipHash 1-3.
 ///
-/// The default hashing algorithm is the one used by `std::collections::HashMap`,
-/// which is currently SipHash 1-3.
-///
-/// While its performance is very competitive for medium sized keys, other hashing
-/// algorithms will outperform it for small keys such as integers as well as large
-/// keys such as long strings. However those algorithms will typically not protect
-/// against attacks such as HashDoS.
+/// While SipHash's performance is very competitive for medium sized keys, other
+/// hashing algorithms will outperform it for small keys such as integers as well as
+/// large keys such as long strings. However those algorithms will typically not
+/// protect against attacks such as HashDoS.
 ///
 /// The hashing algorithm can be replaced on a per-`Cache` basis using the
 /// [`build_with_hasher`][build-with-hasher-method] method of the
@@ -359,7 +357,16 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(entry) = self.base.remove(key) {
+        let hash = self.base.hash(key);
+        self.invalidate_with_hash(key, hash)
+    }
+
+    pub(crate) fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64)
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        if let Some(entry) = self.base.remove(key, hash) {
             let op = WriteOp::Remove(entry);
             let hk = self.base.housekeeper.as_ref();
             Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to remove");
