@@ -189,7 +189,7 @@ where
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.inner.hash(key);
-        self.inner.select(hash).invalidate(key);
+        self.inner.select(hash).invalidate_with_hash(key, hash);
     }
 
     /// Discards all cached values.

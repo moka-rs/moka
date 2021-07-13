@@ -15,7 +15,7 @@ pub(crate) enum InitResult<V> {
 }
 
 pub(crate) struct ValueInitializer<K, V, S> {
-    waiters: cht::HashMap<Arc<K>, Waiter<V>, S>,
+    waiters: moka_cht::SegmentedHashMap<Arc<K>, Waiter<V>, S>,
 }
 
 impl<K, V, S> ValueInitializer<K, V, S>
@@ -26,7 +26,7 @@ where
 {
     pub(crate) fn with_hasher(hasher: S) -> Self {
         Self {
-            waiters: cht::HashMap::with_hasher(hasher),
+            waiters: moka_cht::SegmentedHashMap::with_num_segments_and_hasher(16, hasher),
         }
     }
 

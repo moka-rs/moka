@@ -1,7 +1,9 @@
 use super::{
     deques::Deques,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
-    invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
+    invalidator::{
+        GetOrRemoveEntry, InvalidationResult, Invalidator, KeyHashDateLite, PredicateFun,
+    },
     KeyDate, KeyHash, KeyHashDate, PredicateId, ReadOp, ValueEntry, WriteOp,
 };
 use crate::{
@@ -19,7 +21,7 @@ use quanta::{Clock, Instant};
 use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
-    hash::{BuildHasher, Hash, Hasher},
+    hash::{BuildHasher, Hash},
     ptr::NonNull,
     rc::Rc,
     sync::{
@@ -132,7 +134,7 @@ where
             self.record_read_op(op).expect("Failed to record a get op");
         };
 
-        match self.inner.get_key_value(key) {
+        match self.inner.get_key_value(key, hash) {
             None => {
                 record(ReadOp::Miss(hash));
                 None
@@ -161,12 +163,12 @@ where
     }
 
     #[inline]
-    pub(crate) fn remove<Q>(&self, key: &Q) -> Option<Arc<ValueEntry<K, V>>>
+    pub(crate) fn remove<Q>(&self, key: &Q, hash: u64) -> Option<Arc<ValueEntry<K, V>>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.inner.remove(key)
+        self.inner.remove(key, hash)
     }
 
     #[inline]
@@ -236,7 +238,7 @@ where
         let mut op1 = None;
         let mut op2 = None;
 
-        // Since the cache (cht::SegmentedHashMap) employs optimistic locking
+        // Since the cache (moka_cht::SegmentedHashMap) employs optimistic locking
         // strategy, insert_with_or_modify() may get an insert/modify operation
         // conflicted with other concurrent hash table operations. In that case, it
         // has to retry the insertion or modification, so on_insert and/or on_modify
@@ -244,8 +246,9 @@ where
         // call of these closures, we use a shared counter (op_cnt{1,2}) here to
         // record a serial number on a WriteOp, and consider the WriteOp with the
         // largest serial number is the one made by the last call of the closures.
-        self.inner.cache.insert_with_or_modify(
+        self.inner.cache.h_insert_with_or_modify(
             Arc::clone(&key),
+            hash,
             // on_insert
             || {
                 let entry = Arc::new(ValueEntry::new(value.clone()));
@@ -343,14 +346,13 @@ where
     }
 }
 
-type CacheStore<K, V, S> = cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
+type CacheStore<K, V, S> = moka_cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
 
 type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
 
 pub(crate) struct Inner<K, V, S> {
     max_capacity: usize,
     cache: CacheStore<K, V, S>,
-    build_hasher: S,
     deques: Mutex<Deques<K>>,
     frequency_sketch: RwLock<FrequencySketch>,
     read_op_ch: Receiver<ReadOp<K, V>>,
@@ -387,10 +389,10 @@ where
             .map(|cap| cap + WRITE_LOG_SIZE * 4)
             .unwrap_or_default();
         let num_segments = 64;
-        let cache = cht::SegmentedHashMap::with_num_segments_capacity_and_hasher(
+        let cache = moka_cht::SegmentedHashMap::with_num_segments_capacity_and_hasher(
             num_segments,
             initial_capacity,
-            build_hasher.clone(),
+            build_hasher,
         );
         let skt_capacity = usize::max(max_capacity * 32, 100);
         let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
@@ -398,7 +400,6 @@ where
         Self {
             max_capacity,
             cache,
-            build_hasher,
             deques: Mutex::new(Deques::default()),
             frequency_sketch: RwLock::new(frequency_sketch),
             read_op_ch,
@@ -424,27 +425,25 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let mut hasher = self.build_hasher.build_hasher();
-        key.hash(&mut hasher);
-        hasher.finish()
+        self.cache.hash(key)
     }
 
     #[inline]
-    fn get_key_value<Q>(&self, key: &Q) -> Option<CacheEntry<K, V>>
+    fn get_key_value<Q>(&self, key: &Q, hash: u64) -> Option<CacheEntry<K, V>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.cache.get_key_value(key)
+        self.cache.h_get_key_value(key, hash)
     }
 
     #[inline]
-    fn remove<Q>(&self, key: &Q) -> Option<Arc<ValueEntry<K, V>>>
+    fn remove<Q>(&self, key: &Q, hash: u64) -> Option<Arc<ValueEntry<K, V>>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.cache.remove(key)
+        self.cache.h_remove(key, hash)
     }
 
     fn max_capacity(&self) -> usize {
@@ -530,15 +529,20 @@ where
     K: Hash + Eq,
     S: BuildHasher,
 {
-    fn get_value_entry(&self, key: &Arc<K>) -> Option<Arc<ValueEntry<K, V>>> {
-        self.cache.get(key)
+    fn get_value_entry(&self, key: &Arc<K>, hash: u64) -> Option<Arc<ValueEntry<K, V>>> {
+        self.cache.h_get(key, hash)
     }
 
-    fn remove_key_value_if<F>(&self, key: &Arc<K>, condition: F) -> Option<Arc<ValueEntry<K, V>>>
+    fn remove_key_value_if<F>(
+        &self,
+        key: &Arc<K>,
+        hash: u64,
+        condition: F,
+    ) -> Option<Arc<ValueEntry<K, V>>>
     where
         F: FnMut(&Arc<K>, &Arc<ValueEntry<K, V>>) -> bool,
     {
-        self.cache.remove_if(key, condition)
+        self.cache.h_remove_if(key, hash, condition)
     }
 }
 
@@ -680,7 +684,8 @@ where
                 if Self::admit(kh.hash, victim, freq) {
                     // The candidate is admitted. Try to remove the victim from the
                     // cache (hash map).
-                    if let Some(vic_entry) = self.cache.remove(&victim.element.key) {
+                    let v_elem = &victim.element;
+                    if let Some(vic_entry) = self.cache.h_remove(&v_elem.key, v_elem.hash) {
                         // And then remove the victim from the deques.
                         Self::handle_remove(deqs, vic_entry);
                     } else {
@@ -705,7 +710,7 @@ where
                     );
                 } else {
                     // The candidate is not admitted. Remove it from the cache (hash map).
-                    self.cache.remove(&Arc::clone(&kh.key));
+                    self.cache.h_remove(&Arc::clone(&kh.key), kh.hash);
                 }
             }
             done = true;
@@ -714,7 +719,7 @@ where
 
         if !done {
             // Too mary retries. Remove the candidate from the cache.
-            self.cache.remove(&Arc::clone(&kh.key));
+            self.cache.h_remove(&Arc::clone(&kh.key), kh.hash);
         }
     }
 
@@ -819,14 +824,11 @@ where
         let va = self.valid_after();
         for _ in 0..batch_size {
             // Peek the front node of the deque and check if it is expired.
-            let (key, _ts) = deq
+            let (key, hash) = deq
                 .peek_front()
                 .and_then(|node| {
                     if is_expired_entry_ao(tti, va, &*node, now) {
-                        Some((
-                            Some(Arc::clone(&node.element.key)),
-                            Some(&node.element.timestamp),
-                        ))
+                        Some((Some(Arc::clone(&node.element.key)), node.element.hash))
                     } else {
                         None
                     }
@@ -845,11 +847,11 @@ where
             // above have not been updated yet.
             let maybe_entry = self
                 .cache
-                .remove_if(key, |_, v| is_expired_entry_ao(tti, va, v, now));
+                .h_remove_if(key, hash, |_, v| is_expired_entry_ao(tti, va, v, now));
 
             if let Some(entry) = maybe_entry {
                 Self::handle_remove_with_deques(deq_name, deq, write_order_deq, entry);
-            } else if let Some(entry) = self.cache.get(key) {
+            } else if let Some(entry) = self.cache.h_get(key, hash) {
                 let ts = entry.last_accessed();
                 if ts.is_none() {
                     // The key exists and the entry has been updated.
@@ -877,15 +879,12 @@ where
         let ttl = &self.time_to_live;
         let va = self.valid_after();
         for _ in 0..batch_size {
-            let (key, _ts) = deqs
+            let key = deqs
                 .write_order
                 .peek_front()
                 .and_then(|node| {
                     if is_expired_entry_wo(ttl, va, &*node, now) {
-                        Some((
-                            Some(Arc::clone(&node.element.key)),
-                            Some(&node.element.timestamp),
-                        ))
+                        Some(Some(Arc::clone(&node.element.key)))
                     } else {
                         None
                     }
@@ -897,14 +896,15 @@ where
             }
 
             let key = key.as_ref().unwrap();
+            let hash = self.cache.hash(key);
 
             let maybe_entry = self
                 .cache
-                .remove_if(key, |_, v| is_expired_entry_wo(ttl, va, v, now));
+                .h_remove_if(key, hash, |_, v| is_expired_entry_wo(ttl, va, v, now));
 
             if let Some(entry) = maybe_entry {
                 Self::handle_remove(deqs, entry);
-            } else if let Some(entry) = self.cache.get(key) {
+            } else if let Some(entry) = self.cache.h_get(key, hash) {
                 let ts = entry.last_modified();
                 if ts.is_none() {
                     deqs.move_to_back_ao(&entry);
@@ -977,7 +977,9 @@ where
         while len < batch_size {
             if let Some(kd) = iter.next() {
                 if let Some(ts) = kd.timestamp() {
-                    candidates.push(KeyDateLite::new(&kd.key, ts));
+                    let key = &kd.key;
+                    let hash = self.hash(key);
+                    candidates.push(KeyHashDateLite::new(key, hash, ts));
                     len += 1;
                 }
             } else {

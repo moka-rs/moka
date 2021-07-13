@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
 
@@ -24,8 +24,12 @@ default = []
 future = ["async-io", "async-lock"]
 
 [dependencies]
-cht = "0.4"
 crossbeam-channel = "0.5"
+
+# moka-cht = { version = "0.6", default-features = false, features = ["hash-arg"] }
+moka-cht = { git = "https://github.com/moka-rs/moka-cht", branch = "hash-arg", default-features = false, features = ["hash-arg"] }
+# moka-cht = { version = "0.6", path = "../moka-cht", default-features = false, features = ["hash-arg"] }
+
 num_cpus = "1.13"
 once_cell = "1.7"
 parking_lot = "0.11"
