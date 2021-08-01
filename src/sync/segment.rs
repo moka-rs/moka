@@ -155,6 +155,10 @@ where
     /// key even if the method is concurrently called by many threads; only one of
     /// the calls evaluates its function, and other calls wait for that function to
     /// complete.
+    #[allow(clippy::redundant_allocation)]
+    // https://rust-lang.github.io/rust-clippy/master/index.html#redundant_allocation
+    // `Arc<Box<dyn ..>>` in the return type creates an extra heap allocation.
+    // This will be addressed by Moka v0.6.0.
     pub fn get_or_try_insert_with<F>(
         &self,
         key: K,

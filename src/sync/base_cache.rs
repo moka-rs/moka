@@ -236,7 +236,7 @@ where
         let mut op1 = None;
         let mut op2 = None;
 
-        // Since the cache (cht::SegmentedHashMap) employs optimistic locking
+        // Since the cache (moka-cht::SegmentedHashMap) employs optimistic locking
         // strategy, insert_with_or_modify() may get an insert/modify operation
         // conflicted with other concurrent hash table operations. In that case, it
         // has to retry the insertion or modification, so on_insert and/or on_modify
@@ -343,7 +343,7 @@ where
     }
 }
 
-type CacheStore<K, V, S> = cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
+type CacheStore<K, V, S> = moka_cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
 
 type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
 
@@ -387,7 +387,7 @@ where
             .map(|cap| cap + WRITE_LOG_SIZE * 4)
             .unwrap_or_default();
         let num_segments = 64;
-        let cache = cht::SegmentedHashMap::with_num_segments_capacity_and_hasher(
+        let cache = moka_cht::SegmentedHashMap::with_num_segments_capacity_and_hasher(
             num_segments,
             initial_capacity,
             build_hasher.clone(),

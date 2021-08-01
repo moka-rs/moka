@@ -330,8 +330,7 @@ change.
 <!--
 - socket2 0.4.0 requires 1.46.
 - quanta requires 1.45.
-- aHash 0.5 requires 1.43.
-- cht requires 1.41.
+- moka-cht requires 1.41.
 -->
 
 
