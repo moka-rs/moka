@@ -1,5 +1,12 @@
 # Moka &mdash; Change Log
 
+## Version 0.5.1
+
+### Changed
+
+- Replace a dependency cht v0.4.1 with moka-cht v0.5.0. ([#22][gh-pull-0022])
+
+
 ## Version 0.5.0
 
 ### Added
@@ -74,6 +81,7 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[gh-pull-0022]: https://github.com/moka-rs/moka/pull/22/
 [gh-pull-0020]: https://github.com/moka-rs/moka/pull/20/
 [gh-pull-0019]: https://github.com/moka-rs/moka/pull/19/
 [gh-pull-0016]: https://github.com/moka-rs/moka/pull/16/
