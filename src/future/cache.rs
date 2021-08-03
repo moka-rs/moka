@@ -292,6 +292,10 @@ where
     /// key even if the method is concurrently called by many async tasks; only one
     /// of the calls resolves its future, and other calls wait for that future to
     /// complete.
+    #[allow(clippy::redundant_allocation)]
+    // https://rust-lang.github.io/rust-clippy/master/index.html#redundant_allocation
+    // `Arc<Box<dyn ..>>` in the return type creates an extra heap allocation.
+    // This will be addressed by Moka v0.6.0.
     pub async fn get_or_try_insert_with<F>(
         &self,
         key: K,
@@ -482,6 +486,10 @@ where
         }
     }
 
+    #[allow(clippy::redundant_allocation)]
+    // https://rust-lang.github.io/rust-clippy/master/index.html#redundant_allocation
+    // `Arc<Box<dyn ..>>` in the return type creates an extra heap allocation.
+    // This will be addressed by Moka v0.6.0.
     async fn get_or_try_insert_with_hash_and_fun<F>(
         &self,
         key: Arc<K>,
