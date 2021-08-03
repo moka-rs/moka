@@ -6,16 +6,12 @@ use std::{
     sync::Arc,
 };
 
-type Waiter<V> = Arc<RwLock<Option<Result<V, Arc<Box<dyn Error + Send + Sync + 'static>>>>>>;
+type Waiter<V> = Arc<RwLock<Option<Result<V, Arc<dyn Error + Send + Sync + 'static>>>>>;
 
-#[allow(clippy::redundant_allocation)]
-// https://rust-lang.github.io/rust-clippy/master/index.html#redundant_allocation
 pub(crate) enum InitResult<V> {
     Initialized(V),
     ReadExisting(V),
-    // This `Arc<Box<dyn ..>>` creates an extra heap allocation. This will be
-    // addressed by Moka v0.6.0.
-    InitErr(Arc<Box<dyn Error + Send + Sync + 'static>>),
+    InitErr(Arc<dyn Error + Send + Sync + 'static>),
 }
 
 pub(crate) struct ValueInitializer<K, V, S> {
@@ -80,7 +76,7 @@ where
                         Initialized(value)
                     }
                     Err(e) => {
-                        let err = Arc::new(e);
+                        let err = Arc::from(e);
                         *lock = Some(Err(Arc::clone(&err)));
                         self.remove_waiter(&key);
                         InitErr(err)
