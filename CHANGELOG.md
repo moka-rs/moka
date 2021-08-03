@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Replace a dependency cht v0.4.1 with moka-cht v0.5.0. ([#22][gh-pull-0022])
+- Replace a dependency cht v0.4 with moka-cht v0.5. ([#22][gh-pull-0022])
 
 
 ## Version 0.5.0
