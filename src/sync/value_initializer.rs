@@ -7,14 +7,18 @@ use std::{
 
 type Waiter<V> = Arc<RwLock<Option<Result<V, Arc<Box<dyn Error + Send + Sync + 'static>>>>>>;
 
+#[allow(clippy::redundant_allocation)]
+// https://rust-lang.github.io/rust-clippy/master/index.html#redundant_allocation
 pub(crate) enum InitResult<V> {
     Initialized(V),
     ReadExisting(V),
+    // This `Arc<Box<dyn ..>>` creates an extra heap allocation. This will be
+    // addressed by Moka v0.6.0.
     InitErr(Arc<Box<dyn Error + Send + Sync + 'static>>),
 }
 
 pub(crate) struct ValueInitializer<K, V, S> {
-    waiters: cht::HashMap<Arc<K>, Waiter<V>, S>,
+    waiters: moka_cht::SegmentedHashMap<Arc<K>, Waiter<V>, S>,
 }
 
 impl<K, V, S> ValueInitializer<K, V, S>
@@ -25,7 +29,7 @@ where
 {
     pub(crate) fn with_hasher(hasher: S) -> Self {
         Self {
-            waiters: cht::HashMap::with_hasher(hasher),
+            waiters: moka_cht::SegmentedHashMap::with_num_segments_and_hasher(16, hasher),
         }
     }
 

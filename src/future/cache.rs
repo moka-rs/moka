@@ -27,14 +27,14 @@ use std::{
 /// `Cache` supports full concurrency of retrievals and a high expected concurrency
 /// for updates. It can be accessed inside and outside of asynchronous contexts.
 ///
-/// `Cache` utilizes a lock-free concurrent hash table `cht::SegmentedHashMap` from
-/// the [cht][cht-crate] crate for the central key-value storage. `Cache` performs a
-/// best-effort bounding of the map using an entry replacement algorithm to determine
-/// which entries to evict when the capacity is exceeded.
+/// `Cache` utilizes a lock-free concurrent hash table `SegmentedHashMap` from the
+/// [moka-cht][moka-cht-crate] crate for the central key-value storage. `Cache`
+/// performs a best-effort bounding of the map using an entry replacement algorithm
+/// to determine which entries to evict when the capacity is exceeded.
 ///
 /// To use this cache, enable a crate feature called "future".
 ///
-/// [cht-crate]: https://crates.io/crates/cht
+/// [moka-cht-crate]: https://crates.io/crates/moka-cht
 ///
 /// # Examples
 ///
@@ -171,15 +171,13 @@ use std::{
 /// # Hashing Algorithm
 ///
 /// By default, `Cache` uses a hashing algorithm selected to provide resistance
-/// against HashDoS attacks.
+/// against HashDoS attacks. It will be the same one used by
+/// `std::collections::HashMap`, which is currently SipHash 1-3.
 ///
-/// The default hashing algorithm is the one used by `std::collections::HashMap`,
-/// which is currently SipHash 1-3.
-///
-/// While its performance is very competitive for medium sized keys, other hashing
-/// algorithms will outperform it for small keys such as integers as well as large
-/// keys such as long strings. However those algorithms will typically not protect
-/// against attacks such as HashDoS.
+/// While SipHash's performance is very competitive for medium sized keys, other
+/// hashing algorithms will outperform it for small keys such as integers as well as
+/// large keys such as long strings. However those algorithms will typically not
+/// protect against attacks such as HashDoS.
 ///
 /// The hashing algorithm can be replaced on a per-`Cache` basis using the
 /// [`build_with_hasher`][build-with-hasher-method] method of the
@@ -294,6 +292,10 @@ where
     /// key even if the method is concurrently called by many async tasks; only one
     /// of the calls resolves its future, and other calls wait for that future to
     /// complete.
+    #[allow(clippy::redundant_allocation)]
+    // https://rust-lang.github.io/rust-clippy/master/index.html#redundant_allocation
+    // `Arc<Box<dyn ..>>` in the return type creates an extra heap allocation.
+    // This will be addressed by Moka v0.6.0.
     pub async fn get_or_try_insert_with<F>(
         &self,
         key: K,
@@ -484,6 +486,10 @@ where
         }
     }
 
+    #[allow(clippy::redundant_allocation)]
+    // https://rust-lang.github.io/rust-clippy/master/index.html#redundant_allocation
+    // `Arc<Box<dyn ..>>` in the return type creates an extra heap allocation.
+    // This will be addressed by Moka v0.6.0.
     async fn get_or_try_insert_with_hash_and_fun<F>(
         &self,
         key: Arc<K>,

@@ -73,8 +73,6 @@ impl<K, V> InvalidationResult<K, V> {
 }
 
 pub(crate) struct Invalidator<K, V, S> {
-    // TODO: Replace this RwLock<std::collections::HashMap<_, _>> with cht::HashMap
-    // once iterator is implemented. https://github.com/Gregory-Meyer/cht/issues/20
     predicates: RwLock<HashMap<PredicateId, Predicate<K, V>>>,
     is_empty: AtomicBool,
     scan_context: Arc<ScanContext<K, V, S>>,
