@@ -255,9 +255,9 @@ where
     /// Ensures the value of the key exists by inserting the result of the init
     /// function if not exist, and returns a _clone_ of the value.
     ///
-    /// This method prevents to evaluate the init function multiple times on the same
+    /// This method prevents to evaluate the init closure multiple times on the same
     /// key even if the method is concurrently called by many threads; only one of
-    /// the calls evaluates its function, and other calls wait for that function to
+    /// the calls evaluates its closure, and other calls wait for that closure to
     /// complete.
     pub fn get_or_insert_with(&self, key: K, init: impl FnOnce() -> V) -> V {
         let hash = self.base.hash(&key);
@@ -288,13 +288,13 @@ where
     }
 
     /// Try to ensure the value of the key exists by inserting an `Ok` result of the
-    /// init function if not exist, and returns a _clone_ of the value or the `Err`
-    /// returned by the function.
+    /// init closure if not exist, and returns a _clone_ of the value or the `Err`
+    /// returned by the closure.
     ///
-    /// This method prevents to evaluate the init function multiple times on the same
+    /// This method prevents to evaluate the init closure multiple times on the same
     /// key even if the method is concurrently called by many threads; only one of
-    /// the calls evaluates its function, and other calls wait for that function to
-    /// complete.
+    /// the calls evaluates its closure (as long as these closures return the same
+    /// error type), and other calls wait for that closure to complete.
     pub fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
         F: FnOnce() -> Result<V, E>,
