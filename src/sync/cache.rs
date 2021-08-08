@@ -8,6 +8,7 @@ use crate::{sync::value_initializer::InitResult, PredicateError};
 
 use crossbeam_channel::{Sender, TrySendError};
 use std::{
+    any::TypeId,
     borrow::Borrow,
     collections::hash_map::RandomState,
     error::Error,
@@ -277,7 +278,8 @@ where
         match self.value_initializer.init_or_read(Arc::clone(&key), init) {
             InitResult::Initialized(v) => {
                 self.insert_with_hash(Arc::clone(&key), hash, v.clone());
-                self.value_initializer.remove_waiter(&key);
+                self.value_initializer
+                    .remove_waiter(&key, TypeId::of::<()>());
                 v
             }
             InitResult::ReadExisting(v) => v,
@@ -293,27 +295,25 @@ where
     /// key even if the method is concurrently called by many threads; only one of
     /// the calls evaluates its function, and other calls wait for that function to
     /// complete.
-    pub fn get_or_try_insert_with<F>(
-        &self,
-        key: K,
-        init: F,
-    ) -> Result<V, Arc<dyn Error + Send + Sync + 'static>>
+    pub fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
-        F: FnOnce() -> Result<V, Box<dyn Error + Send + Sync + 'static>>,
+        F: FnOnce() -> Result<V, E>,
+        E: Error + Send + Sync + 'static,
     {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         self.get_or_try_insert_with_hash_and_fun(key, hash, init)
     }
 
-    pub(crate) fn get_or_try_insert_with_hash_and_fun<F>(
+    pub(crate) fn get_or_try_insert_with_hash_and_fun<F, E>(
         &self,
         key: Arc<K>,
         hash: u64,
         init: F,
-    ) -> Result<V, Arc<dyn Error + Send + Sync + 'static>>
+    ) -> Result<V, Arc<E>>
     where
-        F: FnOnce() -> Result<V, Box<dyn Error + Send + Sync + 'static>>,
+        F: FnOnce() -> Result<V, E>,
+        E: Error + Send + Sync + 'static,
     {
         if let Some(v) = self.get_with_hash(&key, hash) {
             return Ok(v);
@@ -325,7 +325,8 @@ where
         {
             InitResult::Initialized(v) => {
                 self.insert_with_hash(Arc::clone(&key), hash, v.clone());
-                self.value_initializer.remove_waiter(&key);
+                self.value_initializer
+                    .remove_waiter(&key, TypeId::of::<E>());
                 Ok(v)
             }
             InitResult::ReadExisting(v) => Ok(v),
@@ -878,7 +879,16 @@ mod tests {
 
     #[test]
     fn get_or_try_insert_with() {
-        use std::thread::{sleep, spawn};
+        use std::{
+            sync::Arc,
+            thread::{sleep, spawn},
+        };
+
+        #[derive(thiserror::Error, Debug)]
+        #[error("{}", _0)]
+        pub struct MyError(String);
+
+        type MyResult<T> = Result<T, Arc<MyError>>;
 
         let cache = Cache::new(100);
         const KEY: u32 = 0;
@@ -892,10 +902,10 @@ mod tests {
             let cache1 = cache.clone();
             spawn(move || {
                 // Call `get_or_try_insert_with` immediately.
-                let v = cache1.get_or_try_insert_with(KEY, || {
+                let v: MyResult<_> = cache1.get_or_try_insert_with(KEY, || {
                     // Wait for 300 ms and return an error.
                     sleep(Duration::from_millis(300));
-                    Err("thread1 error".into())
+                    Err(MyError("thread1 error".into()))
                 });
                 assert!(v.is_err());
             })
@@ -910,7 +920,7 @@ mod tests {
             spawn(move || {
                 // Wait for 100 ms before calling `get_or_try_insert_with`.
                 sleep(Duration::from_millis(100));
-                let v = cache2.get_or_try_insert_with(KEY, || unreachable!());
+                let v: MyResult<_> = cache2.get_or_try_insert_with(KEY, || unreachable!());
                 assert!(v.is_err());
             })
         };
@@ -925,7 +935,7 @@ mod tests {
             spawn(move || {
                 // Wait for 400 ms before calling `get_or_try_insert_with`.
                 sleep(Duration::from_millis(400));
-                let v = cache3.get_or_try_insert_with(KEY, || {
+                let v: MyResult<_> = cache3.get_or_try_insert_with(KEY, || {
                     // Wait for 300 ms and return an Ok(&str) value.
                     sleep(Duration::from_millis(300));
                     Ok("thread3")
@@ -942,7 +952,7 @@ mod tests {
             spawn(move || {
                 // Wait for 500 ms before calling `get_or_try_insert_with`.
                 sleep(Duration::from_millis(500));
-                let v = cache4.get_or_try_insert_with(KEY, || unreachable!());
+                let v: MyResult<_> = cache4.get_or_try_insert_with(KEY, || unreachable!());
                 assert_eq!(v.unwrap(), "thread3");
             })
         };
@@ -957,7 +967,7 @@ mod tests {
             spawn(move || {
                 // Wait for 800 ms before calling `get_or_try_insert_with`.
                 sleep(Duration::from_millis(800));
-                let v = cache5.get_or_try_insert_with(KEY, || unreachable!());
+                let v: MyResult<_> = cache5.get_or_try_insert_with(KEY, || unreachable!());
                 assert_eq!(v.unwrap(), "thread3");
             })
         };

@@ -13,6 +13,7 @@ use crate::{
 
 use crossbeam_channel::{Sender, TrySendError};
 use std::{
+    any::TypeId,
     borrow::Borrow,
     collections::hash_map::RandomState,
     error::Error,
@@ -57,7 +58,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.5", features = ["future"] }
+/// // moka = { version = "0.6", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures = "0.3"
 ///
@@ -292,13 +293,10 @@ where
     /// key even if the method is concurrently called by many async tasks; only one
     /// of the calls resolves its future, and other calls wait for that future to
     /// complete.
-    pub async fn get_or_try_insert_with<F>(
-        &self,
-        key: K,
-        init: F,
-    ) -> Result<V, Arc<dyn Error + Send + Sync + 'static>>
+    pub async fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
-        F: Future<Output = Result<V, Box<dyn Error + Send + Sync + 'static>>>,
+        F: Future<Output = Result<V, E>>,
+        E: Error + Send + Sync + 'static,
     {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
@@ -474,7 +472,8 @@ where
             InitResult::Initialized(v) => {
                 self.insert_with_hash(Arc::clone(&key), hash, v.clone())
                     .await;
-                self.value_initializer.remove_waiter(&key);
+                self.value_initializer
+                    .remove_waiter(&key, TypeId::of::<()>());
                 v
             }
             InitResult::ReadExisting(v) => v,
@@ -482,14 +481,15 @@ where
         }
     }
 
-    async fn get_or_try_insert_with_hash_and_fun<F>(
+    async fn get_or_try_insert_with_hash_and_fun<F, E>(
         &self,
         key: Arc<K>,
         hash: u64,
         init: F,
-    ) -> Result<V, Arc<dyn Error + Send + Sync + 'static>>
+    ) -> Result<V, Arc<E>>
     where
-        F: Future<Output = Result<V, Box<dyn Error + Send + Sync + 'static>>>,
+        F: Future<Output = Result<V, E>>,
+        E: Error + Send + Sync + 'static,
     {
         if let Some(v) = self.base.get_with_hash(&key, hash) {
             return Ok(v);
@@ -504,7 +504,8 @@ where
                 let hash = self.base.hash(&key);
                 self.insert_with_hash(Arc::clone(&key), hash, v.clone())
                     .await;
-                self.value_initializer.remove_waiter(&key);
+                self.value_initializer
+                    .remove_waiter(&key, TypeId::of::<E>());
                 Ok(v)
             }
             InitResult::ReadExisting(v) => Ok(v),
@@ -1020,6 +1021,14 @@ mod tests {
 
     #[tokio::test]
     async fn get_or_try_insert_with() {
+        use std::sync::Arc;
+
+        #[derive(thiserror::Error, Debug)]
+        #[error("{}", _0)]
+        pub struct MyError(String);
+
+        type MyResult<T> = Result<T, Arc<MyError>>;
+
         let cache = Cache::new(100);
         const KEY: u32 = 0;
 
@@ -1032,11 +1041,11 @@ mod tests {
             let cache1 = cache.clone();
             async move {
                 // Call `get_or_try_insert_with` immediately.
-                let v = cache1
+                let v: MyResult<_> = cache1
                     .get_or_try_insert_with(KEY, async {
                         // Wait for 300 ms and return an error.
                         Timer::after(Duration::from_millis(300)).await;
-                        Err("task1 error".into())
+                        Err(MyError("task1 error".into()))
                     })
                     .await;
                 assert!(v.is_err());
@@ -1052,7 +1061,7 @@ mod tests {
             async move {
                 // Wait for 100 ms before calling `get_or_try_insert_with`.
                 Timer::after(Duration::from_millis(100)).await;
-                let v = cache2
+                let v: MyResult<_> = cache2
                     .get_or_try_insert_with(KEY, async { unreachable!() })
                     .await;
                 assert!(v.is_err());
@@ -1069,7 +1078,7 @@ mod tests {
             async move {
                 // Wait for 400 ms before calling `get_or_try_insert_with`.
                 Timer::after(Duration::from_millis(400)).await;
-                let v = cache3
+                let v: MyResult<_> = cache3
                     .get_or_try_insert_with(KEY, async {
                         // Wait for 300 ms and return an Ok(&str) value.
                         Timer::after(Duration::from_millis(300)).await;
@@ -1088,7 +1097,7 @@ mod tests {
             async move {
                 // Wait for 500 ms before calling `get_or_try_insert_with`.
                 Timer::after(Duration::from_millis(500)).await;
-                let v = cache4
+                let v: MyResult<_> = cache4
                     .get_or_try_insert_with(KEY, async { unreachable!() })
                     .await;
                 assert_eq!(v.unwrap(), "task3");
@@ -1105,7 +1114,7 @@ mod tests {
             async move {
                 // Wait for 800 ms before calling `get_or_try_insert_with`.
                 Timer::after(Duration::from_millis(800)).await;
-                let v = cache5
+                let v: MyResult<_> = cache5
                     .get_or_try_insert_with(KEY, async { unreachable!() })
                     .await;
                 assert_eq!(v.unwrap(), "task3");
