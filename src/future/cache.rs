@@ -1041,7 +1041,7 @@ mod tests {
             let cache1 = cache.clone();
             async move {
                 // Call `get_or_try_insert_with` immediately.
-                let v: MyResult<_> = cache1
+                let v = cache1
                     .get_or_try_insert_with(KEY, async {
                         // Wait for 300 ms and return an error.
                         Timer::after(Duration::from_millis(300)).await;

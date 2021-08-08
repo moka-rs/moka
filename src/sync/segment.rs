@@ -712,7 +712,7 @@ mod tests {
             let cache1 = cache.clone();
             spawn(move || {
                 // Call `get_or_try_insert_with` immediately.
-                let v: MyResult<_> = cache1.get_or_try_insert_with(KEY, || {
+                let v = cache1.get_or_try_insert_with(KEY, || {
                     // Wait for 300 ms and return an error.
                     sleep(Duration::from_millis(300));
                     Err(MyError("thread1 error".into()))
