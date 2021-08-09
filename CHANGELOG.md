@@ -1,5 +1,13 @@
 # Moka &mdash; Change Log
 
+## Version 0.6.0 (Unreleased)
+
+### Changed
+
+- Change `get_or_try_insert_with` to return a concrete error type rather
+  than a trait object. ([#23][gh-pull-0023])
+
+
 ## Version 0.5.1
 
 ### Changed
@@ -81,6 +89,7 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[gh-pull-0023]: https://github.com/moka-rs/moka/pull/23/
 [gh-pull-0022]: https://github.com/moka-rs/moka/pull/22/
 [gh-pull-0020]: https://github.com/moka-rs/moka/pull/20/
 [gh-pull-0019]: https://github.com/moka-rs/moka/pull/19/

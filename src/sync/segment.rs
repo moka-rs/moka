@@ -133,11 +133,11 @@ where
     }
 
     /// Ensures the value of the key exists by inserting the result of the init
-    /// function if not exist, and returns a _clone_ of the value.
+    /// closure if not exist, and returns a _clone_ of the value.
     ///
-    /// This method prevents to evaluate the init function multiple times on the same
+    /// This method prevents to evaluate the init closure multiple times on the same
     /// key even if the method is concurrently called by many threads; only one of
-    /// the calls evaluates its function, and other calls wait for that function to
+    /// the calls evaluates its closure, and other calls wait for that closure to
     /// complete.
     pub fn get_or_insert_with(&self, key: K, init: impl FnOnce() -> V) -> V {
         let hash = self.inner.hash(&key);
@@ -148,24 +148,17 @@ where
     }
 
     /// Try to ensure the value of the key exists by inserting an `Ok` result of the
-    /// init function if not exist, and returns a _clone_ of the value or the `Err`
-    /// returned by the function.
+    /// init closure if not exist, and returns a _clone_ of the value or the `Err`
+    /// returned by the closure.
     ///
-    /// This method prevents to evaluate the init function multiple times on the same
+    /// This method prevents to evaluate the init closure multiple times on the same
     /// key even if the method is concurrently called by many threads; only one of
-    /// the calls evaluates its function, and other calls wait for that function to
-    /// complete.
-    #[allow(clippy::redundant_allocation)]
-    // https://rust-lang.github.io/rust-clippy/master/index.html#redundant_allocation
-    // `Arc<Box<dyn ..>>` in the return type creates an extra heap allocation.
-    // This will be addressed by Moka v0.6.0.
-    pub fn get_or_try_insert_with<F>(
-        &self,
-        key: K,
-        init: F,
-    ) -> Result<V, Arc<Box<dyn Error + Send + Sync + 'static>>>
+    /// the calls evaluates its closure (as long as these closures return the same
+    /// error type), and other calls wait for that closure to complete.
+    pub fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
-        F: FnOnce() -> Result<V, Box<dyn Error + Send + Sync + 'static>>,
+        F: FnOnce() -> Result<V, E>,
+        E: Error + Send + Sync + 'static,
     {
         let hash = self.inner.hash(&key);
         let key = Arc::new(key);
@@ -696,7 +689,16 @@ mod tests {
 
     #[test]
     fn get_or_try_insert_with() {
-        use std::thread::{sleep, spawn};
+        use std::{
+            sync::Arc,
+            thread::{sleep, spawn},
+        };
+
+        #[derive(thiserror::Error, Debug)]
+        #[error("{}", _0)]
+        pub struct MyError(String);
+
+        type MyResult<T> = Result<T, Arc<MyError>>;
 
         let cache = SegmentedCache::new(100, 4);
         const KEY: u32 = 0;
@@ -713,7 +715,7 @@ mod tests {
                 let v = cache1.get_or_try_insert_with(KEY, || {
                     // Wait for 300 ms and return an error.
                     sleep(Duration::from_millis(300));
-                    Err("thread1 error".into())
+                    Err(MyError("thread1 error".into()))
                 });
                 assert!(v.is_err());
             })
@@ -728,7 +730,7 @@ mod tests {
             spawn(move || {
                 // Wait for 100 ms before calling `get_or_try_insert_with`.
                 sleep(Duration::from_millis(100));
-                let v = cache2.get_or_try_insert_with(KEY, || unreachable!());
+                let v: MyResult<_> = cache2.get_or_try_insert_with(KEY, || unreachable!());
                 assert!(v.is_err());
             })
         };
@@ -743,7 +745,7 @@ mod tests {
             spawn(move || {
                 // Wait for 400 ms before calling `get_or_try_insert_with`.
                 sleep(Duration::from_millis(400));
-                let v = cache3.get_or_try_insert_with(KEY, || {
+                let v: MyResult<_> = cache3.get_or_try_insert_with(KEY, || {
                     // Wait for 300 ms and return an Ok(&str) value.
                     sleep(Duration::from_millis(300));
                     Ok("thread3")
@@ -760,7 +762,7 @@ mod tests {
             spawn(move || {
                 // Wait for 500 ms before calling `get_or_try_insert_with`.
                 sleep(Duration::from_millis(500));
-                let v = cache4.get_or_try_insert_with(KEY, || unreachable!());
+                let v: MyResult<_> = cache4.get_or_try_insert_with(KEY, || unreachable!());
                 assert_eq!(v.unwrap(), "thread3");
             })
         };
@@ -775,7 +777,7 @@ mod tests {
             spawn(move || {
                 // Wait for 800 ms before calling `get_or_try_insert_with`.
                 sleep(Duration::from_millis(800));
-                let v = cache5.get_or_try_insert_with(KEY, || unreachable!());
+                let v: MyResult<_> = cache5.get_or_try_insert_with(KEY, || unreachable!());
                 assert_eq!(v.unwrap(), "thread3");
             })
         };
