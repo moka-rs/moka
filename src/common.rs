@@ -6,6 +6,8 @@ pub(crate) mod frequency_sketch;
 pub(crate) mod thread_pool;
 pub(crate) mod unsafe_weak_pointer;
 
+pub(crate) type Weighter<K, V> = Box<dyn Fn(&K, &V) -> u64 + Send + Sync + 'static>;
+
 pub(crate) trait AccessTime {
     fn last_accessed(&self) -> Option<Instant>;
     fn set_last_accessed(&mut self, timestamp: Instant);

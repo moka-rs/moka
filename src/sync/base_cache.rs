@@ -2,13 +2,13 @@ use super::{
     deques::Deques,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
-    KeyDate, KeyHash, KeyHashDate, PredicateId, ReadOp, ValueEntry, WriteOp,
+    KeyDate, KeyHash, KeyHashDate, KeyValueEntry, PredicateId, ReadOp, ValueEntry, WriteOp,
 };
 use crate::{
     common::{
         deque::{CacheRegion, DeqNode, Deque},
         frequency_sketch::FrequencySketch,
-        AccessTime,
+        AccessTime, Weighter,
     },
     PredicateError,
 };
@@ -83,7 +83,7 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn new(
-        max_capacity: usize,
+        max_entries: Option<usize>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         time_to_live: Option<Duration>,
@@ -93,7 +93,7 @@ where
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
         let inner = Arc::new(Inner::new(
-            max_capacity,
+            max_entries,
             initial_capacity,
             build_hasher,
             r_rcv,
@@ -161,12 +161,12 @@ where
     }
 
     #[inline]
-    pub(crate) fn remove<Q>(&self, key: &Q) -> Option<Arc<ValueEntry<K, V>>>
+    pub(crate) fn remove_entry<Q>(&self, key: &Q) -> Option<KeyValueEntry<K, V>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.inner.remove(key)
+        self.inner.remove_entry(key)
     }
 
     #[inline]
@@ -196,8 +196,12 @@ where
         self.inner.register_invalidation_predicate(predicate, now)
     }
 
-    pub(crate) fn max_capacity(&self) -> usize {
-        self.inner.max_capacity()
+    pub(crate) fn max_entries(&self) -> Option<usize> {
+        self.inner.max_entries()
+    }
+
+    pub(crate) fn max_weight(&self) -> Option<u64> {
+        self.inner.max_weight()
     }
 
     pub(crate) fn time_to_live(&self) -> Option<Duration> {
@@ -343,12 +347,37 @@ where
     }
 }
 
+struct TotalWeight<'a, K, V> {
+    total: u64,
+    weighter: Option<&'a Weighter<K, V>>,
+}
+
+impl<'a, K, V> TotalWeight<'a, K, V> {
+    fn saturating_add(&mut self, key: &K, value: &V) {
+        if let Some(weighter) = &self.weighter {
+            let total = &mut self.total;
+            let weight = weighter(key, value);
+            *total = total.saturating_add(weight);
+        }
+    }
+
+    fn saturating_sub(&mut self, key: &K, value: &V) {
+        if let Some(weighter) = &self.weighter {
+            let total = &mut self.total;
+            let weight = weighter(key, value);
+            *total = total.saturating_sub(weight);
+        }
+    }
+}
+
 type CacheStore<K, V, S> = moka_cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
 
 type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
 
 pub(crate) struct Inner<K, V, S> {
-    max_capacity: usize,
+    max_entries: Option<usize>,
+    max_weight: Option<u64>,
+    total_weight: AtomicU64,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
     deques: Mutex<Deques<K>>,
@@ -358,6 +387,7 @@ pub(crate) struct Inner<K, V, S> {
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     valid_after: AtomicU64,
+    weighter: Option<Weighter<K, V>>,
     invalidator_enabled: bool,
     invalidator: RwLock<Option<Invalidator<K, V, S>>>,
     has_expiration_clock: AtomicBool,
@@ -374,7 +404,7 @@ where
     // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
     #[allow(clippy::too_many_arguments)]
     fn new(
-        max_capacity: usize,
+        max_entries: Option<usize>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         read_op_ch: Receiver<ReadOp<K, V>>,
@@ -392,11 +422,13 @@ where
             initial_capacity,
             build_hasher.clone(),
         );
-        let skt_capacity = usize::max(max_capacity * 32, 100);
+        let skt_capacity = max_entries.map(|n| n * 32).unwrap_or_default().max(100);
         let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
 
         Self {
-            max_capacity,
+            max_entries,
+            max_weight: None,
+            total_weight: AtomicU64::default(),
             cache,
             build_hasher,
             deques: Mutex::new(Deques::default()),
@@ -406,6 +438,7 @@ where
             time_to_live,
             time_to_idle,
             valid_after: AtomicU64::new(0),
+            weighter: None,
             invalidator_enabled,
             // When enabled, this field will be set later via the set_invalidator method.
             invalidator: RwLock::new(None),
@@ -439,16 +472,22 @@ where
     }
 
     #[inline]
-    fn remove<Q>(&self, key: &Q) -> Option<Arc<ValueEntry<K, V>>>
+    fn remove_entry<Q>(&self, key: &Q) -> Option<KeyValueEntry<K, V>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.cache.remove(key)
+        self.cache
+            .remove_entry(key)
+            .map(|(key, entry)| KeyValueEntry { key, entry })
     }
 
-    fn max_capacity(&self) -> usize {
-        self.max_capacity
+    fn max_entries(&self) -> Option<usize> {
+        self.max_entries
+    }
+
+    fn max_weight(&self) -> Option<u64> {
+        self.max_weight
     }
 
     #[inline]
@@ -556,6 +595,12 @@ where
         let mut calls = 0;
         let mut should_sync = true;
 
+        let current_total_weight = self.total_weight.load(Ordering::Acquire);
+        let mut total_weight = TotalWeight {
+            total: current_total_weight,
+            weighter: self.weighter.as_ref(),
+        };
+
         while should_sync && calls <= max_repeats {
             let r_len = self.read_op_ch.len();
             if r_len > 0 {
@@ -564,7 +609,7 @@ where
 
             let w_len = self.write_op_ch.len();
             if w_len > 0 {
-                self.apply_writes(&mut deqs, w_len);
+                self.apply_writes(&mut deqs, w_len, &mut total_weight);
             }
             calls += 1;
             should_sync = self.read_op_ch.len() >= READ_LOG_FLUSH_POINT
@@ -572,16 +617,28 @@ where
         }
 
         if self.has_expiry() || self.has_valid_after() {
-            self.evict(&mut deqs, EVICTION_BATCH_SIZE);
+            self.evict(&mut deqs, EVICTION_BATCH_SIZE, &mut total_weight);
         }
 
         if self.invalidator_enabled {
             if let Some(invalidator) = &*self.invalidator.read() {
                 if !invalidator.is_empty() && !invalidator.is_task_running() {
-                    self.invalidate_entries(invalidator, &mut deqs, INVALIDATION_BATCH_SIZE);
+                    self.invalidate_entries(
+                        invalidator,
+                        &mut deqs,
+                        INVALIDATION_BATCH_SIZE,
+                        &mut total_weight,
+                    );
                 }
             }
         }
+
+        debug_assert_eq!(
+            self.total_weight.load(Ordering::Acquire),
+            current_total_weight
+        );
+        self.total_weight
+            .store(total_weight.total, Ordering::Release);
 
         if should_sync {
             Some(SyncPace::Fast)
@@ -603,6 +660,18 @@ where
     V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
+    fn has_enough_capacity(&self, total_weight: &TotalWeight<'_, K, V>) -> bool {
+        let entries = self
+            .max_entries
+            .map(|limit| self.cache.len() <= limit)
+            .unwrap_or(true);
+        let weight = self
+            .max_weight
+            .map(|limit| total_weight.total <= limit)
+            .unwrap_or(true);
+        entries && weight
+    }
+
     fn apply_reads(&self, deqs: &mut Deques<K>, count: usize) {
         use ReadOp::*;
         let mut freq = self.frequency_sketch.write();
@@ -620,7 +689,12 @@ where
         }
     }
 
-    fn apply_writes(&self, deqs: &mut Deques<K>, count: usize) {
+    fn apply_writes(
+        &self,
+        deqs: &mut Deques<K>,
+        count: usize,
+        total_weight: &mut TotalWeight<'_, K, V>,
+    ) {
         use WriteOp::*;
         let freq = self.frequency_sketch.read();
         let ch = &self.write_op_ch;
@@ -628,8 +702,10 @@ where
 
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Upsert(kh, entry)) => self.handle_upsert(kh, entry, ts, deqs, &freq),
-                Ok(Remove(entry)) => Self::handle_remove(deqs, entry),
+                Ok(Upsert(kh, entry)) => {
+                    self.handle_upsert(kh, entry, ts, deqs, &freq, total_weight)
+                }
+                Ok(Remove(key, entry)) => Self::handle_remove(deqs, &key, entry, total_weight),
                 Err(_) => break,
             };
         }
@@ -642,6 +718,7 @@ where
         timestamp: Instant,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
+        total_weight: &mut TotalWeight<'_, K, V>,
     ) {
         const MAX_RETRY: usize = 5;
         let mut tries = 0;
@@ -659,9 +736,16 @@ where
                 // The entry has been already admitted, so treat this as an update.
                 deqs.move_to_back_ao(&entry);
                 deqs.move_to_back_wo(&entry);
-            } else if self.cache.len() <= self.max_capacity {
+            } else if self.has_enough_capacity(total_weight) {
                 // There are some room in the cache. Add the candidate to the deques.
-                self.handle_admit(kh.clone(), &entry, last_accessed, last_modified, deqs);
+                self.handle_admit(
+                    kh.clone(),
+                    &entry,
+                    last_accessed,
+                    last_modified,
+                    deqs,
+                    total_weight,
+                );
             } else {
                 let victim = match Self::find_cache_victim(deqs, freq) {
                     // Found a victim.
@@ -671,7 +755,14 @@ where
                     // panicking here, admit the candidate as there might be some
                     // room in te cache now.
                     None => {
-                        self.handle_admit(kh.clone(), &entry, last_accessed, last_modified, deqs);
+                        self.handle_admit(
+                            kh.clone(),
+                            &entry,
+                            last_accessed,
+                            last_modified,
+                            deqs,
+                            total_weight,
+                        );
                         done = true;
                         break;
                     }
@@ -680,9 +771,10 @@ where
                 if Self::admit(kh.hash, victim, freq) {
                     // The candidate is admitted. Try to remove the victim from the
                     // cache (hash map).
-                    if let Some(vic_entry) = self.cache.remove(&victim.element.key) {
+                    if let Some((vic_key, vic_entry)) = self.cache.remove_entry(&victim.element.key)
+                    {
                         // And then remove the victim from the deques.
-                        Self::handle_remove(deqs, vic_entry);
+                        Self::handle_remove(deqs, &vic_key, vic_entry, total_weight);
                     } else {
                         // Could not remove the victim from the cache. Skip this
                         // victim node as its ValueEntry might have been
@@ -702,6 +794,7 @@ where
                         Arc::clone(&last_accessed),
                         Arc::clone(&last_modified),
                         deqs,
+                        total_weight,
                     );
                 } else {
                     // The candidate is not admitted. Remove it from the cache (hash map).
@@ -746,8 +839,10 @@ where
         raw_last_accessed: Arc<AtomicU64>,
         raw_last_modified: Arc<AtomicU64>,
         deqs: &mut Deques<K>,
+        total_weight: &mut TotalWeight<'_, K, V>,
     ) {
         let key = Arc::clone(&kh.key);
+        total_weight.saturating_add(&key, &entry.value);
         deqs.push_back_ao(
             CacheRegion::MainProbation,
             KeyHashDate::new(kh, raw_last_accessed),
@@ -759,9 +854,15 @@ where
         entry.set_is_admitted(true);
     }
 
-    fn handle_remove(deqs: &mut Deques<K>, entry: Arc<ValueEntry<K, V>>) {
+    fn handle_remove(
+        deqs: &mut Deques<K>,
+        key: &Arc<K>,
+        entry: Arc<ValueEntry<K, V>>,
+        total_weight: &mut TotalWeight<'_, K, V>,
+    ) {
         if entry.is_admitted() {
             entry.set_is_admitted(false);
+            total_weight.saturating_sub(key, &entry.value);
             deqs.unlink_ao(&entry);
             Deques::unlink_wo(&mut deqs.write_order, &entry);
         }
@@ -772,21 +873,29 @@ where
         ao_deq_name: &str,
         ao_deq: &mut Deque<KeyHashDate<K>>,
         wo_deq: &mut Deque<KeyDate<K>>,
+        key: &Arc<K>,
         entry: Arc<ValueEntry<K, V>>,
+        total_weight: &mut TotalWeight<'_, K, V>,
     ) {
         if entry.is_admitted() {
             entry.set_is_admitted(false);
+            total_weight.saturating_sub(key, &entry.value);
             Deques::unlink_ao_from_deque(ao_deq_name, ao_deq, &entry);
             Deques::unlink_wo(wo_deq, &entry);
         }
         entry.unset_q_nodes();
     }
 
-    fn evict(&self, deqs: &mut Deques<K>, batch_size: usize) {
+    fn evict(
+        &self,
+        deqs: &mut Deques<K>,
+        batch_size: usize,
+        total_weight: &mut TotalWeight<'_, K, V>,
+    ) {
         let now = self.current_time_from_expiration_clock();
 
         if self.is_write_order_queue_enabled() {
-            self.remove_expired_wo(deqs, batch_size, now);
+            self.remove_expired_wo(deqs, batch_size, now, total_weight);
         }
 
         if self.time_to_idle.is_some() || self.has_valid_after() {
@@ -798,7 +907,7 @@ where
             );
 
             let mut rm_expired_ao =
-                |name, deq| self.remove_expired_ao(name, deq, wo, batch_size, now);
+                |name, deq| self.remove_expired_ao(name, deq, wo, batch_size, now, total_weight);
 
             rm_expired_ao("window", window);
             rm_expired_ao("probation", probation);
@@ -814,6 +923,7 @@ where
         write_order_deq: &mut Deque<KeyDate<K>>,
         batch_size: usize,
         now: Instant,
+        total_weight: &mut TotalWeight<'_, K, V>,
     ) {
         let tti = &self.time_to_idle;
         let va = self.valid_after();
@@ -848,7 +958,14 @@ where
                 .remove_if(key, |_, v| is_expired_entry_ao(tti, va, v, now));
 
             if let Some(entry) = maybe_entry {
-                Self::handle_remove_with_deques(deq_name, deq, write_order_deq, entry);
+                Self::handle_remove_with_deques(
+                    deq_name,
+                    deq,
+                    write_order_deq,
+                    key,
+                    entry,
+                    total_weight,
+                );
             } else if let Some(entry) = self.cache.get(key) {
                 let ts = entry.last_accessed();
                 if ts.is_none() {
@@ -873,7 +990,13 @@ where
     }
 
     #[inline]
-    fn remove_expired_wo(&self, deqs: &mut Deques<K>, batch_size: usize, now: Instant) {
+    fn remove_expired_wo(
+        &self,
+        deqs: &mut Deques<K>,
+        batch_size: usize,
+        now: Instant,
+        total_weight: &mut TotalWeight<'_, K, V>,
+    ) {
         let ttl = &self.time_to_live;
         let va = self.valid_after();
         for _ in 0..batch_size {
@@ -903,7 +1026,7 @@ where
                 .remove_if(key, |_, v| is_expired_entry_wo(ttl, va, v, now));
 
             if let Some(entry) = maybe_entry {
-                Self::handle_remove(deqs, entry);
+                Self::handle_remove(deqs, key, entry, total_weight);
             } else if let Some(entry) = self.cache.get(key) {
                 let ts = entry.last_modified();
                 if ts.is_none() {
@@ -931,8 +1054,9 @@ where
         invalidator: &Invalidator<K, V, S>,
         deqs: &mut Deques<K>,
         batch_size: usize,
+        total_weight: &mut TotalWeight<'_, K, V>,
     ) {
-        self.process_invalidation_result(invalidator, deqs);
+        self.process_invalidation_result(invalidator, deqs, total_weight);
         self.submit_invalidation_task(invalidator, &mut deqs.write_order, batch_size);
     }
 
@@ -940,14 +1064,15 @@ where
         &self,
         invalidator: &Invalidator<K, V, S>,
         deqs: &mut Deques<K>,
+        total_weight: &mut TotalWeight<'_, K, V>,
     ) {
         if let Some(InvalidationResult {
             invalidated,
             is_done,
         }) = invalidator.task_result()
         {
-            for entry in invalidated {
-                Self::handle_remove(deqs, entry);
+            for KeyValueEntry { key, entry } in invalidated {
+                Self::handle_remove(deqs, &key, entry, total_weight);
             }
             if is_done {
                 deqs.write_order.reset_cursor();

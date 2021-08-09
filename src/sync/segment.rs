@@ -58,7 +58,7 @@ where
     V: Clone + Send + Sync + 'static,
 {
     /// Constructs a new `SegmentedCache<K, V>` that has multiple internal
-    /// segments and will store up to the `max_capacity` entries.
+    /// segments and will store up to the `max_entries`.
     ///
     /// To adjust various configuration knobs such as `initial_capacity` or
     /// `time_to_live`, use the [`CacheBuilder`][builder-struct].
@@ -68,10 +68,10 @@ where
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
-    pub fn new(max_capacity: usize, num_segments: usize) -> Self {
+    pub fn new(max_entries: usize, num_segments: usize) -> Self {
         let build_hasher = RandomState::default();
         Self::with_everything(
-            max_capacity,
+            Some(max_entries),
             None,
             num_segments,
             build_hasher,
@@ -92,7 +92,7 @@ where
     ///
     /// Panics if `num_segments` is 0.
     pub(crate) fn with_everything(
-        max_capacity: usize,
+        max_entries: Option<usize>,
         initial_capacity: Option<usize>,
         num_segments: usize,
         build_hasher: S,
@@ -102,7 +102,7 @@ where
     ) -> Self {
         Self {
             inner: Arc::new(Inner::new(
-                max_capacity,
+                max_entries,
                 initial_capacity,
                 num_segments,
                 build_hasher,
@@ -241,9 +241,9 @@ where
         Ok(())
     }
 
-    /// Returns the `max_capacity` of this cache.
-    pub fn max_capacity(&self) -> usize {
-        self.inner.desired_capacity
+    /// Returns the `max_entries` of this cache.
+    pub fn max_entries(&self) -> Option<usize> {
+        self.inner.desired_max_entries
     }
 
     /// Returns the `time_to_live` of this cache.
@@ -343,7 +343,8 @@ impl MockExpirationClock {
 }
 
 struct Inner<K, V, S> {
-    desired_capacity: usize,
+    desired_max_entries: Option<usize>,
+    // desired_max_weight: Option<u64>,
     segments: Box<[Cache<K, V, S>]>,
     build_hasher: S,
     segment_shift: u32,
@@ -359,7 +360,7 @@ where
     ///
     /// Panics if `num_segments` is 0.
     fn new(
-        max_capacity: usize,
+        max_entries: Option<usize>,
         initial_capacity: Option<usize>,
         num_segments: usize,
         build_hasher: S,
@@ -372,14 +373,14 @@ where
         let actual_num_segments = num_segments.next_power_of_two();
         let segment_shift = 64 - actual_num_segments.trailing_zeros();
         // TODO: Round up.
-        let seg_capacity = max_capacity / actual_num_segments;
+        let seg_max_entries = max_entries.map(|n| n / actual_num_segments);
         let seg_init_capacity = initial_capacity.map(|cap| cap / actual_num_segments);
         // NOTE: We cannot initialize the segments as `vec![cache; actual_num_segments]`
         // because Cache::clone() does not clone its inner but shares the same inner.
         let segments = (0..num_segments)
             .map(|_| {
                 Cache::with_everything(
-                    seg_capacity,
+                    seg_max_entries,
                     seg_init_capacity,
                     build_hasher.clone(),
                     time_to_live,
@@ -390,7 +391,8 @@ where
             .collect::<Vec<_>>();
 
         Self {
-            desired_capacity: max_capacity,
+            desired_max_entries: max_entries,
+            // desired_max_weight: None,
             segments: segments.into_boxed_slice(),
             build_hasher,
             segment_shift,

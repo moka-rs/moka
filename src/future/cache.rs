@@ -1,12 +1,12 @@
 use super::{
     value_initializer::{InitResult, ValueInitializer},
-    ConcurrentCacheExt,
+    CacheBuilder, ConcurrentCacheExt,
 };
 use crate::{
     sync::{
         base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
         housekeeper::InnerSync,
-        PredicateId, WriteOp,
+        KeyValueEntry, PredicateId, WriteOp,
     },
     PredicateError,
 };
@@ -215,15 +215,19 @@ where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    /// Constructs a new `Cache<K, V>` that will store up to the `max_capacity` entries.
+    /// Constructs a new `Cache<K, V>` that will store up to the `max_entries`.
     ///
     /// To adjust various configuration knobs such as `initial_capacity` or
     /// `time_to_live`, use the [`CacheBuilder`][builder-struct].
     ///
     /// [builder-struct]: ./struct.CacheBuilder.html
-    pub fn new(max_capacity: usize) -> Self {
+    pub fn new(max_entries: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(max_capacity, None, build_hasher, None, None, false)
+        Self::with_everything(Some(max_entries), None, build_hasher, None, None, false)
+    }
+
+    pub fn builder() -> CacheBuilder<Cache<K, V, RandomState>> {
+        CacheBuilder::unbound()
     }
 }
 
@@ -234,7 +238,7 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn with_everything(
-        max_capacity: usize,
+        max_entries: Option<usize>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         time_to_live: Option<Duration>,
@@ -243,7 +247,7 @@ where
     ) -> Self {
         Self {
             base: BaseCache::new(
-                max_capacity,
+                max_entries,
                 initial_capacity,
                 build_hasher.clone(),
                 time_to_live,
@@ -336,8 +340,8 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(entry) = self.base.remove(key) {
-            let op = WriteOp::Remove(entry);
+        if let Some(KeyValueEntry { key, entry }) = self.base.remove_entry(key) {
+            let op = WriteOp::Remove(key, entry);
             let hk = self.base.housekeeper.as_ref();
             if Self::schedule_write_op(&self.base.write_op_ch, op, hk)
                 .await
@@ -358,8 +362,8 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(entry) = self.base.remove(key) {
-            let op = WriteOp::Remove(entry);
+        if let Some(KeyValueEntry { key, entry }) = self.base.remove_entry(key) {
+            let op = WriteOp::Remove(key, entry);
             let hk = self.base.housekeeper.as_ref();
             if Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk).is_err() {
                 panic!("Failed to remove");
@@ -413,9 +417,14 @@ where
         self.base.invalidate_entries_if(Arc::new(predicate))
     }
 
-    /// Returns the `max_capacity` of this cache.
-    pub fn max_capacity(&self) -> usize {
-        self.base.max_capacity()
+    /// Returns the `max_entries` of this cache.
+    pub fn max_entries(&self) -> Option<usize> {
+        self.base.max_entries()
+    }
+
+    /// Returns the `max_weight` of this cache.
+    pub fn max_weight(&self) -> Option<u64> {
+        self.base.max_weight()
     }
 
     /// Returns the `time_to_live` of this cache.

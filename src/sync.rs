@@ -92,6 +92,11 @@ impl<K> KeyHashDate<K> {
     }
 }
 
+pub(crate) struct KeyValueEntry<K, V> {
+    pub(crate) key: Arc<K>,
+    pub(crate) entry: Arc<ValueEntry<K, V>>,
+}
+
 // DeqNode for an access order queue.
 type KeyDeqNodeAo<K> = NonNull<DeqNode<KeyHashDate<K>>>;
 
@@ -272,11 +277,12 @@ impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
 }
 
 pub(crate) enum ReadOp<K, V> {
+    // u64 is the hash of the key.
     Hit(u64, Arc<ValueEntry<K, V>>, Instant),
     Miss(u64),
 }
 
 pub(crate) enum WriteOp<K, V> {
     Upsert(KeyHash<K>, Arc<ValueEntry<K, V>>),
-    Remove(Arc<ValueEntry<K, V>>),
+    Remove(Arc<K>, Arc<ValueEntry<K, V>>),
 }

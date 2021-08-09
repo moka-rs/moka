@@ -37,9 +37,9 @@ use std::{
 /// ```
 ///
 pub struct CacheBuilder<C> {
-    max_capacity: usize,
+    max_entries: Option<usize>,
+    // max_weight: Option<usize>,
     initial_capacity: Option<usize>,
-    // num_segments: Option<usize>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     invalidator_enabled: bool,
@@ -51,13 +51,11 @@ where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    /// Construct a new `CacheBuilder` that will be used to build a `Cache` holding
-    /// up to `max_capacity` entries.
-    pub fn new(max_capacity: usize) -> Self {
+    pub(crate) fn unbound() -> Self {
         Self {
-            max_capacity,
+            max_entries: None,
+            // max_weight: None,
             initial_capacity: None,
-            // num_segments: None,
             time_to_live: None,
             time_to_idle: None,
             invalidator_enabled: false,
@@ -65,11 +63,20 @@ where
         }
     }
 
+    /// Construct a new `CacheBuilder` that will be used to build a `Cache` holding
+    /// up to `max_capacity` entries.
+    pub fn new(max_capacity: usize) -> Self {
+        Self {
+            max_entries: Some(max_capacity),
+            ..Self::unbound()
+        }
+    }
+
     /// Builds a `Cache<K, V>`.
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
         Cache::with_everything(
-            self.max_capacity,
+            self.max_entries,
             self.initial_capacity,
             build_hasher,
             self.time_to_live,
@@ -84,7 +91,7 @@ where
         S: BuildHasher + Clone + Send + Sync + 'static,
     {
         Cache::with_everything(
-            self.max_capacity,
+            self.max_entries,
             self.initial_capacity,
             hasher,
             self.time_to_live,
@@ -151,7 +158,7 @@ mod tests {
         // Cache<char, String>
         let cache = CacheBuilder::new(100).build();
 
-        assert_eq!(cache.max_capacity(), 100);
+        assert_eq!(cache.max_entries(), Some(100));
         assert_eq!(cache.time_to_live(), None);
         assert_eq!(cache.time_to_idle(), None);
         assert_eq!(cache.num_segments(), 1);
@@ -164,7 +171,7 @@ mod tests {
             .time_to_idle(Duration::from_secs(15 * 60))
             .build();
 
-        assert_eq!(cache.max_capacity(), 100);
+        assert_eq!(cache.max_entries(), Some(100));
         assert_eq!(cache.time_to_live(), Some(Duration::from_secs(45 * 60)));
         assert_eq!(cache.time_to_idle(), Some(Duration::from_secs(15 * 60)));
         assert_eq!(cache.num_segments(), 1);
