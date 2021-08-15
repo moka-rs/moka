@@ -510,7 +510,6 @@ where
             .await
         {
             InitResult::Initialized(v) => {
-                let hash = self.base.hash(&key);
                 self.insert_with_hash(Arc::clone(&key), hash, v.clone())
                     .await;
                 self.value_initializer
