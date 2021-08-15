@@ -346,28 +346,51 @@ where
     }
 }
 
-struct TotalCost<'a, K, V> {
-    total: u64,
+struct WeightedSize<'a, K, V> {
+    size: u64,
     weighter: Option<&'a Weighter<K, V>>,
 }
 
-impl<'a, K, V> TotalCost<'a, K, V> {
+impl<'a, K, V> WeightedSize<'a, K, V> {
     #[inline]
-    fn cost(&self, key: &K, value: &V) -> u64 {
+    fn weigh(&self, key: &K, value: &V) -> u64 {
         self.weighter.map(|w| w(key, value)).unwrap_or(1)
     }
 
     #[inline]
-    fn saturating_add(&mut self, cost: u64) {
-        let total = &mut self.total;
-        *total = total.saturating_add(cost);
+    fn saturating_add(&mut self, weight: u64) {
+        let total = &mut self.size;
+        *total = total.saturating_add(weight);
     }
 
     #[inline]
     fn saturating_sub(&mut self, key: &K, value: &V) {
-        let cost = self.cost(key, value);
-        let total = &mut self.total;
-        *total = total.saturating_sub(cost);
+        let weight = self.weigh(key, value);
+        let total = &mut self.size;
+        *total = total.saturating_sub(weight);
+    }
+}
+
+#[derive(Default)]
+struct EntrySizeAndFrequency {
+    weight: u64,
+    freq: u32,
+}
+
+impl EntrySizeAndFrequency {
+    fn new(policy_weight: u64) -> Self {
+        Self {
+            weight: policy_weight,
+            ..Default::default()
+        }
+    }
+
+    fn add_policy_weight<K, V>(&mut self, ws: &WeightedSize<'_, K, V>, key: &K, value: &V) {
+        self.weight += ws.weigh(key, value);
+    }
+
+    fn add_frequency(&mut self, freq: &FrequencySketch, hash: u64) {
+        self.freq += freq.frequency(hash) as u32;
     }
 }
 
@@ -387,11 +410,11 @@ impl RawTimestamps {
 
 enum AdmissionResult<K> {
     Admitted {
-        victims: Vec<NonNull<DeqNode<KeyHashDate<K>>>>,
-        skipped_victims: Vec<NonNull<DeqNode<KeyHashDate<K>>>>,
+        victim_nodes: Vec<NonNull<DeqNode<KeyHashDate<K>>>>,
+        skipped_nodes: Vec<NonNull<DeqNode<KeyHashDate<K>>>>,
     },
     Rejected {
-        skipped_victims: Vec<NonNull<DeqNode<KeyHashDate<K>>>>,
+        skipped_nodes: Vec<NonNull<DeqNode<KeyHashDate<K>>>>,
     },
 }
 
@@ -401,7 +424,7 @@ type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
 
 pub(crate) struct Inner<K, V, S> {
     max_capacity: Option<u64>,
-    total_cost: AtomicU64,
+    weighted_size: AtomicU64,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
     deques: Mutex<Deques<K>>,
@@ -451,7 +474,7 @@ where
 
         Self {
             max_capacity: max_capacity.map(|n| n as u64),
-            total_cost: AtomicU64::default(),
+            weighted_size: AtomicU64::default(),
             cache,
             build_hasher,
             deques: Mutex::new(Deques::default()),
@@ -614,9 +637,9 @@ where
         let mut calls = 0;
         let mut should_sync = true;
 
-        let current_total_cost = self.total_cost.load(Ordering::Acquire);
-        let mut total_cost = TotalCost {
-            total: current_total_cost,
+        let current_ws = self.weighted_size.load(Ordering::Acquire);
+        let mut ws = WeightedSize {
+            size: current_ws,
             weighter: self.weighter.as_ref(),
         };
 
@@ -628,7 +651,7 @@ where
 
             let w_len = self.write_op_ch.len();
             if w_len > 0 {
-                self.apply_writes(&mut deqs, w_len, &mut total_cost);
+                self.apply_writes(&mut deqs, w_len, &mut ws);
             }
             calls += 1;
             should_sync = self.read_op_ch.len() >= READ_LOG_FLUSH_POINT
@@ -636,7 +659,7 @@ where
         }
 
         if self.has_expiry() || self.has_valid_after() {
-            self.evict(&mut deqs, EVICTION_BATCH_SIZE, &mut total_cost);
+            self.evict(&mut deqs, EVICTION_BATCH_SIZE, &mut ws);
         }
 
         if self.invalidator_enabled {
@@ -646,14 +669,14 @@ where
                         invalidator,
                         &mut deqs,
                         INVALIDATION_BATCH_SIZE,
-                        &mut total_cost,
+                        &mut ws,
                     );
                 }
             }
         }
 
-        debug_assert_eq!(self.total_cost.load(Ordering::Acquire), current_total_cost);
-        self.total_cost.store(total_cost.total, Ordering::Release);
+        debug_assert_eq!(self.weighted_size.load(Ordering::Acquire), current_ws);
+        self.weighted_size.store(ws.size, Ordering::Release);
 
         if should_sync {
             Some(SyncPace::Fast)
@@ -675,9 +698,9 @@ where
     V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    fn has_enough_capacity(&self, candidate_cost: u64, total_cost: &TotalCost<'_, K, V>) -> bool {
+    fn has_enough_capacity(&self, candidate_weight: u64, ws: &WeightedSize<'_, K, V>) -> bool {
         self.max_capacity
-            .map(|limit| total_cost.total + candidate_cost <= limit)
+            .map(|limit| ws.size + candidate_weight <= limit)
             .unwrap_or(true)
     }
 
@@ -698,12 +721,7 @@ where
         }
     }
 
-    fn apply_writes(
-        &self,
-        deqs: &mut Deques<K>,
-        count: usize,
-        total_cost: &mut TotalCost<'_, K, V>,
-    ) {
+    fn apply_writes(&self, deqs: &mut Deques<K>, count: usize, ws: &mut WeightedSize<'_, K, V>) {
         use WriteOp::*;
         let freq = self.frequency_sketch.read();
         let ch = &self.write_op_ch;
@@ -711,8 +729,8 @@ where
 
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Upsert(kh, entry)) => self.handle_upsert(kh, entry, ts, deqs, &freq, total_cost),
-                Ok(Remove(key, entry)) => Self::handle_remove(deqs, &key, entry, total_cost),
+                Ok(Upsert(kh, entry)) => self.handle_upsert(kh, entry, ts, deqs, &freq, ws),
+                Ok(Remove(key, entry)) => Self::handle_remove(deqs, &key, entry, ws),
                 Err(_) => break,
             };
         }
@@ -725,7 +743,7 @@ where
         timestamp: Instant,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
-        total_cost: &mut TotalCost<'_, K, V>,
+        ws: &mut WeightedSize<'_, K, V>,
     ) {
         entry.set_last_accessed(timestamp);
         entry.set_last_modified(timestamp);
@@ -738,118 +756,116 @@ where
             return;
         }
 
-        let size = total_cost.cost(&kh.key, &entry.value);
+        let policy_weight = ws.weigh(&kh.key, &entry.value);
 
-        if self.has_enough_capacity(size, total_cost) {
+        if self.has_enough_capacity(policy_weight, ws) {
             // There are enough room in the cache (or the cache is unbounded).
             // Add the candidate to the deques.
-            self.handle_admit(kh, &entry, size, raw_ts, deqs, total_cost);
+            self.handle_admit(kh, &entry, policy_weight, raw_ts, deqs, ws);
             return;
         }
 
         if let Some(max) = self.max_capacity {
-            if size > max {
+            if policy_weight > max {
                 // The candidate is too big to fit in the cache. Reject it.
                 self.cache.remove(&Arc::clone(&kh.key));
                 return;
             }
         }
 
-        let skipped;
+        let skipped_nodes;
+        let mut candidate = EntrySizeAndFrequency::new(policy_weight);
+        candidate.add_frequency(freq, kh.hash);
 
         // Try to admit the candidate.
-        match Self::admit(kh.hash, size, &self.cache, deqs, freq, total_cost) {
+        match Self::admit(&candidate, &self.cache, deqs, freq, ws) {
             AdmissionResult::Admitted {
-                victims,
-                mut skipped_victims,
+                victim_nodes,
+                skipped_nodes: mut skipped,
             } => {
                 // Try to remove the victims from the cache (hash map).
-                for victim in victims {
+                for victim in victim_nodes {
                     if let Some((vic_key, vic_entry)) = self
                         .cache
                         .remove_entry(unsafe { &victim.as_ref().element.key })
                     {
                         // And then remove the victim from the deques.
-                        Self::handle_remove(deqs, &vic_key, vic_entry, total_cost);
+                        Self::handle_remove(deqs, &vic_key, vic_entry, ws);
                     } else {
                         // Could not remove the victim from the cache. Skip this
                         // victim node as its ValueEntry might have been
-                        // invalidated. Add it to the skipped_victim.
-                        skipped_victims.push(victim);
+                        // invalidated. Add it to the skipped nodes.
+                        skipped.push(victim);
                     }
                 }
-                skipped = skipped_victims;
+                skipped_nodes = skipped;
 
                 // Add the candidate to the deques.
-                self.handle_admit(kh, &entry, size, raw_ts, deqs, total_cost);
+                self.handle_admit(kh, &entry, policy_weight, raw_ts, deqs, ws);
             }
-            AdmissionResult::Rejected { skipped_victims } => {
-                skipped = skipped_victims;
+            AdmissionResult::Rejected { skipped_nodes: s } => {
+                skipped_nodes = s;
                 // Remove the candidate from the cache (hash map).
                 self.cache.remove(&Arc::clone(&kh.key));
             }
         };
 
-        // Move the skipped victim nodes to the back of the deque. We do not unlink
-        // (drop) these nodes because ValueEntries in the write op queue should be
-        // pointing them.
-        for node in skipped {
+        // Move the skipped nodes to the back of the deque. We do not unlink (drop)
+        // them because ValueEntries in the write op queue should be pointing them.
+        for node in skipped_nodes {
             unsafe { deqs.probation.move_to_back(node) };
         }
     }
 
     #[inline]
     fn admit(
-        candidate_hash: u64,
-        candidate_cost: u64,
+        candidate: &EntrySizeAndFrequency,
         cache: &CacheStore<K, V, S>,
         deqs: &Deques<K>,
         freq: &FrequencySketch,
-        total_cost: &TotalCost<'_, K, V>,
+        ws: &WeightedSize<'_, K, V>,
     ) -> AdmissionResult<K> {
-        let candidate_freq = freq.frequency(candidate_hash) as u32;
-        let mut victims_freq = 0u32;
-        let mut victims_cost = 0u64;
-        let mut victims = Vec::default();
-        let mut skipped_victims = Vec::default();
+        let mut victims = EntrySizeAndFrequency::default();
+        let mut victim_nodes = Vec::default();
+        let mut skipped_nodes = Vec::default();
         let mut next_victim;
 
         // Find first victim.
         loop {
             if let Some(victim) = deqs.probation.peek_front() {
                 if let Some(vic_entry) = cache.get(&victim.element.key) {
-                    victims_freq += freq.frequency(victim.element.hash) as u32;
-                    victims_cost += total_cost.cost(&victim.element.key, &vic_entry.value);
+                    victims.add_policy_weight(ws, &victim.element.key, &vic_entry.value);
+                    victims.add_frequency(freq, victim.element.hash);
                     next_victim = victim.next_node();
-                    victims.push(NonNull::from(victim));
+                    victim_nodes.push(NonNull::from(victim));
                     break;
                 } else {
                     // Could not get the victim from the cache. Skip this node as its
                     // ValueEntry might have been invalidated.
-                    skipped_victims.push(NonNull::from(victim));
+                    skipped_nodes.push(NonNull::from(victim));
                 }
             } else {
                 // No more victims. Reject the candidate.
-                return AdmissionResult::Rejected { skipped_victims };
+                return AdmissionResult::Rejected { skipped_nodes };
             }
         }
 
         // Aggregate victims.
-        while victims_cost < candidate_cost {
-            if candidate_freq < victims_freq {
+        while victims.weight < candidate.weight {
+            if candidate.freq < victims.freq {
                 break;
             }
             if let Some(victim) = next_victim.take() {
                 next_victim = victim.next_node();
 
                 if let Some(vic_entry) = cache.get(&victim.element.key) {
-                    victims_freq += freq.frequency(victim.element.hash) as u32;
-                    victims_cost += total_cost.cost(&victim.element.key, &vic_entry.value);
-                    victims.push(NonNull::from(victim));
+                    victims.add_policy_weight(ws, &victim.element.key, &vic_entry.value);
+                    victims.add_frequency(freq, victim.element.hash);
+                    victim_nodes.push(NonNull::from(victim));
                 } else {
                     // Could not get the victim from the cache. Skip this node as its
                     // ValueEntry might have been invalidated.
-                    skipped_victims.push(NonNull::from(victim));
+                    skipped_nodes.push(NonNull::from(victim));
                 }
             } else {
                 // No more victims.
@@ -859,16 +875,16 @@ where
 
         // Admit or reject the candidate.
 
-        // TODO: Implement some randomness to mitigate hash DoS attack?
+        // TODO: Implement some randomness to mitigate hash DoS attack.
         // See Caffeine's implementation.
 
-        if victims_cost >= candidate_cost && candidate_freq >= victims_freq {
+        if victims.weight >= candidate.weight && candidate.freq >= victims.freq {
             AdmissionResult::Admitted {
-                victims,
-                skipped_victims,
+                victim_nodes,
+                skipped_nodes,
             }
         } else {
-            AdmissionResult::Rejected { skipped_victims }
+            AdmissionResult::Rejected { skipped_nodes }
         }
     }
 
@@ -876,13 +892,13 @@ where
         &self,
         kh: KeyHash<K>,
         entry: &Arc<ValueEntry<K, V>>,
-        cost: u64,
+        policy_weight: u64,
         raw_ts: RawTimestamps,
         deqs: &mut Deques<K>,
-        total_cost: &mut TotalCost<'_, K, V>,
+        ws: &mut WeightedSize<'_, K, V>,
     ) {
         let key = Arc::clone(&kh.key);
-        total_cost.saturating_add(cost);
+        ws.saturating_add(policy_weight);
         deqs.push_back_ao(
             CacheRegion::MainProbation,
             KeyHashDate::new(kh, raw_ts.last_accessed),
@@ -898,11 +914,11 @@ where
         deqs: &mut Deques<K>,
         key: &Arc<K>,
         entry: Arc<ValueEntry<K, V>>,
-        total_cost: &mut TotalCost<'_, K, V>,
+        ws: &mut WeightedSize<'_, K, V>,
     ) {
         if entry.is_admitted() {
             entry.set_is_admitted(false);
-            total_cost.saturating_sub(key, &entry.value);
+            ws.saturating_sub(key, &entry.value);
             deqs.unlink_ao(&entry);
             Deques::unlink_wo(&mut deqs.write_order, &entry);
         }
@@ -915,22 +931,22 @@ where
         wo_deq: &mut Deque<KeyDate<K>>,
         key: &Arc<K>,
         entry: Arc<ValueEntry<K, V>>,
-        total_cost: &mut TotalCost<'_, K, V>,
+        ws: &mut WeightedSize<'_, K, V>,
     ) {
         if entry.is_admitted() {
             entry.set_is_admitted(false);
-            total_cost.saturating_sub(key, &entry.value);
+            ws.saturating_sub(key, &entry.value);
             Deques::unlink_ao_from_deque(ao_deq_name, ao_deq, &entry);
             Deques::unlink_wo(wo_deq, &entry);
         }
         entry.unset_q_nodes();
     }
 
-    fn evict(&self, deqs: &mut Deques<K>, batch_size: usize, total_cost: &mut TotalCost<'_, K, V>) {
+    fn evict(&self, deqs: &mut Deques<K>, batch_size: usize, ws: &mut WeightedSize<'_, K, V>) {
         let now = self.current_time_from_expiration_clock();
 
         if self.is_write_order_queue_enabled() {
-            self.remove_expired_wo(deqs, batch_size, now, total_cost);
+            self.remove_expired_wo(deqs, batch_size, now, ws);
         }
 
         if self.time_to_idle.is_some() || self.has_valid_after() {
@@ -942,7 +958,7 @@ where
             );
 
             let mut rm_expired_ao =
-                |name, deq| self.remove_expired_ao(name, deq, wo, batch_size, now, total_cost);
+                |name, deq| self.remove_expired_ao(name, deq, wo, batch_size, now, ws);
 
             rm_expired_ao("window", window);
             rm_expired_ao("probation", probation);
@@ -958,7 +974,7 @@ where
         write_order_deq: &mut Deque<KeyDate<K>>,
         batch_size: usize,
         now: Instant,
-        total_cost: &mut TotalCost<'_, K, V>,
+        ws: &mut WeightedSize<'_, K, V>,
     ) {
         let tti = &self.time_to_idle;
         let va = self.valid_after();
@@ -993,14 +1009,7 @@ where
                 .remove_if(key, |_, v| is_expired_entry_ao(tti, va, v, now));
 
             if let Some(entry) = maybe_entry {
-                Self::handle_remove_with_deques(
-                    deq_name,
-                    deq,
-                    write_order_deq,
-                    key,
-                    entry,
-                    total_cost,
-                );
+                Self::handle_remove_with_deques(deq_name, deq, write_order_deq, key, entry, ws);
             } else if let Some(entry) = self.cache.get(key) {
                 let ts = entry.last_accessed();
                 if ts.is_none() {
@@ -1030,7 +1039,7 @@ where
         deqs: &mut Deques<K>,
         batch_size: usize,
         now: Instant,
-        total_cost: &mut TotalCost<'_, K, V>,
+        ws: &mut WeightedSize<'_, K, V>,
     ) {
         let ttl = &self.time_to_live;
         let va = self.valid_after();
@@ -1061,7 +1070,7 @@ where
                 .remove_if(key, |_, v| is_expired_entry_wo(ttl, va, v, now));
 
             if let Some(entry) = maybe_entry {
-                Self::handle_remove(deqs, key, entry, total_cost);
+                Self::handle_remove(deqs, key, entry, ws);
             } else if let Some(entry) = self.cache.get(key) {
                 let ts = entry.last_modified();
                 if ts.is_none() {
@@ -1089,9 +1098,9 @@ where
         invalidator: &Invalidator<K, V, S>,
         deqs: &mut Deques<K>,
         batch_size: usize,
-        total_cost: &mut TotalCost<'_, K, V>,
+        ws: &mut WeightedSize<'_, K, V>,
     ) {
-        self.process_invalidation_result(invalidator, deqs, total_cost);
+        self.process_invalidation_result(invalidator, deqs, ws);
         self.submit_invalidation_task(invalidator, &mut deqs.write_order, batch_size);
     }
 
@@ -1099,7 +1108,7 @@ where
         &self,
         invalidator: &Invalidator<K, V, S>,
         deqs: &mut Deques<K>,
-        total_cost: &mut TotalCost<'_, K, V>,
+        ws: &mut WeightedSize<'_, K, V>,
     ) {
         if let Some(InvalidationResult {
             invalidated,
@@ -1107,7 +1116,7 @@ where
         }) = invalidator.task_result()
         {
             for KeyValueEntry { key, entry } in invalidated {
-                Self::handle_remove(deqs, &key, entry, total_cost);
+                Self::handle_remove(deqs, &key, entry, ws);
             }
             if is_done {
                 deqs.write_order.reset_cursor();
