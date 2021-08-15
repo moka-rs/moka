@@ -817,6 +817,23 @@ where
         }
     }
 
+    /// Performs size-aware admission explained in the paper:
+    /// [Lightweight Robust Size Aware Cache Management][size-aware-cache-paper]
+    /// by Gil Einziger, Ohad Eytan, Roy Friedman, Ben Manes.
+    ///
+    /// [size-aware-cache-paper]: https://arxiv.org/abs/2105.08770
+    ///
+    /// There are some modifications in this implementation:
+    /// - To admit to the main space, candidate's frequency must be higher than
+    ///   the aggregated frequencies of the potential victims. (In the paper,
+    ///   `>=` operator is used rather than `>`)  The `>` operator will do a better
+    ///   job to prevent the main space from polluting.
+    /// - When a candidate is rejected, the potential victims will stay at the LRU
+    ///   position of the probation access-order queue. (In the paper, they will be
+    ///   promoted (to the MRU position?) to force the eviction policy to select a
+    ///   different set of victims for the next candidate). We may implement the
+    ///   paper's behavior later?
+    ///
     #[inline]
     fn admit(
         candidate: &EntrySizeAndFrequency,
@@ -840,8 +857,8 @@ where
                     victim_nodes.push(NonNull::from(victim));
                     break;
                 } else {
-                    // Could not get the victim from the cache. Skip this node as its
-                    // ValueEntry might have been invalidated.
+                    // Could not get the victim from the cache (hash map). Skip this node
+                    // as its ValueEntry might have been invalidated.
                     skipped_nodes.push(NonNull::from(victim));
                 }
             } else {
@@ -863,8 +880,8 @@ where
                     victims.add_frequency(freq, victim.element.hash);
                     victim_nodes.push(NonNull::from(victim));
                 } else {
-                    // Could not get the victim from the cache. Skip this node as its
-                    // ValueEntry might have been invalidated.
+                    // Could not get the victim from the cache (hash map). Skip this node
+                    // as its ValueEntry might have been invalidated.
                     skipped_nodes.push(NonNull::from(victim));
                 }
             } else {
@@ -878,7 +895,7 @@ where
         // TODO: Implement some randomness to mitigate hash DoS attack.
         // See Caffeine's implementation.
 
-        if victims.weight >= candidate.weight && candidate.freq >= victims.freq {
+        if victims.weight >= candidate.weight && candidate.freq > victims.freq {
             AdmissionResult::Admitted {
                 victim_nodes,
                 skipped_nodes,

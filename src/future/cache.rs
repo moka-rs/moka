@@ -637,14 +637,8 @@ mod tests {
 
         assert_eq!(cache.get(&"a"), Some("alice"));
         assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.get(&"c"), Some("cindy"));
         cache.sync();
-        // counts: a -> 2, b -> 2, c -> 2
-
-        assert_eq!(cache.get(&"a"), Some("alice"));
-        assert_eq!(cache.get(&"b"), Some("bob"));
-        cache.sync();
-        // counts: a -> 3, b -> 3, c -> 2
+        // counts: a -> 2, b -> 2, c -> 1
 
         // "d" should not be admitted because its frequency is too low.
         cache.insert("d", "david").await; //   count: d -> 0
@@ -656,7 +650,7 @@ mod tests {
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
-        // because d's frequency equals to c's.
+        // because d's frequency is higher than to c's.
         cache.insert("d", "dennis").await;
         cache.sync();
         assert_eq!(cache.get(&"a"), Some("alice"));
@@ -690,14 +684,8 @@ mod tests {
 
         assert_eq!(cache.get(&"a"), Some("alice"));
         assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.get(&"c"), Some("cindy"));
         cache.sync();
-        // counts: a -> 2, b -> 2, c -> 2
-
-        assert_eq!(cache.get(&"a"), Some("alice"));
-        assert_eq!(cache.get(&"b"), Some("bob"));
-        cache.sync();
-        // counts: a -> 3, b -> 3, c -> 2
+        // counts: a -> 2, b -> 2, c -> 1
 
         // "d" should not be admitted because its frequency is too low.
         cache.blocking_insert("d", "david"); //   count: d -> 0
@@ -709,7 +697,7 @@ mod tests {
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
-        // because d's frequency equals to c's.
+        // because d's frequency is higher than to c's.
         cache.blocking_insert("d", "dennis");
         cache.sync();
         assert_eq!(cache.get(&"a"), Some("alice"));
