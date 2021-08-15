@@ -143,7 +143,7 @@ impl<K, V> ValueEntry<K, V> {
         };
         let last_accessed = Arc::clone(&other.last_accessed);
         let last_modified = Arc::clone(&other.last_modified);
-        // To prevent this updated ValueEntry from being evicted by a expiration policy,
+        // To prevent this updated ValueEntry from being evicted by an expiration policy,
         // set the max value to the timestamps. They will be replaced with the real
         // timestamps when applying writes.
         last_accessed.store(std::u64::MAX, Ordering::Release);

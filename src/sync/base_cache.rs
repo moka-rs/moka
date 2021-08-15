@@ -262,6 +262,9 @@ where
             },
             // on_modify
             |_k, old_entry| {
+                // NOTE: `new_with` sets the max value to the last_accessed and last_modified
+                // to prevent this updated ValueEntry from being evicted by an expiration policy.
+                // See the comments in `new_with` for more details.
                 let entry = Arc::new(ValueEntry::new_with(value.clone(), old_entry));
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((
