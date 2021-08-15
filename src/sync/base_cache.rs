@@ -842,32 +842,17 @@ where
         freq: &FrequencySketch,
         ws: &WeightedSize<'_, K, V>,
     ) -> AdmissionResult<K> {
+        const MAX_CONSECUTIVE_RETRIES: usize = 5;
+        let mut retries = 0;
+
         let mut victims = EntrySizeAndFrequency::default();
         let mut victim_nodes = Vec::default();
         let mut skipped_nodes = Vec::default();
-        let mut next_victim;
 
-        // Find first victim.
-        loop {
-            if let Some(victim) = deqs.probation.peek_front() {
-                if let Some(vic_entry) = cache.get(&victim.element.key) {
-                    victims.add_policy_weight(ws, &victim.element.key, &vic_entry.value);
-                    victims.add_frequency(freq, victim.element.hash);
-                    next_victim = victim.next_node();
-                    victim_nodes.push(NonNull::from(victim));
-                    break;
-                } else {
-                    // Could not get the victim from the cache (hash map). Skip this node
-                    // as its ValueEntry might have been invalidated.
-                    skipped_nodes.push(NonNull::from(victim));
-                }
-            } else {
-                // No more victims. Reject the candidate.
-                return AdmissionResult::Rejected { skipped_nodes };
-            }
-        }
+        // Get first potential victim at the LRU position.
+        let mut next_victim = deqs.probation.peek_front();
 
-        // Aggregate victims.
+        // Aggregate potential victims.
         while victims.weight < candidate.weight {
             if candidate.freq < victims.freq {
                 break;
@@ -879,13 +864,19 @@ where
                     victims.add_policy_weight(ws, &victim.element.key, &vic_entry.value);
                     victims.add_frequency(freq, victim.element.hash);
                     victim_nodes.push(NonNull::from(victim));
+                    retries = 0;
                 } else {
                     // Could not get the victim from the cache (hash map). Skip this node
                     // as its ValueEntry might have been invalidated.
                     skipped_nodes.push(NonNull::from(victim));
+
+                    retries += 1;
+                    if retries > MAX_CONSECUTIVE_RETRIES {
+                        break;
+                    }
                 }
             } else {
-                // No more victims.
+                // No more potential victims.
                 break;
             }
         }
