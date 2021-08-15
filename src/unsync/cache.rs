@@ -444,7 +444,7 @@ where
     ) -> bool {
         // TODO: Implement some randomness to mitigate hash DoS attack.
         // See Caffeine's implementation.
-        freq.frequency(candidate_hash) > freq.frequency(victim.element.hash)
+        freq.frequency(candidate_hash) >= freq.frequency(victim.element.hash)
     }
 
     fn handle_update(
@@ -605,7 +605,12 @@ mod tests {
 
         assert_eq!(cache.get(&"a"), Some(&"alice"));
         assert_eq!(cache.get(&"b"), Some(&"bob"));
-        // counts: a -> 2, b -> 2, c -> 1
+        assert_eq!(cache.get(&"c"), Some(&"cindy"));
+        // counts: a -> 2, b -> 2, c -> 2
+
+        assert_eq!(cache.get(&"a"), Some(&"alice"));
+        assert_eq!(cache.get(&"b"), Some(&"bob"));
+        // counts: a -> 3, b -> 3, c -> 2
 
         // "d" should not be admitted because its frequency is too low.
         cache.insert("d", "david"); //   count: d -> 0
@@ -615,7 +620,7 @@ mod tests {
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
-        // because d's frequency is higher then c's.
+        // because d's frequency equals to c's.
         cache.insert("d", "dennis");
         assert_eq!(cache.get(&"a"), Some(&"alice"));
         assert_eq!(cache.get(&"b"), Some(&"bob"));

@@ -37,8 +37,7 @@ use std::{
 /// ```
 ///
 pub struct CacheBuilder<C> {
-    max_entries: Option<usize>,
-    // max_weight: Option<usize>,
+    max_capacity: Option<usize>,
     initial_capacity: Option<usize>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
@@ -53,8 +52,7 @@ where
 {
     pub(crate) fn unbound() -> Self {
         Self {
-            max_entries: None,
-            // max_weight: None,
+            max_capacity: None,
             initial_capacity: None,
             time_to_live: None,
             time_to_idle: None,
@@ -67,7 +65,7 @@ where
     /// up to `max_capacity` entries.
     pub fn new(max_capacity: usize) -> Self {
         Self {
-            max_entries: Some(max_capacity),
+            max_capacity: Some(max_capacity),
             ..Self::unbound()
         }
     }
@@ -76,7 +74,7 @@ where
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
         Cache::with_everything(
-            self.max_entries,
+            self.max_capacity,
             self.initial_capacity,
             build_hasher,
             self.time_to_live,
@@ -91,7 +89,7 @@ where
         S: BuildHasher + Clone + Send + Sync + 'static,
     {
         Cache::with_everything(
-            self.max_entries,
+            self.max_capacity,
             self.initial_capacity,
             hasher,
             self.time_to_live,
@@ -158,7 +156,7 @@ mod tests {
         // Cache<char, String>
         let cache = CacheBuilder::new(100).build();
 
-        assert_eq!(cache.max_entries(), Some(100));
+        assert_eq!(cache.max_capacity(), Some(100));
         assert_eq!(cache.time_to_live(), None);
         assert_eq!(cache.time_to_idle(), None);
         assert_eq!(cache.num_segments(), 1);
@@ -171,7 +169,7 @@ mod tests {
             .time_to_idle(Duration::from_secs(15 * 60))
             .build();
 
-        assert_eq!(cache.max_entries(), Some(100));
+        assert_eq!(cache.max_capacity(), Some(100));
         assert_eq!(cache.time_to_live(), Some(Duration::from_secs(45 * 60)));
         assert_eq!(cache.time_to_idle(), Some(Duration::from_secs(15 * 60)));
         assert_eq!(cache.num_segments(), 1);

@@ -187,15 +187,15 @@ where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    /// Constructs a new `Cache<K, V>` that will store up to the `max_entries`.
+    /// Constructs a new `Cache<K, V>` that will store up to the `max_capacity`.
     ///
     /// To adjust various configuration knobs such as `initial_capacity` or
     /// `time_to_live`, use the [`CacheBuilder`][builder-struct].
     ///
     /// [builder-struct]: ./struct.CacheBuilder.html
-    pub fn new(max_entries: usize) -> Self {
+    pub fn new(max_capacity: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(Some(max_entries), None, build_hasher, None, None, false)
+        Self::with_everything(Some(max_capacity), None, build_hasher, None, None, false)
     }
 }
 
@@ -206,7 +206,7 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn with_everything(
-        max_entries: Option<usize>,
+        max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         time_to_live: Option<Duration>,
@@ -215,7 +215,7 @@ where
     ) -> Self {
         Self {
             base: BaseCache::new(
-                max_entries,
+                max_capacity,
                 initial_capacity,
                 build_hasher.clone(),
                 time_to_live,
@@ -421,14 +421,9 @@ where
         self.base.invalidate_entries_if(predicate)
     }
 
-    /// Returns the `max_entries` of this cache.
-    pub fn max_entries(&self) -> Option<usize> {
-        self.base.max_entries()
-    }
-
-    /// Returns the `max_weight` of this cache.
-    pub fn max_weight(&self) -> Option<u64> {
-        self.base.max_weight()
+    /// Returns the `max_capacity` of this cache.
+    pub fn max_capacity(&self) -> Option<usize> {
+        self.base.max_capacity()
     }
 
     /// Returns the `time_to_live` of this cache.
@@ -554,8 +549,14 @@ mod tests {
 
         assert_eq!(cache.get(&"a"), Some("alice"));
         assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"c"), Some("cindy"));
         cache.sync();
-        // counts: a -> 2, b -> 2, c -> 1
+        // counts: a -> 2, b -> 2, c -> 2
+
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        cache.sync();
+        // counts: a -> 3, b -> 3, c -> 2
 
         // "d" should not be admitted because its frequency is too low.
         cache.insert("d", "david"); //   count: d -> 0
@@ -567,7 +568,7 @@ mod tests {
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
-        // because d's frequency is higher then c's.
+        // because d's frequency equals to c's.
         cache.insert("d", "dennis");
         cache.sync();
         assert_eq!(cache.get(&"a"), Some("alice"));

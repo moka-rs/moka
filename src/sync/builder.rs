@@ -39,7 +39,7 @@ use std::{
 /// ```
 ///
 pub struct CacheBuilder<C> {
-    max_entries: Option<usize>,
+    max_capacity: Option<usize>,
     initial_capacity: Option<usize>,
     num_segments: Option<usize>,
     time_to_live: Option<Duration>,
@@ -54,10 +54,10 @@ where
     V: Clone + Send + Sync + 'static,
 {
     /// Construct a new `CacheBuilder` that will be used to build a `Cache` or
-    /// `SegmentedCache` holding up to `max_entries`.
-    pub fn new(max_entries: usize) -> Self {
+    /// `SegmentedCache` holding up to `max_capacity` entries.
+    pub fn new(max_capacity: usize) -> Self {
         Self {
-            max_entries: Some(max_entries),
+            max_capacity: Some(max_capacity),
             initial_capacity: None,
             num_segments: None,
             time_to_live: None,
@@ -76,7 +76,7 @@ where
         assert!(num_segments > 1);
 
         CacheBuilder {
-            max_entries: self.max_entries,
+            max_capacity: self.max_capacity,
             initial_capacity: self.initial_capacity,
             num_segments: Some(num_segments),
             time_to_live: self.time_to_live,
@@ -93,7 +93,7 @@ where
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
         Cache::with_everything(
-            self.max_entries,
+            self.max_capacity,
             self.initial_capacity,
             build_hasher,
             self.time_to_live,
@@ -111,7 +111,7 @@ where
         S: BuildHasher + Clone + Send + Sync + 'static,
     {
         Cache::with_everything(
-            self.max_entries,
+            self.max_capacity,
             self.initial_capacity,
             hasher,
             self.time_to_live,
@@ -133,7 +133,7 @@ where
     pub fn build(self) -> SegmentedCache<K, V, RandomState> {
         let build_hasher = RandomState::default();
         SegmentedCache::with_everything(
-            self.max_entries,
+            self.max_capacity,
             self.initial_capacity,
             self.num_segments.unwrap(),
             build_hasher,
@@ -152,7 +152,7 @@ where
         S: BuildHasher + Clone + Send + Sync + 'static,
     {
         SegmentedCache::with_everything(
-            self.max_entries,
+            self.max_capacity,
             self.initial_capacity,
             self.num_segments.unwrap(),
             hasher,
@@ -220,7 +220,7 @@ mod tests {
         // Cache<char, String>
         let cache = CacheBuilder::new(100).build();
 
-        assert_eq!(cache.max_entries(), Some(100));
+        assert_eq!(cache.max_capacity(), Some(100));
         assert_eq!(cache.time_to_live(), None);
         assert_eq!(cache.time_to_idle(), None);
         assert_eq!(cache.num_segments(), 1);
@@ -233,7 +233,7 @@ mod tests {
             .time_to_idle(Duration::from_secs(15 * 60))
             .build();
 
-        assert_eq!(cache.max_entries(), Some(100));
+        assert_eq!(cache.max_capacity(), Some(100));
         assert_eq!(cache.time_to_live(), Some(Duration::from_secs(45 * 60)));
         assert_eq!(cache.time_to_idle(), Some(Duration::from_secs(15 * 60)));
         assert_eq!(cache.num_segments(), 1);
@@ -247,7 +247,7 @@ mod tests {
         // SegmentCache<char, String>
         let cache = CacheBuilder::new(100).segments(16).build();
 
-        assert_eq!(cache.max_entries(), Some(100));
+        assert_eq!(cache.max_capacity(), Some(100));
         assert_eq!(cache.time_to_live(), None);
         assert_eq!(cache.time_to_idle(), None);
         assert_eq!(cache.num_segments(), 16_usize.next_power_of_two());
@@ -261,7 +261,7 @@ mod tests {
             .time_to_idle(Duration::from_secs(15 * 60))
             .build();
 
-        assert_eq!(cache.max_entries(), Some(100));
+        assert_eq!(cache.max_capacity(), Some(100));
         assert_eq!(cache.time_to_live(), Some(Duration::from_secs(45 * 60)));
         assert_eq!(cache.time_to_idle(), Some(Duration::from_secs(15 * 60)));
         assert_eq!(cache.num_segments(), 16_usize.next_power_of_two());

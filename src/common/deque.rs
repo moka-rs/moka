@@ -49,6 +49,10 @@ impl<T> DeqNode<T> {
             element,
         }
     }
+
+    pub(crate) fn next_node(&self) -> Option<&DeqNode<T>> {
+        self.next.as_ref().map(|node| unsafe { node.as_ref() })
+    }
 }
 
 /// Cursor is used to remember the current iterating position.

@@ -58,7 +58,7 @@ where
     V: Clone + Send + Sync + 'static,
 {
     /// Constructs a new `SegmentedCache<K, V>` that has multiple internal
-    /// segments and will store up to the `max_entries`.
+    /// segments and will store up to the `max_capacity`.
     ///
     /// To adjust various configuration knobs such as `initial_capacity` or
     /// `time_to_live`, use the [`CacheBuilder`][builder-struct].
@@ -68,10 +68,10 @@ where
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
-    pub fn new(max_entries: usize, num_segments: usize) -> Self {
+    pub fn new(max_capacity: usize, num_segments: usize) -> Self {
         let build_hasher = RandomState::default();
         Self::with_everything(
-            Some(max_entries),
+            Some(max_capacity),
             None,
             num_segments,
             build_hasher,
@@ -92,7 +92,7 @@ where
     ///
     /// Panics if `num_segments` is 0.
     pub(crate) fn with_everything(
-        max_entries: Option<usize>,
+        max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         num_segments: usize,
         build_hasher: S,
@@ -102,7 +102,7 @@ where
     ) -> Self {
         Self {
             inner: Arc::new(Inner::new(
-                max_entries,
+                max_capacity,
                 initial_capacity,
                 num_segments,
                 build_hasher,
@@ -241,9 +241,9 @@ where
         Ok(())
     }
 
-    /// Returns the `max_entries` of this cache.
-    pub fn max_entries(&self) -> Option<usize> {
-        self.inner.desired_max_entries
+    /// Returns the `max_capacity` of this cache.
+    pub fn max_capacity(&self) -> Option<usize> {
+        self.inner.desired_capacity
     }
 
     /// Returns the `time_to_live` of this cache.
@@ -343,8 +343,7 @@ impl MockExpirationClock {
 }
 
 struct Inner<K, V, S> {
-    desired_max_entries: Option<usize>,
-    // desired_max_weight: Option<u64>,
+    desired_capacity: Option<usize>,
     segments: Box<[Cache<K, V, S>]>,
     build_hasher: S,
     segment_shift: u32,
@@ -360,7 +359,7 @@ where
     ///
     /// Panics if `num_segments` is 0.
     fn new(
-        max_entries: Option<usize>,
+        max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         num_segments: usize,
         build_hasher: S,
@@ -373,14 +372,14 @@ where
         let actual_num_segments = num_segments.next_power_of_two();
         let segment_shift = 64 - actual_num_segments.trailing_zeros();
         // TODO: Round up.
-        let seg_max_entries = max_entries.map(|n| n / actual_num_segments);
+        let seg_max_capacity = max_capacity.map(|n| n / actual_num_segments);
         let seg_init_capacity = initial_capacity.map(|cap| cap / actual_num_segments);
         // NOTE: We cannot initialize the segments as `vec![cache; actual_num_segments]`
         // because Cache::clone() does not clone its inner but shares the same inner.
         let segments = (0..num_segments)
             .map(|_| {
                 Cache::with_everything(
-                    seg_max_entries,
+                    seg_max_capacity,
                     seg_init_capacity,
                     build_hasher.clone(),
                     time_to_live,
@@ -391,8 +390,7 @@ where
             .collect::<Vec<_>>();
 
         Self {
-            desired_max_entries: max_entries,
-            // desired_max_weight: None,
+            desired_capacity: max_capacity,
             segments: segments.into_boxed_slice(),
             build_hasher,
             segment_shift,
@@ -454,8 +452,14 @@ mod tests {
 
         assert_eq!(cache.get(&"a"), Some("alice"));
         assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"c"), Some("cindy"));
         cache.sync();
-        // counts: a -> 2, b -> 2, c -> 1
+        // counts: a -> 2, b -> 2, c -> 2
+
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        cache.sync();
+        // counts: a -> 3, b -> 3, c -> 2
 
         // "d" should not be admitted because its frequency is too low.
         cache.insert("d", "david"); //   count: d -> 0
@@ -467,7 +471,7 @@ mod tests {
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
-        // because d's frequency is higher then c's.
+        // because d's frequency equals to c's.
         cache.insert("d", "dennis");
         cache.sync();
         assert_eq!(cache.get(&"a"), Some("alice"));

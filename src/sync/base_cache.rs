@@ -83,7 +83,7 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn new(
-        max_entries: Option<usize>,
+        max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         time_to_live: Option<Duration>,
@@ -93,7 +93,7 @@ where
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
         let inner = Arc::new(Inner::new(
-            max_entries,
+            max_capacity,
             initial_capacity,
             build_hasher,
             r_rcv,
@@ -196,12 +196,8 @@ where
         self.inner.register_invalidation_predicate(predicate, now)
     }
 
-    pub(crate) fn max_entries(&self) -> Option<usize> {
-        self.inner.max_entries()
-    }
-
-    pub(crate) fn max_weight(&self) -> Option<u64> {
-        self.inner.max_weight()
+    pub(crate) fn max_capacity(&self) -> Option<usize> {
+        self.inner.max_capacity()
     }
 
     pub(crate) fn time_to_live(&self) -> Option<Duration> {
@@ -356,21 +352,34 @@ struct TotalWeight<'a, K, V> {
 }
 
 impl<'a, K, V> TotalWeight<'a, K, V> {
-    fn saturating_add(&mut self, key: &K, value: &V) {
-        if let Some(weighter) = &self.weighter {
-            let total = &mut self.total;
-            let weight = weighter(key, value);
-            *total = total.saturating_add(weight);
-        }
+    #[inline]
+    fn weight(&self, key: &K, value: &V) -> u64 {
+        self.weighter.map(|w| w(key, value)).unwrap_or(1)
     }
 
-    fn saturating_sub(&mut self, key: &K, value: &V) {
-        if let Some(weighter) = &self.weighter {
-            let total = &mut self.total;
-            let weight = weighter(key, value);
-            *total = total.saturating_sub(weight);
-        }
+    #[inline]
+    fn saturating_add(&mut self, key: &K, value: &V) {
+        let weight = self.weight(key, value);
+        let total = &mut self.total;
+        *total = total.saturating_add(weight);
     }
+
+    #[inline]
+    fn saturating_sub(&mut self, key: &K, value: &V) {
+        let weight = self.weight(key, value);
+        let total = &mut self.total;
+        *total = total.saturating_sub(weight);
+    }
+}
+
+enum AdmissionResult<K> {
+    Admitted {
+        victims: Vec<NonNull<DeqNode<KeyHashDate<K>>>>,
+        skipped_victims: Vec<NonNull<DeqNode<KeyHashDate<K>>>>,
+    },
+    Rejected {
+        skipped_victims: Vec<NonNull<DeqNode<KeyHashDate<K>>>>,
+    },
 }
 
 type CacheStore<K, V, S> = moka_cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
@@ -378,8 +387,7 @@ type CacheStore<K, V, S> = moka_cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, 
 type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
 
 pub(crate) struct Inner<K, V, S> {
-    max_entries: Option<usize>,
-    max_weight: Option<u64>,
+    max_capacity: Option<u64>,
     total_weight: AtomicU64,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
@@ -407,7 +415,7 @@ where
     // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
     #[allow(clippy::too_many_arguments)]
     fn new(
-        max_entries: Option<usize>,
+        max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         read_op_ch: Receiver<ReadOp<K, V>>,
@@ -425,12 +433,11 @@ where
             initial_capacity,
             build_hasher.clone(),
         );
-        let skt_capacity = max_entries.map(|n| n * 32).unwrap_or_default().max(100);
+        let skt_capacity = max_capacity.map(|n| n * 32).unwrap_or_default().max(100);
         let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
 
         Self {
-            max_entries,
-            max_weight: None,
+            max_capacity: max_capacity.map(|n| n as u64),
             total_weight: AtomicU64::default(),
             cache,
             build_hasher,
@@ -485,12 +492,8 @@ where
             .map(|(key, entry)| KeyValueEntry { key, entry })
     }
 
-    fn max_entries(&self) -> Option<usize> {
-        self.max_entries
-    }
-
-    fn max_weight(&self) -> Option<u64> {
-        self.max_weight
+    fn max_capacity(&self) -> Option<usize> {
+        self.max_capacity.map(|n| n as usize)
     }
 
     #[inline]
@@ -663,16 +666,10 @@ where
     V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    fn has_enough_capacity(&self, total_weight: &TotalWeight<'_, K, V>) -> bool {
-        let entries = self
-            .max_entries
-            .map(|limit| self.cache.len() <= limit)
-            .unwrap_or(true);
-        let weight = self
-            .max_weight
-            .map(|limit| total_weight.total <= limit)
-            .unwrap_or(true);
-        entries && weight
+    fn has_enough_capacity(&self, total_weight: &TotalWeight<'_, K, V>, weight: u64) -> bool {
+        self.max_capacity
+            .map(|limit| total_weight.total + weight <= limit)
+            .unwrap_or(true)
     }
 
     fn apply_reads(&self, deqs: &mut Deques<K>, count: usize) {
@@ -723,116 +720,158 @@ where
         freq: &FrequencySketch,
         total_weight: &mut TotalWeight<'_, K, V>,
     ) {
-        const MAX_RETRY: usize = 5;
-        let mut tries = 0;
-        let mut done = false;
-
         entry.set_last_accessed(timestamp);
         entry.set_last_modified(timestamp);
         let last_accessed = entry.raw_last_accessed();
         let last_modified = entry.raw_last_modified();
 
-        while tries < MAX_RETRY {
-            tries += 1;
+        if entry.is_admitted() {
+            // The entry has been already admitted, so treat this as an update.
+            deqs.move_to_back_ao(&entry);
+            deqs.move_to_back_wo(&entry);
+            return;
+        }
 
-            if entry.is_admitted() {
-                // The entry has been already admitted, so treat this as an update.
-                deqs.move_to_back_ao(&entry);
-                deqs.move_to_back_wo(&entry);
-            } else if self.has_enough_capacity(total_weight) {
-                // There are some room in the cache. Add the candidate to the deques.
-                self.handle_admit(
-                    kh.clone(),
-                    &entry,
-                    last_accessed,
-                    last_modified,
-                    deqs,
-                    total_weight,
-                );
-            } else {
-                let victim = match Self::find_cache_victim(deqs, freq) {
-                    // Found a victim.
-                    Some(node) => node,
-                    // Not found a victim. This condition should be unreachable
-                    // because there was no room in the cache. But rather than
-                    // panicking here, admit the candidate as there might be some
-                    // room in te cache now.
-                    None => {
-                        self.handle_admit(
-                            kh.clone(),
-                            &entry,
-                            last_accessed,
-                            last_modified,
-                            deqs,
-                            total_weight,
-                        );
-                        done = true;
-                        break;
-                    }
-                };
+        let space_needed = total_weight.weight(&kh.key, &entry.value);
 
-                if Self::admit(kh.hash, victim, freq) {
-                    // The candidate is admitted. Try to remove the victim from the
-                    // cache (hash map).
-                    if let Some((vic_key, vic_entry)) = self.cache.remove_entry(&victim.element.key)
+        if self.has_enough_capacity(total_weight, space_needed) {
+            // There are enough room in the cache (or the cache is unbounded).
+            // Add the candidate to the deques.
+            self.handle_admit(kh, &entry, last_accessed, last_modified, deqs, total_weight);
+            return;
+        }
+
+        if let Some(max) = self.max_capacity {
+            if space_needed > max {
+                // The candidate is too big to fit in the cache. Reject it.
+                self.cache.remove(&Arc::clone(&kh.key));
+                return;
+            }
+        }
+
+        let skipped;
+
+        // Try to admit the candidate.
+        match Self::admit(kh.hash, space_needed, &self.cache, deqs, freq, total_weight) {
+            AdmissionResult::Admitted {
+                victims,
+                mut skipped_victims,
+            } => {
+                // Try to remove the victims from the cache (hash map).
+                for victim in victims {
+                    if let Some((vic_key, vic_entry)) = self
+                        .cache
+                        .remove_entry(unsafe { &victim.as_ref().element.key })
                     {
                         // And then remove the victim from the deques.
                         Self::handle_remove(deqs, &vic_key, vic_entry, total_weight);
                     } else {
                         // Could not remove the victim from the cache. Skip this
                         // victim node as its ValueEntry might have been
-                        // invalidated. Since the invalidated ValueEntry (which
-                        // should be still in the write op queue) has a pointer to
-                        // this node, we move the node to the back of the deque
-                        // instead of unlinking (dropping) it.
-                        let victim = NonNull::from(victim);
-                        unsafe { deqs.probation.move_to_back(victim) };
-
-                        continue; // Retry
+                        // invalidated. Add it to the skipped_victim.
+                        skipped_victims.push(victim);
                     }
-                    // Add the candidate to the deques.
-                    self.handle_admit(
-                        kh.clone(),
-                        &entry,
-                        Arc::clone(&last_accessed),
-                        Arc::clone(&last_modified),
-                        deqs,
-                        total_weight,
-                    );
-                } else {
-                    // The candidate is not admitted. Remove it from the cache (hash map).
-                    self.cache.remove(&Arc::clone(&kh.key));
                 }
+                skipped = skipped_victims;
+
+                // Add the candidate to the deques.
+                self.handle_admit(
+                    kh,
+                    &entry,
+                    Arc::clone(&last_accessed),
+                    Arc::clone(&last_modified),
+                    deqs,
+                    total_weight,
+                );
             }
-            done = true;
-            break;
-        }
+            AdmissionResult::Rejected { skipped_victims } => {
+                skipped = skipped_victims;
+                // Remove the candidate from the cache (hash map).
+                self.cache.remove(&Arc::clone(&kh.key));
+            }
+        };
 
-        if !done {
-            // Too mary retries. Remove the candidate from the cache.
-            self.cache.remove(&Arc::clone(&kh.key));
+        // Move the skipped victim nodes to the back of the deque. We do not unlink
+        // (drop) these nodes because ValueEntries in the write op queue should be
+        // pointing them.
+        for node in skipped {
+            unsafe { deqs.probation.move_to_back(node) };
         }
-    }
-
-    #[inline]
-    fn find_cache_victim<'a>(
-        deqs: &'a Deques<K>,
-        _freq: &FrequencySketch,
-    ) -> Option<&'a DeqNode<KeyHashDate<K>>> {
-        // TODO: Check its frequency. If it is not very low, maybe we should
-        // check frequencies of next few others and pick from them.
-        deqs.probation.peek_front()
     }
 
     #[inline]
     fn admit(
         candidate_hash: u64,
-        victim: &DeqNode<KeyHashDate<K>>,
+        space_needed: u64,
+        cache: &CacheStore<K, V, S>,
+        deqs: &Deques<K>,
         freq: &FrequencySketch,
-    ) -> bool {
-        // TODO: Implement some randomness to mitigate hash DoS attack.
+        total_weight: &TotalWeight<'_, K, V>,
+    ) -> AdmissionResult<K> {
+        let candidate_freq = freq.frequency(candidate_hash) as u32;
+        let mut victims_freq = 0u32;
+        let mut victims_size = 0u64;
+        let mut victims = Vec::default();
+        let mut skipped_victims = Vec::default();
+        let mut current_victim;
+
+        // Find first victim.
+        loop {
+            if let Some(victim) = deqs.probation.peek_front() {
+                if let Some(vic_entry) = cache.get(&victim.element.key) {
+                    victims_freq += freq.frequency(victim.element.hash) as u32;
+                    victims_size += total_weight.weight(&victim.element.key, &vic_entry.value);
+                    current_victim = victim.next_node();
+                    victims.push(NonNull::from(victim));
+                    break;
+                } else {
+                    // Could not get the victim from the cache. Skip this node as its
+                    // ValueEntry might have been invalidated.
+                    skipped_victims.push(NonNull::from(victim));
+                }
+            } else {
+                // No more victims. Reject the candidate.
+                return AdmissionResult::Rejected { skipped_victims };
+            }
+        }
+
+        // Aggregate victims.
+        while victims_size < space_needed {
+            if candidate_freq < victims_freq {
+                break;
+            }
+            if let Some(victim) = current_victim.take() {
+                if let Some(vic_entry) = cache.get(&victim.element.key) {
+                    victims_freq += freq.frequency(victim.element.hash) as u32;
+                    victims_size += total_weight.weight(&victim.element.key, &vic_entry.value);
+                    current_victim = victim.next_node();
+                    victims.push(NonNull::from(victim));
+                } else {
+                    // Could not get the victim from the cache. Skip this node as its
+                    // ValueEntry might have been invalidated.
+                    skipped_victims.push(NonNull::from(victim));
+                }
+            } else {
+                // No more victims.
+                break;
+            }
+        }
+
+        // Admit or reject the candidate.
+
+        // TODO: Implement some randomness to mitigate hash DoS attack?
         // See Caffeine's implementation.
-        freq.frequency(candidate_hash) > freq.frequency(victim.element.hash)
+
+        if victims_size >= space_needed && candidate_freq >= victims_freq {
+            dbg!("admitted");
+            AdmissionResult::Admitted {
+                victims,
+                skipped_victims,
+            }
+        } else {
+            dbg!("rejected");
+            AdmissionResult::Rejected { skipped_victims }
+        }
     }
 
     fn handle_admit(
