@@ -2,7 +2,7 @@ use super::{
     deques::Deques,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
-    KeyDate, KeyHash, KeyHashDate, KeyValueEntry, PredicateId, ReadOp, ValueEntry, WriteOp,
+    KVEntry, KeyDate, KeyHash, KeyHashDate, PredicateId, ReadOp, ValueEntry, WriteOp,
 };
 use crate::{
     common::{
@@ -161,7 +161,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn remove_entry<Q>(&self, key: &Q) -> Option<KeyValueEntry<K, V>>
+    pub(crate) fn remove_entry<Q>(&self, key: &Q) -> Option<KVEntry<K, V>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -518,14 +518,14 @@ where
     }
 
     #[inline]
-    fn remove_entry<Q>(&self, key: &Q) -> Option<KeyValueEntry<K, V>>
+    fn remove_entry<Q>(&self, key: &Q) -> Option<KVEntry<K, V>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.cache
             .remove_entry(key)
-            .map(|(key, entry)| KeyValueEntry { key, entry })
+            .map(|(key, entry)| KVEntry::new(key, entry))
     }
 
     fn max_capacity(&self) -> Option<usize> {
@@ -730,7 +730,7 @@ where
         for _ in 0..count {
             match ch.try_recv() {
                 Ok(Upsert(kh, entry)) => self.handle_upsert(kh, entry, ts, deqs, &freq, ws),
-                Ok(Remove(key, entry)) => Self::handle_remove(deqs, &key, entry, ws),
+                Ok(Remove(KVEntry { key, entry })) => Self::handle_remove(deqs, &key, entry, ws),
                 Err(_) => break,
             };
         }
@@ -1132,7 +1132,7 @@ where
             is_done,
         }) = invalidator.task_result()
         {
-            for KeyValueEntry { key, entry } in invalidated {
+            for KVEntry { key, entry } in invalidated {
                 Self::handle_remove(deqs, &key, entry, ws);
             }
             if is_done {

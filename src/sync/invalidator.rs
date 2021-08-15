@@ -9,7 +9,7 @@ use crate::{
     PredicateError,
 };
 
-use super::{base_cache::Inner, KeyValueEntry, PredicateId, PredicateIdStr, ValueEntry};
+use super::{base_cache::Inner, KVEntry, PredicateId, PredicateIdStr, ValueEntry};
 
 use parking_lot::{Mutex, RwLock};
 use quanta::Instant;
@@ -59,12 +59,12 @@ impl<K> KeyDateLite<K> {
 }
 
 pub(crate) struct InvalidationResult<K, V> {
-    pub(crate) invalidated: Vec<KeyValueEntry<K, V>>,
+    pub(crate) invalidated: Vec<KVEntry<K, V>>,
     pub(crate) is_done: bool,
 }
 
 impl<K, V> InvalidationResult<K, V> {
-    fn new(invalidated: Vec<KeyValueEntry<K, V>>, is_done: bool) -> Self {
+    fn new(invalidated: Vec<KVEntry<K, V>>, is_done: bool) -> Self {
         Self {
             invalidated,
             is_done,
@@ -399,7 +399,7 @@ where
             let ts = candidate.timestamp;
             if Self::apply(&predicates, cache, key, ts) {
                 if let Some(entry) = Self::invalidate(cache, key, ts) {
-                    invalidated.push(KeyValueEntry {
+                    invalidated.push(KVEntry {
                         key: Arc::clone(key),
                         entry,
                     })
@@ -450,7 +450,7 @@ where
 }
 
 struct ScanResult<K, V> {
-    invalidated: Vec<KeyValueEntry<K, V>>,
+    invalidated: Vec<KVEntry<K, V>>,
     is_truncated: bool,
     newest_timestamp: Option<Instant>,
 }

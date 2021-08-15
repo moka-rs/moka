@@ -92,9 +92,15 @@ impl<K> KeyHashDate<K> {
     }
 }
 
-pub(crate) struct KeyValueEntry<K, V> {
+pub(crate) struct KVEntry<K, V> {
     pub(crate) key: Arc<K>,
     pub(crate) entry: Arc<ValueEntry<K, V>>,
+}
+
+impl<K, V> KVEntry<K, V> {
+    pub(crate) fn new(key: Arc<K>, entry: Arc<ValueEntry<K, V>>) -> Self {
+        Self { key, entry }
+    }
 }
 
 // DeqNode for an access order queue.
@@ -284,5 +290,5 @@ pub(crate) enum ReadOp<K, V> {
 
 pub(crate) enum WriteOp<K, V> {
     Upsert(KeyHash<K>, Arc<ValueEntry<K, V>>),
-    Remove(Arc<K>, Arc<ValueEntry<K, V>>),
+    Remove(KVEntry<K, V>),
 }

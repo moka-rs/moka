@@ -6,7 +6,7 @@ use crate::{
     sync::{
         base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
         housekeeper::InnerSync,
-        KeyValueEntry, PredicateId, WriteOp,
+        PredicateId, WriteOp,
     },
     PredicateError,
 };
@@ -340,8 +340,8 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(KeyValueEntry { key, entry }) = self.base.remove_entry(key) {
-            let op = WriteOp::Remove(key, entry);
+        if let Some(kv) = self.base.remove_entry(key) {
+            let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
             if Self::schedule_write_op(&self.base.write_op_ch, op, hk)
                 .await
@@ -362,8 +362,8 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(KeyValueEntry { key, entry }) = self.base.remove_entry(key) {
-            let op = WriteOp::Remove(key, entry);
+        if let Some(kv) = self.base.remove_entry(key) {
+            let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
             if Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk).is_err() {
                 panic!("Failed to remove");

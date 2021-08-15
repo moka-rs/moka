@@ -2,7 +2,7 @@ use super::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
     housekeeper::InnerSync,
     value_initializer::ValueInitializer,
-    ConcurrentCacheExt, KeyValueEntry, PredicateId, WriteOp,
+    ConcurrentCacheExt, PredicateId, WriteOp,
 };
 use crate::{sync::value_initializer::InitResult, PredicateError};
 
@@ -358,8 +358,8 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(KeyValueEntry { key, entry }) = self.base.remove_entry(key) {
-            let op = WriteOp::Remove(key, entry);
+        if let Some(kv) = self.base.remove_entry(key) {
+            let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
             Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to remove");
         }
