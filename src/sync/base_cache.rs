@@ -346,29 +346,42 @@ where
     }
 }
 
-struct TotalWeight<'a, K, V> {
+struct TotalCost<'a, K, V> {
     total: u64,
     weighter: Option<&'a Weighter<K, V>>,
 }
 
-impl<'a, K, V> TotalWeight<'a, K, V> {
+impl<'a, K, V> TotalCost<'a, K, V> {
     #[inline]
-    fn weight(&self, key: &K, value: &V) -> u64 {
+    fn cost(&self, key: &K, value: &V) -> u64 {
         self.weighter.map(|w| w(key, value)).unwrap_or(1)
     }
 
     #[inline]
-    fn saturating_add(&mut self, key: &K, value: &V) {
-        let weight = self.weight(key, value);
+    fn saturating_add(&mut self, cost: u64) {
         let total = &mut self.total;
-        *total = total.saturating_add(weight);
+        *total = total.saturating_add(cost);
     }
 
     #[inline]
     fn saturating_sub(&mut self, key: &K, value: &V) {
-        let weight = self.weight(key, value);
+        let cost = self.cost(key, value);
         let total = &mut self.total;
-        *total = total.saturating_sub(weight);
+        *total = total.saturating_sub(cost);
+    }
+}
+
+struct RawTimestamps {
+    last_accessed: Arc<AtomicU64>,
+    last_modified: Arc<AtomicU64>,
+}
+
+impl RawTimestamps {
+    fn new<K, V>(entry: &Arc<ValueEntry<K, V>>) -> Self {
+        Self {
+            last_accessed: entry.raw_last_accessed(),
+            last_modified: entry.raw_last_modified(),
+        }
     }
 }
 
@@ -388,7 +401,7 @@ type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
 
 pub(crate) struct Inner<K, V, S> {
     max_capacity: Option<u64>,
-    total_weight: AtomicU64,
+    total_cost: AtomicU64,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
     deques: Mutex<Deques<K>>,
@@ -438,7 +451,7 @@ where
 
         Self {
             max_capacity: max_capacity.map(|n| n as u64),
-            total_weight: AtomicU64::default(),
+            total_cost: AtomicU64::default(),
             cache,
             build_hasher,
             deques: Mutex::new(Deques::default()),
@@ -601,9 +614,9 @@ where
         let mut calls = 0;
         let mut should_sync = true;
 
-        let current_total_weight = self.total_weight.load(Ordering::Acquire);
-        let mut total_weight = TotalWeight {
-            total: current_total_weight,
+        let current_total_cost = self.total_cost.load(Ordering::Acquire);
+        let mut total_cost = TotalCost {
+            total: current_total_cost,
             weighter: self.weighter.as_ref(),
         };
 
@@ -615,7 +628,7 @@ where
 
             let w_len = self.write_op_ch.len();
             if w_len > 0 {
-                self.apply_writes(&mut deqs, w_len, &mut total_weight);
+                self.apply_writes(&mut deqs, w_len, &mut total_cost);
             }
             calls += 1;
             should_sync = self.read_op_ch.len() >= READ_LOG_FLUSH_POINT
@@ -623,7 +636,7 @@ where
         }
 
         if self.has_expiry() || self.has_valid_after() {
-            self.evict(&mut deqs, EVICTION_BATCH_SIZE, &mut total_weight);
+            self.evict(&mut deqs, EVICTION_BATCH_SIZE, &mut total_cost);
         }
 
         if self.invalidator_enabled {
@@ -633,18 +646,14 @@ where
                         invalidator,
                         &mut deqs,
                         INVALIDATION_BATCH_SIZE,
-                        &mut total_weight,
+                        &mut total_cost,
                     );
                 }
             }
         }
 
-        debug_assert_eq!(
-            self.total_weight.load(Ordering::Acquire),
-            current_total_weight
-        );
-        self.total_weight
-            .store(total_weight.total, Ordering::Release);
+        debug_assert_eq!(self.total_cost.load(Ordering::Acquire), current_total_cost);
+        self.total_cost.store(total_cost.total, Ordering::Release);
 
         if should_sync {
             Some(SyncPace::Fast)
@@ -666,9 +675,9 @@ where
     V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    fn has_enough_capacity(&self, total_weight: &TotalWeight<'_, K, V>, weight: u64) -> bool {
+    fn has_enough_capacity(&self, candidate_cost: u64, total_cost: &TotalCost<'_, K, V>) -> bool {
         self.max_capacity
-            .map(|limit| total_weight.total + weight <= limit)
+            .map(|limit| total_cost.total + candidate_cost <= limit)
             .unwrap_or(true)
     }
 
@@ -693,7 +702,7 @@ where
         &self,
         deqs: &mut Deques<K>,
         count: usize,
-        total_weight: &mut TotalWeight<'_, K, V>,
+        total_cost: &mut TotalCost<'_, K, V>,
     ) {
         use WriteOp::*;
         let freq = self.frequency_sketch.read();
@@ -702,10 +711,8 @@ where
 
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Upsert(kh, entry)) => {
-                    self.handle_upsert(kh, entry, ts, deqs, &freq, total_weight)
-                }
-                Ok(Remove(key, entry)) => Self::handle_remove(deqs, &key, entry, total_weight),
+                Ok(Upsert(kh, entry)) => self.handle_upsert(kh, entry, ts, deqs, &freq, total_cost),
+                Ok(Remove(key, entry)) => Self::handle_remove(deqs, &key, entry, total_cost),
                 Err(_) => break,
             };
         }
@@ -718,12 +725,11 @@ where
         timestamp: Instant,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
-        total_weight: &mut TotalWeight<'_, K, V>,
+        total_cost: &mut TotalCost<'_, K, V>,
     ) {
         entry.set_last_accessed(timestamp);
         entry.set_last_modified(timestamp);
-        let last_accessed = entry.raw_last_accessed();
-        let last_modified = entry.raw_last_modified();
+        let raw_ts = RawTimestamps::new(&entry);
 
         if entry.is_admitted() {
             // The entry has been already admitted, so treat this as an update.
@@ -732,17 +738,17 @@ where
             return;
         }
 
-        let space_needed = total_weight.weight(&kh.key, &entry.value);
+        let size = total_cost.cost(&kh.key, &entry.value);
 
-        if self.has_enough_capacity(total_weight, space_needed) {
+        if self.has_enough_capacity(size, total_cost) {
             // There are enough room in the cache (or the cache is unbounded).
             // Add the candidate to the deques.
-            self.handle_admit(kh, &entry, last_accessed, last_modified, deqs, total_weight);
+            self.handle_admit(kh, &entry, size, raw_ts, deqs, total_cost);
             return;
         }
 
         if let Some(max) = self.max_capacity {
-            if space_needed > max {
+            if size > max {
                 // The candidate is too big to fit in the cache. Reject it.
                 self.cache.remove(&Arc::clone(&kh.key));
                 return;
@@ -752,7 +758,7 @@ where
         let skipped;
 
         // Try to admit the candidate.
-        match Self::admit(kh.hash, space_needed, &self.cache, deqs, freq, total_weight) {
+        match Self::admit(kh.hash, size, &self.cache, deqs, freq, total_cost) {
             AdmissionResult::Admitted {
                 victims,
                 mut skipped_victims,
@@ -764,7 +770,7 @@ where
                         .remove_entry(unsafe { &victim.as_ref().element.key })
                     {
                         // And then remove the victim from the deques.
-                        Self::handle_remove(deqs, &vic_key, vic_entry, total_weight);
+                        Self::handle_remove(deqs, &vic_key, vic_entry, total_cost);
                     } else {
                         // Could not remove the victim from the cache. Skip this
                         // victim node as its ValueEntry might have been
@@ -775,14 +781,7 @@ where
                 skipped = skipped_victims;
 
                 // Add the candidate to the deques.
-                self.handle_admit(
-                    kh,
-                    &entry,
-                    Arc::clone(&last_accessed),
-                    Arc::clone(&last_modified),
-                    deqs,
-                    total_weight,
-                );
+                self.handle_admit(kh, &entry, size, raw_ts, deqs, total_cost);
             }
             AdmissionResult::Rejected { skipped_victims } => {
                 skipped = skipped_victims;
@@ -802,26 +801,26 @@ where
     #[inline]
     fn admit(
         candidate_hash: u64,
-        space_needed: u64,
+        candidate_cost: u64,
         cache: &CacheStore<K, V, S>,
         deqs: &Deques<K>,
         freq: &FrequencySketch,
-        total_weight: &TotalWeight<'_, K, V>,
+        total_cost: &TotalCost<'_, K, V>,
     ) -> AdmissionResult<K> {
         let candidate_freq = freq.frequency(candidate_hash) as u32;
         let mut victims_freq = 0u32;
-        let mut victims_size = 0u64;
+        let mut victims_cost = 0u64;
         let mut victims = Vec::default();
         let mut skipped_victims = Vec::default();
-        let mut current_victim;
+        let mut next_victim;
 
         // Find first victim.
         loop {
             if let Some(victim) = deqs.probation.peek_front() {
                 if let Some(vic_entry) = cache.get(&victim.element.key) {
                     victims_freq += freq.frequency(victim.element.hash) as u32;
-                    victims_size += total_weight.weight(&victim.element.key, &vic_entry.value);
-                    current_victim = victim.next_node();
+                    victims_cost += total_cost.cost(&victim.element.key, &vic_entry.value);
+                    next_victim = victim.next_node();
                     victims.push(NonNull::from(victim));
                     break;
                 } else {
@@ -836,15 +835,16 @@ where
         }
 
         // Aggregate victims.
-        while victims_size < space_needed {
+        while victims_cost < candidate_cost {
             if candidate_freq < victims_freq {
                 break;
             }
-            if let Some(victim) = current_victim.take() {
+            if let Some(victim) = next_victim.take() {
+                next_victim = victim.next_node();
+
                 if let Some(vic_entry) = cache.get(&victim.element.key) {
                     victims_freq += freq.frequency(victim.element.hash) as u32;
-                    victims_size += total_weight.weight(&victim.element.key, &vic_entry.value);
-                    current_victim = victim.next_node();
+                    victims_cost += total_cost.cost(&victim.element.key, &vic_entry.value);
                     victims.push(NonNull::from(victim));
                 } else {
                     // Could not get the victim from the cache. Skip this node as its
@@ -862,14 +862,12 @@ where
         // TODO: Implement some randomness to mitigate hash DoS attack?
         // See Caffeine's implementation.
 
-        if victims_size >= space_needed && candidate_freq >= victims_freq {
-            dbg!("admitted");
+        if victims_cost >= candidate_cost && candidate_freq >= victims_freq {
             AdmissionResult::Admitted {
                 victims,
                 skipped_victims,
             }
         } else {
-            dbg!("rejected");
             AdmissionResult::Rejected { skipped_victims }
         }
     }
@@ -878,20 +876,20 @@ where
         &self,
         kh: KeyHash<K>,
         entry: &Arc<ValueEntry<K, V>>,
-        raw_last_accessed: Arc<AtomicU64>,
-        raw_last_modified: Arc<AtomicU64>,
+        cost: u64,
+        raw_ts: RawTimestamps,
         deqs: &mut Deques<K>,
-        total_weight: &mut TotalWeight<'_, K, V>,
+        total_cost: &mut TotalCost<'_, K, V>,
     ) {
         let key = Arc::clone(&kh.key);
-        total_weight.saturating_add(&key, &entry.value);
+        total_cost.saturating_add(cost);
         deqs.push_back_ao(
             CacheRegion::MainProbation,
-            KeyHashDate::new(kh, raw_last_accessed),
+            KeyHashDate::new(kh, raw_ts.last_accessed),
             entry,
         );
         if self.is_write_order_queue_enabled() {
-            deqs.push_back_wo(KeyDate::new(key, raw_last_modified), entry);
+            deqs.push_back_wo(KeyDate::new(key, raw_ts.last_modified), entry);
         }
         entry.set_is_admitted(true);
     }
@@ -900,11 +898,11 @@ where
         deqs: &mut Deques<K>,
         key: &Arc<K>,
         entry: Arc<ValueEntry<K, V>>,
-        total_weight: &mut TotalWeight<'_, K, V>,
+        total_cost: &mut TotalCost<'_, K, V>,
     ) {
         if entry.is_admitted() {
             entry.set_is_admitted(false);
-            total_weight.saturating_sub(key, &entry.value);
+            total_cost.saturating_sub(key, &entry.value);
             deqs.unlink_ao(&entry);
             Deques::unlink_wo(&mut deqs.write_order, &entry);
         }
@@ -917,27 +915,22 @@ where
         wo_deq: &mut Deque<KeyDate<K>>,
         key: &Arc<K>,
         entry: Arc<ValueEntry<K, V>>,
-        total_weight: &mut TotalWeight<'_, K, V>,
+        total_cost: &mut TotalCost<'_, K, V>,
     ) {
         if entry.is_admitted() {
             entry.set_is_admitted(false);
-            total_weight.saturating_sub(key, &entry.value);
+            total_cost.saturating_sub(key, &entry.value);
             Deques::unlink_ao_from_deque(ao_deq_name, ao_deq, &entry);
             Deques::unlink_wo(wo_deq, &entry);
         }
         entry.unset_q_nodes();
     }
 
-    fn evict(
-        &self,
-        deqs: &mut Deques<K>,
-        batch_size: usize,
-        total_weight: &mut TotalWeight<'_, K, V>,
-    ) {
+    fn evict(&self, deqs: &mut Deques<K>, batch_size: usize, total_cost: &mut TotalCost<'_, K, V>) {
         let now = self.current_time_from_expiration_clock();
 
         if self.is_write_order_queue_enabled() {
-            self.remove_expired_wo(deqs, batch_size, now, total_weight);
+            self.remove_expired_wo(deqs, batch_size, now, total_cost);
         }
 
         if self.time_to_idle.is_some() || self.has_valid_after() {
@@ -949,7 +942,7 @@ where
             );
 
             let mut rm_expired_ao =
-                |name, deq| self.remove_expired_ao(name, deq, wo, batch_size, now, total_weight);
+                |name, deq| self.remove_expired_ao(name, deq, wo, batch_size, now, total_cost);
 
             rm_expired_ao("window", window);
             rm_expired_ao("probation", probation);
@@ -965,7 +958,7 @@ where
         write_order_deq: &mut Deque<KeyDate<K>>,
         batch_size: usize,
         now: Instant,
-        total_weight: &mut TotalWeight<'_, K, V>,
+        total_cost: &mut TotalCost<'_, K, V>,
     ) {
         let tti = &self.time_to_idle;
         let va = self.valid_after();
@@ -1006,7 +999,7 @@ where
                     write_order_deq,
                     key,
                     entry,
-                    total_weight,
+                    total_cost,
                 );
             } else if let Some(entry) = self.cache.get(key) {
                 let ts = entry.last_accessed();
@@ -1037,7 +1030,7 @@ where
         deqs: &mut Deques<K>,
         batch_size: usize,
         now: Instant,
-        total_weight: &mut TotalWeight<'_, K, V>,
+        total_cost: &mut TotalCost<'_, K, V>,
     ) {
         let ttl = &self.time_to_live;
         let va = self.valid_after();
@@ -1068,7 +1061,7 @@ where
                 .remove_if(key, |_, v| is_expired_entry_wo(ttl, va, v, now));
 
             if let Some(entry) = maybe_entry {
-                Self::handle_remove(deqs, key, entry, total_weight);
+                Self::handle_remove(deqs, key, entry, total_cost);
             } else if let Some(entry) = self.cache.get(key) {
                 let ts = entry.last_modified();
                 if ts.is_none() {
@@ -1096,9 +1089,9 @@ where
         invalidator: &Invalidator<K, V, S>,
         deqs: &mut Deques<K>,
         batch_size: usize,
-        total_weight: &mut TotalWeight<'_, K, V>,
+        total_cost: &mut TotalCost<'_, K, V>,
     ) {
-        self.process_invalidation_result(invalidator, deqs, total_weight);
+        self.process_invalidation_result(invalidator, deqs, total_cost);
         self.submit_invalidation_task(invalidator, &mut deqs.write_order, batch_size);
     }
 
@@ -1106,7 +1099,7 @@ where
         &self,
         invalidator: &Invalidator<K, V, S>,
         deqs: &mut Deques<K>,
-        total_weight: &mut TotalWeight<'_, K, V>,
+        total_cost: &mut TotalCost<'_, K, V>,
     ) {
         if let Some(InvalidationResult {
             invalidated,
@@ -1114,7 +1107,7 @@ where
         }) = invalidator.task_result()
         {
             for KeyValueEntry { key, entry } in invalidated {
-                Self::handle_remove(deqs, &key, entry, total_weight);
+                Self::handle_remove(deqs, &key, entry, total_cost);
             }
             if is_done {
                 deqs.write_order.reset_cursor();
