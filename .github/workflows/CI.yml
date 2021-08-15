@@ -27,7 +27,7 @@ jobs:
           - stable
           - beta
           - 1.46.0  # MSRV (future)
-          - 1.45.2  # MSRV (no features)
+          # - 1.45.2  # MSRV (no features)
 
     steps:
       - name: Checkout Moka
