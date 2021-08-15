@@ -465,7 +465,7 @@ mod tests {
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
-        // because d's frequency is higher than to c's.
+        // because d's frequency is higher than c's.
         cache.insert("d", "dennis");
         cache.sync();
         assert_eq!(cache.get(&"a"), Some("alice"));
