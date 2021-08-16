@@ -16,6 +16,7 @@ use crate::{
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use parking_lot::{Mutex, RwLock};
 use quanta::{Clock, Instant};
+use smallvec::SmallVec;
 use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
@@ -410,13 +411,15 @@ impl RawTimestamps {
     }
 }
 
+type AOQueueNode<K> = NonNull<DeqNode<KeyHashDate<K>>>;
+
 enum AdmissionResult<K> {
     Admitted {
-        victim_nodes: Vec<NonNull<DeqNode<KeyHashDate<K>>>>,
-        skipped_nodes: Vec<NonNull<DeqNode<KeyHashDate<K>>>>,
+        victim_nodes: SmallVec<[AOQueueNode<K>; 8]>,
+        skipped_nodes: SmallVec<[AOQueueNode<K>; 4]>,
     },
     Rejected {
-        skipped_nodes: Vec<NonNull<DeqNode<KeyHashDate<K>>>>,
+        skipped_nodes: SmallVec<[AOQueueNode<K>; 4]>,
     },
 }
 
@@ -849,8 +852,8 @@ where
         let mut retries = 0;
 
         let mut victims = EntrySizeAndFrequency::default();
-        let mut victim_nodes = Vec::default();
-        let mut skipped_nodes = Vec::default();
+        let mut victim_nodes = SmallVec::default();
+        let mut skipped_nodes = SmallVec::default();
 
         // Get first potential victim at the LRU position.
         let mut next_victim = deqs.probation.peek_front();
