@@ -1,3 +1,5 @@
+use crate::common::Weighter;
+
 use super::{Cache, SegmentedCache};
 
 use std::{
@@ -38,32 +40,41 @@ use std::{
 /// // after 30 minutes (TTL) from the insert().
 /// ```
 ///
-pub struct CacheBuilder<C> {
+pub struct CacheBuilder<K, V, C> {
     max_capacity: Option<usize>,
     initial_capacity: Option<usize>,
     num_segments: Option<usize>,
+    weighter: Option<Weighter<K, V>>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     invalidator_enabled: bool,
     cache_type: PhantomData<C>,
 }
 
-impl<K, V> CacheBuilder<Cache<K, V, RandomState>>
+impl<K, V> CacheBuilder<K, V, Cache<K, V, RandomState>>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
+    pub(crate) fn unbound() -> Self {
+        Self {
+            max_capacity: None,
+            initial_capacity: None,
+            num_segments: None,
+            weighter: None,
+            time_to_live: None,
+            time_to_idle: None,
+            invalidator_enabled: false,
+            cache_type: PhantomData::default(),
+        }
+    }
+
     /// Construct a new `CacheBuilder` that will be used to build a `Cache` or
     /// `SegmentedCache` holding up to `max_capacity` entries.
     pub fn new(max_capacity: usize) -> Self {
         Self {
             max_capacity: Some(max_capacity),
-            initial_capacity: None,
-            num_segments: None,
-            time_to_live: None,
-            time_to_idle: None,
-            invalidator_enabled: false,
-            cache_type: PhantomData::default(),
+            ..Self::unbound()
         }
     }
 
@@ -72,13 +83,17 @@ where
     /// # Panics
     ///
     /// Panics if `num_segments` is less than or equals to 1.
-    pub fn segments(self, num_segments: usize) -> CacheBuilder<SegmentedCache<K, V, RandomState>> {
+    pub fn segments(
+        self,
+        num_segments: usize,
+    ) -> CacheBuilder<K, V, SegmentedCache<K, V, RandomState>> {
         assert!(num_segments > 1);
 
         CacheBuilder {
             max_capacity: self.max_capacity,
             initial_capacity: self.initial_capacity,
             num_segments: Some(num_segments),
+            weighter: None,
             time_to_live: self.time_to_live,
             time_to_idle: self.time_to_idle,
             invalidator_enabled: self.invalidator_enabled,
@@ -96,6 +111,7 @@ where
             self.max_capacity,
             self.initial_capacity,
             build_hasher,
+            self.weighter,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -114,6 +130,7 @@ where
             self.max_capacity,
             self.initial_capacity,
             hasher,
+            self.weighter,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -121,7 +138,7 @@ where
     }
 }
 
-impl<K, V> CacheBuilder<SegmentedCache<K, V, RandomState>>
+impl<K, V> CacheBuilder<K, V, SegmentedCache<K, V, RandomState>>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -163,11 +180,27 @@ where
     }
 }
 
-impl<C> CacheBuilder<C> {
+impl<K, V, C> CacheBuilder<K, V, C> {
+    /// Sets the max capacity of the cache.
+    pub fn max_capacity(self, max_capacity: usize) -> Self {
+        Self {
+            max_capacity: Some(max_capacity),
+            ..self
+        }
+    }
+
     /// Sets the initial capacity of the cache.
     pub fn initial_capacity(self, capacity: usize) -> Self {
         Self {
             initial_capacity: Some(capacity),
+            ..self
+        }
+    }
+
+    /// Sets the weighter closure of the cache.
+    pub fn weighter(self, weighter: Weighter<K, V>) -> Self {
+        Self {
+            weighter: Some(weighter),
             ..self
         }
     }

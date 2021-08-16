@@ -382,6 +382,7 @@ where
                     seg_max_capacity,
                     seg_init_capacity,
                     build_hasher.clone(),
+                    None, // TODO
                     time_to_live,
                     time_to_idle,
                     invalidator_enabled,

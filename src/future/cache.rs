@@ -3,6 +3,7 @@ use super::{
     CacheBuilder, ConcurrentCacheExt,
 };
 use crate::{
+    common::Weighter,
     sync::{
         base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
         housekeeper::InnerSync,
@@ -223,10 +224,18 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(Some(max_capacity), None, build_hasher, None, None, false)
+        Self::with_everything(
+            Some(max_capacity),
+            None,
+            build_hasher,
+            None,
+            None,
+            None,
+            false,
+        )
     }
 
-    pub fn builder() -> CacheBuilder<Cache<K, V, RandomState>> {
+    pub fn builder() -> CacheBuilder<K, V, Cache<K, V, RandomState>> {
         CacheBuilder::unbound()
     }
 }
@@ -241,6 +250,7 @@ where
         max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         build_hasher: S,
+        weighter: Option<Weighter<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -250,6 +260,7 @@ where
                 max_capacity,
                 initial_capacity,
                 build_hasher.clone(),
+                weighter,
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,

@@ -2,9 +2,9 @@ use super::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
     housekeeper::InnerSync,
     value_initializer::ValueInitializer,
-    ConcurrentCacheExt, PredicateId, WriteOp,
+    CacheBuilder, ConcurrentCacheExt, PredicateId, WriteOp,
 };
-use crate::{sync::value_initializer::InitResult, PredicateError};
+use crate::{common::Weighter, sync::value_initializer::InitResult, PredicateError};
 
 use crossbeam_channel::{Sender, TrySendError};
 use std::{
@@ -195,7 +195,19 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(Some(max_capacity), None, build_hasher, None, None, false)
+        Self::with_everything(
+            Some(max_capacity),
+            None,
+            build_hasher,
+            None,
+            None,
+            None,
+            false,
+        )
+    }
+
+    pub fn builder() -> CacheBuilder<K, V, Cache<K, V, RandomState>> {
+        CacheBuilder::unbound()
     }
 }
 
@@ -209,6 +221,7 @@ where
         max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         build_hasher: S,
+        weighter: Option<Weighter<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -218,6 +231,7 @@ where
                 max_capacity,
                 initial_capacity,
                 build_hasher.clone(),
+                weighter,
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
@@ -572,6 +586,69 @@ mod tests {
 
         cache.invalidate(&"b");
         assert_eq!(cache.get(&"b"), None);
+    }
+
+    #[test]
+    fn size_aware_admission() {
+        let weighter = |_k: &&str, v: &(&str, u64)| v.1;
+
+        let alice = ("alice", 10u64);
+        let bob = ("bob", 15);
+        let cindy = ("cindy", 5);
+        let david = ("david", 15);
+        let dennis = ("dennis", 15);
+
+        let mut cache = Cache::builder()
+            .max_capacity(31)
+            .weighter(Box::new(weighter))
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", alice);
+        cache.insert("b", bob);
+        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"b"), Some(bob));
+        cache.sync();
+        // order (LRU -> MRU) and counts: a -> 1, b -> 1
+
+        cache.insert("c", cindy);
+        assert_eq!(cache.get(&"c"), Some(cindy));
+        // order and counts: a -> 1, b -> 1, c -> 1
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"b"), Some(bob));
+        cache.sync();
+        // order and counts: c -> 1, a -> 2, b -> 2
+
+        // To enter "d" (weight: 15), it needs to evict "c" (w: 5) and "a" (w: 10).
+        // "d" must have higher count than 3, which is the aggregated count of "a" and "c".
+        cache.insert("d", david); //   count: d -> 0
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 1
+
+        cache.insert("d", david);
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 2
+
+        cache.insert("d", david);
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 3
+
+        cache.insert("d", david);
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 4
+
+        // Finally "d" should be admitted by evicting "c" and "a".
+        cache.insert("d", dennis);
+        cache.sync();
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), Some(bob));
+        assert_eq!(cache.get(&"c"), None);
+        assert_eq!(cache.get(&"d"), Some(dennis));
     }
 
     #[test]
