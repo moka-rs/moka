@@ -721,6 +721,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn size_aware_admission() {
+        let weighter = |_k: &&str, v: &(&str, u64)| v.1;
+
+        let alice = ("alice", 10u64);
+        let bob = ("bob", 15);
+        let cindy = ("cindy", 5);
+        let david = ("david", 15);
+        let dennis = ("dennis", 15);
+
+        let mut cache = Cache::builder()
+            .max_capacity(31)
+            .weighter(Box::new(weighter))
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", alice).await;
+        cache.insert("b", bob).await;
+        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"b"), Some(bob));
+        cache.sync();
+        // order (LRU -> MRU) and counts: a -> 1, b -> 1
+
+        cache.insert("c", cindy).await;
+        assert_eq!(cache.get(&"c"), Some(cindy));
+        // order and counts: a -> 1, b -> 1, c -> 1
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"b"), Some(bob));
+        cache.sync();
+        // order and counts: c -> 1, a -> 2, b -> 2
+
+        // To enter "d" (weight: 15), it needs to evict "c" (w: 5) and "a" (w: 10).
+        // "d" must have higher count than 3, which is the aggregated count
+        // of "a" and "c".
+        cache.insert("d", david).await; //   count: d -> 0
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 1
+
+        cache.insert("d", david).await;
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 2
+
+        cache.insert("d", david).await;
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 3
+
+        cache.insert("d", david).await;
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 4
+
+        // Finally "d" should be admitted by evicting "c" and "a".
+        cache.insert("d", dennis).await;
+        cache.sync();
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), Some(bob));
+        assert_eq!(cache.get(&"c"), None);
+        assert_eq!(cache.get(&"d"), Some(dennis));
+    }
+
+    #[tokio::test]
     async fn basic_multi_async_tasks() {
         let num_threads = 4;
         let cache = Cache::new(100);

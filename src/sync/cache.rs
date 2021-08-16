@@ -625,7 +625,8 @@ mod tests {
         // order and counts: c -> 1, a -> 2, b -> 2
 
         // To enter "d" (weight: 15), it needs to evict "c" (w: 5) and "a" (w: 10).
-        // "d" must have higher count than 3, which is the aggregated count of "a" and "c".
+        // "d" must have higher count than 3, which is the aggregated count
+        // of "a" and "c".
         cache.insert("d", david); //   count: d -> 0
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 1
