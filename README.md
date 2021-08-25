@@ -15,9 +15,8 @@ Moka provides cache implementations that support full concurrency of retrievals 
 a high expected concurrency for updates. Moka also provides a not thread-safe cache
 implementation for single thread applications.
 
-All caches perform a best-effort bounding of a  hash map using an entry
-replacement algorithm to determine which entries to evict when the capacity is
-exceeded.
+All caches perform a best-effort bounding of a hash map using an entry replacement
+algorithm to determine which entries to evict when the capacity is exceeded.
 
 [gh-actions-badge]: https://github.com/moka-rs/moka/workflows/CI/badge.svg
 [release-badge]: https://img.shields.io/crates/v/moka.svg
@@ -75,7 +74,7 @@ moka = { version = "0.6", features = ["future"] }
 
 ## Example: Synchronous Cache
 
-The thread-safe, blocking caches are defined in the `sync` module.
+The thread-safe, synchronous caches are defined in the `sync` module.
 
 Cache entries are manually added using `insert` method, and are stored in the cache
 until either evicted or manually invalidated.
