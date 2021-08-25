@@ -43,6 +43,11 @@ jobs:
 
       - uses: Swatinem/rust-cache@v1
 
+      - name: cargo clean
+        uses: actions-rs/cargo@v1
+        with:
+          command: clean
+
       - name: Build (no features)
         uses: actions-rs/cargo@v1
         with:
