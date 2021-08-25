@@ -411,15 +411,16 @@ impl RawTimestamps {
     }
 }
 
-type AOQueueNode<K> = NonNull<DeqNode<KeyHashDate<K>>>;
+// Access-Order Queue Node
+type AoqNode<K> = NonNull<DeqNode<KeyHashDate<K>>>;
 
 enum AdmissionResult<K> {
     Admitted {
-        victim_nodes: SmallVec<[AOQueueNode<K>; 8]>,
-        skipped_nodes: SmallVec<[AOQueueNode<K>; 4]>,
+        victim_nodes: SmallVec<[AoqNode<K>; 8]>,
+        skipped_nodes: SmallVec<[AoqNode<K>; 4]>,
     },
     Rejected {
-        skipped_nodes: SmallVec<[AOQueueNode<K>; 4]>,
+        skipped_nodes: SmallVec<[AoqNode<K>; 4]>,
     },
 }
 
