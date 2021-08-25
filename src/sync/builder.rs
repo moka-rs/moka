@@ -18,11 +18,12 @@ use std::{
 /// # Examples
 ///
 /// ```rust
-/// use moka::sync::CacheBuilder;
-///
+/// use moka::sync::Cache;
 /// use std::time::Duration;
 ///
-/// let cache = CacheBuilder::new(10_000) // Max 10,000 elements
+/// let cache = Cache::builder()
+///     // Max 10,000 entries
+///     .max_capacity(10_000)
 ///     // Time to live (TTL): 30 minutes
 ///     .time_to_live(Duration::from_secs(30 * 60))
 ///     // Time to idle (TTI):  5 minutes
@@ -51,12 +52,12 @@ pub struct CacheBuilder<K, V, C> {
     cache_type: PhantomData<C>,
 }
 
-impl<K, V> CacheBuilder<K, V, Cache<K, V, RandomState>>
+impl<K, V> Default for CacheBuilder<K, V, Cache<K, V, RandomState>>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn unbound() -> Self {
+    fn default() -> Self {
         Self {
             max_capacity: None,
             initial_capacity: None,
@@ -65,16 +66,22 @@ where
             time_to_live: None,
             time_to_idle: None,
             invalidator_enabled: false,
-            cache_type: PhantomData::default(),
+            cache_type: Default::default(),
         }
     }
+}
 
+impl<K, V> CacheBuilder<K, V, Cache<K, V, RandomState>>
+where
+    K: Eq + Hash + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
     /// Construct a new `CacheBuilder` that will be used to build a `Cache` or
     /// `SegmentedCache` holding up to `max_capacity` entries.
     pub fn new(max_capacity: usize) -> Self {
         Self {
             max_capacity: Some(max_capacity),
-            ..Self::unbound()
+            ..Default::default()
         }
     }
 
@@ -198,9 +205,9 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     }
 
     /// Sets the weigher closure of the cache.
-    pub fn weigher(self, weigher: Weigher<K, V>) -> Self {
+    pub fn weigher(self, weigher: impl Fn(&K, &V) -> u64 + Send + Sync + 'static) -> Self {
         Self {
-            weigher: Some(weigher),
+            weigher: Some(Box::new(weigher)),
             ..self
         }
     }

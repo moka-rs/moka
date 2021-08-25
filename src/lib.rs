@@ -23,11 +23,12 @@
 //! # Features
 //!
 //! - Thread-safe, highly concurrent in-memory cache implementations:
-//!     - Blocking caches that can be shared across OS threads.
+//!     - Synchronous caches that can be shared across OS threads.
 //!     - An asynchronous (futures aware) cache that can be accessed inside and
 //!       outside of asynchronous contexts.
-//! - A not thread-safe, in-memory cache implementation for single thread applications.
-//! - Caches are bounded by the maximum number of entries.
+//! - A cache can be bounded by one of the followings:
+//!     - The maximum number of entries.
+//!     - The total weighted size of entries.
 //! - Maintains good hit rate by using entry replacement algorithms inspired by
 //!   [Caffeine][caffeine-git]:
 //!     - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.

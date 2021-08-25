@@ -41,11 +41,12 @@ exceeded.
 ## Features
 
 - Thread-safe, highly concurrent in-memory cache implementations:
-    - Blocking caches that can be shared across OS threads.
+    - Synchronous caches that can be shared across OS threads.
     - An asynchronous (futures aware) cache that can be accessed inside and outside
       of asynchronous contexts.
-- A not thread-safe, in-memory cache implementation for single thread applications.
-- Caches are bounded by the maximum number of entries.
+- A cache can be bounded by one of the followings:
+    - The maximum number of entries.
+    - The total weighted size of entries.
 - Maintains good hit rate by using an entry replacement algorithms inspired by
   [Caffeine][caffeine-git]:
     - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.
@@ -255,6 +256,29 @@ cache.get(&key);
 ```
 
 
+## Example: Bounding a Cache with Weighted Size of Entry
+
+A `weigher` closure can be set at the cache creation time. It will calculate and
+return a weighted size (relative size) of an entry. When it is set, a cache tiers to
+evict entries when the total weighted size exceeds its `max_capacity`.
+
+```rust
+use moka::sync::Cache;
+
+fn main() {
+    // Evict based on the byte length of strings in the cache.
+    let cache = Cache::builder()
+        // Up to 32MiB instead of 3M entries because this cache is going to have
+        // a weigher.
+        .max_capacity(32 * 1024 * 1024)
+        // A weigher closure takes &K and &V and returns a u64 representing the
+        // relative size of the entry.
+        .weigher(|_key, value: &String| -> u64 { value.len() as u64 })
+        .build();
+    cache.insert(0, "zero".to_string());
+}
+```
+
 ## Example: Expiration Policies
 
 Moka supports the following expiration policies:
@@ -267,12 +291,11 @@ Moka supports the following expiration policies:
 To set them, use the `CacheBuilder`.
 
 ```rust
-use moka::sync::CacheBuilder;
-
+use moka::sync::Cache;
 use std::time::Duration;
 
 fn main() {
-    let cache = CacheBuilder::new(10_000) // Max 10,000 elements
+    let cache = Cache::builder()
         // Time to live (TTL): 30 minutes
         .time_to_live(Duration::from_secs(30 * 60))
         // Time to idle (TTI):  5 minutes

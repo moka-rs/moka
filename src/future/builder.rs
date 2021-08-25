@@ -16,26 +16,37 @@ use std::{
 /// # Examples
 ///
 /// ```rust
-/// use moka::future::CacheBuilder;
+/// // Cargo.toml
+/// //
+/// // [dependencies]
+/// // moka = { version = "0.6", features = ["future"] }
+/// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+/// // futures = "0.3"
 ///
+/// use moka::future::Cache;
 /// use std::time::Duration;
 ///
-/// let cache = CacheBuilder::new(10_000) // Max 10,000 elements
-///     // Time to live (TTL): 30 minutes
-///     .time_to_live(Duration::from_secs(30 * 60))
-///     // Time to idle (TTI):  5 minutes
-///     .time_to_idle(Duration::from_secs( 5 * 60))
-///     // Create the cache.
-///     .build();
+/// #[tokio::main]
+/// async fn main() {
+///     let cache = Cache::builder()
+///         // Max 10,000 entries
+///         .max_capacity(10_000)
+///         // Time to live (TTL): 30 minutes
+///         .time_to_live(Duration::from_secs(30 * 60))
+///         // Time to idle (TTI):  5 minutes
+///         .time_to_idle(Duration::from_secs( 5 * 60))
+///         // Create the cache.
+///         .build();
 ///
-/// // This entry will expire after 5 minutes (TTI) if there is no get().
-/// cache.insert(0, "zero");
+///     // This entry will expire after 5 minutes (TTI) if there is no get().
+///     cache.insert(0, "zero").await;
 ///
-/// // This get() will extend the entry life for another 5 minutes.
-/// cache.get(&0);
+///     // This get() will extend the entry life for another 5 minutes.
+///     cache.get(&0);
 ///
-/// // Even though we keep calling get(), the entry will expire
-/// // after 30 minutes (TTL) from the insert().
+///     // Even though we keep calling get(), the entry will expire
+///     // after 30 minutes (TTL) from the insert().
+/// }
 /// ```
 ///
 pub struct CacheBuilder<K, V, C> {
@@ -48,12 +59,12 @@ pub struct CacheBuilder<K, V, C> {
     cache_type: PhantomData<C>,
 }
 
-impl<K, V> CacheBuilder<K, V, Cache<K, V, RandomState>>
+impl<K, V> Default for CacheBuilder<K, V, Cache<K, V, RandomState>>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    pub(crate) fn unbound() -> Self {
+    fn default() -> Self {
         Self {
             max_capacity: None,
             initial_capacity: None,
@@ -61,16 +72,22 @@ where
             time_to_live: None,
             time_to_idle: None,
             invalidator_enabled: false,
-            cache_type: PhantomData::default(),
+            cache_type: Default::default(),
         }
     }
+}
 
+impl<K, V> CacheBuilder<K, V, Cache<K, V, RandomState>>
+where
+    K: Eq + Hash + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
     /// Construct a new `CacheBuilder` that will be used to build a `Cache` holding
     /// up to `max_capacity` entries.
     pub fn new(max_capacity: usize) -> Self {
         Self {
             max_capacity: Some(max_capacity),
-            ..Self::unbound()
+            ..Default::default()
         }
     }
 
@@ -123,9 +140,9 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     }
 
     /// Sets the weigher closure of the cache.
-    pub fn weigher(self, weigher: Weigher<K, V>) -> Self {
+    pub fn weigher(self, weigher: impl Fn(&K, &V) -> u64 + Send + Sync + 'static) -> Self {
         Self {
-            weigher: Some(weigher),
+            weigher: Some(Box::new(weigher)),
             ..self
         }
     }
