@@ -1,4 +1,4 @@
-use crate::common::Weighter;
+use crate::common::Weigher;
 
 use super::{Cache, SegmentedCache};
 
@@ -44,7 +44,7 @@ pub struct CacheBuilder<K, V, C> {
     max_capacity: Option<usize>,
     initial_capacity: Option<usize>,
     num_segments: Option<usize>,
-    weighter: Option<Weighter<K, V>>,
+    weigher: Option<Weigher<K, V>>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     invalidator_enabled: bool,
@@ -61,7 +61,7 @@ where
             max_capacity: None,
             initial_capacity: None,
             num_segments: None,
-            weighter: None,
+            weigher: None,
             time_to_live: None,
             time_to_idle: None,
             invalidator_enabled: false,
@@ -93,7 +93,7 @@ where
             max_capacity: self.max_capacity,
             initial_capacity: self.initial_capacity,
             num_segments: Some(num_segments),
-            weighter: None,
+            weigher: None,
             time_to_live: self.time_to_live,
             time_to_idle: self.time_to_idle,
             invalidator_enabled: self.invalidator_enabled,
@@ -111,7 +111,7 @@ where
             self.max_capacity,
             self.initial_capacity,
             build_hasher,
-            self.weighter,
+            self.weigher,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -130,7 +130,7 @@ where
             self.max_capacity,
             self.initial_capacity,
             hasher,
-            self.weighter,
+            self.weigher,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -197,10 +197,10 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
-    /// Sets the weighter closure of the cache.
-    pub fn weighter(self, weighter: Weighter<K, V>) -> Self {
+    /// Sets the weigher closure of the cache.
+    pub fn weigher(self, weigher: Weigher<K, V>) -> Self {
         Self {
-            weighter: Some(weighter),
+            weigher: Some(weigher),
             ..self
         }
     }

@@ -8,7 +8,7 @@ use crate::{
     common::{
         deque::{CacheRegion, DeqNode, Deque},
         frequency_sketch::FrequencySketch,
-        AccessTime, Weighter,
+        AccessTime, Weigher,
     },
     PredicateError,
 };
@@ -87,7 +87,7 @@ where
         max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         build_hasher: S,
-        weighter: Option<Weighter<K, V>>,
+        weigher: Option<Weigher<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -98,7 +98,7 @@ where
             max_capacity,
             initial_capacity,
             build_hasher,
-            weighter,
+            weigher,
             r_rcv,
             w_rcv,
             time_to_live,
@@ -351,13 +351,13 @@ where
 
 struct WeightedSize<'a, K, V> {
     size: u64,
-    weighter: Option<&'a Weighter<K, V>>,
+    weigher: Option<&'a Weigher<K, V>>,
 }
 
 impl<'a, K, V> WeightedSize<'a, K, V> {
     #[inline]
     fn weigh(&self, key: &K, value: &V) -> u64 {
-        self.weighter.map(|w| w(key, value)).unwrap_or(1)
+        self.weigher.map(|w| w(key, value)).unwrap_or(1)
     }
 
     #[inline]
@@ -440,7 +440,7 @@ pub(crate) struct Inner<K, V, S> {
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     valid_after: AtomicU64,
-    weighter: Option<Weighter<K, V>>,
+    weigher: Option<Weigher<K, V>>,
     invalidator_enabled: bool,
     invalidator: RwLock<Option<Invalidator<K, V, S>>>,
     has_expiration_clock: AtomicBool,
@@ -460,7 +460,7 @@ where
         max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         build_hasher: S,
-        weighter: Option<Weighter<K, V>>,
+        weigher: Option<Weigher<K, V>>,
         read_op_ch: Receiver<ReadOp<K, V>>,
         write_op_ch: Receiver<WriteOp<K, V>>,
         time_to_live: Option<Duration>,
@@ -491,7 +491,7 @@ where
             time_to_live,
             time_to_idle,
             valid_after: AtomicU64::new(0),
-            weighter,
+            weigher,
             invalidator_enabled,
             // When enabled, this field will be set later via the set_invalidator method.
             invalidator: RwLock::new(None),
@@ -647,7 +647,7 @@ where
         let current_ws = self.weighted_size.load(Ordering::Acquire);
         let mut ws = WeightedSize {
             size: current_ws,
-            weighter: self.weighter.as_ref(),
+            weigher: self.weigher.as_ref(),
         };
 
         while should_sync && calls <= max_repeats {

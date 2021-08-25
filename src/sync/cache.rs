@@ -4,7 +4,7 @@ use super::{
     value_initializer::ValueInitializer,
     CacheBuilder, ConcurrentCacheExt, PredicateId, WriteOp,
 };
-use crate::{common::Weighter, sync::value_initializer::InitResult, PredicateError};
+use crate::{common::Weigher, sync::value_initializer::InitResult, PredicateError};
 
 use crossbeam_channel::{Sender, TrySendError};
 use std::{
@@ -221,7 +221,7 @@ where
         max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         build_hasher: S,
-        weighter: Option<Weighter<K, V>>,
+        weigher: Option<Weigher<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -231,7 +231,7 @@ where
                 max_capacity,
                 initial_capacity,
                 build_hasher.clone(),
-                weighter,
+                weigher,
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
@@ -590,7 +590,7 @@ mod tests {
 
     #[test]
     fn size_aware_admission() {
-        let weighter = |_k: &&str, v: &(&str, u64)| v.1;
+        let weigher = |_k: &&str, v: &(&str, u64)| v.1;
 
         let alice = ("alice", 10u64);
         let bob = ("bob", 15);
@@ -600,7 +600,7 @@ mod tests {
 
         let mut cache = Cache::builder()
             .max_capacity(31)
-            .weighter(Box::new(weighter))
+            .weigher(Box::new(weigher))
             .build();
         cache.reconfigure_for_testing();
 

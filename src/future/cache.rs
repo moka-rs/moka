@@ -3,7 +3,7 @@ use super::{
     CacheBuilder, ConcurrentCacheExt,
 };
 use crate::{
-    common::Weighter,
+    common::Weigher,
     sync::{
         base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
         housekeeper::InnerSync,
@@ -250,7 +250,7 @@ where
         max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         build_hasher: S,
-        weighter: Option<Weighter<K, V>>,
+        weigher: Option<Weigher<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -260,7 +260,7 @@ where
                 max_capacity,
                 initial_capacity,
                 build_hasher.clone(),
-                weighter,
+                weigher,
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
@@ -722,7 +722,7 @@ mod tests {
 
     #[tokio::test]
     async fn size_aware_admission() {
-        let weighter = |_k: &&str, v: &(&str, u64)| v.1;
+        let weigher = |_k: &&str, v: &(&str, u64)| v.1;
 
         let alice = ("alice", 10u64);
         let bob = ("bob", 15);
@@ -732,7 +732,7 @@ mod tests {
 
         let mut cache = Cache::builder()
             .max_capacity(31)
-            .weighter(Box::new(weighter))
+            .weigher(Box::new(weigher))
             .build();
         cache.reconfigure_for_testing();
 
