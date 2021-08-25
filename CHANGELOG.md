@@ -2,6 +2,11 @@
 
 ## Version 0.6.0 (Unreleased)
 
+### Added
+
+- Add support for size aware admission policy. ([#24][gh-pull-0024])
+- Add support for unbound cache. ([#24][gh-pull-0024])
+
 ### Changed
 
 - Change `get_or_try_insert_with` to return a concrete error type rather
@@ -89,6 +94,7 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[gh-pull-0024]: https://github.com/moka-rs/moka/pull/24/
 [gh-pull-0023]: https://github.com/moka-rs/moka/pull/23/
 [gh-pull-0022]: https://github.com/moka-rs/moka/pull/22/
 [gh-pull-0020]: https://github.com/moka-rs/moka/pull/20/
