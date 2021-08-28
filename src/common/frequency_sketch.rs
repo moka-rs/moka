@@ -71,7 +71,7 @@ impl FrequencySketch {
     pub(crate) fn with_capacity(cap: u32) -> Self {
         // The max byte size of the table `[u64; table_size]`:
         // - 8GiB for 32-bit or 64-bit addressing. (Can track about one billion keys)
-        // - 8KiB for 16-bit addressing. (Can track about one thousand keys). 
+        // - 8KiB for 16-bit addressing. (Can track about one thousand keys).
         let maximum = if cfg!(target_pointer_width = "16") {
             cap.min(1024)
         } else {
