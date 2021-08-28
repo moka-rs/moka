@@ -26,8 +26,9 @@ jobs:
         rust:
           - stable
           - beta
-          - 1.46.0  # MSRV (future)
+          # - 1.46.0  # MSRV (future)
           # - 1.45.2  # MSRV (no features)
+          - 1.49.0  # Temporary MSRV
 
     steps:
       - name: Checkout Moka
