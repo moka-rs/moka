@@ -1,5 +1,12 @@
 # Moka &mdash; Change Log
 
+## Version 0.5.2
+
+### Fixed
+
+- Handle `usize` overflow on big cache capacity. ([#28][gh-pull-0028])
+
+
 ## Version 0.5.1
 
 ### Changed
@@ -81,6 +88,7 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[gh-pull-0028]: https://github.com/moka-rs/moka/pull/28/
 [gh-pull-0022]: https://github.com/moka-rs/moka/pull/22/
 [gh-pull-0020]: https://github.com/moka-rs/moka/pull/20/
 [gh-pull-0019]: https://github.com/moka-rs/moka/pull/19/
