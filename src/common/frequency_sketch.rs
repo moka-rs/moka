@@ -17,7 +17,7 @@
 pub(crate) struct FrequencySketch {
     sample_size: u32,
     table_mask: u32,
-    table: Vec<u64>,
+    table: Box<[u64]>,
     size: u32,
 }
 
@@ -69,21 +69,29 @@ static ONE_MASK: u64 = 0x1111_1111_1111_1111;
 impl FrequencySketch {
     /// Creates a frequency sketch with the capacity.
     pub(crate) fn with_capacity(cap: u32) -> Self {
-        // The max byte size of the table `[u64; table_size]`:
-        // - 8GiB for 32-bit or 64-bit addressing. (Can track about one billion keys)
-        // - 8KiB for 16-bit addressing. (Can track about one thousand keys).
+        // The max byte size of the table, Box<[u64; table_size]>
+        //
+        // | Pointer width    | Max size |
+        // |:-----------------|---------:|
+        // | 16 bit           |    8 KiB |
+        // | 32 bit           |  128 MiB |
+        // | 64 bit or bigger |    8 GiB |
+
         let maximum = if cfg!(target_pointer_width = "16") {
             cap.min(1024)
+        } else if cfg!(target_pointer_width = "32") {
+            cap.min(2u32.pow(24)) // about 16 millions
         } else {
-            // target_pointer_width will be 32, 64 or larger.
-            cap.min((i32::MAX >> 1) as u32)
+            // Same to Caffeine's limit:
+            //   `Integer.MAX_VALUE >>> 1` with `ceilingPowerOfTwo()` applied.
+            cap.min(2u32.pow(30)) // about 1 billion
         };
         let table_size = if maximum == 0 {
             1
         } else {
             maximum.next_power_of_two()
         };
-        let table = vec![0; table_size as usize];
+        let table = vec![0; table_size as usize].into_boxed_slice();
         let table_mask = 0.max(table_size - 1);
         let sample_size = if cap == 0 {
             10
@@ -149,7 +157,7 @@ impl FrequencySketch {
     /// Reduces every counter by half of its original value.
     fn reset(&mut self) {
         let mut count = 0u32;
-        for entry in &mut self.table {
+        for entry in self.table.iter_mut() {
             // Count number of odd numbers.
             count += (*entry & ONE_MASK).count_ones();
             *entry = (*entry >> 1) & RESET_MASK;
