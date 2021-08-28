@@ -15,10 +15,10 @@
 /// a time window. The maximum frequency of an element is limited to 15 (4-bits)
 /// and an aging process periodically halves the popularity of all elements.
 pub(crate) struct FrequencySketch {
-    sample_size: usize,
-    table_mask: usize,
+    sample_size: u32,
+    table_mask: u32,
     table: Vec<u64>,
-    size: usize,
+    size: u32,
 }
 
 // A mixture of seeds from FNV-1a, CityHash, and Murmur3. (Taken from Caffeine)
@@ -68,19 +68,27 @@ static ONE_MASK: u64 = 0x1111_1111_1111_1111;
 
 impl FrequencySketch {
     /// Creates a frequency sketch with the capacity.
-    pub(crate) fn with_capacity(cap: usize) -> Self {
-        let maximum = cap.min((i32::MAX >> 1) as usize);
+    pub(crate) fn with_capacity(cap: u32) -> Self {
+        // The max byte size of the table `[u64; table_size]`:
+        // - 8GiB for 32-bit or 64-bit addressing. (Can track about one billion keys)
+        // - 8KiB for 16-bit addressing. (Can track about one thousand keys). 
+        let maximum = if cfg!(target_pointer_width = "16") {
+            cap.min(1024)
+        } else {
+            // target_pointer_width will be 32, 64 or larger.
+            cap.min((i32::MAX >> 1) as u32)
+        };
         let table_size = if maximum == 0 {
             1
         } else {
             maximum.next_power_of_two()
         };
-        let table = vec![0; table_size];
+        let table = vec![0; table_size as usize];
         let table_mask = 0.max(table_size - 1);
         let sample_size = if cap == 0 {
             10
         } else {
-            maximum.saturating_mul(10).min(i32::MAX as usize)
+            maximum.saturating_mul(10).min(i32::MAX as u32)
         };
         Self {
             sample_size,
@@ -146,7 +154,7 @@ impl FrequencySketch {
             count += (*entry & ONE_MASK).count_ones();
             *entry = (*entry >> 1) & RESET_MASK;
         }
-        self.size = (self.size >> 1) - (count >> 2) as usize;
+        self.size = (self.size >> 1) - (count >> 2);
     }
 
     /// Returns the table index for the counter at the specified depth.
@@ -154,7 +162,7 @@ impl FrequencySketch {
         let i = depth as usize;
         let mut hash = hash.wrapping_add(SEED[i]).wrapping_mul(SEED[i]);
         hash += hash >> 32;
-        hash as usize & self.table_mask
+        (hash as u32 & self.table_mask) as usize
     }
 }
 
@@ -229,7 +237,7 @@ mod tests {
         let mut sketch = FrequencySketch::with_capacity(64);
         let hasher = hasher();
 
-        for i in 1..(20 * sketch.table.len()) {
+        for i in 1..(20 * sketch.table.len() as u32) {
             sketch.increment(hasher(i));
             if sketch.size != i {
                 reset = true;

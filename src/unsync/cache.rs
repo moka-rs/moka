@@ -9,6 +9,7 @@ use quanta::{Clock, Instant};
 use std::{
     borrow::Borrow,
     collections::{hash_map::RandomState, HashMap},
+    convert::TryInto,
     hash::{BuildHasher, Hash, Hasher},
     ptr::NonNull,
     rc::Rc,
@@ -153,7 +154,12 @@ where
             initial_capacity.unwrap_or_default(),
             build_hasher.clone(),
         );
-        let skt_capacity = usize::max(max_capacity * 32, 100);
+
+        // Ensure skt_capacity fits in a range of `128u32..=u32::MAX`.
+        let skt_capacity = max_capacity
+            .try_into() // Convert to u32.
+            .unwrap_or(u32::MAX)
+            .max(128);
         let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
         Self {
             max_capacity,
