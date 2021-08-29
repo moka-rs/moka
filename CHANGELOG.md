@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Handle `usize` overflow on big cache capacity. ([#28][gh-pull-0028])
+- `usize` overflow on big cache capacity. ([#28][gh-pull-0028])
 
 
 ## Version 0.5.1
