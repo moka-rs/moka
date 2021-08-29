@@ -15,10 +15,10 @@
 /// a time window. The maximum frequency of an element is limited to 15 (4-bits)
 /// and an aging process periodically halves the popularity of all elements.
 pub(crate) struct FrequencySketch {
-    sample_size: usize,
-    table_mask: usize,
-    table: Vec<u64>,
-    size: usize,
+    sample_size: u32,
+    table_mask: u64,
+    table: Box<[u64]>,
+    size: u32,
 }
 
 // A mixture of seeds from FNV-1a, CityHash, and Murmur3. (Taken from Caffeine)
@@ -68,19 +68,35 @@ static ONE_MASK: u64 = 0x1111_1111_1111_1111;
 
 impl FrequencySketch {
     /// Creates a frequency sketch with the capacity.
-    pub(crate) fn with_capacity(cap: usize) -> Self {
-        let maximum = cap.min((i32::MAX >> 1) as usize);
+    pub(crate) fn with_capacity(cap: u32) -> Self {
+        // The max byte size of the table, Box<[u64; table_size]>
+        //
+        // | Pointer width    | Max size |
+        // |:-----------------|---------:|
+        // | 16 bit           |    8 KiB |
+        // | 32 bit           |  128 MiB |
+        // | 64 bit or bigger |    8 GiB |
+
+        let maximum = if cfg!(target_pointer_width = "16") {
+            cap.min(1024)
+        } else if cfg!(target_pointer_width = "32") {
+            cap.min(2u32.pow(24)) // about 16 millions
+        } else {
+            // Same to Caffeine's limit:
+            //   `Integer.MAX_VALUE >>> 1` with `ceilingPowerOfTwo()` applied.
+            cap.min(2u32.pow(30)) // about 1 billion
+        };
         let table_size = if maximum == 0 {
             1
         } else {
             maximum.next_power_of_two()
         };
-        let table = vec![0; table_size];
-        let table_mask = 0.max(table_size - 1);
+        let table = vec![0; table_size as usize].into_boxed_slice();
+        let table_mask = 0.max(table_size - 1) as u64;
         let sample_size = if cap == 0 {
             10
         } else {
-            maximum.saturating_mul(10).min(i32::MAX as usize)
+            maximum.saturating_mul(10).min(i32::MAX as u32)
         };
         Self {
             sample_size,
@@ -141,12 +157,12 @@ impl FrequencySketch {
     /// Reduces every counter by half of its original value.
     fn reset(&mut self) {
         let mut count = 0u32;
-        for entry in &mut self.table {
+        for entry in self.table.iter_mut() {
             // Count number of odd numbers.
             count += (*entry & ONE_MASK).count_ones();
             *entry = (*entry >> 1) & RESET_MASK;
         }
-        self.size = (self.size >> 1) - (count >> 2) as usize;
+        self.size = (self.size >> 1) - (count >> 2);
     }
 
     /// Returns the table index for the counter at the specified depth.
@@ -154,7 +170,15 @@ impl FrequencySketch {
         let i = depth as usize;
         let mut hash = hash.wrapping_add(SEED[i]).wrapping_mul(SEED[i]);
         hash += hash >> 32;
-        hash as usize & self.table_mask
+        (hash & self.table_mask) as usize
+    }
+}
+
+// Methods only available for testing.
+#[cfg(test)]
+impl FrequencySketch {
+    pub(crate) fn table_len(&self) -> usize {
+        self.table.len()
     }
 }
 
@@ -229,7 +253,7 @@ mod tests {
         let mut sketch = FrequencySketch::with_capacity(64);
         let hasher = hasher();
 
-        for i in 1..(20 * sketch.table.len()) {
+        for i in 1..(20 * sketch.table.len() as u32) {
             sketch.increment(hasher(i));
             if sketch.size != i {
                 reset = true;
