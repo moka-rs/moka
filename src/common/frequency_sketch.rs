@@ -174,6 +174,14 @@ impl FrequencySketch {
     }
 }
 
+// Methods only available for testing.
+#[cfg(test)]
+impl FrequencySketch {
+    pub(crate) fn table_len(&self) -> usize {
+        self.table.len()
+    }
+}
+
 // Some test cases were ported from Caffeine at:
 // https://github.com/ben-manes/caffeine/blob/master/caffeine/src/test/java/com/github/benmanes/caffeine/cache/FrequencySketchTest.java
 //

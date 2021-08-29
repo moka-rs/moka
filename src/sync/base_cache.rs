@@ -1069,3 +1069,62 @@ fn is_expired_entry_wo(
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::BaseCache;
+
+    #[cfg_attr(target_pointer_width = "16", ignore)]
+    #[test]
+    fn test_skt_capacity_will_not_overflow() {
+        use std::collections::hash_map::RandomState;
+
+        // power of two
+        let pot = |exp| 2_usize.pow(exp);
+
+        let ensure_sketch_len = |max_capacity, len, name| {
+            let cache = BaseCache::<u8, u8>::new(
+                max_capacity,
+                None,
+                RandomState::default(),
+                None,
+                None,
+                false,
+            );
+            assert_eq!(
+                cache.inner.frequency_sketch.read().table_len(),
+                len,
+                "{}",
+                name
+            );
+        };
+
+        if cfg!(target_pointer_width = "32") {
+            let pot24 = pot(24);
+            let pot16 = pot(16);
+            ensure_sketch_len(0, 128, "0");
+            ensure_sketch_len(128, 128, "128");
+            ensure_sketch_len(pot16, pot16, "pot16");
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot16 + 1, pot(17), "pot16 + 1");
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot24 - 1, pot24, "pot24 - 1");
+            ensure_sketch_len(pot24, pot24, "pot24");
+            ensure_sketch_len(pot(27), pot24, "pot(27)");
+            ensure_sketch_len(usize::MAX, pot24, "usize::MAX");
+        } else {
+            // target_pointer_width: 64 or larger.
+            let pot30 = pot(30);
+            let pot16 = pot(16);
+            ensure_sketch_len(0, 128, "0");
+            ensure_sketch_len(128, 128, "128");
+            ensure_sketch_len(pot16, pot16, "pot16");
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot16 + 1, pot(17), "pot16 + 1");
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot30 - 1, pot30, "pot30- 1");
+            ensure_sketch_len(pot30, pot30, "pot30");
+            ensure_sketch_len(usize::MAX, pot30, "usize::MAX");
+        };
+    }
+}
