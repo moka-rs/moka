@@ -16,7 +16,7 @@
 /// and an aging process periodically halves the popularity of all elements.
 pub(crate) struct FrequencySketch {
     sample_size: u32,
-    table_mask: u32,
+    table_mask: u64,
     table: Box<[u64]>,
     size: u32,
 }
@@ -92,7 +92,7 @@ impl FrequencySketch {
             maximum.next_power_of_two()
         };
         let table = vec![0; table_size as usize].into_boxed_slice();
-        let table_mask = 0.max(table_size - 1);
+        let table_mask = 0.max(table_size - 1) as u64;
         let sample_size = if cap == 0 {
             10
         } else {
@@ -170,7 +170,7 @@ impl FrequencySketch {
         let i = depth as usize;
         let mut hash = hash.wrapping_add(SEED[i]).wrapping_mul(SEED[i]);
         hash += hash >> 32;
-        (hash as u32 & self.table_mask) as usize
+        (hash & self.table_mask) as usize
     }
 }
 
