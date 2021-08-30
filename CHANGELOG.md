@@ -4,7 +4,12 @@
 
 ### Fixed
 
-- `usize` overflow on big cache capacity. ([#28][gh-pull-0028])
+- Fix `usize` overflow on big cache capacity. ([#28][gh-pull-0028])
+
+### Added
+
+- Add examples for `get_or_insert_with` and `get_or_try_insert_with`
+  methods to the docs. ([#30][gh-pull-0030])
 
 
 ## Version 0.5.1
@@ -88,6 +93,7 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[gh-pull-0030]: https://github.com/moka-rs/moka/pull/30/
 [gh-pull-0028]: https://github.com/moka-rs/moka/pull/28/
 [gh-pull-0022]: https://github.com/moka-rs/moka/pull/22/
 [gh-pull-0020]: https://github.com/moka-rs/moka/pull/20/
