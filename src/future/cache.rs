@@ -278,6 +278,44 @@ where
     /// key even if the method is concurrently called by many async tasks; only one
     /// of the calls resolves its future, and other calls wait for that future to
     /// complete.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.5", features = ["future"] }
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    ///
+    /// use moka::future::Cache;
+    /// use std::sync::Arc;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
+    ///     let cache = Cache::new(1_000);
+    ///
+    ///     // Get the value for key1. The async block should be evaluated because
+    ///     // the key1 does not exist yet.
+    ///     let value1 = cache
+    ///         .get_or_insert_with("key1", async { Arc::new(vec![0u8; TEN_MIB]) })
+    ///         .await;
+    ///     assert_eq!(value1.len(), TEN_MIB);
+    ///
+    ///     // Get the value for key1. The async block should NOT be evaluated
+    ///     // because the key1 already exists. Note that the length of the vec is
+    ///     // different to the first call (10MiB vs zero).
+    ///     let value2 = cache
+    ///         .get_or_insert_with("key1", async { Arc::new(vec![0u8; 0]) })
+    ///         .await;
+    ///
+    ///     // The length of the value2 should be equal to the one inserted by the
+    ///     // first call.
+    ///     assert_eq!(value2.len(), TEN_MIB);
+    /// }
+    /// ```
+    ///
     pub async fn get_or_insert_with(&self, key: K, init: impl Future<Output = V>) -> V {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
@@ -292,6 +330,52 @@ where
     /// key even if the method is concurrently called by many async tasks; only one
     /// of the calls resolves its future, and other calls wait for that future to
     /// complete.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.5", features = ["future"] }
+    /// // reqwest = "0.11"
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    /// use moka::future::Cache;
+    ///
+    /// /// This async function tries to get HTML from the given URI.
+    /// async fn get_html(
+    ///     uri: &str
+    /// ) -> Result<String, Box<dyn std::error::Error + Send + Sync + 'static>>
+    /// {
+    ///     Ok(reqwest::get(uri).await?.text().await?)
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let cache = Cache::new(1_000);
+    ///
+    ///     // Get the value for key1. The async fn should be evaluated because the
+    ///     // key does not exist yet. However, the async fn will return an error due
+    ///     // to the broken URL.
+    ///     let value1 = cache
+    ///         .get_or_try_insert_with("key1", get_html("tps://broken-url"))
+    ///         .await;
+    ///
+    ///     // An error has been returned, and key1 still does not exist.
+    ///     assert!(value1.is_err());
+    ///     assert!(cache.get(&"key1").is_none());
+    ///
+    ///     // Get the value for key1. The async fn should be evaluated.
+    ///     let value2 = cache
+    ///         .get_or_try_insert_with("key1", get_html("https://www.rust-lang.org"))
+    ///         .await;
+    ///
+    ///     // An OK has been returned, and key1 now exists.
+    ///     assert!(value2.is_ok());
+    ///     assert!(cache.get(&"key1").is_some());
+    /// }
+    /// ```
+    ///
     #[allow(clippy::redundant_allocation)]
     // https://rust-lang.github.io/rust-clippy/master/index.html#redundant_allocation
     // `Arc<Box<dyn ..>>` in the return type creates an extra heap allocation.

@@ -258,6 +258,32 @@ where
     /// key even if the method is concurrently called by many threads; only one of
     /// the calls evaluates its function, and other calls wait for that function to
     /// complete.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use moka::sync::Cache;
+    /// use std::sync::Arc;
+    ///
+    /// const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
+    ///
+    /// let cache = Cache::new(1_000);
+    ///
+    /// // Get the value for key1. The closure should be evaluated because the key1
+    /// // does not exist yet.
+    /// let value1 = cache.get_or_insert_with("key1", || Arc::new(vec![0u8; TEN_MIB]));
+    /// assert_eq!(value1.len(), TEN_MIB);
+    ///
+    /// // Get the value for key1. The closure should NOT be evaluated because the
+    /// // key1 already exists. Note that the length of the vec is different to the
+    /// // first call (10MiB vs zero).
+    /// let value2 = cache.get_or_insert_with("key1", || Arc::new(vec![0u8; 0]));
+    ///
+    /// // The length of the value2 should be equal to the one inserted by the first
+    /// // call.
+    /// assert_eq!(value2.len(), TEN_MIB);
+    /// ```
+    ///
     pub fn get_or_insert_with(&self, key: K, init: impl FnOnce() -> V) -> V {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
@@ -293,6 +319,41 @@ where
     /// key even if the method is concurrently called by many threads; only one of
     /// the calls evaluates its function, and other calls wait for that function to
     /// complete.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use moka::sync::Cache;
+    /// use std::path::Path;
+    ///
+    /// /// This function tries to get the file size in bytes.
+    /// fn get_file_size(
+    ///     path: impl AsRef<Path>,
+    /// ) -> Result<u64, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    ///     Ok(std::fs::metadata(path)?.len())
+    /// }
+    ///
+    /// fn main() {
+    ///     let cache = Cache::new(1_000);
+    ///
+    ///     // Get the value for key1. The closure should be evaluated because the
+    ///     // key does not exist yet. However, the closure will return an error due
+    ///     // to the broken URL.
+    ///     let value1 = cache.get_or_try_insert_with("key1", || get_file_size("./not-exist"));
+    ///
+    ///     // An error has been returned, and key1 still does not exist.
+    ///     assert!(value1.is_err());
+    ///     assert!(cache.get(&"key1").is_none());
+    ///
+    ///     // Get the value for key1. The closure should be evaluated.
+    ///     let value2 = cache.get_or_try_insert_with("key1", || get_file_size("./Cargo.toml"));
+    ///
+    ///     // An OK has been returned, and key1 now exists.
+    ///     assert!(value2.is_ok());
+    ///     assert!(cache.get(&"key1").is_some());
+    /// }
+    /// ```
+    ///
     #[allow(clippy::redundant_allocation)]
     // https://rust-lang.github.io/rust-clippy/master/index.html#redundant_allocation
     // `Arc<Box<dyn ..>>` in the return type creates an extra heap allocation.
