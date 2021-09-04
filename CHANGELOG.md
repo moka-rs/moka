@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Fix `get_or_insert_with` and `get_or_try_insert_with` methods in `future::Cache`
+  can lead undefined behavior as accepting `init` future that is not `Send` or
+  `'static`. ([#31][gh-issue-0031])
 - Fix `usize` overflow on big cache capacity. ([#28][gh-pull-0028])
 
 ### Added
@@ -93,6 +96,7 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[gh-issue-0030]: https://github.com/moka-rs/moka/issues/30/
 [gh-pull-0030]: https://github.com/moka-rs/moka/pull/30/
 [gh-pull-0028]: https://github.com/moka-rs/moka/pull/28/
 [gh-pull-0022]: https://github.com/moka-rs/moka/pull/22/
