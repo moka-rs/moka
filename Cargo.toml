@@ -25,7 +25,8 @@ future = ["async-io", "async-lock"]
 
 [dependencies]
 crossbeam-channel = "0.5"
-moka-cht = "0.5"
+# moka-cht = "0.5"
+moka-cht = { git = "https://github.com/moka-rs/moka-cht", branch = "maint-0.4" }
 num_cpus = "1.13"
 once_cell = "1.7"
 parking_lot = "0.11"
