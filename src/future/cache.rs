@@ -307,7 +307,7 @@ where
     ///                 // will call `get_or_insert_with` at the same time, the `init` async
     ///                 // block must be resolved only once.
     ///                 let value = my_cache
-    ///                     .get_or_insert_with("key1", async {
+    ///                     .get_or_insert_with("key1", async move {
     ///                         println!("Task {} inserting a value.", task_id);
     ///                         Arc::new(vec![0u8; TEN_MIB])
     ///                     })
@@ -344,7 +344,10 @@ where
     /// Task 2 got the value. (len: 10485760)
     /// ```
     ///
-    pub async fn get_or_insert_with(&self, key: K, init: impl Future<Output = V>) -> V {
+    pub async fn get_or_insert_with<F>(&self, key: K, init: F) -> V
+    where
+        F: Future<Output = V> + Send + 'static,
+    {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         self.get_or_insert_with_hash_and_fun(key, hash, init).await
@@ -445,7 +448,7 @@ where
         init: F,
     ) -> Result<V, Arc<Box<dyn Error + Send + Sync + 'static>>>
     where
-        F: Future<Output = Result<V, Box<dyn Error + Send + Sync + 'static>>>,
+        F: Future<Output = Result<V, Box<dyn Error + Send + Sync + 'static>>> + Send + 'static,
     {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);

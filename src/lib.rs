@@ -159,3 +159,12 @@ pub mod unsync;
 pub(crate) mod common;
 
 pub use common::error::PredicateError;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn ui() {
+        let t = trybuild::TestCases::new();
+        t.compile_fail("tests/ui/*.rs");
+    }
+}
