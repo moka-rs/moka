@@ -162,9 +162,16 @@ pub use common::error::PredicateError;
 
 #[cfg(test)]
 mod tests {
-    #[cfg(feature = "future")]
+    // #[cfg(trybuild)]
+    // #[test]
+    // fn ui_trybuild() {
+    //     let t = trybuild::TestCases::new();
+    //     t.compile_fail("tests/ui/default/*.rs");
+    // }
+
+    #[cfg(all(trybuild, feature = "future"))]
     #[test]
-    fn ui_future() {
+    fn ui_trybuild_future() {
         let t = trybuild::TestCases::new();
         t.compile_fail("tests/ui/future/*.rs");
     }
