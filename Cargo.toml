@@ -44,6 +44,7 @@ actix-rt1 = { package = "actix-rt", version = "1", default-features = false }
 async-std = { version = "1", default-features = false, features = ["attributes"] }
 futures = "0.3"
 getrandom = "0.2"
+reqwest = "0.11"
 skeptic = "0.13"
 tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 
