@@ -286,34 +286,62 @@ where
     /// //
     /// // [dependencies]
     /// // moka = { version = "0.5", features = ["future"] }
+    /// // futures = "0.3"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
-    ///
     /// use moka::future::Cache;
     /// use std::sync::Arc;
     ///
     /// #[tokio::main]
     /// async fn main() {
     ///     const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
-    ///     let cache = Cache::new(1_000);
+    ///     let cache = Cache::new(100);
     ///
-    ///     // Get the value for key1. The async block should be evaluated because
-    ///     // the key1 does not exist yet.
-    ///     let value1 = cache
-    ///         .get_or_insert_with("key1", async { Arc::new(vec![0u8; TEN_MIB]) })
-    ///         .await;
-    ///     assert_eq!(value1.len(), TEN_MIB);
+    ///     // Spawn four async tasks.
+    ///     let tasks: Vec<_> = (0..4_u8)
+    ///         .map(|task_id| {
+    ///             let my_cache = cache.clone();
+    ///             tokio::spawn(async move {
+    ///                 println!("Task {} started.", task_id);
     ///
-    ///     // Get the value for key1. The async block should NOT be evaluated
-    ///     // because the key1 already exists. Note that the length of the vec is
-    ///     // different to the first call (10MiB vs zero).
-    ///     let value2 = cache
-    ///         .get_or_insert_with("key1", async { Arc::new(vec![0u8; 0]) })
-    ///         .await;
+    ///                 // Insert and get the value for key1. Although all four async tasks
+    ///                 // will call `get_or_insert_with` at the same time, the `init` async
+    ///                 // block must be resolved only once.
+    ///                 let value = my_cache
+    ///                     .get_or_insert_with("key1", async {
+    ///                         println!("Task {} inserting a value.", task_id);
+    ///                         Arc::new(vec![0u8; TEN_MIB])
+    ///                     })
+    ///                     .await;
     ///
-    ///     // The length of the value2 should be equal to the one inserted by the
-    ///     // first call.
-    ///     assert_eq!(value2.len(), TEN_MIB);
+    ///                 // Ensure the value exists now.
+    ///                 assert_eq!(value.len(), TEN_MIB);
+    ///                 assert!(my_cache.get(&"key1").is_some());
+    ///
+    ///                 println!("Task {} got the value. (len: {})", task_id, value.len());
+    ///             })
+    ///         })
+    ///         .collect();
+    ///
+    ///     // Run all tasks concurrently and wait for them to complete.
+    ///     futures::future::join_all(tasks).await;
     /// }
+    /// ```
+    ///
+    /// **A Sample Result**
+    ///
+    /// - The async black resolved exactly once by task 3.
+    /// - Other tasks were blocked until task 3 inserted the value.
+    ///
+    /// ```console
+    /// Task 0 started.
+    /// Task 3 started.
+    /// Task 1 started.
+    /// Task 2 started.
+    /// Task 3 inserting a value.
+    /// Task 3 got the value. (len: 10485760)
+    /// Task 0 got the value. (len: 10485760)
+    /// Task 1 got the value. (len: 10485760)
+    /// Task 2 got the value. (len: 10485760)
     /// ```
     ///
     pub async fn get_or_insert_with(&self, key: K, init: impl Future<Output = V>) -> V {
@@ -338,42 +366,73 @@ where
     /// //
     /// // [dependencies]
     /// // moka = { version = "0.5", features = ["future"] }
+    /// // futures = "0.3"
     /// // reqwest = "0.11"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
     ///
-    /// /// This async function tries to get HTML from the given URI.
+    /// // This async function tries to get HTML from the given URI.
     /// async fn get_html(
-    ///     uri: &str
-    /// ) -> Result<String, Box<dyn std::error::Error + Send + Sync + 'static>>
-    /// {
+    ///     task_id: u8,
+    ///     uri: &str,
+    /// ) -> Result<String, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    ///     println!("get_html() called by task {}.", task_id);
     ///     Ok(reqwest::get(uri).await?.text().await?)
     /// }
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///     let cache = Cache::new(1_000);
+    ///     let cache = Cache::new(100);
     ///
-    ///     // Get the value for key1. The async fn should be evaluated because the
-    ///     // key does not exist yet. However, the async fn will return an error due
-    ///     // to the broken URL.
-    ///     let value1 = cache
-    ///         .get_or_try_insert_with("key1", get_html("tps://broken-url"))
-    ///         .await;
+    ///     // Spawn four async tasks.
+    ///     let tasks: Vec<_> = (0..4_u8)
+    ///         .map(|task_id| {
+    ///             let my_cache = cache.clone();
+    ///             tokio::spawn(async move {
+    ///                 println!("Task {} started.", task_id);
     ///
-    ///     // An error has been returned, and key1 still does not exist.
-    ///     assert!(value1.is_err());
-    ///     assert!(cache.get(&"key1").is_none());
+    ///                 // Try to insert and get the value for key1. Although
+    ///                 // all four async tasks will call `get_or_try_insert_with`
+    ///                 // at the same time, get_html() must be called only once.
+    ///                 let value = my_cache
+    ///                     .get_or_try_insert_with(
+    ///                         "key1",
+    ///                         get_html(task_id, "https://www.rust-lang.org"),
+    ///                     ).await;
     ///
-    ///     // Get the value for key1. The async fn should be evaluated.
-    ///     let value2 = cache
-    ///         .get_or_try_insert_with("key1", get_html("https://www.rust-lang.org"))
-    ///         .await;
+    ///                 // Ensure the value exists now.
+    ///                 assert!(value.is_ok());
+    ///                 assert!(my_cache.get(&"key1").is_some());
     ///
-    ///     // An OK has been returned, and key1 now exists.
-    ///     assert!(value2.is_ok());
-    ///     assert!(cache.get(&"key1").is_some());
+    ///                 println!(
+    ///                     "Task {} got the value. (len: {})",
+    ///                     task_id,
+    ///                     value.unwrap().len()
+    ///                 );
+    ///             })
+    ///         })
+    ///         .collect();
+    ///
+    ///     // Run all tasks concurrently and wait for them to complete.
+    ///     futures::future::join_all(tasks).await;
     /// }
+    /// ```
+    ///
+    /// **A Sample Result**
+    ///
+    /// - `get_html()` called exactly once by task 2.
+    /// - Other tasks were blocked until task 2 inserted the value.
+    ///
+    /// ```console
+    /// Task 1 started.
+    /// Task 0 started.
+    /// Task 2 started.
+    /// Task 3 started.
+    /// get_html() called by task 2.
+    /// Task 2 got the value. (len: 19419)
+    /// Task 1 got the value. (len: 19419)
+    /// Task 0 got the value. (len: 19419)
+    /// Task 3 got the value. (len: 19419)
     /// ```
     ///
     #[allow(clippy::redundant_allocation)]

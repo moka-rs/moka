@@ -263,25 +263,57 @@ where
     ///
     /// ```rust
     /// use moka::sync::Cache;
-    /// use std::sync::Arc;
+    /// use std::{sync::Arc, thread, time::Duration};
     ///
     /// const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
+    /// let cache = Cache::new(100);
     ///
-    /// let cache = Cache::new(1_000);
+    /// // Spawn four threads.
+    /// let threads: Vec<_> = (0..4_u8)
+    ///     .map(|task_id| {
+    ///         let my_cache = cache.clone();
+    ///         thread::spawn(move || {
+    ///             println!("Thread {} started.", task_id);
     ///
-    /// // Get the value for key1. The closure should be evaluated because the key1
-    /// // does not exist yet.
-    /// let value1 = cache.get_or_insert_with("key1", || Arc::new(vec![0u8; TEN_MIB]));
-    /// assert_eq!(value1.len(), TEN_MIB);
+    ///             // Try to insert and get the value for key1. Although all four
+    ///             // threads will call `get_or_insert_with` at the same time, the
+    ///             // `init` closure must be evaluated only once.
+    ///             let value = my_cache.get_or_insert_with("key1", || {
+    ///                 println!("Thread {} inserting a value.", task_id);
+    ///                 Arc::new(vec![0u8; TEN_MIB])
+    ///             });
     ///
-    /// // Get the value for key1. The closure should NOT be evaluated because the
-    /// // key1 already exists. Note that the length of the vec is different to the
-    /// // first call (10MiB vs zero).
-    /// let value2 = cache.get_or_insert_with("key1", || Arc::new(vec![0u8; 0]));
+    ///             // Ensure the value exists now.
+    ///             assert_eq!(value.len(), TEN_MIB);
+    ///             thread::sleep(Duration::from_millis(10));
+    ///             assert!(my_cache.get(&"key1").is_some());
     ///
-    /// // The length of the value2 should be equal to the one inserted by the first
-    /// // call.
-    /// assert_eq!(value2.len(), TEN_MIB);
+    ///             println!("Thread {} got the value. (len: {})", task_id, value.len());
+    ///         })
+    ///     })
+    ///     .collect();
+    ///
+    /// // Wait all threads to complete.
+    /// threads
+    ///     .into_iter()
+    ///     .for_each(|t| t.join().expect("Thread failed"));
+    /// ```
+    ///
+    /// **Result**
+    ///
+    /// - The `init` closure called exactly once by thread 1.
+    /// - Other threads were blocked until thread 1 inserted the value.
+    ///
+    /// ```console
+    /// Thread 1 started.
+    /// Thread 0 started.
+    /// Thread 3 started.
+    /// Thread 2 started.
+    /// Thread 1 inserting a value.
+    /// Thread 2 got the value. (len: 10485760)
+    /// Thread 1 got the value. (len: 10485760)
+    /// Thread 0 got the value. (len: 10485760)
+    /// Thread 3 got the value. (len: 10485760)
     /// ```
     ///
     pub fn get_or_insert_with(&self, key: K, init: impl FnOnce() -> V) -> V {
@@ -324,34 +356,69 @@ where
     ///
     /// ```rust
     /// use moka::sync::Cache;
-    /// use std::path::Path;
+    /// use std::{path::Path, time::Duration, thread};
     ///
     /// /// This function tries to get the file size in bytes.
     /// fn get_file_size(
+    ///     thread_id: u8,
     ///     path: impl AsRef<Path>,
     /// ) -> Result<u64, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    ///     println!("get_file_size() called by thread {}.", thread_id);
     ///     Ok(std::fs::metadata(path)?.len())
     /// }
     ///
-    /// fn main() {
-    ///     let cache = Cache::new(1_000);
+    /// let cache = Cache::new(100);
     ///
-    ///     // Get the value for key1. The closure should be evaluated because the
-    ///     // key does not exist yet. However, the closure will return an error due
-    ///     // to the broken URL.
-    ///     let value1 = cache.get_or_try_insert_with("key1", || get_file_size("./not-exist"));
+    /// // Spawn four threads.
+    /// let threads: Vec<_> = (0..4_u8)
+    ///     .map(|thread_id| {
+    ///         let my_cache = cache.clone();
+    ///         thread::spawn(move || {
+    ///             println!("Thread {} started.", thread_id);
     ///
-    ///     // An error has been returned, and key1 still does not exist.
-    ///     assert!(value1.is_err());
-    ///     assert!(cache.get(&"key1").is_none());
+    ///             // Try to insert and get the value for key1. Although all four
+    ///             // threads will call `get_or_try_insert_with` at the same time,
+    ///             // get_file_size() must be called only once.
+    ///             let value = my_cache.get_or_try_insert_with(
+    ///                 "key1",
+    ///                 || get_file_size(thread_id, "./Cargo.toml"),
+    ///             );
     ///
-    ///     // Get the value for key1. The closure should be evaluated.
-    ///     let value2 = cache.get_or_try_insert_with("key1", || get_file_size("./Cargo.toml"));
+    ///             // Ensure the value exists now.
+    ///             assert!(value.is_ok());
+    ///             thread::sleep(Duration::from_millis(10));
+    ///             assert!(my_cache.get(&"key1").is_some());
     ///
-    ///     // An OK has been returned, and key1 now exists.
-    ///     assert!(value2.is_ok());
-    ///     assert!(cache.get(&"key1").is_some());
-    /// }
+    ///             println!(
+    ///                 "Thread {} got the value. (len: {})",
+    ///                 thread_id,
+    ///                 value.unwrap()
+    ///             );
+    ///         })
+    ///     })
+    ///     .collect();
+    ///
+    /// // Wait all threads to complete.
+    /// threads
+    ///     .into_iter()
+    ///     .for_each(|t| t.join().expect("Thread failed"));
+    /// ```
+    ///
+    /// **Result**
+    ///
+    /// - `get_file_size()` called exactly once by thread 1.
+    /// - Other threads were blocked until thread 1 inserted the value.
+    ///
+    /// ```console
+    /// Thread 1 started.
+    /// Thread 2 started.
+    /// get_file_size() called by thread 1.
+    /// Thread 3 started.
+    /// Thread 0 started.
+    /// Thread 2 got the value. (len: 1466)
+    /// Thread 0 got the value. (len: 1466)
+    /// Thread 1 got the value. (len: 1466)
+    /// Thread 3 got the value. (len: 1466)
     /// ```
     ///
     #[allow(clippy::redundant_allocation)]

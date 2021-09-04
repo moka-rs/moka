@@ -41,14 +41,14 @@ where
 
         match self.try_insert_waiter(&key, &waiter) {
             None => {
-                // Inserted. Evaluate the init closure.
+                // Our waiter was inserted. Let's resolve the init closure.
                 let value = init();
                 *lock = Some(Ok(value.clone()));
                 Initialized(value)
             }
             Some(res) => {
-                // Value already exists. Drop our write lock and wait for a read lock
-                // to become available.
+                // Somebody else's waiter already exists. Drop our write lock and wait
+                // for a read lock to become available.
                 std::mem::drop(lock);
                 match &*res.read() {
                     Some(Ok(value)) => ReadExisting(value.clone()),
@@ -69,7 +69,7 @@ where
 
         match self.try_insert_waiter(&key, &waiter) {
             None => {
-                // Inserted. Evaluate the init closure.
+                // Our waiter was inserted. Let's resolve the init closure.
                 match init() {
                     Ok(value) => {
                         *lock = Some(Ok(value.clone()));
@@ -84,8 +84,8 @@ where
                 }
             }
             Some(res) => {
-                // Value already exists. Drop our write lock and wait for a read lock
-                // to become available.
+                // Somebody else's waiter already exists. Drop our write lock and wait
+                // for a read lock to become available.
                 std::mem::drop(lock);
                 match &*res.read() {
                     Some(Ok(value)) => ReadExisting(value.clone()),
