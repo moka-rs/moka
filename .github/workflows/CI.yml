@@ -15,9 +15,6 @@ on:
     # Run against the last commit on the default branch on Friday at 8pm (UTC?)
     - cron:  '0 20 * * 5'
 
-env:
-  RUSTFLAGS: '--cfg skeptic'
-
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -59,6 +56,8 @@ jobs:
         with:
           command: test
           args: --release
+        env:
+          RUSTFLAGS: '--cfg skeptic'
 
       - name: Run tests (future)
         uses: actions-rs/cargo@v1
@@ -66,6 +65,17 @@ jobs:
         with:
           command: test
           args: --release --features future
+        env:
+          RUSTFLAGS: '--cfg skeptic'
+
+      - name: Run UI tests (future, trybuild)
+        uses: actions-rs/cargo@v1
+        if: ${{ matrix.rust == 'stable' }}
+        with:
+          command: test
+          args: ui_trybuild --release --features future
+        env:
+          RUSTFLAGS: '--cfg trybuild'
 
       - name: Run Rustfmt
         uses: actions-rs/cargo@v1

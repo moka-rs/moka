@@ -48,5 +48,8 @@ reqwest = "0.11"
 skeptic = "0.13"
 tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 
+[target.'cfg(trybuild)'.dev-dependencies]
+trybuild = "1.0"
+
 [target.'cfg(skeptic)'.build-dependencies]
 skeptic = "0.13"
