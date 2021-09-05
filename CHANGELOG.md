@@ -18,7 +18,7 @@
 
 - Downgrade crossbeam-epoch used in moka-cht from v0.9.x to v0.8.x as a
   possible workaround for segmentation faults on many-core CPU machines.
-  ([#33](gh-pull-0033))
+  ([#33][gh-pull-0033])
 
 
 ## Version 0.5.1
