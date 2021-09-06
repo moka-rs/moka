@@ -360,8 +360,8 @@ where
     ///
     /// This method prevents to resolve the init future multiple times on the same
     /// key even if the method is concurrently called by many async tasks; only one
-    /// of the calls resolves its future, and other calls wait for that future to
-    /// complete.
+    /// of the calls resolves its future (as long as these futures return the same
+    /// error type), and other calls wait for that future to complete.
     ///
     /// # Example
     ///
