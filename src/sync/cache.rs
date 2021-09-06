@@ -361,10 +361,7 @@ where
     /// use std::{path::Path, time::Duration, thread};
     ///
     /// /// This function tries to get the file size in bytes.
-    /// fn get_file_size(
-    ///     thread_id: u8,
-    ///     path: impl AsRef<Path>,
-    /// ) -> Result<u64, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    /// fn get_file_size(thread_id: u8, path: impl AsRef<Path>) -> Result<u64, std::io::Error> {
     ///     println!("get_file_size() called by thread {}.", thread_id);
     ///     Ok(std::fs::metadata(path)?.len())
     /// }

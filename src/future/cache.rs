@@ -376,10 +376,7 @@ where
     /// use moka::future::Cache;
     ///
     /// // This async function tries to get HTML from the given URI.
-    /// async fn get_html(
-    ///     task_id: u8,
-    ///     uri: &str,
-    /// ) -> Result<String, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    /// async fn get_html(task_id: u8, uri: &str) -> Result<String, reqwest::Error> {
     ///     println!("get_html() called by task {}.", task_id);
     ///     Ok(reqwest::get(uri).await?.text().await?)
     /// }
