@@ -438,7 +438,7 @@ where
     ///
     pub async fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
-        F: Future<Output = Result<V, E>>,
+        F: Future<Output = Result<V, E>> + Send + 'static,
         E: Error + Send + Sync + 'static,
     {
         let hash = self.base.hash(&key);
