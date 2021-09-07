@@ -16,7 +16,6 @@ use std::{
     any::TypeId,
     borrow::Borrow,
     collections::hash_map::RandomState,
-    error::Error,
     future::Future,
     hash::{BuildHasher, Hash},
     sync::Arc,
@@ -439,7 +438,7 @@ where
     pub async fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
         F: Future<Output = Result<V, E>> + Send + 'static,
-        E: Error + Send + Sync + 'static,
+        E: Send + Sync + 'static,
     {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
@@ -632,7 +631,7 @@ where
     ) -> Result<V, Arc<E>>
     where
         F: Future<Output = Result<V, E>>,
-        E: Error + Send + Sync + 'static,
+        E: Send + Sync + 'static,
     {
         if let Some(v) = self.base.get_with_hash(&key, hash) {
             return Ok(v);
@@ -1166,8 +1165,9 @@ mod tests {
     async fn get_or_try_insert_with() {
         use std::sync::Arc;
 
-        #[derive(thiserror::Error, Debug)]
-        #[error("{}", _0)]
+        // Note that MyError does not implement std::error::Error trait
+        // like anyhow::Error.
+        #[derive(Debug)]
         pub struct MyError(String);
 
         type MyResult<T> = Result<T, Arc<MyError>>;

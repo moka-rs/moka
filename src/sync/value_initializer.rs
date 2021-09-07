@@ -1,7 +1,6 @@
 use parking_lot::RwLock;
 use std::{
     any::{Any, TypeId},
-    error::Error,
     hash::{BuildHasher, Hash},
     sync::Arc,
 };
@@ -63,7 +62,7 @@ where
     pub(crate) fn try_init_or_read<F, E>(&self, key: Arc<K>, init: F) -> InitResult<V, E>
     where
         F: FnOnce() -> Result<V, E>,
-        E: Error + Send + Sync + 'static,
+        E: Send + Sync + 'static,
     {
         use InitResult::*;
 

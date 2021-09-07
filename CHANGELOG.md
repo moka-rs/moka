@@ -5,7 +5,7 @@
 ### Changed
 
 - Change `get_or_try_insert_with` to return a concrete error type rather
-  than a trait object. ([#23][gh-pull-0023])
+  than a trait object. ([#23][gh-pull-0023], [#37][gh-pull-0037])
 
 
 ## Version 0.5.2
@@ -112,6 +112,7 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[gh-pull-0037]: https://github.com/moka-rs/moka/pull/37/
 [gh-pull-0033]: https://github.com/moka-rs/moka/pull/33/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 [gh-pull-0030]: https://github.com/moka-rs/moka/pull/30/
