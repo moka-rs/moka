@@ -1,0 +1,41 @@
+error[E0597]: `data` does not live long enough
+  --> $DIR/try_get_with_non_static_future.rs:12:24
+   |
+12 |           let data_ref = &data;
+   |                          ^^^^^ borrowed value does not live long enough
+...
+15 |               .get_or_try_insert_with(0, async {
+   |  ________________________________________-
+16 | |                 // This may become a dangling pointer.
+17 | |                 // The async block can be executed by a different thread so
+18 | |                 // the captured reference `data_ref` may outlive its value.
+19 | |                 Ok(data_ref.to_string())
+20 | |             })
+   | |_____________- argument requires that `data` is borrowed for `'static`
+...
+25 |   }
+   |   - `data` dropped here while still borrowed
+
+error[E0373]: async block may outlive the current function, but it borrows `data_ref`, which is owned by the current function
+  --> $DIR/try_get_with_non_static_future.rs:15:46
+   |
+15 |               .get_or_try_insert_with(0, async {
+   |  ______________________________________________^
+16 | |                 // This may become a dangling pointer.
+17 | |                 // The async block can be executed by a different thread so
+18 | |                 // the captured reference `data_ref` may outlive its value.
+19 | |                 Ok(data_ref.to_string())
+   | |                    -------- `data_ref` is borrowed here
+20 | |             })
+   | |_____________^ may outlive borrowed value `data_ref`
+   |
+   = note: async blocks are not executed immediately and must either take a reference or ownership of outside variables they use
+help: to force the async block to take ownership of `data_ref` (and any other referenced variables), use the `move` keyword
+   |
+15 |             .get_or_try_insert_with(0, async move {
+16 |                 // This may become a dangling pointer.
+17 |                 // The async block can be executed by a different thread so
+18 |                 // the captured reference `data_ref` may outlive its value.
+19 |                 Ok(data_ref.to_string())
+20 |             })
+   |
