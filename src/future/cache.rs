@@ -285,7 +285,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.5", features = ["future"] }
+    /// // moka = { version = "0.6", features = ["future"] }
     /// // futures = "0.3"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
@@ -368,7 +368,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.5", features = ["future"] }
+    /// // moka = { version = "0.6", features = ["future"] }
     /// // futures = "0.3"
     /// // reqwest = "0.11"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
