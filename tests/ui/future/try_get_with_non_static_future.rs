@@ -1,6 +1,7 @@
 // https://github.com/moka-rs/moka/issues/31
 
 use moka::future::Cache;
+use std::convert::Infallible;
 
 #[tokio::main]
 async fn main() {
@@ -16,7 +17,7 @@ async fn main() {
                 // This may become a dangling pointer.
                 // The async block can be executed by a different thread so
                 // the captured reference `data_ref` may outlive its value.
-                Ok(data_ref.to_string())
+                Ok(data_ref.to_string()) as Result<_, Infallible>
             })
             .await;
     }

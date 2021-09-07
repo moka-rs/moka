@@ -1,7 +1,7 @@
 // https://github.com/moka-rs/moka/issues/31
 
 use moka::future::Cache;
-use std::rc::Rc;
+use std::{convert::Infallible ,rc::Rc};
 
 #[tokio::main]
 async fn main() {
@@ -16,7 +16,7 @@ async fn main() {
             // A data race may occur. 
             // The async block can be executed by a different thread
             // but Rc's internal reference counters are not thread safe.
-            Ok(data1.to_string())
+            Ok(data1.to_string()) as Result<_, Infallible>
         })
         .await;
 

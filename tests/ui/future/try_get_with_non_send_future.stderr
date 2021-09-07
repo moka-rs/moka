@@ -8,5 +8,5 @@ error: future cannot be sent between threads safely
 note: captured value is not `Send`
   --> $DIR/try_get_with_non_send_future.rs:19:16
    |
-19 |             Ok(data1.to_string())
+19 |             Ok(data1.to_string()) as Result<_, Infallible>
    |                ^^^^^ has type `Rc<String>` which is not `Send`
