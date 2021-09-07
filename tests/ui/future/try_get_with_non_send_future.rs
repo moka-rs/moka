@@ -18,7 +18,7 @@ async fn main() {
             // but Rc's internal reference counters are not thread safe.
             Ok(data1.to_string()) as Result<_, Infallible>
         })
-        .await;
+        .await.unwrap();
 
     println!("{:?}", data);
 }

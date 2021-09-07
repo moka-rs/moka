@@ -19,7 +19,7 @@ async fn main() {
                 // the captured reference `data_ref` may outlive its value.
                 Ok(data_ref.to_string()) as Result<_, Infallible>
             })
-            .await;
+            .await.unwrap();
     }
 
     println!("{:?}", data);
