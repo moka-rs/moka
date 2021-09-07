@@ -48,14 +48,14 @@ where
 
         match self.try_insert_waiter(&key, type_id, &waiter) {
             None => {
-                // Inserted. Resolve the init future.
+                // Our waiter was inserted. Let's resolve the init future.
                 let value = init.await;
                 *lock = Some(Ok(value.clone()));
                 Initialized(value)
             }
             Some(res) => {
-                // Value already exists. Drop our write lock and wait for a read lock
-                // to become available.
+                // Somebody else's waiter already exists. Drop our write lock and wait
+                // for a read lock to become available.
                 std::mem::drop(lock);
                 match &*res.read().await {
                     Some(Ok(value)) => ReadExisting(value.clone()),
@@ -78,7 +78,7 @@ where
 
         match self.try_insert_waiter(&key, type_id, &waiter) {
             None => {
-                // Inserted. Resolve the init future.
+                // Our waiter was inserted. Let's resolve the init future.
                 match init.await {
                     Ok(value) => {
                         *lock = Some(Ok(value.clone()));
@@ -93,8 +93,8 @@ where
                 }
             }
             Some(res) => {
-                // Value already exists. Drop our write lock and wait for a read lock
-                // to become available.
+                // Somebody else's waiter already exists. Drop our write lock and wait
+                // for a read lock to become available.
                 std::mem::drop(lock);
                 match &*res.read().await {
                     Some(Ok(value)) => ReadExisting(value.clone()),

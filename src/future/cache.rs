@@ -279,7 +279,76 @@ where
     /// key even if the method is concurrently called by many async tasks; only one
     /// of the calls resolves its future, and other calls wait for that future to
     /// complete.
-    pub async fn get_or_insert_with(&self, key: K, init: impl Future<Output = V>) -> V {
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.5", features = ["future"] }
+    /// // futures = "0.3"
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    /// use moka::future::Cache;
+    /// use std::sync::Arc;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
+    ///     let cache = Cache::new(100);
+    ///
+    ///     // Spawn four async tasks.
+    ///     let tasks: Vec<_> = (0..4_u8)
+    ///         .map(|task_id| {
+    ///             let my_cache = cache.clone();
+    ///             tokio::spawn(async move {
+    ///                 println!("Task {} started.", task_id);
+    ///
+    ///                 // Insert and get the value for key1. Although all four async tasks
+    ///                 // will call `get_or_insert_with` at the same time, the `init` async
+    ///                 // block must be resolved only once.
+    ///                 let value = my_cache
+    ///                     .get_or_insert_with("key1", async move {
+    ///                         println!("Task {} inserting a value.", task_id);
+    ///                         Arc::new(vec![0u8; TEN_MIB])
+    ///                     })
+    ///                     .await;
+    ///
+    ///                 // Ensure the value exists now.
+    ///                 assert_eq!(value.len(), TEN_MIB);
+    ///                 assert!(my_cache.get(&"key1").is_some());
+    ///
+    ///                 println!("Task {} got the value. (len: {})", task_id, value.len());
+    ///             })
+    ///         })
+    ///         .collect();
+    ///
+    ///     // Run all tasks concurrently and wait for them to complete.
+    ///     futures::future::join_all(tasks).await;
+    /// }
+    /// ```
+    ///
+    /// **A Sample Result**
+    ///
+    /// - The async black resolved exactly once by task 3.
+    /// - Other tasks were blocked until task 3 inserted the value.
+    ///
+    /// ```console
+    /// Task 0 started.
+    /// Task 3 started.
+    /// Task 1 started.
+    /// Task 2 started.
+    /// Task 3 inserting a value.
+    /// Task 3 got the value. (len: 10485760)
+    /// Task 0 got the value. (len: 10485760)
+    /// Task 1 got the value. (len: 10485760)
+    /// Task 2 got the value. (len: 10485760)
+    /// ```
+    ///
+    pub async fn get_or_insert_with<F>(&self, key: K, init: F) -> V
+    where
+        F: Future<Output = V> + Send + 'static,
+    {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         self.get_or_insert_with_hash_and_fun(key, hash, init).await
@@ -293,9 +362,83 @@ where
     /// key even if the method is concurrently called by many async tasks; only one
     /// of the calls resolves its future (as long as these futures return the same
     /// error type), and other calls wait for that future to complete.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.5", features = ["future"] }
+    /// // futures = "0.3"
+    /// // reqwest = "0.11"
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    /// use moka::future::Cache;
+    ///
+    /// // This async function tries to get HTML from the given URI.
+    /// async fn get_html(task_id: u8, uri: &str) -> Result<String, reqwest::Error> {
+    ///     println!("get_html() called by task {}.", task_id);
+    ///     Ok(reqwest::get(uri).await?.text().await?)
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let cache = Cache::new(100);
+    ///
+    ///     // Spawn four async tasks.
+    ///     let tasks: Vec<_> = (0..4_u8)
+    ///         .map(|task_id| {
+    ///             let my_cache = cache.clone();
+    ///             tokio::spawn(async move {
+    ///                 println!("Task {} started.", task_id);
+    ///
+    ///                 // Try to insert and get the value for key1. Although
+    ///                 // all four async tasks will call `get_or_try_insert_with`
+    ///                 // at the same time, get_html() must be called only once.
+    ///                 let value = my_cache
+    ///                     .get_or_try_insert_with(
+    ///                         "key1",
+    ///                         get_html(task_id, "https://www.rust-lang.org"),
+    ///                     ).await;
+    ///
+    ///                 // Ensure the value exists now.
+    ///                 assert!(value.is_ok());
+    ///                 assert!(my_cache.get(&"key1").is_some());
+    ///
+    ///                 println!(
+    ///                     "Task {} got the value. (len: {})",
+    ///                     task_id,
+    ///                     value.unwrap().len()
+    ///                 );
+    ///             })
+    ///         })
+    ///         .collect();
+    ///
+    ///     // Run all tasks concurrently and wait for them to complete.
+    ///     futures::future::join_all(tasks).await;
+    /// }
+    /// ```
+    ///
+    /// **A Sample Result**
+    ///
+    /// - `get_html()` called exactly once by task 2.
+    /// - Other tasks were blocked until task 2 inserted the value.
+    ///
+    /// ```console
+    /// Task 1 started.
+    /// Task 0 started.
+    /// Task 2 started.
+    /// Task 3 started.
+    /// get_html() called by task 2.
+    /// Task 2 got the value. (len: 19419)
+    /// Task 1 got the value. (len: 19419)
+    /// Task 0 got the value. (len: 19419)
+    /// Task 3 got the value. (len: 19419)
+    /// ```
+    ///
     pub async fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
-        F: Future<Output = Result<V, E>>,
+        F: Future<Output = Result<V, E>> + Send + 'static,
         E: Error + Send + Sync + 'static,
     {
         let hash = self.base.hash(&key);

@@ -8,6 +8,29 @@
   than a trait object. ([#23][gh-pull-0023])
 
 
+## Version 0.5.2
+
+### Fixed
+
+- Fix a bug in `get_or_insert_with` and `get_or_try_insert_with` methods of
+  `future::Cache` by adding missing bounds `Send` and `'static` to the `init`
+  future. Without this fix, these methods will accept non-`Send` or
+  non-`'static` future and may cause undefined behavior.
+  ([#31][gh-issue-0031])
+- Fix `usize` overflow on big cache capacity. ([#28][gh-pull-0028])
+
+### Added
+
+- Add examples for `get_or_insert_with` and `get_or_try_insert_with`
+  methods to the docs. ([#30][gh-pull-0030])
+
+### Changed
+
+- Downgrade crossbeam-epoch used in moka-cht from v0.9.x to v0.8.x as a possible
+  workaround for segmentation faults on many-core CPU machines.
+  ([#33][gh-pull-0033])
+
+
 ## Version 0.5.1
 
 ### Changed
@@ -89,6 +112,10 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[gh-pull-0033]: https://github.com/moka-rs/moka/pull/33/
+[gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
+[gh-pull-0030]: https://github.com/moka-rs/moka/pull/30/
+[gh-pull-0028]: https://github.com/moka-rs/moka/pull/28/
 [gh-pull-0023]: https://github.com/moka-rs/moka/pull/23/
 [gh-pull-0022]: https://github.com/moka-rs/moka/pull/22/
 [gh-pull-0020]: https://github.com/moka-rs/moka/pull/20/
