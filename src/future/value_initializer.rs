@@ -1,7 +1,6 @@
 use async_lock::RwLock;
 use std::{
     any::{Any, TypeId},
-    error::Error,
     future::Future,
     hash::{BuildHasher, Hash},
     sync::Arc,
@@ -68,7 +67,7 @@ where
     pub(crate) async fn try_init_or_read<F, E>(&self, key: Arc<K>, init: F) -> InitResult<V, E>
     where
         F: Future<Output = Result<V, E>>,
-        E: Error + Send + Sync + 'static,
+        E: Send + Sync + 'static,
     {
         use InitResult::*;
 
