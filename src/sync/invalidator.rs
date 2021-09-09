@@ -3,6 +3,7 @@
 use crate::{
     common::{
         thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
+        time::Instant,
         unsafe_weak_pointer::UnsafeWeakPointer,
         AccessTime,
     },
@@ -12,13 +13,12 @@ use crate::{
 use super::{base_cache::Inner, PredicateId, PredicateIdStr, ValueEntry};
 
 use parking_lot::{Mutex, RwLock};
-use quanta::Instant;
 use std::{
     collections::HashMap,
     hash::{BuildHasher, Hash},
     marker::PhantomData,
     sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
         Arc, Weak,
     },
     time::Duration,

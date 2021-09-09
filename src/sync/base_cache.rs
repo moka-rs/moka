@@ -8,6 +8,7 @@ use crate::{
     common::{
         deque::{CacheRegion, DeqNode, Deque},
         frequency_sketch::FrequencySketch,
+        time::{AtomicInstant, Clock, Instant},
         AccessTime,
     },
     PredicateError,
@@ -15,7 +16,6 @@ use crate::{
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use parking_lot::{Mutex, RwLock};
-use quanta::{Clock, Instant};
 use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
@@ -24,7 +24,7 @@ use std::{
     ptr::NonNull,
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         Arc,
     },
     time::Duration,
@@ -140,7 +140,7 @@ where
             }
             Some((arc_key, entry)) => {
                 let i = &self.inner;
-                let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), i.valid_after());
+                let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
                 let now = i.current_time_from_expiration_clock();
 
                 if is_expired_entry_wo(ttl, va, &entry, now)
@@ -339,7 +339,7 @@ where
         }
     }
 
-    pub(crate) fn set_expiration_clock(&self, clock: Option<quanta::Clock>) {
+    pub(crate) fn set_expiration_clock(&self, clock: Option<Clock>) {
         self.inner.set_expiration_clock(clock);
     }
 }
@@ -358,7 +358,7 @@ pub(crate) struct Inner<K, V, S> {
     write_op_ch: Receiver<WriteOp<K, V>>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
-    valid_after: AtomicU64,
+    valid_after: AtomicInstant,
     invalidator_enabled: bool,
     invalidator: RwLock<Option<Invalidator<K, V, S>>>,
     has_expiration_clock: AtomicBool,
@@ -411,7 +411,7 @@ where
             write_op_ch,
             time_to_live,
             time_to_idle,
-            valid_after: AtomicU64::new(0),
+            valid_after: AtomicInstant::default(),
             invalidator_enabled,
             // When enabled, this field will be set later via the set_invalidator method.
             invalidator: RwLock::new(None),
@@ -478,20 +478,23 @@ where
     }
 
     #[inline]
-    fn valid_after(&self) -> Instant {
-        let ts = self.valid_after.load(Ordering::Acquire);
-        unsafe { std::mem::transmute(ts) }
+    fn valid_after(&self) -> Option<Instant> {
+        // let ts = self.valid_after.load(Ordering::Acquire);
+        // unsafe { std::mem::transmute(ts) }
+        self.valid_after.instant()
     }
 
     #[inline]
     fn set_valid_after(&self, timestamp: Instant) {
-        self.valid_after
-            .store(timestamp.as_u64(), Ordering::Release);
+        // self.valid_after
+        //     .store(timestamp.as_u64(), Ordering::Release);
+        self.valid_after.set_instant(timestamp);
     }
 
     #[inline]
     fn has_valid_after(&self) -> bool {
-        self.valid_after.load(Ordering::Acquire) > 0
+        // self.valid_after.load(Ordering::Acquire) > 0
+        self.valid_after.is_set()
     }
 
     #[inline]
@@ -749,8 +752,8 @@ where
         &self,
         kh: KeyHash<K>,
         entry: &Arc<ValueEntry<K, V>>,
-        raw_last_accessed: Arc<AtomicU64>,
-        raw_last_modified: Arc<AtomicU64>,
+        raw_last_accessed: Arc<AtomicInstant>,
+        raw_last_modified: Arc<AtomicInstant>,
         deqs: &mut Deques<K>,
     ) {
         let key = Arc::clone(&kh.key);
@@ -822,7 +825,7 @@ where
         now: Instant,
     ) {
         let tti = &self.time_to_idle;
-        let va = self.valid_after();
+        let va = &self.valid_after();
         for _ in 0..batch_size {
             // Peek the front node of the deque and check if it is expired.
             let (key, _ts) = deq
@@ -881,7 +884,7 @@ where
     #[inline]
     fn remove_expired_wo(&self, deqs: &mut Deques<K>, batch_size: usize, now: Instant) {
         let ttl = &self.time_to_live;
-        let va = self.valid_after();
+        let va = &self.valid_after();
         for _ in 0..batch_size {
             let (key, _ts) = deqs
                 .write_order
@@ -1019,7 +1022,7 @@ where
             .unwrap_or(0)
     }
 
-    fn set_expiration_clock(&self, clock: Option<quanta::Clock>) {
+    fn set_expiration_clock(&self, clock: Option<Clock>) {
         let mut exp_clock = self.expiration_clock.write();
         if let Some(clock) = clock {
             *exp_clock = Some(clock);
@@ -1037,13 +1040,15 @@ where
 #[inline]
 fn is_expired_entry_ao(
     time_to_idle: &Option<Duration>,
-    valid_after: Instant,
+    valid_after: &Option<Instant>,
     entry: &impl AccessTime,
     now: Instant,
 ) -> bool {
     if let Some(ts) = entry.last_accessed() {
-        if ts < valid_after {
-            return true;
+        if let Some(va) = valid_after {
+            if ts < *va {
+                return true;
+            }
         }
         if let Some(tti) = time_to_idle {
             return ts + *tti <= now;
@@ -1055,13 +1060,15 @@ fn is_expired_entry_ao(
 #[inline]
 fn is_expired_entry_wo(
     time_to_live: &Option<Duration>,
-    valid_after: Instant,
+    valid_after: &Option<Instant>,
     entry: &impl AccessTime,
     now: Instant,
 ) -> bool {
     if let Some(ts) = entry.last_modified() {
-        if ts < valid_after {
-            return true;
+        if let Some(va) = valid_after {
+            if ts < *va {
+                return true;
+            }
         }
         if let Some(ttl) = time_to_live {
             return ts + *ttl <= now;

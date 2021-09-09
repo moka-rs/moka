@@ -2,10 +2,10 @@ use super::{deques::Deques, KeyDate, KeyHashDate, ValueEntry};
 use crate::common::{
     deque::{CacheRegion, DeqNode, Deque},
     frequency_sketch::FrequencySketch,
+    time::{Clock, Instant},
     AccessTime,
 };
 
-use quanta::{Clock, Instant};
 use std::{
     borrow::Borrow,
     collections::{hash_map::RandomState, HashMap},
@@ -581,7 +581,7 @@ where
     K: Hash + Eq,
     S: BuildHasher + Clone,
 {
-    fn set_expiration_clock(&mut self, clock: Option<quanta::Clock>) {
+    fn set_expiration_clock(&mut self, clock: Option<crate::common::time::Clock>) {
         self.expiration_clock = clock;
     }
 }
@@ -590,9 +590,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::Cache;
-    use crate::unsync::CacheBuilder;
+    use crate::{common::time::Clock, unsync::CacheBuilder};
 
-    use quanta::Clock;
     use std::time::Duration;
 
     #[test]

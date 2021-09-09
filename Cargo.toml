@@ -20,7 +20,7 @@ build = "build.rs"
 features = ["future"]
 
 [features]
-default = []
+default = ["quanta"]
 future = ["async-io", "async-lock"]
 
 [dependencies]
@@ -29,7 +29,6 @@ moka-cht = "0.4.2"
 num_cpus = "1.13"
 once_cell = "1.7"
 parking_lot = "0.11"
-quanta = "0.9"
 scheduled-thread-pool = "0.2"
 thiserror = "1.0"
 uuid = { version = "0.8", features = ["v4"] }
@@ -37,6 +36,7 @@ uuid = { version = "0.8", features = ["v4"] }
 # Optional dependencies
 async-io = { version = "1.4", optional = true }
 async-lock = { version = "2.4", optional = true }
+quanta = { version = "0.9", optional = true }
 
 [dev-dependencies]
 actix-rt2 = { package = "actix-rt", version = "2", default-features = false }
