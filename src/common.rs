@@ -1,5 +1,3 @@
-// use quanta::Instant;
-
 pub(crate) mod deque;
 pub(crate) mod error;
 pub(crate) mod frequency_sketch;
@@ -10,8 +8,14 @@ pub(crate) mod unsafe_weak_pointer;
 // https://github.com/rust-lang/rust/issues/32976
 // #[cfg_attr(target_has_atomic = "64", path = "common/time_quanta.rs")]
 
-#[cfg_attr(all(feature = "quanta", not(target_arch = "mips")), path = "common/time_quanta.rs")]
-#[cfg_attr(any(not(feature = "quanta"), target_arch = "mips"), path = "common/time_compat.rs")]
+#[cfg_attr(
+    all(feature = "quanta", not(target_arch = "mips")),
+    path = "common/time_quanta.rs"
+)]
+#[cfg_attr(
+    any(not(feature = "quanta"), target_arch = "mips"),
+    path = "common/time_compat.rs"
+)]
 pub(crate) mod time;
 
 use time::Instant;
