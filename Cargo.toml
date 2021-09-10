@@ -20,8 +20,16 @@ build = "build.rs"
 features = ["future"]
 
 [features]
-default = ["quanta"]
+default = ["atomic64"]
+
+# Enable this feature to use `moka::future::Cache`.
 future = ["async-io", "async-lock"]
+
+# This feature is enabled by default. Disable it when the target platform does not
+# support `std::sync::atomic::AtomicU64`. (e.g. `armv5te-unknown-linux-musleabi`
+# or `mips-unknown-linux-musl`)
+# https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
+atomic64 = ["quanta"]
 
 [dependencies]
 crossbeam-channel = "0.5"

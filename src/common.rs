@@ -8,8 +8,8 @@ pub(crate) mod unsafe_weak_pointer;
 // https://github.com/rust-lang/rust/issues/32976
 // #[cfg_attr(target_has_atomic = "64", path = "common/time_quanta.rs")]
 
-#[cfg_attr(feature = "quanta", path = "common/time_quanta.rs")]
-#[cfg_attr(not(feature = "quanta"), path = "common/time_compat.rs")]
+#[cfg_attr(feature = "atomic64", path = "common/time_quanta.rs")]
+#[cfg_attr(not(feature = "atomic64"), path = "common/time_compat.rs")]
 pub(crate) mod time;
 
 use time::Instant;

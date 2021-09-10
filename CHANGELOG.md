@@ -5,7 +5,7 @@
 ### Added
 
 - Add support for some 32-bit platforms where `std::sync::atomic::AtomicU64` is not
-  provided. (e.g. `armv5te-unknown-linux-musleabi`, `mips-unknown-linux-musl`)
+  provided. (e.g. `armv5te-unknown-linux-musleabi` or `mips-unknown-linux-musl`)
     - On these platforms, you will need to disable the default features of Moka.
       See [the relevant section][resolving-error-on-32bit] of the README.
 
