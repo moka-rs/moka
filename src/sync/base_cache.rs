@@ -479,21 +479,16 @@ where
 
     #[inline]
     fn valid_after(&self) -> Option<Instant> {
-        // let ts = self.valid_after.load(Ordering::Acquire);
-        // unsafe { std::mem::transmute(ts) }
         self.valid_after.instant()
     }
 
     #[inline]
     fn set_valid_after(&self, timestamp: Instant) {
-        // self.valid_after
-        //     .store(timestamp.as_u64(), Ordering::Release);
         self.valid_after.set_instant(timestamp);
     }
 
     #[inline]
     fn has_valid_after(&self) -> bool {
-        // self.valid_after.load(Ordering::Acquire) > 0
         self.valid_after.is_set()
     }
 
