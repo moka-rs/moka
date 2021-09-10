@@ -1,5 +1,15 @@
 # Moka &mdash; Change Log
 
+## Version 0.5.3
+
+### Added
+
+- Add support for some 32-bit platforms where `std::sync::atomic::AtomicU64` is not
+  provided. (e.g. `armv5te-unknown-linux-musleabi` or `mips-unknown-linux-musl`)
+    - On these platforms, you will need to disable the default features of Moka.
+      See [the relevant section][resolving-error-on-32bit] of the README.
+
+
 ## Version 0.5.2
 
 ### Fixed
@@ -104,6 +114,9 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[resolving-error-on-32bit]: https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
+
+[gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-pull-0033]: https://github.com/moka-rs/moka/pull/33/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 [gh-pull-0030]: https://github.com/moka-rs/moka/pull/30/

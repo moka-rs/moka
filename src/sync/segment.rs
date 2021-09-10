@@ -324,7 +324,7 @@ where
         let mut exp_clock = MockExpirationClock::default();
 
         for segment in self.inner.segments.iter() {
-            let (clock, mock) = quanta::Clock::mock();
+            let (clock, mock) = crate::common::time::Clock::mock();
             segment.set_expiration_clock(Some(clock));
             exp_clock.mocks.push(mock);
         }
@@ -337,7 +337,7 @@ where
 #[cfg(test)]
 #[derive(Default)]
 struct MockExpirationClock {
-    mocks: Vec<Arc<quanta::Mock>>,
+    mocks: Vec<Arc<crate::common::time::Mock>>,
 }
 
 #[cfg(test)]

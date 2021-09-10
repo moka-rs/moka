@@ -317,14 +317,15 @@ available on crates.io, such as the [aHash][ahash-crate] crate.
 
 This crate's minimum supported Rust versions (MSRV) are the followings:
 
-| Enabled Feature      | MSRV        |
-|:---------------------|:------------|
-| no feature (default) | Rust 1.45.2 |
-| `future`             | Rust 1.46.0 |
+| Feature    | Enabled by default? | MSRV        |
+|:-----------|:-------------------:|:-----------:|
+| no feature |                     | Rust 1.45.2 |
+| `atomic64` |       yes           | Rust 1.45.2 |
+| `future`   |                     | Rust 1.46.0 |
 
-If no feature is enabled, MSRV will be updated conservatively. When using other
-features, like `future`, MSRV might be updated more frequently, up to the latest
-stable. In both cases, increasing MSRV is _not_ considered a semver-breaking
+If only the default features are enabled, MSRV will be updated conservatively. When
+using other features, like `future`, MSRV might be updated more frequently, up to the
+latest stable. In both cases, increasing MSRV is _not_ considered a semver-breaking
 change.
 
 <!--
@@ -332,6 +333,50 @@ change.
 - quanta requires 1.45.
 - moka-cht requires 1.41.
 -->
+
+
+## Resolving Compile Errors on Some 32-bit Platforms
+
+On some 32-bit target platforms including the followings, you may encounter compile
+errors in quanta crate and Moka itself.
+
+- `armv5te-unknown-linux-musleabi`
+- `mips-unknown-linux-musl`
+- `mipsel-unknown-linux-musl`
+
+```console
+error[E0599]: no method named `fetch_add` found for struct `Arc<AtomicCell<u64>>` in the current scope
+  --> ... /quanta-0.9.2/src/mock.rs:48:21
+   |
+48 |         self.offset.fetch_add(amount.into_nanos());
+   |                     ^^^^^^^^^ method not found in `Arc<AtomicCell<u64>>`
+```
+
+```console
+error[E0432]: unresolved import `std::sync::atomic::AtomicU64`
+  --> ... /moka-0.5.3/src/sync.rs:10:30
+   |
+10 |         atomic::{AtomicBool, AtomicU64, Ordering},
+   |                              ^^^^^^^^^
+   |                              |
+   |                              no `AtomicU64` in `sync::atomic`
+```
+
+These errors occur because `std::sync::atomic::AtomicU64` type is not provided on
+these platforms but both quanta and Moka use it.
+
+You can resolve the errors by disabling the default features of Moka. Edit your
+Cargo.toml to add `default-features = false` option to the dependency declaration.
+
+```toml:Cargo.toml
+[dependencies]
+moka = { version = "0.5", default-feautures = false }
+# Or
+moka = { version = "0.5", default-feautures = false, features = ["future"] }
+```
+
+This will remove quanta from the dependencies and enable a fall-back implementation
+in Moka, so it will compile.
 
 
 ## Developing Moka

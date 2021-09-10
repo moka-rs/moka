@@ -57,15 +57,16 @@
 //!
 //! This crate's minimum supported Rust versions (MSRV) are the followings:
 //!
-//! | Enabled Feature      | MSRV        |
-//! |:---------------------|:------------|
-//! | no feature (default) | Rust 1.45.2 |
-//! | `future`             | Rust 1.46.0 |
+//! | Feature    | Enabled by default? | MSRV        |
+//! |:-----------|:-------------------:|:-----------:|
+//! | no feature |                     | Rust 1.45.2 |
+//! | `atomic64` |       yes           | Rust 1.45.2 |
+//! | `future`   |                     | Rust 1.46.0 |
 //!
-//! If no crate feature is enabled, MSRV will be updated conservatively. When using
-//! features like `future`, MSRV might be updated more frequently, up to the latest
-//! stable. In both cases, increasing MSRV is _not_ considered a semver-breaking
-//! change.
+//! If only the default features are enabled, MSRV will be updated conservatively.
+//! When using other features, like `future`, MSRV might be updated more frequently,
+//! up to the latest stable. In both cases, increasing MSRV is _not_ considered a
+//! semver-breaking change.
 //!
 //! # Implementation Details
 //!
