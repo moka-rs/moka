@@ -49,7 +49,8 @@ jobs:
       - name: Remove integration tests
         run: |
           rm -rf tests
-          sed -i '/(actix-rt|async-std|reqwest|skeptic)/d' Cargo.toml
+          sed -i '/actix-rt\|async-std\|reqwest\|skeptic/d' Cargo.toml
+          cat Cargo.toml
 
       - uses: Swatinem/rust-cache@v1
 
