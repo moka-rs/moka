@@ -316,6 +316,14 @@ where
     /// Thread 3 got the value. (len: 10485760)
     /// ```
     ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` closure has been panicked. When it
+    /// happens, only the caller whose `init` closure panicked will get the panic
+    /// (e.g. only thread 1 in the above sample). If there are other calls in
+    /// progress (e.g. thread 0, 2 and 3 above), this method will restart and resolve
+    /// one of the remaining `init` closure.
+    ///
     pub fn get_or_insert_with(&self, key: K, init: impl FnOnce() -> V) -> V {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
@@ -418,6 +426,14 @@ where
     /// Thread 1 got the value. (len: 1466)
     /// Thread 3 got the value. (len: 1466)
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` closure has been panicked. When it
+    /// happens, only the caller whose `init` closure panicked will get the panic
+    /// (e.g. only thread 1 in the above sample). If there are other calls in
+    /// progress (e.g. thread 0, 2 and 3 above), this method will restart and resolve
+    /// one of the remaining `init` closure.
     ///
     pub fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
@@ -648,7 +664,7 @@ mod tests {
     use super::{Cache, ConcurrentCacheExt};
     use crate::{common::time::Clock, sync::CacheBuilder};
 
-    use std::time::Duration;
+    use std::{convert::Infallible, sync::Arc, time::Duration};
 
     #[test]
     fn basic_single_thread() {
@@ -1137,5 +1153,54 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+    }
+
+    #[test]
+    // https://github.com/moka-rs/moka/issues/43
+    fn handle_panic_in_get_or_insert_with() {
+        use std::{sync::Barrier, thread};
+
+        let cache = Cache::new(16);
+        let barrier = Arc::new(Barrier::new(2));
+        {
+            let cache_ref = cache.clone();
+            let barrier_ref = barrier.clone();
+            thread::spawn(move || {
+                let _ = cache_ref.get_or_insert_with(1, || {
+                    barrier_ref.wait();
+                    thread::sleep(Duration::from_millis(50));
+                    panic!("Panic during get_or_try_insert_with");
+                });
+            });
+        }
+
+        barrier.wait();
+        assert_eq!(cache.get_or_insert_with(1, || 5), 5);
+    }
+
+    #[test]
+    // https://github.com/moka-rs/moka/issues/43
+    fn handle_panic_in_get_or_try_insert_with() {
+        use std::{sync::Barrier, thread};
+
+        let cache = Cache::new(16);
+        let barrier = Arc::new(Barrier::new(2));
+        {
+            let cache_ref = cache.clone();
+            let barrier_ref = barrier.clone();
+            thread::spawn(move || {
+                let _ = cache_ref.get_or_try_insert_with(1, || {
+                    barrier_ref.wait();
+                    thread::sleep(Duration::from_millis(50));
+                    panic!("Panic during get_or_try_insert_with");
+                }) as Result<_, Arc<Infallible>>;
+            });
+        }
+
+        barrier.wait();
+        assert_eq!(
+            cache.get_or_try_insert_with(1, || Ok(5)) as Result<_, Arc<Infallible>>,
+            Ok(5)
+        );
     }
 }
