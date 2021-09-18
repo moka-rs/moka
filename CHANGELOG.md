@@ -1,11 +1,21 @@
 # Moka &mdash; Change Log
 
+## Version 0.5.4
+
+### Changed
+
+-  Restore quanta dependency on some 32-bit platforms such as
+   `armv5te-unknown-linux-musleabi` or `mips-unknown-linux-musl`.
+   ([#42][gh-pull-0042])
+
+
 ## Version 0.5.3
 
 ### Added
 
 - Add support for some 32-bit platforms where `std::sync::atomic::AtomicU64` is not
   provided. (e.g. `armv5te-unknown-linux-musleabi` or `mips-unknown-linux-musl`)
+  ([#38][gh-issue-0038])
     - On these platforms, you will need to disable the default features of Moka.
       See [the relevant section][resolving-error-on-32bit] of the README.
 
@@ -116,6 +126,7 @@
 
 [resolving-error-on-32bit]: https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
 
+[gh-pull-0042]: https://github.com/moka-rs/moka/pull/42/
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-pull-0033]: https://github.com/moka-rs/moka/pull/33/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
