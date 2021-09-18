@@ -7,7 +7,8 @@ use std::{
 };
 
 type ErrorObject = Arc<dyn Any + Send + Sync + 'static>;
-type Waiter<V> = Arc<RwLock<Option<Result<V, ErrorObject>>>>;
+type WaiterValue<V> = Option<Result<V, ErrorObject>>;
+type Waiter<V> = Arc<RwLock<WaiterValue<V>>>;
 
 pub(crate) enum InitResult<V, E> {
     Initialized(V),
@@ -35,70 +36,99 @@ where
         }
     }
 
+    /// # Panics
+    /// Panics if the `init` future has been panicked.
     pub(crate) async fn init_or_read<F>(&self, key: Arc<K>, init: F) -> InitResult<V, ()>
     where
         F: Future<Output = V>,
     {
-        use InitResult::*;
+        // This closure will be called after the init closure has returned a value.
+        // It will convert the returned value (from init) into an InitResult.
+        let post_init = |_key, value: V, lock: &mut WaiterValue<V>| {
+            *lock = Some(Ok(value.clone()));
+            InitResult::Initialized(value)
+        };
 
         let type_id = TypeId::of::<()>();
-        let waiter = Arc::new(RwLock::new(None));
-        let mut lock = waiter.write().await;
-
-        match self.try_insert_waiter(&key, type_id, &waiter) {
-            None => {
-                // Our waiter was inserted. Let's resolve the init future.
-                let value = init.await;
-                *lock = Some(Ok(value.clone()));
-                Initialized(value)
-            }
-            Some(res) => {
-                // Somebody else's waiter already exists. Drop our write lock and wait
-                // for a read lock to become available.
-                std::mem::drop(lock);
-                match &*res.read().await {
-                    Some(Ok(value)) => ReadExisting(value.clone()),
-                    Some(Err(_)) | None => unreachable!(),
-                }
-            }
-        }
+        self.do_try_init(&key, type_id, init, post_init).await
     }
 
+    /// # Panics
+    /// Panics if the `init` future has been panicked.
     pub(crate) async fn try_init_or_read<F, E>(&self, key: Arc<K>, init: F) -> InitResult<V, E>
     where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
     {
+        let type_id = TypeId::of::<E>();
+
+        // This closure will be called after the init closure has returned a value.
+        // It will convert the returned value (from init) into an InitResult.
+        let post_init = |key, value: Result<V, E>, lock: &mut WaiterValue<V>| match value {
+            Ok(value) => {
+                *lock = Some(Ok(value.clone()));
+                InitResult::Initialized(value)
+            }
+            Err(e) => {
+                let err: ErrorObject = Arc::new(e);
+                *lock = Some(Err(Arc::clone(&err)));
+                self.remove_waiter(key, type_id);
+                InitResult::InitErr(err.downcast().unwrap())
+            }
+        };
+
+        self.do_try_init(&key, type_id, init, post_init).await
+    }
+
+    /// # Panics
+    /// Panics if the `init` future has been panicked.
+    async fn do_try_init<'a, F, FO, C, E>(
+        &self,
+        key: &'a Arc<K>,
+        type_id: TypeId,
+        init: F,
+        mut post_init: C,
+    ) -> InitResult<V, E>
+    where
+        F: Future<Output = FO>,
+        C: FnMut(&'a Arc<K>, FO, &mut WaiterValue<V>) -> InitResult<V, E>,
+        E: Send + Sync + 'static,
+    {
+        use futures::future::FutureExt;
+        use std::panic::{resume_unwind, AssertUnwindSafe};
         use InitResult::*;
 
-        let type_id = TypeId::of::<E>();
-        let waiter = Arc::new(RwLock::new(None));
-        let mut lock = waiter.write().await;
+        loop {
+            let waiter = Arc::new(RwLock::new(None));
+            let mut lock = waiter.write().await;
 
-        match self.try_insert_waiter(&key, type_id, &waiter) {
-            None => {
-                // Our waiter was inserted. Let's resolve the init future.
-                match init.await {
-                    Ok(value) => {
-                        *lock = Some(Ok(value.clone()));
-                        Initialized(value)
-                    }
-                    Err(e) => {
-                        let err: ErrorObject = Arc::new(e);
-                        *lock = Some(Err(Arc::clone(&err)));
-                        self.remove_waiter(&key, type_id);
-                        InitErr(err.downcast().unwrap())
+            match self.try_insert_waiter(key, type_id, &waiter) {
+                None => {
+                    // Our waiter was inserted. Let's resolve the init future.
+                    // Catching panic is safe here as we do not try to resolve the future again.
+                    match AssertUnwindSafe(init).catch_unwind().await {
+                        // resolved.
+                        Ok(value) => return post_init(key, value, &mut lock),
+                        // panicked.
+                        Err(payload) => {
+                            *lock = None;
+                            // Remove the waiter so that others can retry.
+                            self.remove_waiter(key, type_id);
+                            resume_unwind(payload);
+                        }
                     }
                 }
-            }
-            Some(res) => {
-                // Somebody else's waiter already exists. Drop our write lock and wait
-                // for a read lock to become available.
-                std::mem::drop(lock);
-                match &*res.read().await {
-                    Some(Ok(value)) => ReadExisting(value.clone()),
-                    Some(Err(e)) => InitErr(Arc::clone(e).downcast().unwrap()),
-                    None => unreachable!(),
+                Some(res) => {
+                    // Somebody else's waiter already exists. Drop our write lock and wait
+                    // for a read lock to become available.
+                    std::mem::drop(lock);
+                    match &*res.read().await {
+                        Some(Ok(value)) => return ReadExisting(value.clone()),
+                        Some(Err(e)) => return InitErr(Arc::clone(e).downcast().unwrap()),
+                        // None means somebody else's init future has been panicked.
+                        // Retry from the beginning.
+                        None => continue,
+                    }
                 }
             }
         }
@@ -110,6 +140,7 @@ where
         self.waiters.remove(&(key, type_id));
     }
 
+    #[inline]
     fn try_insert_waiter(
         &self,
         key: &Arc<K>,
