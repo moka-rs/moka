@@ -54,7 +54,7 @@ async-std = { version = "1", default-features = false, features = ["attributes"]
 getrandom = "0.2"
 reqwest = "0.11"
 skeptic = "0.13"
-tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time" ] }
 
 [target.'cfg(trybuild)'.dev-dependencies]
 trybuild = "1.0"
