@@ -98,6 +98,9 @@ where
         use std::panic::{resume_unwind, AssertUnwindSafe};
         use InitResult::*;
 
+        const MAX_RETRIES: usize = 200;
+        let mut retries = 0;
+
         loop {
             let waiter = Arc::new(RwLock::new(None));
             let mut lock = waiter.write().await;
@@ -115,7 +118,7 @@ where
                             // Remove the waiter so that others can retry.
                             self.remove_waiter(key, type_id);
                             resume_unwind(payload);
-                        } // The lock will be unlock here.
+                        } // The lock will be unlocked here.
                     }
                 }
                 Some(res) => {
@@ -126,8 +129,19 @@ where
                         Some(Ok(value)) => return ReadExisting(value.clone()),
                         Some(Err(e)) => return InitErr(Arc::clone(e).downcast().unwrap()),
                         // None means somebody else's init future has been panicked.
-                        // Retry from the beginning.
-                        None => continue,
+                        None => {
+                            retries += 1;
+                            if retries < MAX_RETRIES {
+                                // Retry from the beginning.
+                                continue;
+                            } else {
+                                panic!(
+                                    r#"Too many retries. Tried to read the return value from the `init` \
+                                future but failed {} times. Maybe the `init` kept panicking?"#,
+                                    retries
+                                );
+                            }
+                        }
                     }
                 }
             }

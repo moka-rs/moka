@@ -93,6 +93,9 @@ where
         use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
         use InitResult::*;
 
+        const MAX_RETRIES: usize = 200;
+        let mut retries = 0;
+
         loop {
             let waiter = Arc::new(RwLock::new(None));
             let mut lock = waiter.write();
@@ -110,7 +113,7 @@ where
                             // Remove the waiter so that others can retry.
                             self.remove_waiter(key, type_id);
                             resume_unwind(payload);
-                        } // The lock will be unlock here.
+                        } // The write lock will be unlocked here.
                     }
                 }
                 Some(res) => {
@@ -120,9 +123,20 @@ where
                     match &*res.read() {
                         Some(Ok(value)) => return ReadExisting(value.clone()),
                         Some(Err(e)) => return InitErr(Arc::clone(e).downcast().unwrap()),
-                        // None means somebody else's init future has been panicked.
-                        // Retry from the beginning.
-                        None => continue,
+                        // None means somebody else's init closure has been panicked.
+                        None => {
+                            retries += 1;
+                            if retries < MAX_RETRIES {
+                                // Retry from the beginning.
+                                continue;
+                            } else {
+                                panic!(
+                                    r#"Too many retries. Tried to read the return value from the `init` \
+                                closure but failed {} times. Maybe the `init` kept panicking?"#,
+                                    retries
+                                );
+                            }
+                        }
                     }
                 }
             }
