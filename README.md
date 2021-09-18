@@ -345,14 +345,6 @@ errors in quanta crate and Moka itself.
 - `mipsel-unknown-linux-musl`
 
 ```console
-error[E0599]: no method named `fetch_add` found for struct `Arc<AtomicCell<u64>>` in the current scope
-  --> ... /quanta-0.9.2/src/mock.rs:48:21
-   |
-48 |         self.offset.fetch_add(amount.into_nanos());
-   |                     ^^^^^^^^^ method not found in `Arc<AtomicCell<u64>>`
-```
-
-```console
 error[E0432]: unresolved import `std::sync::atomic::AtomicU64`
   --> ... /moka-0.5.3/src/sync.rs:10:30
    |
@@ -363,7 +355,7 @@ error[E0432]: unresolved import `std::sync::atomic::AtomicU64`
 ```
 
 These errors occur because `std::sync::atomic::AtomicU64` type is not provided on
-these platforms but both quanta and Moka use it.
+these platforms but Moka uses it.
 
 You can resolve the errors by disabling the default features of Moka. Edit your
 Cargo.toml to add `default-features = false` option to the dependency declaration.
@@ -375,8 +367,7 @@ moka = { version = "0.5", default-feautures = false }
 moka = { version = "0.5", default-feautures = false, features = ["future"] }
 ```
 
-This will remove quanta from the dependencies and enable a fall-back implementation
-in Moka, so it will compile.
+This will enable a fall-back implementation in Moka, so it will compile.
 
 
 ## Developing Moka
