@@ -1,11 +1,13 @@
 {
     "rust-analyzer.cargo.features": ["future"],
     "cSpell.words": [
+        "aarch",
         "actix",
         "ahash",
         "benmanes",
         "CLFU",
         "clippy",
+        "compat",
         "cpus",
         "deqs",
         "Deque",
