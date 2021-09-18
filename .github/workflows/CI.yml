@@ -68,6 +68,15 @@ jobs:
         env:
           RUSTFLAGS: '--cfg skeptic'
 
+      - name: Run tests (future, without atomic64)
+        uses: actions-rs/cargo@v1
+        if: ${{ matrix.rust != '1.45.2' }}
+        with:
+          command: test
+          args: --release --no-default-features --features future
+        env:
+          RUSTFLAGS: '--cfg skeptic'
+
       - name: Run UI tests (future, trybuild)
         uses: actions-rs/cargo@v1
         if: ${{ matrix.rust == 'stable' }}

@@ -637,7 +637,7 @@ where
         self.base.reconfigure_for_testing();
     }
 
-    pub(crate) fn set_expiration_clock(&self, clock: Option<quanta::Clock>) {
+    pub(crate) fn set_expiration_clock(&self, clock: Option<crate::common::time::Clock>) {
         self.base.set_expiration_clock(clock);
     }
 }
@@ -646,9 +646,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Cache, ConcurrentCacheExt};
-    use crate::sync::CacheBuilder;
+    use crate::{common::time::Clock, sync::CacheBuilder};
 
-    use quanta::Clock;
     use std::time::Duration;
 
     #[test]
