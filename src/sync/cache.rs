@@ -301,7 +301,7 @@ where
     ///
     /// **Result**
     ///
-    /// - The `init` closure called exactly once by thread 1.
+    /// - The `init` closure was called exactly once by thread 1.
     /// - Other threads were blocked until thread 1 inserted the value.
     ///
     /// ```console
@@ -412,7 +412,7 @@ where
     ///
     /// **Result**
     ///
-    /// - `get_file_size()` called exactly once by thread 1.
+    /// - `get_file_size()` was called exactly once by thread 1.
     /// - Other threads were blocked until thread 1 inserted the value.
     ///
     /// ```console

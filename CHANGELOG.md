@@ -7,7 +7,7 @@
 - Fix a bug in `get_or_insert_with` and `get_or_try_insert_with` methods of
   `future::Cache` and `sync::Cache`; a panic in the `init` future/closure
   causes subsequent calls on the same key to get "unreachable code" panics.
-  ([#41][gh-issue-0043])
+  ([#43][gh-issue-0043])
 
 ### Changed
 
