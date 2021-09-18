@@ -1339,7 +1339,7 @@ mod tests {
             });
         }
         let _ = semaphore.acquire().await.expect("semaphore acquire failed");
-        assert_eq!(cache.get_or_insert_with(1, async move { 5 }).await, 5);
+        assert_eq!(cache.get_or_insert_with(1, async { 5 }).await, 5);
     }
 
     #[tokio::test]
@@ -1364,8 +1364,7 @@ mod tests {
         }
         let _ = semaphore.acquire().await.expect("semaphore acquire failed");
         assert_eq!(
-            cache.get_or_try_insert_with(1, async move { Ok(5) }).await
-                as Result<_, Arc<Infallible>>,
+            cache.get_or_try_insert_with(1, async { Ok(5) }).await as Result<_, Arc<Infallible>>,
             Ok(5)
         );
     }

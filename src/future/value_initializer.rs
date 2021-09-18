@@ -82,7 +82,7 @@ where
 
     /// # Panics
     /// Panics if the `init` future has been panicked.
-    async fn do_try_init<'a, F, FO, C, E>(
+    async fn do_try_init<'a, F, O, C, E>(
         &self,
         key: &'a Arc<K>,
         type_id: TypeId,
@@ -90,8 +90,8 @@ where
         mut post_init: C,
     ) -> InitResult<V, E>
     where
-        F: Future<Output = FO>,
-        C: FnMut(&'a Arc<K>, FO, &mut WaiterValue<V>) -> InitResult<V, E>,
+        F: Future<Output = O>,
+        C: FnMut(&'a Arc<K>, O, &mut WaiterValue<V>) -> InitResult<V, E>,
         E: Send + Sync + 'static,
     {
         use futures::future::FutureExt;
@@ -107,15 +107,15 @@ where
                     // Our waiter was inserted. Let's resolve the init future.
                     // Catching panic is safe here as we do not try to resolve the future again.
                     match AssertUnwindSafe(init).catch_unwind().await {
-                        // resolved.
+                        // Resolved.
                         Ok(value) => return post_init(key, value, &mut lock),
-                        // panicked.
+                        // Panicked.
                         Err(payload) => {
                             *lock = None;
                             // Remove the waiter so that others can retry.
                             self.remove_waiter(key, type_id);
                             resume_unwind(payload);
-                        }
+                        } // The lock will be unlock here.
                     }
                 }
                 Some(res) => {
