@@ -338,7 +338,7 @@ change.
 ## Resolving Compile Errors on Some 32-bit Platforms
 
 On some 32-bit target platforms including the followings, you may encounter compile
-errors in quanta crate and Moka itself.
+errors:
 
 - `armv5te-unknown-linux-musleabi`
 - `mips-unknown-linux-musl`
@@ -354,11 +354,12 @@ error[E0432]: unresolved import `std::sync::atomic::AtomicU64`
    |                              no `AtomicU64` in `sync::atomic`
 ```
 
-These errors occur because `std::sync::atomic::AtomicU64` type is not provided on
-these platforms but Moka uses it.
+Such errors can occur because `std::sync::atomic::AtomicU64` is not provided on these
+platforms but Moka uses it.
 
-You can resolve the errors by disabling the default features of Moka. Edit your
-Cargo.toml to add `default-features = false` option to the dependency declaration.
+You can resolve the errors by disabling `atomic64` feature, which is one of the
+default features of Moka. Edit your Cargo.toml to add `default-features = false`
+to the dependency declaration.
 
 ```toml:Cargo.toml
 [dependencies]
@@ -367,7 +368,7 @@ moka = { version = "0.5", default-feautures = false }
 moka = { version = "0.5", default-feautures = false, features = ["future"] }
 ```
 
-This will enable a fall-back implementation in Moka, so it will compile.
+This will make Moka to switch to a fall-back implementation, so it will compile.
 
 
 ## Developing Moka
