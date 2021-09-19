@@ -1,6 +1,6 @@
 # Moka &mdash; Change Log
 
-## Version 0.6.0 (Unreleased)
+## Version 0.6.0
 
 ### Fixed
 
@@ -13,6 +13,7 @@
 
 - Change `get_or_try_insert_with` to return a concrete error type rather
   than a trait object. ([#23][gh-pull-0023], [#37][gh-pull-0037])
+
 
 ## Version 0.5.4
 
