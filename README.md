@@ -363,9 +363,9 @@ to the dependency declaration.
 
 ```toml:Cargo.toml
 [dependencies]
-moka = { version = "0.5", default-feautures = false }
+moka = { version = "0.6", default-feautures = false }
 # Or
-moka = { version = "0.5", default-feautures = false, features = ["future"] }
+moka = { version = "0.6", default-feautures = false, features = ["future"] }
 ```
 
 This will make Moka to switch to a fall-back implementation, so it will compile.
