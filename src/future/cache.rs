@@ -329,7 +329,7 @@ where
     ///
     /// **A Sample Result**
     ///
-    /// - The async black resolved exactly once by task 3.
+    /// - The `init` future (async black) was resolved exactly once by task 3.
     /// - Other tasks were blocked until task 3 inserted the value.
     ///
     /// ```console
@@ -343,6 +343,14 @@ where
     /// Task 1 got the value. (len: 10485760)
     /// Task 2 got the value. (len: 10485760)
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` future has been panicked. When it happens,
+    /// only the caller whose `init` future panicked will get the panic (e.g. only
+    /// task 3 in the above sample). If there are other calls in progress (e.g. task
+    /// 0, 1 and 2 above), this method will restart and resolve one of the remaining
+    /// `init` futures.
     ///
     pub async fn get_or_insert_with<F>(&self, key: K, init: F) -> V
     where
@@ -420,7 +428,7 @@ where
     ///
     /// **A Sample Result**
     ///
-    /// - `get_html()` called exactly once by task 2.
+    /// - `get_html()` was called exactly once by task 2.
     /// - Other tasks were blocked until task 2 inserted the value.
     ///
     /// ```console
@@ -434,6 +442,14 @@ where
     /// Task 0 got the value. (len: 19419)
     /// Task 3 got the value. (len: 19419)
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` future has been panicked. When it happens,
+    /// only the caller whose `init` future panicked will get the panic (e.g. only
+    /// task 2 in the above sample). If there are other calls in progress (e.g. task
+    /// 0, 1 and 3 above), this method will restart and resolve one of the remaining
+    /// `init` futures.
     ///
     pub async fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
@@ -750,7 +766,7 @@ mod tests {
     use crate::{common::time::Clock, future::CacheBuilder};
 
     use async_io::Timer;
-    use std::time::Duration;
+    use std::{convert::Infallible, sync::Arc, time::Duration};
 
     #[tokio::test]
     async fn basic_single_async_task() {
@@ -1300,5 +1316,56 @@ mod tests {
         };
 
         futures::join!(task1, task2, task3, task4, task5, task6, task7, task8);
+    }
+
+    #[tokio::test]
+    // https://github.com/moka-rs/moka/issues/43
+    async fn handle_panic_in_get_or_insert_with() {
+        use tokio::time::{sleep, Duration};
+
+        let cache = Cache::new(16);
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(0));
+        {
+            let cache_ref = cache.clone();
+            let semaphore_ref = semaphore.clone();
+            tokio::task::spawn(async move {
+                let _ = cache_ref
+                    .get_or_insert_with(1, async move {
+                        semaphore_ref.add_permits(1);
+                        sleep(Duration::from_millis(50)).await;
+                        panic!("Panic during get_or_try_insert_with");
+                    })
+                    .await;
+            });
+        }
+        let _ = semaphore.acquire().await.expect("semaphore acquire failed");
+        assert_eq!(cache.get_or_insert_with(1, async { 5 }).await, 5);
+    }
+
+    #[tokio::test]
+    // https://github.com/moka-rs/moka/issues/43
+    async fn handle_panic_in_get_or_try_insert_with() {
+        use tokio::time::{sleep, Duration};
+
+        let cache = Cache::new(16);
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(0));
+        {
+            let cache_ref = cache.clone();
+            let semaphore_ref = semaphore.clone();
+            tokio::task::spawn(async move {
+                let _ = cache_ref
+                    .get_or_try_insert_with(1, async move {
+                        semaphore_ref.add_permits(1);
+                        sleep(Duration::from_millis(50)).await;
+                        panic!("Panic during get_or_try_insert_with");
+                    })
+                    .await as Result<_, Arc<Infallible>>;
+            });
+        }
+        let _ = semaphore.acquire().await.expect("semaphore acquire failed");
+        assert_eq!(
+            cache.get_or_try_insert_with(1, async { Ok(5) }).await as Result<_, Arc<Infallible>>,
+            Ok(5)
+        );
     }
 }

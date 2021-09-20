@@ -1,11 +1,19 @@
 # Moka &mdash; Change Log
 
-## Version 0.6.0 (Unreleased)
+## Version 0.6.0
+
+### Fixed
+
+- Fix a bug in `get_or_insert_with` and `get_or_try_insert_with` methods of
+  `future::Cache` and `sync::Cache`; a panic in the `init` future/closure
+  causes subsequent calls on the same key to get "unreachable code" panics.
+  ([#43][gh-issue-0043])
 
 ### Changed
 
 - Change `get_or_try_insert_with` to return a concrete error type rather
   than a trait object. ([#23][gh-pull-0023], [#37][gh-pull-0037])
+
 
 ## Version 0.5.4
 
@@ -133,6 +141,7 @@
 
 [resolving-error-on-32bit]: https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
 
+[gh-issue-0043]: https://github.com/moka-rs/moka/issues/43/
 [gh-pull-0042]: https://github.com/moka-rs/moka/pull/42/
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-pull-0037]: https://github.com/moka-rs/moka/pull/37/
