@@ -23,7 +23,7 @@ features = ["future"]
 default = ["atomic64"]
 
 # Enable this feature to use `moka::future::Cache`.
-future = ["async-io", "async-lock", "futures"]
+future = ["async-io", "async-lock", "futures-util"]
 
 # This feature is enabled by default. Disable it when the target platform does not
 # support `std::sync::atomic::AtomicU64`. (e.g. `armv5te-unknown-linux-musleabi`
@@ -45,7 +45,7 @@ uuid = { version = "0.8", features = ["v4"] }
 # Optional dependencies
 async-io = { version = "1.4", optional = true }
 async-lock = { version = "2.4", optional = true }
-futures = { version = "0.3", optional = true }
+futures-util = { version = "0.3", optional = true }
 
 [dev-dependencies]
 actix-rt2 = { package = "actix-rt", version = "2", default-features = false }

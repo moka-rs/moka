@@ -103,7 +103,7 @@ use std::{
 ///         .collect();
 ///
 ///     // Wait for all tasks to complete.
-///     futures::future::join_all(tasks).await;
+///     futures_util::future::join_all(tasks).await;
 ///
 ///     // Verify the result.
 ///     for key in 0..(NUM_TASKS * NUM_KEYS_PER_TASK) {
@@ -323,7 +323,7 @@ where
     ///         .collect();
     ///
     ///     // Run all tasks concurrently and wait for them to complete.
-    ///     futures::future::join_all(tasks).await;
+    ///     futures_util::future::join_all(tasks).await;
     /// }
     /// ```
     ///
@@ -422,7 +422,7 @@ where
     ///         .collect();
     ///
     ///     // Run all tasks concurrently and wait for them to complete.
-    ///     futures::future::join_all(tasks).await;
+    ///     futures_util::future::join_all(tasks).await;
     /// }
     /// ```
     ///
@@ -888,7 +888,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let _ = futures::future::join_all(tasks).await;
+        let _ = futures_util::future::join_all(tasks).await;
 
         assert!(cache.get(&10).is_none());
         assert!(cache.get(&20).is_some());
@@ -1173,7 +1173,7 @@ mod tests {
             }
         };
 
-        futures::join!(task1, task2, task3, task4, task5);
+        futures_util::join!(task1, task2, task3, task4, task5);
     }
 
     #[tokio::test]
@@ -1315,7 +1315,7 @@ mod tests {
             }
         };
 
-        futures::join!(task1, task2, task3, task4, task5, task6, task7, task8);
+        futures_util::join!(task1, task2, task3, task4, task5, task6, task7, task8);
     }
 
     #[tokio::test]
