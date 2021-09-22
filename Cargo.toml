@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.6.0"
+version = "0.6.1"
 authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
 
@@ -54,7 +54,9 @@ async-std = { version = "1", default-features = false, features = ["attributes"]
 getrandom = "0.2"
 reqwest = "0.11"
 skeptic = "0.13"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time" ] }
+# It will be safer to use 1.9 or newer.
+# https://github.com/rustsec/advisory-db/blob/main/crates/tokio/RUSTSEC-2021-0072.md
+tokio = { version = "1.9", features = ["rt-multi-thread", "macros", "sync", "time" ] }
 
 [target.'cfg(trybuild)'.dev-dependencies]
 trybuild = "1.0"
