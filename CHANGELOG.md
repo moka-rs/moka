@@ -1,5 +1,12 @@
 # Moka &mdash; Change Log
 
+## Version 0.6.1
+
+### Changed
+
+- Replace futures with futures-util. ([#47][gh-pull-0047])
+
+
 ## Version 0.6.0
 
 ### Fixed
@@ -141,6 +148,7 @@
 
 [resolving-error-on-32bit]: https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
 
+[gh-pull-0047]: https://github.com/moka-rs/moka/pull/47/
 [gh-issue-0043]: https://github.com/moka-rs/moka/issues/43/
 [gh-pull-0042]: https://github.com/moka-rs/moka/pull/42/
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
