@@ -94,7 +94,7 @@ where
         C: FnMut(&'a Arc<K>, O, &mut WaiterValue<V>) -> InitResult<V, E>,
         E: Send + Sync + 'static,
     {
-        use futures::future::FutureExt;
+        use futures_util::FutureExt;
         use std::panic::{resume_unwind, AssertUnwindSafe};
         use InitResult::*;
 
