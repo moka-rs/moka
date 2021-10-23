@@ -33,9 +33,4 @@ error[E0373]: async block may outlive the current function, but it borrows `data
 help: to force the async block to take ownership of `data_ref` (and any other referenced variables), use the `move` keyword
    |
 15 |             .get_or_insert_with(0, async move {
-16 |                 // This may become a dangling pointer.
-17 |                 // The async block can be executed by a different thread so
-18 |                 // the captured reference `data_ref` may outlive its value.
-19 |                 data_ref.to_string()
-20 |             })
-   |
+   |                                          ++++
