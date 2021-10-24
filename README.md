@@ -386,6 +386,7 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test --all-features
 ## Road Map
 
 - [x] `async` optimized caches. (`v0.2.0`)
+- [ ] Weight based cache management ([#24](https://github.com/moka-rs/moka/pull/24))
 - [ ] Cache statistics. (Hit rate, etc.)
 - [ ] Upgrade TinyLFU to Window TinyLFU.
 - [ ] The variable (per-entry) expiration, using a hierarchical timer wheel.

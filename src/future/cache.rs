@@ -480,9 +480,7 @@ where
         let key = Arc::new(key);
         let op = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
-        if Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk).is_err() {
-            panic!("Failed to insert");
-        }
+        Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to insert");
     }
 
     /// Discards any cached value for the key.
@@ -497,12 +495,9 @@ where
         if let Some(entry) = self.base.remove(key) {
             let op = WriteOp::Remove(entry);
             let hk = self.base.housekeeper.as_ref();
-            if Self::schedule_write_op(&self.base.write_op_ch, op, hk)
+            Self::schedule_write_op(&self.base.write_op_ch, op, hk)
                 .await
-                .is_err()
-            {
-                panic!("Failed to remove");
-            }
+                .expect("Failed to remove");
         }
     }
 
@@ -519,9 +514,8 @@ where
         if let Some(entry) = self.base.remove(key) {
             let op = WriteOp::Remove(entry);
             let hk = self.base.housekeeper.as_ref();
-            if Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk).is_err() {
-                panic!("Failed to remove");
-            }
+            Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk)
+                .expect("Failed to remove");
         }
     }
 
@@ -674,12 +668,9 @@ where
     async fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
         let op = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
-        if Self::schedule_write_op(&self.base.write_op_ch, op, hk)
+        Self::schedule_write_op(&self.base.write_op_ch, op, hk)
             .await
-            .is_err()
-        {
-            panic!("Failed to insert");
-        }
+            .expect("Failed to insert");
     }
 
     #[inline]

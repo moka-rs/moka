@@ -387,14 +387,14 @@ where
         if has_free_space {
             // Add the candidate to the deque.
             let key = Rc::clone(&key);
-            let mut entry = cache.get_mut(&key).unwrap();
+            let entry = cache.get_mut(&key).unwrap();
             deqs.push_back_ao(
                 CacheRegion::MainProbation,
                 KeyHashDate::new(Rc::clone(&key), hash, timestamp),
-                &mut entry,
+                entry,
             );
             if self.time_to_live.is_some() {
-                deqs.push_back_wo(KeyDate::new(key, timestamp), &mut entry);
+                deqs.push_back_wo(KeyDate::new(key, timestamp), entry);
             }
         } else {
             let victim = Self::find_cache_victim(deqs, freq);
@@ -414,16 +414,16 @@ where
                     deqs.unlink_node_ao(victim);
                 }
                 // Add the candidate to the deque.
-                let mut entry = cache.get_mut(&key).unwrap();
+                let entry = cache.get_mut(&key).unwrap();
 
                 let key = Rc::clone(&key);
                 deqs.push_back_ao(
                     CacheRegion::MainProbation,
                     KeyHashDate::new(Rc::clone(&key), hash, timestamp),
-                    &mut entry,
+                    entry,
                 );
                 if self.time_to_live.is_some() {
-                    deqs.push_back_wo(KeyDate::new(key, timestamp), &mut entry);
+                    deqs.push_back_wo(KeyDate::new(key, timestamp), entry);
                 }
             } else {
                 // Remove the candidate from the cache.
