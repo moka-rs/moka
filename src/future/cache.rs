@@ -356,7 +356,7 @@ where
     ///
     pub async fn get_or_insert_with<F>(&self, key: K, init: F) -> V
     where
-        F: Future<Output = V> + Send + 'static,
+        F: Future<Output = V>,
     {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
@@ -455,7 +455,7 @@ where
     ///
     pub async fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
-        F: Future<Output = Result<V, E>> + Send + 'static,
+        F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
     {
         let hash = self.base.hash(&key);
