@@ -11,6 +11,8 @@ pub(crate) struct Deques<K> {
 }
 
 #[cfg(feature = "future")]
+// TODO: https://github.com/moka-rs/moka/issues/54
+#[allow(clippy::non_send_fields_in_send_ty)]
 // Multi-threaded async runtimes require base_cache::Inner to be Send, but it will
 // not be without this `unsafe impl`. This is because DeqNodes have NonNull
 // pointers.
