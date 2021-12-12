@@ -231,6 +231,8 @@ pub struct Cache<K, V, S = RandomState> {
     value_initializer: Arc<ValueInitializer<K, V, S>>,
 }
 
+// TODO: https://github.com/moka-rs/moka/issues/54
+#[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl<K, V, S> Send for Cache<K, V, S>
 where
     K: Send + Sync,
