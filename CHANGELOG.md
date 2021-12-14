@@ -1,5 +1,13 @@
 # Moka &mdash; Change Log
 
+## Version 0.6.2
+
+### Removed
+
+- Remove `Send` and `'static` bounds from `get_or_insert_with` and
+  `get_or_try_insert_with` methods of `future::Cache`. ([#53][gh-pull-0053])
+
+
 ## Version 0.6.1
 
 ### Changed
@@ -148,6 +156,7 @@
 
 [resolving-error-on-32bit]: https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
 
+[gh-pull-0053]: https://github.com/moka-rs/moka/pull/53
 [gh-pull-0047]: https://github.com/moka-rs/moka/pull/47/
 [gh-issue-0043]: https://github.com/moka-rs/moka/issues/43/
 [gh-pull-0042]: https://github.com/moka-rs/moka/pull/42/
