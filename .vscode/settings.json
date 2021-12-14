@@ -1,5 +1,8 @@
 {
     "rust-analyzer.cargo.features": ["future"],
+    "rust-analyzer.server.extraEnv": {
+        "CARGO_TARGET_DIR": "target/ra"
+    },
     "cSpell.words": [
         "aarch",
         "actix",
@@ -38,5 +41,8 @@
         "unsync",
         "Upsert",
         "usize"
-    ]
+    ],
+    "files.watcherExclude": {
+        "**/target": true
+    }
 }
