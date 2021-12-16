@@ -1,7 +1,37 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
-pub(crate) type Instant = quanta::Instant;
+/// a wrapper type over qunta::Instant to force checked additions and prevent
+/// unintentioal overflow. The type preserve the Copy semnatics for the wrapped
+#[derive(PartialEq, PartialOrd, Clone, Copy)]
+pub(crate) struct Instant(quanta::Instant);
+
 pub(crate) type Clock = quanta::Clock;
+
+pub(crate) trait CheckedTimeOps {
+    fn checked_add(&self, duration: Duration)-> Option<Self> where Self: Sized;
+} 
+
+impl Instant {
+    pub(crate) fn new(instant: quanta::Instant) -> Instant {
+        Instant(instant)
+    }
+
+    pub(crate) fn now()-> Instant {
+        Instant(quanta::Instant::now())
+    }
+}
+
+impl CheckedTimeOps for Instant {
+    fn checked_add(&self, duration: Duration) -> Option<Instant> {
+        if let Some(checked_add) = self.0.checked_add(duration){
+            Some(Instant(checked_add))
+        } else {
+            None
+        }
+        
+    }
+}
 
 #[cfg(test)]
 pub(crate) type Mock = quanta::Mock;
@@ -37,6 +67,6 @@ impl AtomicInstant {
     }
 
     pub(crate) fn set_instant(&self, instant: Instant) {
-        self.instant.store(instant.as_u64(), Ordering::Release);
+        self.instant.store(instant.0.as_u64(), Ordering::Release);
     }
 }

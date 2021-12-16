@@ -54,6 +54,11 @@ exceeded.
     - Time to live
     - Time to idle
 
+## A note on expiration policies
+The cache builders will panic if configured with either time to live/ time to idle
+higher than 1000 years. This is done to protect against overflow when computing key
+expiration.
+
 
 ## Usage
 
@@ -311,6 +316,7 @@ The hashing algorithm can be replaced on a per-`Cache` basis using the
 available on crates.io, such as the [aHash][ahash-crate] crate.
 
 [ahash-crate]: https://crates.io/crates/ahash
+
 
 
 ## Minimum Supported Rust Versions

@@ -2,7 +2,7 @@ use super::{deques::Deques, KeyDate, KeyHashDate, ValueEntry};
 use crate::common::{
     deque::{CacheRegion, DeqNode, Deque},
     frequency_sketch::FrequencySketch,
-    time::{Clock, Instant},
+    time::{Clock, Instant, CheckedTimeOps},
     AccessTime,
 };
 
@@ -342,7 +342,7 @@ where
     #[inline]
     fn current_time_from_expiration_clock(&self) -> Instant {
         if let Some(clock) = &self.expiration_clock {
-            clock.now()
+            Instant::new(clock.now())
         } else {
             Instant::now()
         }
@@ -355,7 +355,11 @@ where
         now: Instant,
     ) -> bool {
         if let (Some(ts), Some(tti)) = (entry.last_accessed(), time_to_idle) {
-            return ts + *tti <= now;
+            let checked_add = ts.checked_add(*tti);
+            if checked_add.is_none() {
+                panic!("ttl overflow")
+            }
+            return checked_add.unwrap() <= now;
         }
         false
     }
@@ -367,7 +371,11 @@ where
         now: Instant,
     ) -> bool {
         if let (Some(ts), Some(ttl)) = (entry.last_modified(), time_to_live) {
-            return ts + *ttl <= now;
+            let checked_add = ts.checked_add(*ttl);
+            if checked_add.is_none() {
+                panic!("ttl overflow")
+            }
+            return checked_add.unwrap() <= now;
         }
         false
     }
