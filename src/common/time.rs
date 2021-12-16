@@ -25,11 +25,6 @@ impl Instant {
 
 impl CheckedTimeOps for Instant {
     fn checked_add(&self, duration: Duration) -> Option<Instant> {
-        if let Some(checked_add) = self.0.checked_add(duration){
-            Some(Instant(checked_add))
-        } else {
-            None
-        }
-        
+        self.0.checked_add(duration).map(Instant)
     }
 }
