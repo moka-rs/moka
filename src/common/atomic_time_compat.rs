@@ -1,10 +1,5 @@
 use parking_lot::RwLock;
-
-pub(crate) type Instant = quanta::Instant;
-pub(crate) type Clock = quanta::Clock;
-
-#[cfg(test)]
-pub(crate) type Mock = quanta::Mock;
+use super::time::Instant;
 
 pub(crate) struct AtomicInstant {
     instant: RwLock<Option<Instant>>,

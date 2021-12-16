@@ -8,7 +8,8 @@ use crate::{
     common::{
         deque::{CacheRegion, DeqNode, Deque},
         frequency_sketch::FrequencySketch,
-        time::{AtomicInstant, Clock, Instant, CheckedTimeOps},
+        atomic_time::AtomicInstant,
+        time::{Clock, Instant, CheckedTimeOps},
         AccessTime,
     },
     PredicateError,
