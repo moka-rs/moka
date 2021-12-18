@@ -43,7 +43,6 @@ exceeded.
     - Blocking caches that can be shared across OS threads.
     - An asynchronous (futures aware) cache that can be accessed inside and outside
       of asynchronous contexts.
-- A not thread-safe, in-memory cache implementation for single thread applications.
 - Caches are bounded by the maximum number of entries.
 - Maintains good hit rate by using an entry replacement algorithms inspired by
   [Caffeine][caffeine-git]:
@@ -52,6 +51,17 @@ exceeded.
 - Supports expiration policies:
     - Time to live
     - Time to idle
+
+
+## Moka in Production
+
+Moka is powering production services as well as embedded devices. Here are some highlights:
+
+- [crates.io](https://crates.io/) (Nov 2021 &mdash; present): The official crate registry has been using Moka in their API service to reduce the loads on PostgreSQL. ([discussions][gh-discussions-51])
+- [aliyundrive-webdav][aliyundrive-webdav-git] (Aug 2021 &mdash; present): This WebDAV service for a cloud drive is potentially running in hundreds of home WiFi routers with 32-bit ARMv5 or MIPS based SoCs. Moka is used to cache the metadata of remote files.
+
+[gh-discussions-51]: https://github.com/moka-rs/moka/discussions/51
+[aliyundrive-webdav-git]: https://github.com/messense/aliyundrive-webdav
 
 
 ## Usage
