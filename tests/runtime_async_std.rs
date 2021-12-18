@@ -50,7 +50,7 @@ async fn main() {
         .collect();
 
     // Wait for all tasks to complete.
-    futures::future::join_all(tasks).await;
+    futures_util::future::join_all(tasks).await;
 
     // Verify the result.
     for key in 0..(NUM_TASKS * NUM_KEYS_PER_TASK) {

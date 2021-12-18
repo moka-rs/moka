@@ -1,0 +1,74 @@
+name: Linux cross compile tests
+
+on:
+  push:
+    paths-ignore:
+    - '.devcontainer/**'
+    - '.gitpod.yml'
+    - '.vscode/**'
+    - 'tests/**'
+  pull_request:
+    paths-ignore:
+    - '.devcontainer/**'
+    - '.gitpod.yml'
+    - '.vscode/**'
+    - 'tests/**'
+  schedule:
+    # Run against the last commit on the default branch on Friday at 9pm (UTC?)
+    - cron:  '0 21 * * 5'
+
+jobs:
+  linux-cross:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        platform:
+          - target: aarch64-unknown-linux-musl
+          - target: i686-unknown-linux-musl
+          - target: armv7-unknown-linux-musleabihf
+          # Platforms without AtomicU64 support.
+          - target: armv5te-unknown-linux-musleabi
+            cargo-opts: "--no-default-features"  # Disable atomic64 feature.
+          - target: mips-unknown-linux-musl
+            cargo-opts: "--no-default-features"  # Disable atomic64 feature.
+          - target: mipsel-unknown-linux-musl
+            cargo-opts: "--no-default-features"  # Disable atomic64 feature.
+
+    steps:
+      - name: Checkout Moka
+        uses: actions/checkout@v2
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          target: ${{ matrix.platform.target }}
+          override: true
+
+      - name: Remove integration tests
+        run: |
+          rm -rf tests
+          sed -i '/actix-rt\|async-std\|reqwest\|skeptic/d' Cargo.toml
+          cat Cargo.toml
+
+      - uses: Swatinem/rust-cache@v1
+
+      - name: cargo clean
+        uses: actions-rs/cargo@v1
+        with:
+          command: clean
+
+      - name: Run tests (no features)
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: test
+          args: --release --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
+
+      - name: Run tests (future feature)
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: test
+          args: --release --features future --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}

@@ -1,6 +1,28 @@
 # Moka &mdash; Change Log
 
-## Version 0.6.0 (Unreleased)
+## Version 0.6.2
+
+### Removed
+
+- Remove `Send` and `'static` bounds from `get_or_insert_with` and
+  `get_or_try_insert_with` methods of `future::Cache`. ([#53][gh-pull-0053])
+
+
+## Version 0.6.1
+
+### Changed
+
+- Replace futures with futures-util. ([#47][gh-pull-0047])
+
+
+## Version 0.6.0
+
+### Fixed
+
+- Fix a bug in `get_or_insert_with` and `get_or_try_insert_with` methods of
+  `future::Cache` and `sync::Cache`; a panic in the `init` future/closure
+  causes subsequent calls on the same key to get "unreachable code" panics.
+  ([#43][gh-issue-0043])
 
 ### Added
 
@@ -10,7 +32,50 @@
 ### Changed
 
 - Change `get_or_try_insert_with` to return a concrete error type rather
-  than a trait object. ([#23][gh-pull-0023])
+  than a trait object. ([#23][gh-pull-0023], [#37][gh-pull-0037])
+
+
+## Version 0.5.4
+
+### Changed
+
+-  Restore quanta dependency on some 32-bit platforms such as
+   `armv5te-unknown-linux-musleabi` or `mips-unknown-linux-musl`.
+   ([#42][gh-pull-0042])
+
+
+## Version 0.5.3
+
+### Added
+
+- Add support for some 32-bit platforms where `std::sync::atomic::AtomicU64` is not
+  provided. (e.g. `armv5te-unknown-linux-musleabi` or `mips-unknown-linux-musl`)
+  ([#38][gh-issue-0038])
+    - On these platforms, you will need to disable the default features of Moka.
+      See [the relevant section][resolving-error-on-32bit] of the README.
+
+
+## Version 0.5.2
+
+### Fixed
+
+- Fix a bug in `get_or_insert_with` and `get_or_try_insert_with` methods of
+  `future::Cache` by adding missing bounds `Send` and `'static` to the `init`
+  future. Without this fix, these methods will accept non-`Send` or
+  non-`'static` future and may cause undefined behavior.
+  ([#31][gh-issue-0031])
+- Fix `usize` overflow on big cache capacity. ([#28][gh-pull-0028])
+
+### Added
+
+- Add examples for `get_or_insert_with` and `get_or_try_insert_with`
+  methods to the docs. ([#30][gh-pull-0030])
+
+### Changed
+
+- Downgrade crossbeam-epoch used in moka-cht from v0.9.x to v0.8.x as a possible
+  workaround for segmentation faults on many-core CPU machines.
+  ([#33][gh-pull-0033])
 
 
 ## Version 0.5.1
@@ -94,6 +159,18 @@
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
+[resolving-error-on-32bit]: https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
+
+[gh-pull-0053]: https://github.com/moka-rs/moka/pull/53
+[gh-pull-0047]: https://github.com/moka-rs/moka/pull/47/
+[gh-issue-0043]: https://github.com/moka-rs/moka/issues/43/
+[gh-pull-0042]: https://github.com/moka-rs/moka/pull/42/
+[gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
+[gh-pull-0037]: https://github.com/moka-rs/moka/pull/37/
+[gh-pull-0033]: https://github.com/moka-rs/moka/pull/33/
+[gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
+[gh-pull-0030]: https://github.com/moka-rs/moka/pull/30/
+[gh-pull-0028]: https://github.com/moka-rs/moka/pull/28/
 [gh-pull-0024]: https://github.com/moka-rs/moka/pull/24/
 [gh-pull-0023]: https://github.com/moka-rs/moka/pull/23/
 [gh-pull-0022]: https://github.com/moka-rs/moka/pull/22/

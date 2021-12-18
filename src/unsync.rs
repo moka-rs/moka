@@ -8,9 +8,8 @@ use std::{ptr::NonNull, rc::Rc};
 
 pub use builder::CacheBuilder;
 pub use cache::Cache;
-use quanta::Instant;
 
-use crate::common::{deque::DeqNode, AccessTime};
+use crate::common::{deque::DeqNode, time::Instant, AccessTime};
 
 pub(crate) type Weigher<K, V> = Box<dyn FnMut(&K, &V) -> u64>;
 

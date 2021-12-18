@@ -16,7 +16,6 @@ use std::{
     any::TypeId,
     borrow::Borrow,
     collections::hash_map::RandomState,
-    error::Error,
     future::Future,
     hash::{BuildHasher, Hash},
     sync::Arc,
@@ -104,7 +103,7 @@ use std::{
 ///         .collect();
 ///
 ///     // Wait for all tasks to complete.
-///     futures::future::join_all(tasks).await;
+///     futures_util::future::join_all(tasks).await;
 ///
 ///     // Verify the result.
 ///     for key in 0..(NUM_TASKS * NUM_KEYS_PER_TASK) {
@@ -380,7 +379,84 @@ where
     /// key even if the method is concurrently called by many async tasks; only one
     /// of the calls resolves its future, and other calls wait for that future to
     /// complete.
-    pub async fn get_or_insert_with(&self, key: K, init: impl Future<Output = V>) -> V {
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.6", features = ["future"] }
+    /// // futures = "0.3"
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    /// use moka::future::Cache;
+    /// use std::sync::Arc;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
+    ///     let cache = Cache::new(100);
+    ///
+    ///     // Spawn four async tasks.
+    ///     let tasks: Vec<_> = (0..4_u8)
+    ///         .map(|task_id| {
+    ///             let my_cache = cache.clone();
+    ///             tokio::spawn(async move {
+    ///                 println!("Task {} started.", task_id);
+    ///
+    ///                 // Insert and get the value for key1. Although all four async tasks
+    ///                 // will call `get_or_insert_with` at the same time, the `init` async
+    ///                 // block must be resolved only once.
+    ///                 let value = my_cache
+    ///                     .get_or_insert_with("key1", async move {
+    ///                         println!("Task {} inserting a value.", task_id);
+    ///                         Arc::new(vec![0u8; TEN_MIB])
+    ///                     })
+    ///                     .await;
+    ///
+    ///                 // Ensure the value exists now.
+    ///                 assert_eq!(value.len(), TEN_MIB);
+    ///                 assert!(my_cache.get(&"key1").is_some());
+    ///
+    ///                 println!("Task {} got the value. (len: {})", task_id, value.len());
+    ///             })
+    ///         })
+    ///         .collect();
+    ///
+    ///     // Run all tasks concurrently and wait for them to complete.
+    ///     futures_util::future::join_all(tasks).await;
+    /// }
+    /// ```
+    ///
+    /// **A Sample Result**
+    ///
+    /// - The `init` future (async black) was resolved exactly once by task 3.
+    /// - Other tasks were blocked until task 3 inserted the value.
+    ///
+    /// ```console
+    /// Task 0 started.
+    /// Task 3 started.
+    /// Task 1 started.
+    /// Task 2 started.
+    /// Task 3 inserting a value.
+    /// Task 3 got the value. (len: 10485760)
+    /// Task 0 got the value. (len: 10485760)
+    /// Task 1 got the value. (len: 10485760)
+    /// Task 2 got the value. (len: 10485760)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` future has been panicked. When it happens,
+    /// only the caller whose `init` future panicked will get the panic (e.g. only
+    /// task 3 in the above sample). If there are other calls in progress (e.g. task
+    /// 0, 1 and 2 above), this method will restart and resolve one of the remaining
+    /// `init` futures.
+    ///
+    pub async fn get_or_insert_with<F>(&self, key: K, init: F) -> V
+    where
+        F: Future<Output = V>,
+    {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         self.get_or_insert_with_hash_and_fun(key, hash, init).await
@@ -394,10 +470,92 @@ where
     /// key even if the method is concurrently called by many async tasks; only one
     /// of the calls resolves its future (as long as these futures return the same
     /// error type), and other calls wait for that future to complete.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.6", features = ["future"] }
+    /// // futures = "0.3"
+    /// // reqwest = "0.11"
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    /// use moka::future::Cache;
+    ///
+    /// // This async function tries to get HTML from the given URI.
+    /// async fn get_html(task_id: u8, uri: &str) -> Result<String, reqwest::Error> {
+    ///     println!("get_html() called by task {}.", task_id);
+    ///     Ok(reqwest::get(uri).await?.text().await?)
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let cache = Cache::new(100);
+    ///
+    ///     // Spawn four async tasks.
+    ///     let tasks: Vec<_> = (0..4_u8)
+    ///         .map(|task_id| {
+    ///             let my_cache = cache.clone();
+    ///             tokio::spawn(async move {
+    ///                 println!("Task {} started.", task_id);
+    ///
+    ///                 // Try to insert and get the value for key1. Although
+    ///                 // all four async tasks will call `get_or_try_insert_with`
+    ///                 // at the same time, get_html() must be called only once.
+    ///                 let value = my_cache
+    ///                     .get_or_try_insert_with(
+    ///                         "key1",
+    ///                         get_html(task_id, "https://www.rust-lang.org"),
+    ///                     ).await;
+    ///
+    ///                 // Ensure the value exists now.
+    ///                 assert!(value.is_ok());
+    ///                 assert!(my_cache.get(&"key1").is_some());
+    ///
+    ///                 println!(
+    ///                     "Task {} got the value. (len: {})",
+    ///                     task_id,
+    ///                     value.unwrap().len()
+    ///                 );
+    ///             })
+    ///         })
+    ///         .collect();
+    ///
+    ///     // Run all tasks concurrently and wait for them to complete.
+    ///     futures_util::future::join_all(tasks).await;
+    /// }
+    /// ```
+    ///
+    /// **A Sample Result**
+    ///
+    /// - `get_html()` was called exactly once by task 2.
+    /// - Other tasks were blocked until task 2 inserted the value.
+    ///
+    /// ```console
+    /// Task 1 started.
+    /// Task 0 started.
+    /// Task 2 started.
+    /// Task 3 started.
+    /// get_html() called by task 2.
+    /// Task 2 got the value. (len: 19419)
+    /// Task 1 got the value. (len: 19419)
+    /// Task 0 got the value. (len: 19419)
+    /// Task 3 got the value. (len: 19419)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` future has been panicked. When it happens,
+    /// only the caller whose `init` future panicked will get the panic (e.g. only
+    /// task 2 in the above sample). If there are other calls in progress (e.g. task
+    /// 0, 1 and 3 above), this method will restart and resolve one of the remaining
+    /// `init` futures.
+    ///
     pub async fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
         F: Future<Output = Result<V, E>>,
-        E: Error + Send + Sync + 'static,
+        E: Send + Sync + 'static,
     {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
@@ -423,9 +581,7 @@ where
         let key = Arc::new(key);
         let op = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
-        if Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk).is_err() {
-            panic!("Failed to insert");
-        }
+        Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to insert");
     }
 
     /// Discards any cached value for the key.
@@ -440,12 +596,9 @@ where
         if let Some(kv) = self.base.remove_entry(key) {
             let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
-            if Self::schedule_write_op(&self.base.write_op_ch, op, hk)
+            Self::schedule_write_op(&self.base.write_op_ch, op, hk)
                 .await
-                .is_err()
-            {
-                panic!("Failed to remove");
-            }
+                .expect("Failed to remove");
         }
     }
 
@@ -462,9 +615,8 @@ where
         if let Some(kv) = self.base.remove_entry(key) {
             let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
-            if Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk).is_err() {
-                panic!("Failed to remove");
-            }
+            Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk)
+                .expect("Failed to remove");
         }
     }
 
@@ -590,7 +742,7 @@ where
     ) -> Result<V, Arc<E>>
     where
         F: Future<Output = Result<V, E>>,
-        E: Error + Send + Sync + 'static,
+        E: Send + Sync + 'static,
     {
         if let Some(v) = self.base.get_with_hash(&key, hash) {
             return Ok(v);
@@ -617,12 +769,9 @@ where
     async fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
         let op = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
-        if Self::schedule_write_op(&self.base.write_op_ch, op, hk)
+        Self::schedule_write_op(&self.base.write_op_ch, op, hk)
             .await
-            .is_err()
-        {
-            panic!("Failed to insert");
-        }
+            .expect("Failed to insert");
     }
 
     #[inline]
@@ -697,7 +846,7 @@ where
         self.base.reconfigure_for_testing();
     }
 
-    fn set_expiration_clock(&self, clock: Option<quanta::Clock>) {
+    fn set_expiration_clock(&self, clock: Option<crate::common::time::Clock>) {
         self.base.set_expiration_clock(clock);
     }
 }
@@ -706,11 +855,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Cache, ConcurrentCacheExt};
-    use crate::future::CacheBuilder;
+    use crate::{common::time::Clock, future::CacheBuilder};
 
     use async_io::Timer;
-    use quanta::Clock;
-    use std::time::Duration;
+    use std::{convert::Infallible, sync::Arc, time::Duration};
 
     #[tokio::test]
     async fn basic_single_async_task() {
@@ -893,7 +1041,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let _ = futures::future::join_all(tasks).await;
+        let _ = futures_util::future::join_all(tasks).await;
 
         assert!(cache.get(&10).is_none());
         assert!(cache.get(&20).is_some());
@@ -1178,15 +1326,16 @@ mod tests {
             }
         };
 
-        futures::join!(task1, task2, task3, task4, task5);
+        futures_util::join!(task1, task2, task3, task4, task5);
     }
 
     #[tokio::test]
     async fn get_or_try_insert_with() {
         use std::sync::Arc;
 
-        #[derive(thiserror::Error, Debug)]
-        #[error("{}", _0)]
+        // Note that MyError does not implement std::error::Error trait
+        // like anyhow::Error.
+        #[derive(Debug)]
         pub struct MyError(String);
 
         type MyResult<T> = Result<T, Arc<MyError>>;
@@ -1319,6 +1468,57 @@ mod tests {
             }
         };
 
-        futures::join!(task1, task2, task3, task4, task5, task6, task7, task8);
+        futures_util::join!(task1, task2, task3, task4, task5, task6, task7, task8);
+    }
+
+    #[tokio::test]
+    // https://github.com/moka-rs/moka/issues/43
+    async fn handle_panic_in_get_or_insert_with() {
+        use tokio::time::{sleep, Duration};
+
+        let cache = Cache::new(16);
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(0));
+        {
+            let cache_ref = cache.clone();
+            let semaphore_ref = semaphore.clone();
+            tokio::task::spawn(async move {
+                let _ = cache_ref
+                    .get_or_insert_with(1, async move {
+                        semaphore_ref.add_permits(1);
+                        sleep(Duration::from_millis(50)).await;
+                        panic!("Panic during get_or_try_insert_with");
+                    })
+                    .await;
+            });
+        }
+        let _ = semaphore.acquire().await.expect("semaphore acquire failed");
+        assert_eq!(cache.get_or_insert_with(1, async { 5 }).await, 5);
+    }
+
+    #[tokio::test]
+    // https://github.com/moka-rs/moka/issues/43
+    async fn handle_panic_in_get_or_try_insert_with() {
+        use tokio::time::{sleep, Duration};
+
+        let cache = Cache::new(16);
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(0));
+        {
+            let cache_ref = cache.clone();
+            let semaphore_ref = semaphore.clone();
+            tokio::task::spawn(async move {
+                let _ = cache_ref
+                    .get_or_try_insert_with(1, async move {
+                        semaphore_ref.add_permits(1);
+                        sleep(Duration::from_millis(50)).await;
+                        panic!("Panic during get_or_try_insert_with");
+                    })
+                    .await as Result<_, Arc<Infallible>>;
+            });
+        }
+        let _ = semaphore.acquire().await.expect("semaphore acquire failed");
+        assert_eq!(
+            cache.get_or_try_insert_with(1, async { Ok(5) }).await as Result<_, Arc<Infallible>>,
+            Ok(5)
+        );
     }
 }

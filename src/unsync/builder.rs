@@ -7,6 +7,8 @@ use std::{
     time::Duration,
 };
 
+const YEAR_SECONDS: u64 = 365 * 24 * 3600;
+
 /// Builds a [`Cache`][cache-struct] with various configuration knobs.
 ///
 /// [cache-struct]: ./struct.Cache.html
@@ -78,6 +80,20 @@ where
     /// Builds a `Cache<K, V>`.
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
+        self.time_to_live.map(|d| {
+            if Duration::from_secs(1_000 * YEAR_SECONDS) < d {
+                panic!("time_to_live is longer than 1000 years");
+            } else {
+                d
+            }
+        });
+        self.time_to_idle.map(|d| {
+            if Duration::from_secs(1_000 * YEAR_SECONDS) < d {
+                panic!("time_to_idle is longer than 1000 years");
+            } else {
+                d
+            }
+        });
         Cache::with_everything(
             self.max_capacity,
             self.initial_capacity,
@@ -154,6 +170,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
 
 #[cfg(test)]
 mod tests {
+    use super::Cache;
     use super::CacheBuilder;
 
     use std::time::Duration;
@@ -181,5 +198,27 @@ mod tests {
 
         cache.insert('a', "Alice");
         assert_eq!(cache.get(&'a'), Some(&"Alice"));
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "time_to_live is longer than 1000 years")]
+    async fn build_cache_too_long_ttl() {
+        let thousand_years_secs: u64 = 1000 * 365 * 24 * 3600;
+        let builder: CacheBuilder<Cache<char, String>> = CacheBuilder::new(100);
+        let duration = Duration::from_secs(thousand_years_secs);
+        builder
+            .time_to_live(duration + Duration::from_secs(1))
+            .build();
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "time_to_idle is longer than 1000 years")]
+    async fn build_cache_too_long_tti() {
+        let thousand_years_secs: u64 = 1000 * 365 * 24 * 3600;
+        let builder: CacheBuilder<Cache<char, String>> = CacheBuilder::new(100);
+        let duration = Duration::from_secs(thousand_years_secs);
+        builder
+            .time_to_idle(duration + Duration::from_secs(1))
+            .build();
     }
 }

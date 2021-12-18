@@ -11,7 +11,6 @@ use std::{
     any::TypeId,
     borrow::Borrow,
     collections::hash_map::RandomState,
-    error::Error,
     hash::{BuildHasher, Hash},
     sync::Arc,
     time::Duration,
@@ -340,6 +339,72 @@ where
     /// key even if the method is concurrently called by many threads; only one of
     /// the calls evaluates its closure, and other calls wait for that closure to
     /// complete.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use moka::sync::Cache;
+    /// use std::{sync::Arc, thread, time::Duration};
+    ///
+    /// const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
+    /// let cache = Cache::new(100);
+    ///
+    /// // Spawn four threads.
+    /// let threads: Vec<_> = (0..4_u8)
+    ///     .map(|task_id| {
+    ///         let my_cache = cache.clone();
+    ///         thread::spawn(move || {
+    ///             println!("Thread {} started.", task_id);
+    ///
+    ///             // Try to insert and get the value for key1. Although all four
+    ///             // threads will call `get_or_insert_with` at the same time, the
+    ///             // `init` closure must be evaluated only once.
+    ///             let value = my_cache.get_or_insert_with("key1", || {
+    ///                 println!("Thread {} inserting a value.", task_id);
+    ///                 Arc::new(vec![0u8; TEN_MIB])
+    ///             });
+    ///
+    ///             // Ensure the value exists now.
+    ///             assert_eq!(value.len(), TEN_MIB);
+    ///             thread::sleep(Duration::from_millis(10));
+    ///             assert!(my_cache.get(&"key1").is_some());
+    ///
+    ///             println!("Thread {} got the value. (len: {})", task_id, value.len());
+    ///         })
+    ///     })
+    ///     .collect();
+    ///
+    /// // Wait all threads to complete.
+    /// threads
+    ///     .into_iter()
+    ///     .for_each(|t| t.join().expect("Thread failed"));
+    /// ```
+    ///
+    /// **Result**
+    ///
+    /// - The `init` closure was called exactly once by thread 1.
+    /// - Other threads were blocked until thread 1 inserted the value.
+    ///
+    /// ```console
+    /// Thread 1 started.
+    /// Thread 0 started.
+    /// Thread 3 started.
+    /// Thread 2 started.
+    /// Thread 1 inserting a value.
+    /// Thread 2 got the value. (len: 10485760)
+    /// Thread 1 got the value. (len: 10485760)
+    /// Thread 0 got the value. (len: 10485760)
+    /// Thread 3 got the value. (len: 10485760)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` closure has been panicked. When it
+    /// happens, only the caller whose `init` closure panicked will get the panic
+    /// (e.g. only thread 1 in the above sample). If there are other calls in
+    /// progress (e.g. thread 0, 2 and 3 above), this method will restart and resolve
+    /// one of the remaining `init` closure.
+    ///
     pub fn get_or_insert_with(&self, key: K, init: impl FnOnce() -> V) -> V {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
@@ -376,10 +441,85 @@ where
     /// key even if the method is concurrently called by many threads; only one of
     /// the calls evaluates its closure (as long as these closures return the same
     /// error type), and other calls wait for that closure to complete.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use moka::sync::Cache;
+    /// use std::{path::Path, time::Duration, thread};
+    ///
+    /// /// This function tries to get the file size in bytes.
+    /// fn get_file_size(thread_id: u8, path: impl AsRef<Path>) -> Result<u64, std::io::Error> {
+    ///     println!("get_file_size() called by thread {}.", thread_id);
+    ///     Ok(std::fs::metadata(path)?.len())
+    /// }
+    ///
+    /// let cache = Cache::new(100);
+    ///
+    /// // Spawn four threads.
+    /// let threads: Vec<_> = (0..4_u8)
+    ///     .map(|thread_id| {
+    ///         let my_cache = cache.clone();
+    ///         thread::spawn(move || {
+    ///             println!("Thread {} started.", thread_id);
+    ///
+    ///             // Try to insert and get the value for key1. Although all four
+    ///             // threads will call `get_or_try_insert_with` at the same time,
+    ///             // get_file_size() must be called only once.
+    ///             let value = my_cache.get_or_try_insert_with(
+    ///                 "key1",
+    ///                 || get_file_size(thread_id, "./Cargo.toml"),
+    ///             );
+    ///
+    ///             // Ensure the value exists now.
+    ///             assert!(value.is_ok());
+    ///             thread::sleep(Duration::from_millis(10));
+    ///             assert!(my_cache.get(&"key1").is_some());
+    ///
+    ///             println!(
+    ///                 "Thread {} got the value. (len: {})",
+    ///                 thread_id,
+    ///                 value.unwrap()
+    ///             );
+    ///         })
+    ///     })
+    ///     .collect();
+    ///
+    /// // Wait all threads to complete.
+    /// threads
+    ///     .into_iter()
+    ///     .for_each(|t| t.join().expect("Thread failed"));
+    /// ```
+    ///
+    /// **Result**
+    ///
+    /// - `get_file_size()` was called exactly once by thread 1.
+    /// - Other threads were blocked until thread 1 inserted the value.
+    ///
+    /// ```console
+    /// Thread 1 started.
+    /// Thread 2 started.
+    /// get_file_size() called by thread 1.
+    /// Thread 3 started.
+    /// Thread 0 started.
+    /// Thread 2 got the value. (len: 1466)
+    /// Thread 0 got the value. (len: 1466)
+    /// Thread 1 got the value. (len: 1466)
+    /// Thread 3 got the value. (len: 1466)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` closure has been panicked. When it
+    /// happens, only the caller whose `init` closure panicked will get the panic
+    /// (e.g. only thread 1 in the above sample). If there are other calls in
+    /// progress (e.g. thread 0, 2 and 3 above), this method will restart and resolve
+    /// one of the remaining `init` closure.
+    ///
     pub fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
         F: FnOnce() -> Result<V, E>,
-        E: Error + Send + Sync + 'static,
+        E: Send + Sync + 'static,
     {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
@@ -394,7 +534,7 @@ where
     ) -> Result<V, Arc<E>>
     where
         F: FnOnce() -> Result<V, E>,
-        E: Error + Send + Sync + 'static,
+        E: Send + Sync + 'static,
     {
         if let Some(v) = self.get_with_hash(&key, hash) {
             return Ok(v);
@@ -594,7 +734,7 @@ where
         self.base.reconfigure_for_testing();
     }
 
-    pub(crate) fn set_expiration_clock(&self, clock: Option<quanta::Clock>) {
+    pub(crate) fn set_expiration_clock(&self, clock: Option<crate::common::time::Clock>) {
         self.base.set_expiration_clock(clock);
     }
 }
@@ -603,10 +743,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Cache, ConcurrentCacheExt};
-    use crate::sync::CacheBuilder;
+    use crate::{common::time::Clock, sync::CacheBuilder};
 
-    use quanta::Clock;
-    use std::time::Duration;
+    use std::{convert::Infallible, sync::Arc, time::Duration};
 
     #[test]
     fn basic_single_thread() {
@@ -1026,8 +1165,9 @@ mod tests {
             thread::{sleep, spawn},
         };
 
-        #[derive(thiserror::Error, Debug)]
-        #[error("{}", _0)]
+        // Note that MyError does not implement std::error::Error trait
+        // like anyhow::Error.
+        #[derive(Debug)]
         pub struct MyError(String);
 
         type MyResult<T> = Result<T, Arc<MyError>>;
@@ -1155,5 +1295,54 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+    }
+
+    #[test]
+    // https://github.com/moka-rs/moka/issues/43
+    fn handle_panic_in_get_or_insert_with() {
+        use std::{sync::Barrier, thread};
+
+        let cache = Cache::new(16);
+        let barrier = Arc::new(Barrier::new(2));
+        {
+            let cache_ref = cache.clone();
+            let barrier_ref = barrier.clone();
+            thread::spawn(move || {
+                let _ = cache_ref.get_or_insert_with(1, || {
+                    barrier_ref.wait();
+                    thread::sleep(Duration::from_millis(50));
+                    panic!("Panic during get_or_try_insert_with");
+                });
+            });
+        }
+
+        barrier.wait();
+        assert_eq!(cache.get_or_insert_with(1, || 5), 5);
+    }
+
+    #[test]
+    // https://github.com/moka-rs/moka/issues/43
+    fn handle_panic_in_get_or_try_insert_with() {
+        use std::{sync::Barrier, thread};
+
+        let cache = Cache::new(16);
+        let barrier = Arc::new(Barrier::new(2));
+        {
+            let cache_ref = cache.clone();
+            let barrier_ref = barrier.clone();
+            thread::spawn(move || {
+                let _ = cache_ref.get_or_try_insert_with(1, || {
+                    barrier_ref.wait();
+                    thread::sleep(Duration::from_millis(50));
+                    panic!("Panic during get_or_try_insert_with");
+                }) as Result<_, Arc<Infallible>>;
+            });
+        }
+
+        barrier.wait();
+        assert_eq!(
+            cache.get_or_try_insert_with(1, || Ok(5)) as Result<_, Arc<Infallible>>,
+            Ok(5)
+        );
     }
 }

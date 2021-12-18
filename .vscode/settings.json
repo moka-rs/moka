@@ -1,5 +1,8 @@
 {
     "rust-analyzer.cargo.features": ["future"],
+    "rust-analyzer.server.extraEnv": {
+        "CARGO_TARGET_DIR": "target/ra"
+    },
     "cSpell.words": [
         "CLFU",
         "Deque",
@@ -15,27 +18,45 @@
         "Ristretto",
         "Tatsuya",
         "Upsert",
+        "aarch",
         "actix",
         "ahash",
         "benmanes",
+        "CLFU",
         "clippy",
+        "compat",
         "cpus",
         "deqs",
+        "Deque",
+        "Deques",
+        "else's",
         "getrandom",
+        "Hasher",
+        "Kawano",
+        "Moka",
         "mpsc",
+        "MSRV",
         "nanos",
         "nocapture",
         "peekable",
         "preds",
+        "reqwest",
         "runtimes",
         "rustdoc",
+        "RUSTFLAGS",
         "rustfmt",
         "semver",
         "smallvec",
         "structs",
+        "Tatsuya",
         "thiserror",
         "toolchain",
+        "trybuild",
         "unsync",
+        "Upsert",
         "usize"
-    ]
+    ],
+    "files.watcherExclude": {
+        "**/target": true
+    }
 }

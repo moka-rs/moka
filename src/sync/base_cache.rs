@@ -6,8 +6,10 @@ use super::{
 };
 use crate::{
     common::{
+        atomic_time::AtomicInstant,
         deque::{CacheRegion, DeqNode, Deque},
         frequency_sketch::FrequencySketch,
+        time::{CheckedTimeOps, Clock, Instant},
         AccessTime,
     },
     PredicateError,
@@ -15,16 +17,16 @@ use crate::{
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use parking_lot::{Mutex, RwLock};
-use quanta::{Clock, Instant};
 use smallvec::SmallVec;
 use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
+    convert::TryInto,
     hash::{BuildHasher, Hash, Hasher},
     ptr::NonNull,
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         Arc,
     },
     time::Duration,
@@ -142,7 +144,7 @@ where
             }
             Some((arc_key, entry)) => {
                 let i = &self.inner;
-                let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), i.valid_after());
+                let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
                 let now = i.current_time_from_expiration_clock();
 
                 if is_expired_entry_wo(ttl, va, &entry, now)
@@ -344,7 +346,7 @@ where
         }
     }
 
-    pub(crate) fn set_expiration_clock(&self, clock: Option<quanta::Clock>) {
+    pub(crate) fn set_expiration_clock(&self, clock: Option<Clock>) {
         self.inner.set_expiration_clock(clock);
     }
 }
@@ -439,7 +441,7 @@ pub(crate) struct Inner<K, V, S> {
     write_op_ch: Receiver<WriteOp<K, V>>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
-    valid_after: AtomicU64,
+    valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
     invalidator_enabled: bool,
     invalidator: RwLock<Option<Invalidator<K, V, S>>>,
@@ -476,7 +478,12 @@ where
             initial_capacity,
             build_hasher.clone(),
         );
-        let skt_capacity = max_capacity.map(|n| n * 32).unwrap_or_default().max(100);
+
+        // Ensure skt_capacity fits in a range of `128u32..=u32::MAX`.
+        let skt_capacity = max_capacity
+            .map(|n| n.try_into().unwrap_or_default()) // Convert to u32.
+            .unwrap_or(u32::MAX)
+            .max(128);
         let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
 
         Self {
@@ -490,7 +497,7 @@ where
             write_op_ch,
             time_to_live,
             time_to_idle,
-            valid_after: AtomicU64::new(0),
+            valid_after: AtomicInstant::default(),
             weigher,
             invalidator_enabled,
             // When enabled, this field will be set later via the set_invalidator method.
@@ -560,20 +567,18 @@ where
     }
 
     #[inline]
-    fn valid_after(&self) -> Instant {
-        let ts = self.valid_after.load(Ordering::Acquire);
-        unsafe { std::mem::transmute(ts) }
+    fn valid_after(&self) -> Option<Instant> {
+        self.valid_after.instant()
     }
 
     #[inline]
     fn set_valid_after(&self, timestamp: Instant) {
-        self.valid_after
-            .store(timestamp.as_u64(), Ordering::Release);
+        self.valid_after.set_instant(timestamp);
     }
 
     #[inline]
     fn has_valid_after(&self) -> bool {
-        self.valid_after.load(Ordering::Acquire) > 0
+        self.valid_after.is_set()
     }
 
     #[inline]
@@ -602,11 +607,13 @@ where
     #[inline]
     fn current_time_from_expiration_clock(&self) -> Instant {
         if self.has_expiration_clock.load(Ordering::Relaxed) {
-            self.expiration_clock
-                .read()
-                .as_ref()
-                .expect("Cannot get the expiration clock")
-                .now()
+            Instant::new(
+                self.expiration_clock
+                    .read()
+                    .as_ref()
+                    .expect("Cannot get the expiration clock")
+                    .now(),
+            )
         } else {
             Instant::now()
         }
@@ -1002,7 +1009,7 @@ where
         ws: &mut WeightedSize<'_, K, V>,
     ) {
         let tti = &self.time_to_idle;
-        let va = self.valid_after();
+        let va = &self.valid_after();
         for _ in 0..batch_size {
             // Peek the front node of the deque and check if it is expired.
             let (key, _ts) = deq
@@ -1067,7 +1074,7 @@ where
         ws: &mut WeightedSize<'_, K, V>,
     ) {
         let ttl = &self.time_to_live;
-        let va = self.valid_after();
+        let va = &self.valid_after();
         for _ in 0..batch_size {
             let (key, _ts) = deqs
                 .write_order
@@ -1207,7 +1214,7 @@ where
             .unwrap_or(0)
     }
 
-    fn set_expiration_clock(&self, clock: Option<quanta::Clock>) {
+    fn set_expiration_clock(&self, clock: Option<Clock>) {
         let mut exp_clock = self.expiration_clock.write();
         if let Some(clock) = clock {
             *exp_clock = Some(clock);
@@ -1225,16 +1232,22 @@ where
 #[inline]
 fn is_expired_entry_ao(
     time_to_idle: &Option<Duration>,
-    valid_after: Instant,
+    valid_after: &Option<Instant>,
     entry: &impl AccessTime,
     now: Instant,
 ) -> bool {
     if let Some(ts) = entry.last_accessed() {
-        if ts < valid_after {
-            return true;
+        if let Some(va) = valid_after {
+            if ts < *va {
+                return true;
+            }
         }
         if let Some(tti) = time_to_idle {
-            return ts + *tti <= now;
+            let checked_add = ts.checked_add(*tti);
+            if checked_add.is_none() {
+                panic!("ttl overflow")
+            }
+            return checked_add.unwrap() <= now;
         }
     }
     false
@@ -1243,17 +1256,83 @@ fn is_expired_entry_ao(
 #[inline]
 fn is_expired_entry_wo(
     time_to_live: &Option<Duration>,
-    valid_after: Instant,
+    valid_after: &Option<Instant>,
     entry: &impl AccessTime,
     now: Instant,
 ) -> bool {
     if let Some(ts) = entry.last_modified() {
-        if ts < valid_after {
-            return true;
+        if let Some(va) = valid_after {
+            if ts < *va {
+                return true;
+            }
         }
         if let Some(ttl) = time_to_live {
-            return ts + *ttl <= now;
+            let checked_add = ts.checked_add(*ttl);
+            if checked_add.is_none() {
+                panic!("ttl overflow");
+            }
+            return checked_add.unwrap() <= now;
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BaseCache;
+
+    #[cfg_attr(target_pointer_width = "16", ignore)]
+    #[test]
+    fn test_skt_capacity_will_not_overflow() {
+        use std::collections::hash_map::RandomState;
+
+        // power of two
+        let pot = |exp| 2_usize.pow(exp);
+
+        let ensure_sketch_len = |max_capacity, len, name| {
+            let cache = BaseCache::<u8, u8>::new(
+                max_capacity,
+                None,
+                RandomState::default(),
+                None,
+                None,
+                None,
+                false,
+            );
+            assert_eq!(
+                cache.inner.frequency_sketch.read().table_len(),
+                len,
+                "{}",
+                name
+            );
+        };
+
+        if cfg!(target_pointer_width = "32") {
+            let pot24 = pot(24);
+            let pot16 = pot(16);
+            ensure_sketch_len(0, 128, "0");
+            ensure_sketch_len(128, 128, "128");
+            ensure_sketch_len(pot16, pot16, "pot16");
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot16 + 1, pot(17), "pot16 + 1");
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot24 - 1, pot24, "pot24 - 1");
+            ensure_sketch_len(pot24, pot24, "pot24");
+            ensure_sketch_len(pot(27), pot24, "pot(27)");
+            ensure_sketch_len(usize::MAX, pot24, "usize::MAX");
+        } else {
+            // target_pointer_width: 64 or larger.
+            let pot30 = pot(30);
+            let pot16 = pot(16);
+            ensure_sketch_len(0, 128, "0");
+            ensure_sketch_len(128, 128, "128");
+            ensure_sketch_len(pot16, pot16, "pot16");
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot16 + 1, pot(17), "pot16 + 1");
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot30 - 1, pot30, "pot30- 1");
+            ensure_sketch_len(pot30, pot30, "pot30");
+            ensure_sketch_len(usize::MAX, pot30, "usize::MAX");
+        };
+    }
 }

@@ -2,7 +2,7 @@
 #![warn(rust_2018_idioms)]
 
 //! Moka is a fast, concurrent cache library for Rust. Moka is inspired by
-//! [Caffeine][caffeine-git] (Java) and [Ristretto][ristretto-git] (Go).
+//! [Caffeine][caffeine-git] (Java).
 //!
 //! Moka provides in-memory concurrent cache implementations that support full
 //! concurrency of retrievals and a high expected concurrency for updates. <!-- , and multiple ways to bound the cache. -->
@@ -17,7 +17,6 @@
 //! is exceeded.
 //!
 //! [caffeine-git]: https://github.com/ben-manes/caffeine
-//! [ristretto-git]: https://github.com/dgraph-io/ristretto
 //! [moka-cht-crate]: https://crates.io/crates/moka-cht
 //!
 //! # Features
@@ -58,15 +57,16 @@
 //!
 //! This crate's minimum supported Rust versions (MSRV) are the followings:
 //!
-//! | Enabled Feature      | MSRV        |
-//! |:---------------------|:------------|
-//! | no feature (default) | Rust 1.45.2 |
-//! | `future`             | Rust 1.46.0 |
+//! | Feature    | Enabled by default? | MSRV        |
+//! |:-----------|:-------------------:|:-----------:|
+//! | no feature |                     | Rust 1.45.2 |
+//! | `atomic64` |       yes           | Rust 1.45.2 |
+//! | `future`   |                     | Rust 1.46.0 |
 //!
-//! If no crate feature is enabled, MSRV will be updated conservatively. When using
-//! features like `future`, MSRV might be updated more frequently, up to the latest
-//! stable. In both cases, increasing MSRV is _not_ considered a semver-breaking
-//! change.
+//! If only the default features are enabled, MSRV will be updated conservatively.
+//! When using other features, like `future`, MSRV might be updated more frequently,
+//! up to the latest stable. In both cases, increasing MSRV is _not_ considered a
+//! semver-breaking change.
 //!
 //! # Implementation Details
 //!
@@ -160,3 +160,20 @@ pub mod unsync;
 pub(crate) mod common;
 
 pub use common::error::PredicateError;
+
+#[cfg(test)]
+mod tests {
+    // #[cfg(trybuild)]
+    // #[test]
+    // fn ui_trybuild() {
+    //     let t = trybuild::TestCases::new();
+    //     t.compile_fail("tests/ui/default/*.rs");
+    // }
+
+    #[cfg(all(trybuild, feature = "future"))]
+    #[test]
+    fn ui_trybuild_future() {
+        let t = trybuild::TestCases::new();
+        t.compile_fail("tests/ui/future/*.rs");
+    }
+}

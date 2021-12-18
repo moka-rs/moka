@@ -9,7 +9,7 @@
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_shield)
 
 Moka is a fast, concurrent cache library for Rust. Moka is inspired by
-[Caffeine][caffeine-git] (Java) and [Ristretto][ristretto-git] (Go).
+[Caffeine][caffeine-git] (Java).
 
 Moka provides cache implementations that support full concurrency of retrievals and
 a high expected concurrency for updates. Moka also provides a not thread-safe cache
@@ -34,7 +34,6 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 [fossa]: https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_shield
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
-[ristretto-git]: https://github.com/dgraph-io/ristretto
 
 
 ## Features
@@ -53,6 +52,23 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 - Supports expiration policies:
     - Time to live
     - Time to idle
+
+
+## Moka in Production
+
+Moka is powering production services as well as embedded devices. Here are some
+highlights:
+
+- [crates.io](https://crates.io/): The official crate registry has been using Moka in
+  their API service to reduce the loads on PostgreSQL.
+  ([discussions][gh-discussions-51]) (Moka used: Nov 2021 &mdash; present)
+- [aliyundrive-webdav][aliyundrive-webdav-git]: This WebDAV service for a cloud drive
+  is potentially running in hundreds of home WiFi routers with 32-bit ARMv5 or MIPS
+  based SoCs. Moka is used to cache the metadata of remote files. (Moka used: Aug
+  2021 &mdash; present)
+
+[gh-discussions-51]: https://github.com/moka-rs/moka/discussions/51
+[aliyundrive-webdav-git]: https://github.com/messense/aliyundrive-webdav
 
 
 ## Usage
@@ -313,6 +329,12 @@ fn main() {
 }
 ```
 
+### A note on expiration policies
+
+The cache builders will panic if configured with either time to live/ time to idle
+higher than 1000 years. This is done to protect against overflow when computing key
+expiration.
+
 
 ## Hashing Algorithm
 
@@ -335,18 +357,20 @@ available on crates.io, such as the [aHash][ahash-crate] crate.
 [ahash-crate]: https://crates.io/crates/ahash
 
 
+
 ## Minimum Supported Rust Versions
 
 This crate's minimum supported Rust versions (MSRV) are the followings:
 
-| Enabled Feature      | MSRV        |
-|:---------------------|:------------|
-| no feature (default) | Rust 1.45.2 |
-| `future`             | Rust 1.46.0 |
+| Feature    | Enabled by default? | MSRV        |
+|:-----------|:-------------------:|:-----------:|
+| no feature |                     | Rust 1.45.2 |
+| `atomic64` |       yes           | Rust 1.45.2 |
+| `future`   |                     | Rust 1.46.0 |
 
-If no feature is enabled, MSRV will be updated conservatively. When using other
-features, like `future`, MSRV might be updated more frequently, up to the latest
-stable. In both cases, increasing MSRV is _not_ considered a semver-breaking
+If only the default features are enabled, MSRV will be updated conservatively. When
+using other features, like `future`, MSRV might be updated more frequently, up to the
+latest stable. In both cases, increasing MSRV is _not_ considered a semver-breaking
 change.
 
 <!--
@@ -354,6 +378,42 @@ change.
 - quanta requires 1.45.
 - moka-cht requires 1.41.
 -->
+
+
+## Resolving Compile Errors on Some 32-bit Platforms
+
+On some 32-bit target platforms including the followings, you may encounter compile
+errors:
+
+- `armv5te-unknown-linux-musleabi`
+- `mips-unknown-linux-musl`
+- `mipsel-unknown-linux-musl`
+
+```console
+error[E0432]: unresolved import `std::sync::atomic::AtomicU64`
+  --> ... /moka-0.5.3/src/sync.rs:10:30
+   |
+10 |         atomic::{AtomicBool, AtomicU64, Ordering},
+   |                              ^^^^^^^^^
+   |                              |
+   |                              no `AtomicU64` in `sync::atomic`
+```
+
+Such errors can occur because `std::sync::atomic::AtomicU64` is not provided on these
+platforms but Moka uses it.
+
+You can resolve the errors by disabling `atomic64` feature, which is one of the
+default features of Moka. Edit your Cargo.toml to add `default-features = false`
+to the dependency declaration.
+
+```toml:Cargo.toml
+[dependencies]
+moka = { version = "0.6", default-feautures = false }
+# Or
+moka = { version = "0.6", default-feautures = false, features = ["future"] }
+```
+
+This will make Moka to switch to a fall-back implementation, so it will compile.
 
 
 ## Developing Moka
@@ -364,13 +424,14 @@ To run all tests including `future` feature and doc tests on the README, use the
 following command:
 
 ```console
-$ RUSTFLAGS='--cfg skeptic' cargo test --all-features
+$ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test --all-features
 ```
 
 
 ## Road Map
 
 - [x] `async` optimized caches. (`v0.2.0`)
+- [ ] Weight based cache management ([#24](https://github.com/moka-rs/moka/pull/24))
 - [ ] Cache statistics. (Hit rate, etc.)
 - [ ] Upgrade TinyLFU to Window TinyLFU.
 - [ ] The variable (per-entry) expiration, using a hierarchical timer wheel.

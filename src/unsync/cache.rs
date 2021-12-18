@@ -2,14 +2,15 @@ use super::{deques::Deques, CacheBuilder, KeyDate, KeyHashDate, ValueEntry, Weig
 use crate::common::{
     deque::{CacheRegion, DeqNode, Deque},
     frequency_sketch::FrequencySketch,
+    time::{CheckedTimeOps, Clock, Instant},
     AccessTime,
 };
 
-use quanta::{Clock, Instant};
 use smallvec::SmallVec;
 use std::{
     borrow::Borrow,
     collections::{hash_map::RandomState, HashMap},
+    convert::TryInto,
     hash::{BuildHasher, Hash, Hasher},
     ptr::NonNull,
     rc::Rc,
@@ -161,7 +162,12 @@ where
             initial_capacity.unwrap_or_default(),
             build_hasher.clone(),
         );
-        let skt_capacity = max_capacity.map(|n| n * 32).unwrap_or_default().max(100);
+
+        // Ensure skt_capacity fits in a range of `128u32..=u32::MAX`.
+        let skt_capacity = max_capacity
+            .map(|n| n.try_into().unwrap_or_default()) // Convert to u32.
+            .unwrap_or(u32::MAX)
+            .max(128);
         let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
         Self {
             max_capacity: max_capacity.map(|n| n as u64),
@@ -351,7 +357,7 @@ where
     #[inline]
     fn current_time_from_expiration_clock(&self) -> Instant {
         if let Some(clock) = &self.expiration_clock {
-            clock.now()
+            Instant::new(clock.now())
         } else {
             Instant::now()
         }
@@ -364,7 +370,11 @@ where
         now: Instant,
     ) -> bool {
         if let (Some(ts), Some(tti)) = (entry.last_accessed(), time_to_idle) {
-            return ts + *tti <= now;
+            let checked_add = ts.checked_add(*tti);
+            if checked_add.is_none() {
+                panic!("ttl overflow")
+            }
+            return checked_add.unwrap() <= now;
         }
         false
     }
@@ -376,7 +386,11 @@ where
         now: Instant,
     ) -> bool {
         if let (Some(ts), Some(ttl)) = (entry.last_modified(), time_to_live) {
-            return ts + *ttl <= now;
+            let checked_add = ts.checked_add(*ttl);
+            if checked_add.is_none() {
+                panic!("ttl overflow")
+            }
+            return checked_add.unwrap() <= now;
         }
         false
     }
@@ -702,7 +716,7 @@ where
     K: Hash + Eq,
     S: BuildHasher + Clone,
 {
-    fn set_expiration_clock(&mut self, clock: Option<quanta::Clock>) {
+    fn set_expiration_clock(&mut self, clock: Option<crate::common::time::Clock>) {
         self.expiration_clock = clock;
     }
 }
@@ -753,9 +767,8 @@ fn weigh<K, V>(weigher: &mut Option<Weigher<K, V>>, key: &K, value: &V) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::Cache;
-    use crate::unsync::CacheBuilder;
+    use crate::{common::time::Clock, unsync::CacheBuilder};
 
-    use quanta::Clock;
     use std::time::Duration;
 
     #[test]
@@ -983,5 +996,45 @@ mod tests {
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
         assert!(cache.cache.is_empty());
+    }
+
+    #[cfg_attr(target_pointer_width = "16", ignore)]
+    #[test]
+    fn test_skt_capacity_will_not_overflow() {
+        // power of two
+        let pot = |exp| 2_usize.pow(exp);
+
+        let ensure_sketch_len = |max_capacity, len, name| {
+            let cache = Cache::<u8, u8>::new(max_capacity);
+            assert_eq!(cache.frequency_sketch.table_len(), len, "{}", name);
+        };
+
+        if cfg!(target_pointer_width = "32") {
+            let pot24 = pot(24);
+            let pot16 = pot(16);
+            ensure_sketch_len(0, 128, "0");
+            ensure_sketch_len(128, 128, "128");
+            ensure_sketch_len(pot16, pot16, "pot16");
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot16 + 1, pot(17), "pot16 + 1");
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot24 - 1, pot24, "pot24 - 1");
+            ensure_sketch_len(pot24, pot24, "pot24");
+            ensure_sketch_len(pot(27), pot24, "pot(27)");
+            ensure_sketch_len(usize::MAX, pot24, "usize::MAX");
+        } else {
+            // target_pointer_width: 64 or larger.
+            let pot30 = pot(30);
+            let pot16 = pot(16);
+            ensure_sketch_len(0, 128, "0");
+            ensure_sketch_len(128, 128, "128");
+            ensure_sketch_len(pot16, pot16, "pot16");
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot16 + 1, pot(17), "pot16 + 1");
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot30 - 1, pot30, "pot30- 1");
+            ensure_sketch_len(pot30, pot30, "pot30");
+            ensure_sketch_len(usize::MAX, pot30, "usize::MAX");
+        };
     }
 }
