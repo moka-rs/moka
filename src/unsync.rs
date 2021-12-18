@@ -12,6 +12,8 @@ use quanta::Instant;
 
 use crate::common::{deque::DeqNode, AccessTime};
 
+pub(crate) type Weigher<K, V> = Box<dyn FnMut(&K, &V) -> u64>;
+
 pub(crate) struct KeyDate<K> {
     pub(crate) key: Rc<K>,
     pub(crate) timestamp: Option<Instant>,

@@ -1,6 +1,4 @@
-use crate::common::Weigher;
-
-use super::{Cache, SegmentedCache};
+use super::{Cache, SegmentedCache, Weigher};
 
 use std::{
     collections::hash_map::RandomState,

@@ -41,6 +41,8 @@ pub trait ConcurrentCacheExt<K, V> {
     fn sync(&self);
 }
 
+pub(crate) type Weigher<K, V> = Box<dyn Fn(&K, &V) -> u64 + Send + Sync + 'static>;
+
 pub(crate) struct KeyHash<K> {
     pub(crate) key: Arc<K>,
     pub(crate) hash: u64,
@@ -92,12 +94,12 @@ impl<K> KeyHashDate<K> {
     }
 }
 
-pub(crate) struct KVEntry<K, V> {
+pub(crate) struct KvEntry<K, V> {
     pub(crate) key: Arc<K>,
     pub(crate) entry: Arc<ValueEntry<K, V>>,
 }
 
-impl<K, V> KVEntry<K, V> {
+impl<K, V> KvEntry<K, V> {
     pub(crate) fn new(key: Arc<K>, entry: Arc<ValueEntry<K, V>>) -> Self {
         Self { key, entry }
     }
@@ -290,5 +292,5 @@ pub(crate) enum ReadOp<K, V> {
 
 pub(crate) enum WriteOp<K, V> {
     Upsert(KeyHash<K>, Arc<ValueEntry<K, V>>),
-    Remove(KVEntry<K, V>),
+    Remove(KvEntry<K, V>),
 }

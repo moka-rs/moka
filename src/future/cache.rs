@@ -3,11 +3,10 @@ use super::{
     CacheBuilder, ConcurrentCacheExt,
 };
 use crate::{
-    common::Weigher,
     sync::{
         base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
         housekeeper::InnerSync,
-        PredicateId, WriteOp,
+        PredicateId, Weigher, WriteOp,
     },
     PredicateError,
 };

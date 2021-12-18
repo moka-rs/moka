@@ -2,13 +2,13 @@ use super::{
     deques::Deques,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
-    KVEntry, KeyDate, KeyHash, KeyHashDate, PredicateId, ReadOp, ValueEntry, WriteOp,
+    KeyDate, KeyHash, KeyHashDate, KvEntry, PredicateId, ReadOp, ValueEntry, Weigher, WriteOp,
 };
 use crate::{
     common::{
         deque::{CacheRegion, DeqNode, Deque},
         frequency_sketch::FrequencySketch,
-        AccessTime, Weigher,
+        AccessTime,
     },
     PredicateError,
 };
@@ -65,7 +65,7 @@ impl<K, V, S> Clone for BaseCache<K, V, S> {
             inner: Arc::clone(&self.inner),
             read_op_ch: self.read_op_ch.clone(),
             write_op_ch: self.write_op_ch.clone(),
-            housekeeper: self.housekeeper.as_ref().map(|h| Arc::clone(h)),
+            housekeeper: self.housekeeper.as_ref().map(Arc::clone),
         }
     }
 }
@@ -164,7 +164,7 @@ where
     }
 
     #[inline]
-    pub(crate) fn remove_entry<Q>(&self, key: &Q) -> Option<KVEntry<K, V>>
+    pub(crate) fn remove_entry<Q>(&self, key: &Q) -> Option<KvEntry<K, V>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -525,14 +525,14 @@ where
     }
 
     #[inline]
-    fn remove_entry<Q>(&self, key: &Q) -> Option<KVEntry<K, V>>
+    fn remove_entry<Q>(&self, key: &Q) -> Option<KvEntry<K, V>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.cache
             .remove_entry(key)
-            .map(|(key, entry)| KVEntry::new(key, entry))
+            .map(|(key, entry)| KvEntry::new(key, entry))
     }
 
     fn max_capacity(&self) -> Option<usize> {
@@ -630,6 +630,12 @@ where
     }
 }
 
+// TODO: Divide this method into smaller methods so that unit tests can do more
+// precise testing.
+// - sync_reads
+// - sync_writes
+// - evict
+// - invalidate_entries
 impl<K, V, S> InnerSync for Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -737,7 +743,7 @@ where
         for _ in 0..count {
             match ch.try_recv() {
                 Ok(Upsert(kh, entry)) => self.handle_upsert(kh, entry, ts, deqs, &freq, ws),
-                Ok(Remove(KVEntry { key, entry })) => Self::handle_remove(deqs, &key, entry, ws),
+                Ok(Remove(KvEntry { key, entry })) => Self::handle_remove(deqs, &key, entry, ws),
                 Err(_) => break,
             };
         }
@@ -756,14 +762,16 @@ where
         entry.set_last_modified(timestamp);
         let raw_ts = RawTimestamps::new(&entry);
 
+        let policy_weight = ws.weigh(&kh.key, &entry.value);
+
         if entry.is_admitted() {
+            // TODO: Update the total weight.
+
             // The entry has been already admitted, so treat this as an update.
             deqs.move_to_back_ao(&entry);
             deqs.move_to_back_wo(&entry);
             return;
         }
-
-        let policy_weight = ws.weigh(&kh.key, &entry.value);
 
         if self.has_enough_capacity(policy_weight, ws) {
             // There are enough room in the cache (or the cache is unbounded).
@@ -790,6 +798,8 @@ where
                 victim_nodes,
                 skipped_nodes: mut skipped,
             } => {
+                // TODO: Try not to recalculate weights in handle_remove and handle_admit.
+
                 // Try to remove the victims from the cache (hash map).
                 for victim in victim_nodes {
                     if let Some((vic_key, vic_entry)) = self
@@ -1130,7 +1140,7 @@ where
             is_done,
         }) = invalidator.task_result()
         {
-            for KVEntry { key, entry } in invalidated {
+            for KvEntry { key, entry } in invalidated {
                 Self::handle_remove(deqs, &key, entry, ws);
             }
             if is_done {

@@ -1,6 +1,5 @@
-use crate::common::Weigher;
-
 use super::Cache;
+use crate::sync::Weigher;
 
 use std::{
     collections::hash_map::RandomState,

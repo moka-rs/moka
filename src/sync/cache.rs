@@ -2,9 +2,9 @@ use super::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
     housekeeper::InnerSync,
     value_initializer::ValueInitializer,
-    CacheBuilder, ConcurrentCacheExt, PredicateId, WriteOp,
+    CacheBuilder, ConcurrentCacheExt, PredicateId, Weigher, WriteOp,
 };
-use crate::{common::Weigher, sync::value_initializer::InitResult, PredicateError};
+use crate::{sync::value_initializer::InitResult, PredicateError};
 
 use crossbeam_channel::{Sender, TrySendError};
 use std::{
