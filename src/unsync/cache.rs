@@ -165,8 +165,8 @@ where
 
         // Ensure skt_capacity fits in a range of `128u32..=u32::MAX`.
         let skt_capacity = max_capacity
-            .map(|n| n.try_into().unwrap_or_default()) // Convert to u32.
-            .unwrap_or(u32::MAX)
+            .map(|n| n.try_into().unwrap_or(u32::MAX)) // Convert to u32.
+            .unwrap_or_default()
             .max(128);
         let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
         Self {

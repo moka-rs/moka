@@ -14,8 +14,8 @@ use crate::{
     },
     PredicateError,
 };
-
 use crossbeam_channel::{Receiver, Sender, TrySendError};
+use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
 use smallvec::SmallVec;
 use std::{
@@ -400,8 +400,8 @@ impl EntrySizeAndFrequency {
 }
 
 struct RawTimestamps {
-    last_accessed: Arc<AtomicU64>,
-    last_modified: Arc<AtomicU64>,
+    last_accessed: Arc<AtomicInstant>,
+    last_modified: Arc<AtomicInstant>,
 }
 
 impl RawTimestamps {
@@ -432,7 +432,7 @@ type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
 
 pub(crate) struct Inner<K, V, S> {
     max_capacity: Option<u64>,
-    weighted_size: AtomicU64,
+    weighted_size: AtomicCell<u64>,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
     deques: Mutex<Deques<K>>,
@@ -481,14 +481,14 @@ where
 
         // Ensure skt_capacity fits in a range of `128u32..=u32::MAX`.
         let skt_capacity = max_capacity
-            .map(|n| n.try_into().unwrap_or_default()) // Convert to u32.
-            .unwrap_or(u32::MAX)
+            .map(|n| n.try_into().unwrap_or(u32::MAX)) // Convert to u32.
+            .unwrap_or_default()
             .max(128);
         let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
 
         Self {
             max_capacity: max_capacity.map(|n| n as u64),
-            weighted_size: AtomicU64::default(),
+            weighted_size: AtomicCell::default(),
             cache,
             build_hasher,
             deques: Mutex::new(Deques::default()),
@@ -657,7 +657,7 @@ where
         let mut calls = 0;
         let mut should_sync = true;
 
-        let current_ws = self.weighted_size.load(Ordering::Acquire);
+        let current_ws = self.weighted_size.load();
         let mut ws = WeightedSize {
             size: current_ws,
             weigher: self.weigher.as_ref(),
@@ -695,8 +695,8 @@ where
             }
         }
 
-        debug_assert_eq!(self.weighted_size.load(Ordering::Acquire), current_ws);
-        self.weighted_size.store(ws.size, Ordering::Release);
+        debug_assert_eq!(self.weighted_size.load(), current_ws);
+        self.weighted_size.store(ws.size);
 
         if should_sync {
             Some(SyncPace::Fast)
@@ -1291,7 +1291,7 @@ mod tests {
 
         let ensure_sketch_len = |max_capacity, len, name| {
             let cache = BaseCache::<u8, u8>::new(
-                max_capacity,
+                Some(max_capacity),
                 None,
                 RandomState::default(),
                 None,

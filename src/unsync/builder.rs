@@ -170,7 +170,6 @@ impl<K, V, C> CacheBuilder<K, V, C> {
 
 #[cfg(test)]
 mod tests {
-    use super::Cache;
     use super::CacheBuilder;
 
     use std::time::Duration;
@@ -204,7 +203,7 @@ mod tests {
     #[should_panic(expected = "time_to_live is longer than 1000 years")]
     async fn build_cache_too_long_ttl() {
         let thousand_years_secs: u64 = 1000 * 365 * 24 * 3600;
-        let builder: CacheBuilder<Cache<char, String>> = CacheBuilder::new(100);
+        let builder: CacheBuilder<char, String, _> = CacheBuilder::new(100);
         let duration = Duration::from_secs(thousand_years_secs);
         builder
             .time_to_live(duration + Duration::from_secs(1))
@@ -215,7 +214,7 @@ mod tests {
     #[should_panic(expected = "time_to_idle is longer than 1000 years")]
     async fn build_cache_too_long_tti() {
         let thousand_years_secs: u64 = 1000 * 365 * 24 * 3600;
-        let builder: CacheBuilder<Cache<char, String>> = CacheBuilder::new(100);
+        let builder: CacheBuilder<char, String, _> = CacheBuilder::new(100);
         let duration = Duration::from_secs(thousand_years_secs);
         builder
             .time_to_idle(duration + Duration::from_secs(1))
