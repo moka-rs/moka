@@ -2,7 +2,8 @@
 
 use crate::common::{
     deque::DeqNode,
-    time::{AtomicInstant, Instant},
+    atomic_time::AtomicInstant,
+    time::Instant,
     AccessTime,
 };
 

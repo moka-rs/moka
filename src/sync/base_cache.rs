@@ -8,7 +8,8 @@ use crate::{
     common::{
         deque::{CacheRegion, DeqNode, Deque},
         frequency_sketch::FrequencySketch,
-        time::{AtomicInstant, Clock, Instant},
+        atomic_time::AtomicInstant,
+        time::{Clock, Instant, CheckedTimeOps},
         AccessTime,
     },
     PredicateError,
@@ -518,11 +519,13 @@ where
     #[inline]
     fn current_time_from_expiration_clock(&self) -> Instant {
         if self.has_expiration_clock.load(Ordering::Relaxed) {
+            Instant::new(
             self.expiration_clock
                 .read()
                 .as_ref()
                 .expect("Cannot get the expiration clock")
                 .now()
+            )
         } else {
             Instant::now()
         }
@@ -1046,7 +1049,11 @@ fn is_expired_entry_ao(
             }
         }
         if let Some(tti) = time_to_idle {
-            return ts + *tti <= now;
+            let checked_add = ts.checked_add(*tti);
+            if checked_add.is_none() {
+                panic!("ttl overflow")
+            }
+            return checked_add.unwrap() <= now;
         }
     }
     false
@@ -1066,7 +1073,11 @@ fn is_expired_entry_wo(
             }
         }
         if let Some(ttl) = time_to_live {
-            return ts + *ttl <= now;
+            let checked_add = ts.checked_add(*ttl);
+            if checked_add.is_none() {
+                panic!("ttl overflow");
+            }
+            return checked_add.unwrap() <= now;
         }
     }
     false

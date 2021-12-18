@@ -1,10 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
-pub(crate) type Instant = quanta::Instant;
-pub(crate) type Clock = quanta::Clock;
-
-#[cfg(test)]
-pub(crate) type Mock = quanta::Mock;
+use super::time::Instant;
 
 pub(crate) struct AtomicInstant {
     instant: AtomicU64,
@@ -37,6 +33,6 @@ impl AtomicInstant {
     }
 
     pub(crate) fn set_instant(&self, instant: Instant) {
-        self.instant.store(instant.as_u64(), Ordering::Release);
+        self.instant.store(instant.0.as_u64(), Ordering::Release);
     }
 }
