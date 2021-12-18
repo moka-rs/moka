@@ -27,7 +27,6 @@
         "peekable",
         "preds",
         "reqwest",
-        "Ristretto",
         "runtimes",
         "rustdoc",
         "RUSTFLAGS",

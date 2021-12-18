@@ -4,7 +4,7 @@ version = "0.6.2"
 authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
 
-description = "A fast and concurrent cache library inspired by Caffeine (Java) and Ristretto (Go)"
+description = "A fast and concurrent cache library inspired by Caffeine (Java)"
 license = "MIT OR Apache-2.0"
 # homepage = "https://"
 documentation = "https://docs.rs/moka/"
