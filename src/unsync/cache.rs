@@ -2,7 +2,7 @@ use super::{deques::Deques, KeyDate, KeyHashDate, ValueEntry};
 use crate::common::{
     deque::{CacheRegion, DeqNode, Deque},
     frequency_sketch::FrequencySketch,
-    time::{Clock, Instant, CheckedTimeOps},
+    time::{CheckedTimeOps, Clock, Instant},
     AccessTime,
 };
 

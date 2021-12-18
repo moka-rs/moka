@@ -65,16 +65,19 @@ where
     /// Builds a `Cache<K, V>`.
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
-        self.time_to_live.map(|d| if Duration::from_secs(1_000 * YEAR_SECONDS) < d {
+        self.time_to_live.map(|d| {
+            if Duration::from_secs(1_000 * YEAR_SECONDS) < d {
                 panic!("time_to_live is longer than 1000 years");
             } else {
                 d
             }
-        );
-        self.time_to_idle.map(|d| if Duration::from_secs(1_000 * YEAR_SECONDS) < d {
-            panic!("time_to_idle is longer than 1000 years");
-        } else {
-            d
+        });
+        self.time_to_idle.map(|d| {
+            if Duration::from_secs(1_000 * YEAR_SECONDS) < d {
+                panic!("time_to_idle is longer than 1000 years");
+            } else {
+                d
+            }
         });
         Cache::with_everything(
             self.max_capacity,
@@ -134,8 +137,8 @@ impl<C> CacheBuilder<C> {
 
 #[cfg(test)]
 mod tests {
-    use super::CacheBuilder;
     use super::Cache;
+    use super::CacheBuilder;
 
     use std::time::Duration;
 
@@ -170,7 +173,9 @@ mod tests {
         let thousand_years_secs: u64 = 1000 * 365 * 24 * 3600;
         let builder: CacheBuilder<Cache<char, String>> = CacheBuilder::new(100);
         let duration = Duration::from_secs(thousand_years_secs);
-        builder.time_to_live(duration + Duration::from_secs(1)).build();
+        builder
+            .time_to_live(duration + Duration::from_secs(1))
+            .build();
     }
 
     #[tokio::test]
@@ -179,6 +184,8 @@ mod tests {
         let thousand_years_secs: u64 = 1000 * 365 * 24 * 3600;
         let builder: CacheBuilder<Cache<char, String>> = CacheBuilder::new(100);
         let duration = Duration::from_secs(thousand_years_secs);
-        builder.time_to_idle(duration + Duration::from_secs(1)).build();
+        builder
+            .time_to_idle(duration + Duration::from_secs(1))
+            .build();
     }
 }

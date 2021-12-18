@@ -10,15 +10,17 @@ pub(crate) type Mock = quanta::Mock;
 pub(crate) struct Instant(pub quanta::Instant);
 
 pub(crate) trait CheckedTimeOps {
-    fn checked_add(&self, duration: Duration)-> Option<Self> where Self: Sized;
-} 
+    fn checked_add(&self, duration: Duration) -> Option<Self>
+    where
+        Self: Sized;
+}
 
 impl Instant {
     pub(crate) fn new(instant: quanta::Instant) -> Instant {
         Instant(instant)
     }
 
-    pub(crate) fn now()-> Instant {
+    pub(crate) fn now() -> Instant {
         Instant(quanta::Instant::now())
     }
 }

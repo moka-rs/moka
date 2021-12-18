@@ -1,11 +1,6 @@
 //! Provides thread-safe, blocking cache implementations.
 
-use crate::common::{
-    deque::DeqNode,
-    atomic_time::AtomicInstant,
-    time::Instant,
-    AccessTime,
-};
+use crate::common::{atomic_time::AtomicInstant, deque::DeqNode, time::Instant, AccessTime};
 
 use parking_lot::Mutex;
 use std::{

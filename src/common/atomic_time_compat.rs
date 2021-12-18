@@ -1,5 +1,5 @@
-use parking_lot::RwLock;
 use super::time::Instant;
+use parking_lot::RwLock;
 
 pub(crate) struct AtomicInstant {
     instant: RwLock<Option<Instant>>,

@@ -6,10 +6,10 @@ use super::{
 };
 use crate::{
     common::{
+        atomic_time::AtomicInstant,
         deque::{CacheRegion, DeqNode, Deque},
         frequency_sketch::FrequencySketch,
-        atomic_time::AtomicInstant,
-        time::{Clock, Instant, CheckedTimeOps},
+        time::{CheckedTimeOps, Clock, Instant},
         AccessTime,
     },
     PredicateError,
@@ -520,11 +520,11 @@ where
     fn current_time_from_expiration_clock(&self) -> Instant {
         if self.has_expiration_clock.load(Ordering::Relaxed) {
             Instant::new(
-            self.expiration_clock
-                .read()
-                .as_ref()
-                .expect("Cannot get the expiration clock")
-                .now()
+                self.expiration_clock
+                    .read()
+                    .as_ref()
+                    .expect("Cannot get the expiration clock")
+                    .now(),
             )
         } else {
             Instant::now()
