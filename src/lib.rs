@@ -2,7 +2,7 @@
 #![warn(rust_2018_idioms)]
 
 //! Moka is a fast, concurrent cache library for Rust. Moka is inspired by
-//! [Caffeine][caffeine-git] (Java) and [Ristretto][ristretto-git] (Go).
+//! [Caffeine][caffeine-git] (Java).
 //!
 //! Moka provides in-memory concurrent cache implementations that support full
 //! concurrency of retrievals and a high expected concurrency for updates. <!-- , and multiple ways to bound the cache. -->
@@ -17,7 +17,6 @@
 //! is exceeded.
 //!
 //! [caffeine-git]: https://github.com/ben-manes/caffeine
-//! [ristretto-git]: https://github.com/dgraph-io/ristretto
 //! [moka-cht-crate]: https://crates.io/crates/moka-cht
 //!
 //! # Features
