@@ -1,4 +1,5 @@
 use super::Cache;
+use crate::common::builder_utils;
 
 use std::{
     collections::hash_map::RandomState,
@@ -6,8 +7,6 @@ use std::{
     marker::PhantomData,
     time::Duration,
 };
-
-const YEAR_SECONDS: u64 = 365 * 24 * 3600;
 
 /// Builds a [`Cache`][cache-struct] with various configuration knobs.
 ///
@@ -63,22 +62,15 @@ where
     }
 
     /// Builds a `Cache<K, V>`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if configured with either `time_to_live` or `time_to_idle` higher than
+    /// 1000 years. This is done to protect against overflow when computing key
+    /// expiration.
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
-        self.time_to_live.map(|d| {
-            if Duration::from_secs(1_000 * YEAR_SECONDS) < d {
-                panic!("time_to_live is longer than 1000 years");
-            } else {
-                d
-            }
-        });
-        self.time_to_idle.map(|d| {
-            if Duration::from_secs(1_000 * YEAR_SECONDS) < d {
-                panic!("time_to_idle is longer than 1000 years");
-            } else {
-                d
-            }
-        });
+        builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
         Cache::with_everything(
             self.max_capacity,
             self.initial_capacity,
@@ -89,10 +81,17 @@ where
     }
 
     /// Builds a `Cache<K, V, S>`, with the given `hasher`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if configured with either `time_to_live` or `time_to_idle` higher than
+    /// 1000 years. This is done to protect against overflow when computing key
+    /// expiration.
     pub fn build_with_hasher<S>(self, hasher: S) -> Cache<K, V, S>
     where
         S: BuildHasher + Clone,
     {
+        builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
         Cache::with_everything(
             self.max_capacity,
             self.initial_capacity,
@@ -116,6 +115,12 @@ impl<C> CacheBuilder<C> {
     ///
     /// A cached entry will be expired after the specified duration past from
     /// `insert`.
+    ///
+    /// # Panics
+    ///
+    /// `CacheBuilder::build*` methods will panic if the given `duration` is longer
+    /// than 1000 years. This is done to protect against overflow when computing key
+    /// expiration.
     pub fn time_to_live(self, duration: Duration) -> Self {
         Self {
             time_to_live: Some(duration),
@@ -127,6 +132,12 @@ impl<C> CacheBuilder<C> {
     ///
     /// A cached entry will be expired after the specified duration past from `get`
     /// or `insert`.
+    ///
+    /// # Panics
+    ///
+    /// `CacheBuilder::build*` methods will panic if the given `duration` is longer
+    /// than 1000 years. This is done to protect against overflow when computing key
+    /// expiration.
     pub fn time_to_idle(self, duration: Duration) -> Self {
         Self {
             time_to_idle: Some(duration),
@@ -167,9 +178,9 @@ mod tests {
         assert_eq!(cache.get(&'a'), Some(&"Alice"));
     }
 
-    #[tokio::test]
+    #[test]
     #[should_panic(expected = "time_to_live is longer than 1000 years")]
-    async fn build_cache_too_long_ttl() {
+    fn build_cache_too_long_ttl() {
         let thousand_years_secs: u64 = 1000 * 365 * 24 * 3600;
         let builder: CacheBuilder<Cache<char, String>> = CacheBuilder::new(100);
         let duration = Duration::from_secs(thousand_years_secs);
@@ -178,9 +189,9 @@ mod tests {
             .build();
     }
 
-    #[tokio::test]
+    #[test]
     #[should_panic(expected = "time_to_idle is longer than 1000 years")]
-    async fn build_cache_too_long_tti() {
+    fn build_cache_too_long_tti() {
         let thousand_years_secs: u64 = 1000 * 365 * 24 * 3600;
         let builder: CacheBuilder<Cache<char, String>> = CacheBuilder::new(100);
         let duration = Duration::from_secs(thousand_years_secs);
