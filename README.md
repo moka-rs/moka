@@ -404,6 +404,13 @@ following command:
 $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test --all-features
 ```
 
+**Running All Tests without Default Features**
+
+```console
+$ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
+    --no-default-features --features future
+```
+
 
 ## Road Map
 
