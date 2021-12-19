@@ -55,16 +55,18 @@ exceeded.
 
 ## Moka in Production
 
-Moka is powering production services as well as embedded devices. Here are some
-highlights:
+Moka is powering production services as well as embedded devices like home routers.
+Here are some highlights:
 
 - [crates.io](https://crates.io/): The official crate registry has been using Moka in
-  their API service to reduce the loads on PostgreSQL.
+  its API service to reduce the loads on PostgreSQL. Every time you download a crate
+  using Cargo, the API server will use the information cached in Moka. It is
+  maintaining cache hit rates of ~85% for the high-traffic download endpoints.
   ([discussions][gh-discussions-51]) (Moka used: Nov 2021 &mdash; present)
-- [aliyundrive-webdav][aliyundrive-webdav-git]: This WebDAV service for a cloud drive
-  is potentially running in hundreds of home WiFi routers with 32-bit ARMv5 or MIPS
-  based SoCs. Moka is used to cache the metadata of remote files. (Moka used: Aug
-  2021 &mdash; present)
+- [aliyundrive-webdav][aliyundrive-webdav-git]: This WebDAV gateway for a cloud drive
+  may have been deployed in hundreds of home WiFi routers, including inexpensive
+  models with 32-bit ARMv5TE or MIPS-based SoCs. Moka is used to cache the metadata
+  of remote files. (Moka used: Aug 2021 &mdash; present)
 
 [gh-discussions-51]: https://github.com/moka-rs/moka/discussions/51
 [aliyundrive-webdav-git]: https://github.com/messense/aliyundrive-webdav
@@ -308,8 +310,8 @@ fn main() {
 
 ### A note on expiration policies
 
-The cache builders will panic if configured with either time to live/ time to idle
-higher than 1000 years. This is done to protect against overflow when computing key
+The cache builders will panic if configured with either `time_to_live` or `time to idle`
+longer than 1000 years. This is done to protect against overflow when computing key
 expiration.
 
 
