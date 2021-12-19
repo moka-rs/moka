@@ -70,7 +70,7 @@ where
     /// expiration.
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
-        builder_utils::ensure_expiration_config_or_panic(self.time_to_live, self.time_to_idle);
+        builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
         Cache::with_everything(
             self.max_capacity,
             self.initial_capacity,
@@ -91,7 +91,7 @@ where
     where
         S: BuildHasher + Clone,
     {
-        builder_utils::ensure_expiration_config_or_panic(self.time_to_live, self.time_to_idle);
+        builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
         Cache::with_everything(
             self.max_capacity,
             self.initial_capacity,

@@ -2,7 +2,7 @@ use std::time::Duration;
 
 const YEAR_SECONDS: u64 = 365 * 24 * 3600;
 
-pub(crate) fn ensure_expiration_config_or_panic(
+pub(crate) fn ensure_expirations_or_panic(
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
 ) {
