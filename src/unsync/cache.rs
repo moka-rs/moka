@@ -1,9 +1,8 @@
-use super::{deques::Deques, CacheBuilder, KeyDate, KeyHashDate, ValueEntry, Weigher};
+use super::{deques::Deques, AccessTime, CacheBuilder, KeyDate, KeyHashDate, ValueEntry, Weigher};
 use crate::common::{
     deque::{CacheRegion, DeqNode, Deque},
     frequency_sketch::FrequencySketch,
     time::{CheckedTimeOps, Clock, Instant},
-    AccessTime,
 };
 
 use smallvec::SmallVec;
@@ -229,7 +228,7 @@ where
         let entry = ValueEntry::new(value);
 
         if let Some(old_entry) = self.cache.insert(Rc::clone(&key), entry) {
-            let old_policy_weight = weigh(&mut self.weigher, &key, &old_entry.value);
+            let old_policy_weight = weigh(&mut self.weigher, &key, &old_entry.value) as u64;
             self.handle_update(key, timestamp, policy_weight, old_entry, old_policy_weight);
         } else {
             let hash = self.hash(&key);
@@ -402,20 +401,20 @@ where
         deques.move_to_back_ao(entry)
     }
 
-    fn has_enough_capacity(&self, candidate_weight: u64, ws: u64) -> bool {
+    fn has_enough_capacity(&self, candidate_weight: u32, ws: u64) -> bool {
         self.max_capacity
-            .map(|limit| ws + candidate_weight <= limit)
+            .map(|limit| ws + candidate_weight as u64 <= limit)
             .unwrap_or(true)
     }
 
     fn saturating_add_to_total_weight(&mut self, weight: u64) {
         let total = &mut self.weighted_size;
-        *total = total.saturating_add(weight);
+        *total = total.saturating_add(weight as u64);
     }
 
     fn saturating_sub_from_total_weight(&mut self, weight: u64) {
         let total = &mut self.weighted_size;
-        *total = total.saturating_sub(weight);
+        *total = total.saturating_sub(weight as u64);
     }
 
     #[inline]
@@ -423,7 +422,7 @@ where
         &mut self,
         key: Rc<K>,
         hash: u64,
-        policy_weight: u64,
+        policy_weight: u32,
         timestamp: Option<Instant>,
     ) {
         let has_free_space = self.has_enough_capacity(policy_weight, self.weighted_size);
@@ -441,19 +440,19 @@ where
             if self.time_to_live.is_some() {
                 deqs.push_back_wo(KeyDate::new(key, timestamp), entry);
             }
-            self.saturating_add_to_total_weight(policy_weight);
+            self.saturating_add_to_total_weight(policy_weight as u64);
             return;
         }
 
         if let Some(max) = self.max_capacity {
-            if policy_weight > max {
+            if policy_weight as u64 > max {
                 // The candidate is too big to fit in the cache. Reject it.
                 cache.remove(&Rc::clone(&key));
                 return;
             }
         }
 
-        let mut candidate = EntrySizeAndFrequency::new(policy_weight);
+        let mut candidate = EntrySizeAndFrequency::new(policy_weight as u64);
         candidate.add_frequency(freq, hash);
 
         match Self::admit(&candidate, cache, deqs, freq, &mut self.weigher) {
@@ -485,7 +484,7 @@ where
                 }
 
                 Self::saturating_sub_from_total_weight(self, victims_weight);
-                Self::saturating_add_to_total_weight(self, policy_weight);
+                Self::saturating_add_to_total_weight(self, policy_weight as u64);
             }
             AdmissionResult::Rejected => {
                 // Remove the candidate from the cache.
@@ -585,7 +584,7 @@ where
         &mut self,
         key: Rc<K>,
         timestamp: Option<Instant>,
-        policy_weight: u64,
+        policy_weight: u32,
         old_entry: ValueEntry<K, V>,
         old_policy_weight: u64,
     ) {
@@ -600,7 +599,7 @@ where
         deqs.move_to_back_wo(entry);
 
         self.saturating_sub_from_total_weight(old_policy_weight);
-        self.saturating_add_to_total_weight(policy_weight);
+        self.saturating_add_to_total_weight(policy_weight as u64);
     }
 
     fn evict(&mut self, now: Instant) {
@@ -736,7 +735,7 @@ impl EntrySizeAndFrequency {
     }
 
     fn add_policy_weight<K, V>(&mut self, key: &K, value: &V, weigher: &mut Option<Weigher<K, V>>) {
-        self.weight += weigh(weigher, key, value);
+        self.weight += weigh(weigher, key, value) as u64;
     }
 
     fn add_frequency(&mut self, freq: &FrequencySketch, hash: u64) {
@@ -759,7 +758,7 @@ enum AdmissionResult<K> {
 // private free-standing functions
 //
 #[inline]
-fn weigh<K, V>(weigher: &mut Option<Weigher<K, V>>, key: &K, value: &V) -> u64 {
+fn weigh<K, V>(weigher: &mut Option<Weigher<K, V>>, key: &K, value: &V) -> u32 {
     weigher.as_mut().map(|w| w(key, value)).unwrap_or(1)
 }
 
@@ -810,9 +809,9 @@ mod tests {
 
     #[test]
     fn size_aware_eviction() {
-        let weigher = |_k: &&str, v: &(&str, u64)| v.1;
+        let weigher = |_k: &&str, v: &(&str, u32)| v.1;
 
-        let alice = ("alice", 10u64);
+        let alice = ("alice", 10);
         let bob = ("bob", 15);
         let cindy = ("cindy", 5);
         let david = ("david", 15);

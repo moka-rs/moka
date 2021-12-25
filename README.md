@@ -275,7 +275,7 @@ cache.get(&key);
 ## Example: Bounding a Cache with Weighted Size of Entry
 
 A `weigher` closure can be set at the cache creation time. It will calculate and
-return a weighted size (relative size) of an entry. When it is set, a cache tiers to
+return a weighted size (relative size) of an entry. When it is set, a cache tries to
 evict entries when the total weighted size exceeds its `max_capacity`.
 
 ```rust
@@ -284,16 +284,17 @@ use moka::sync::Cache;
 fn main() {
     // Evict based on the byte length of strings in the cache.
     let cache = Cache::builder()
-        // Up to 32MiB instead of 3M entries because this cache is going to have
-        // a weigher.
+        // A weigher closure takes &K and &V and returns a u32 representing the
+        // relative size of the entry. Here, we use the byte length of the value
+        // String as the size.
+        .weigher(|_key, value: &String| -> u32 { value.len() as u32 })
+        // This cache will hold up to 32MiB of values.
         .max_capacity(32 * 1024 * 1024)
-        // A weigher closure takes &K and &V and returns a u64 representing the
-        // relative size of the entry.
-        .weigher(|_key, value: &String| -> u64 { value.len() as u64 })
         .build();
     cache.insert(0, "zero".to_string());
 }
 ```
+
 
 ## Example: Expiration Policies
 

@@ -5,12 +5,11 @@ use crate::{
         thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
         time::Instant,
         unsafe_weak_pointer::UnsafeWeakPointer,
-        AccessTime,
     },
     PredicateError,
 };
 
-use super::{base_cache::Inner, KvEntry, PredicateId, PredicateIdStr, ValueEntry};
+use super::{base_cache::Inner, AccessTime, KvEntry, PredicateId, PredicateIdStr, ValueEntry};
 
 use parking_lot::{Mutex, RwLock};
 use std::{

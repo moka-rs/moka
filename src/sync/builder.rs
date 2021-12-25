@@ -232,7 +232,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     }
 
     /// Sets the weigher closure of the cache.
-    pub fn weigher(self, weigher: impl Fn(&K, &V) -> u64 + Send + Sync + 'static) -> Self {
+    pub fn weigher(self, weigher: impl Fn(&K, &V) -> u32 + Send + Sync + 'static) -> Self {
         Self {
             weigher: Some(Box::new(weigher)),
             ..self

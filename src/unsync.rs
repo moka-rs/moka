@@ -9,9 +9,16 @@ use std::{ptr::NonNull, rc::Rc};
 pub use builder::CacheBuilder;
 pub use cache::Cache;
 
-use crate::common::{deque::DeqNode, time::Instant, AccessTime};
+use crate::common::{deque::DeqNode, time::Instant};
 
-pub(crate) type Weigher<K, V> = Box<dyn FnMut(&K, &V) -> u64>;
+pub(crate) type Weigher<K, V> = Box<dyn FnMut(&K, &V) -> u32>;
+
+pub(crate) trait AccessTime {
+    fn last_accessed(&self) -> Option<Instant>;
+    fn set_last_accessed(&mut self, timestamp: Instant);
+    fn last_modified(&self) -> Option<Instant>;
+    fn set_last_modified(&mut self, timestamp: Instant);
+}
 
 pub(crate) struct KeyDate<K> {
     pub(crate) key: Rc<K>,

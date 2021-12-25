@@ -163,9 +163,9 @@ use std::{
 ///         // Up to 32MiB instead of 3M entries because this cache is going to have
 ///         // a weigher.
 ///         .max_capacity(32 * 1024 * 1024)
-///         // A weigher closure takes &K and &V and returns a u64 representing the
+///         // A weigher closure takes &K and &V and returns a u32 representing the
 ///         // relative size of the entry.
-///         .weigher(|_key, value: &String| -> u64 { value.len() as u64 })
+///         .weigher(|_key, value: &String| -> u32 { value.len() as u32 })
 ///         .build();
 ///     cache.insert(2, "two".to_string()).await;
 /// }
@@ -177,7 +177,7 @@ use std::{
 ///
 /// At the cache creation time, a weigher closure can be set by the `weigher` method
 /// of the `CacheBuilder`. A weigher closure takes `&K` and `&V` as the arguments and
-/// returns a `u64` representing the relative size of the entry:
+/// returns a `u32` representing the relative size of the entry:
 ///
 /// - If the `weigher` is _not_ set, the cache will treat each entry has the same
 ///   size of `1`. This means the cache will be bounded by the number of entries.
@@ -956,9 +956,9 @@ mod tests {
 
     #[tokio::test]
     async fn size_aware_eviction() {
-        let weigher = |_k: &&str, v: &(&str, u64)| v.1;
+        let weigher = |_k: &&str, v: &(&str, u32)| v.1;
 
-        let alice = ("alice", 10u64);
+        let alice = ("alice", 10);
         let bob = ("bob", 15);
         let cindy = ("cindy", 5);
         let david = ("david", 15);

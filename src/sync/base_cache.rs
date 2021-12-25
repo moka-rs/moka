@@ -2,7 +2,8 @@ use super::{
     deques::Deques,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
-    KeyDate, KeyHash, KeyHashDate, KvEntry, PredicateId, ReadOp, ValueEntry, Weigher, WriteOp,
+    AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, PredicateId, ReadOp, ValueEntry, Weigher,
+    WriteOp,
 };
 use crate::{
     common::{
@@ -10,7 +11,6 @@ use crate::{
         deque::{CacheRegion, DeqNode, Deque},
         frequency_sketch::FrequencySketch,
         time::{CheckedTimeOps, Clock, Instant},
-        AccessTime,
     },
     PredicateError,
 };
@@ -358,21 +358,21 @@ struct WeightedSize<'a, K, V> {
 
 impl<'a, K, V> WeightedSize<'a, K, V> {
     #[inline]
-    fn weigh(&self, key: &K, value: &V) -> u64 {
+    fn weigh(&self, key: &K, value: &V) -> u32 {
         self.weigher.map(|w| w(key, value)).unwrap_or(1)
     }
 
     #[inline]
-    fn saturating_add(&mut self, weight: u64) {
+    fn saturating_add(&mut self, weight: u32) {
         let total = &mut self.size;
-        *total = total.saturating_add(weight);
+        *total = total.saturating_add(weight as u64);
     }
 
     #[inline]
     fn saturating_sub(&mut self, key: &K, value: &V) {
         let weight = self.weigh(key, value);
         let total = &mut self.size;
-        *total = total.saturating_sub(weight);
+        *total = total.saturating_sub(weight as u64);
     }
 }
 
@@ -383,33 +383,19 @@ struct EntrySizeAndFrequency {
 }
 
 impl EntrySizeAndFrequency {
-    fn new(policy_weight: u64) -> Self {
+    fn new(policy_weight: u32) -> Self {
         Self {
-            weight: policy_weight,
+            weight: policy_weight as u64,
             ..Default::default()
         }
     }
 
     fn add_policy_weight<K, V>(&mut self, ws: &WeightedSize<'_, K, V>, key: &K, value: &V) {
-        self.weight += ws.weigh(key, value);
+        self.weight += ws.weigh(key, value) as u64;
     }
 
     fn add_frequency(&mut self, freq: &FrequencySketch, hash: u64) {
         self.freq += freq.frequency(hash) as u32;
-    }
-}
-
-struct RawTimestamps {
-    last_accessed: Arc<AtomicInstant>,
-    last_modified: Arc<AtomicInstant>,
-}
-
-impl RawTimestamps {
-    fn new<K, V>(entry: &Arc<ValueEntry<K, V>>) -> Self {
-        Self {
-            last_accessed: entry.raw_last_accessed(),
-            last_modified: entry.raw_last_modified(),
-        }
     }
 }
 
@@ -718,9 +704,9 @@ where
     V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    fn has_enough_capacity(&self, candidate_weight: u64, ws: &WeightedSize<'_, K, V>) -> bool {
+    fn has_enough_capacity(&self, candidate_weight: u32, ws: &WeightedSize<'_, K, V>) -> bool {
         self.max_capacity
-            .map(|limit| ws.size + candidate_weight <= limit)
+            .map(|limit| ws.size + candidate_weight as u64 <= limit)
             .unwrap_or(true)
     }
 
@@ -730,7 +716,7 @@ where
         let ch = &self.read_op_ch;
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Hit(hash, mut entry, timestamp)) => {
+                Ok(Hit(hash, entry, timestamp)) => {
                     freq.increment(hash);
                     entry.set_last_accessed(timestamp);
                     deqs.move_to_back_ao(&entry)
@@ -759,7 +745,7 @@ where
     fn handle_upsert(
         &self,
         kh: KeyHash<K>,
-        mut entry: Arc<ValueEntry<K, V>>,
+        entry: Arc<ValueEntry<K, V>>,
         timestamp: Instant,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
@@ -767,7 +753,6 @@ where
     ) {
         entry.set_last_accessed(timestamp);
         entry.set_last_modified(timestamp);
-        let raw_ts = RawTimestamps::new(&entry);
 
         let policy_weight = ws.weigh(&kh.key, &entry.value);
 
@@ -783,12 +768,12 @@ where
         if self.has_enough_capacity(policy_weight, ws) {
             // There are enough room in the cache (or the cache is unbounded).
             // Add the candidate to the deques.
-            self.handle_admit(kh, &entry, policy_weight, raw_ts, deqs, ws);
+            self.handle_admit(kh, &entry, policy_weight, deqs, ws);
             return;
         }
 
         if let Some(max) = self.max_capacity {
-            if policy_weight > max {
+            if policy_weight as u64 > max {
                 // The candidate is too big to fit in the cache. Reject it.
                 self.cache.remove(&Arc::clone(&kh.key));
                 return;
@@ -825,7 +810,7 @@ where
                 skipped_nodes = skipped;
 
                 // Add the candidate to the deques.
-                self.handle_admit(kh, &entry, policy_weight, raw_ts, deqs, ws);
+                self.handle_admit(kh, &entry, policy_weight, deqs, ws);
             }
             AdmissionResult::Rejected { skipped_nodes: s } => {
                 skipped_nodes = s;
@@ -924,8 +909,7 @@ where
         &self,
         kh: KeyHash<K>,
         entry: &Arc<ValueEntry<K, V>>,
-        policy_weight: u64,
-        raw_ts: RawTimestamps,
+        policy_weight: u32,
         deqs: &mut Deques<K>,
         ws: &mut WeightedSize<'_, K, V>,
     ) {
@@ -933,11 +917,11 @@ where
         ws.saturating_add(policy_weight);
         deqs.push_back_ao(
             CacheRegion::MainProbation,
-            KeyHashDate::new(kh, raw_ts.last_accessed),
+            KeyHashDate::new(kh, entry.entry_info()),
             entry,
         );
         if self.is_write_order_queue_enabled() {
-            deqs.push_back_wo(KeyDate::new(key, raw_ts.last_modified), entry);
+            deqs.push_back_wo(KeyDate::new(key, entry.entry_info()), entry);
         }
         entry.set_is_admitted(true);
     }
@@ -1017,8 +1001,8 @@ where
                 .and_then(|node| {
                     if is_expired_entry_ao(tti, va, &*node, now) {
                         Some((
-                            Some(Arc::clone(&node.element.key)),
-                            Some(&node.element.timestamp),
+                            Some(Arc::clone(node.element.key())),
+                            Some(Arc::clone(node.element.entry_info())),
                         ))
                     } else {
                         None
@@ -1082,8 +1066,8 @@ where
                 .and_then(|node| {
                     if is_expired_entry_wo(ttl, va, &*node, now) {
                         Some((
-                            Some(Arc::clone(&node.element.key)),
-                            Some(&node.element.timestamp),
+                            Some(Arc::clone(node.element.key())),
+                            Some(Arc::clone(node.element.entry_info())),
                         ))
                     } else {
                         None
@@ -1177,7 +1161,7 @@ where
 
         while len < batch_size {
             if let Some(kd) = iter.next() {
-                if let Some(ts) = kd.timestamp() {
+                if let Some(ts) = kd.last_modified() {
                     candidates.push(KeyDateLite::new(&kd.key, ts));
                     len += 1;
                 }

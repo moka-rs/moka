@@ -1,12 +1,12 @@
 //! Provides thread-safe, blocking cache implementations.
 
-use crate::common::{atomic_time::AtomicInstant, deque::DeqNode, time::Instant, AccessTime};
+use crate::common::{atomic_time::AtomicInstant, deque::DeqNode, time::Instant};
 
 use parking_lot::Mutex;
 use std::{
     ptr::NonNull,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU32, Ordering},
         Arc,
     },
 };
@@ -40,7 +40,70 @@ pub trait ConcurrentCacheExt<K, V> {
     fn sync(&self);
 }
 
-pub(crate) type Weigher<K, V> = Box<dyn Fn(&K, &V) -> u64 + Send + Sync + 'static>;
+pub(crate) type Weigher<K, V> = Box<dyn Fn(&K, &V) -> u32 + Send + Sync + 'static>;
+
+pub(crate) trait AccessTime {
+    fn last_accessed(&self) -> Option<Instant>;
+    fn set_last_accessed(&self, timestamp: Instant);
+    fn last_modified(&self) -> Option<Instant>;
+    fn set_last_modified(&self, timestamp: Instant);
+}
+
+pub(crate) trait EntryInfo: AccessTime {
+    fn is_admitted(&self) -> bool;
+    fn set_is_admitted(&self, value: bool);
+    fn reset_timestamps(&self);
+}
+
+#[derive(Default)]
+pub(crate) struct EntryInfoFull {
+    is_admitted: AtomicBool,
+    last_accessed: AtomicInstant,
+    last_modified: AtomicInstant,
+    _weighed_size: AtomicU32,
+}
+
+impl EntryInfo for EntryInfoFull {
+    #[inline]
+    fn is_admitted(&self) -> bool {
+        self.is_admitted.load(Ordering::Acquire)
+    }
+
+    #[inline]
+    fn set_is_admitted(&self, value: bool) {
+        self.is_admitted.store(value, Ordering::Release);
+    }
+
+    #[inline]
+    fn reset_timestamps(&self) {
+        self.last_accessed.reset();
+        self.last_modified.reset();
+    }
+}
+
+impl AccessTime for EntryInfoFull {
+    #[inline]
+    fn last_accessed(&self) -> Option<Instant> {
+        self.last_accessed.instant()
+    }
+
+    #[inline]
+    fn set_last_accessed(&self, timestamp: Instant) {
+        self.last_accessed.set_instant(timestamp);
+    }
+
+    #[inline]
+    fn last_modified(&self) -> Option<Instant> {
+        self.last_modified.instant()
+    }
+
+    #[inline]
+    fn set_last_modified(&self, timestamp: Instant) {
+        self.last_modified.set_instant(timestamp);
+    }
+}
+
+pub(crate) type ArcedEntryInfo = Arc<dyn EntryInfo + Send + Sync + 'static>;
 
 pub(crate) struct KeyHash<K> {
     pub(crate) key: Arc<K>,
@@ -63,33 +126,49 @@ impl<K> Clone for KeyHash<K> {
 }
 
 pub(crate) struct KeyDate<K> {
-    pub(crate) key: Arc<K>,
-    pub(crate) timestamp: Arc<AtomicInstant>,
+    key: Arc<K>,
+    entry_info: ArcedEntryInfo,
 }
 
 impl<K> KeyDate<K> {
-    pub(crate) fn new(key: Arc<K>, timestamp: Arc<AtomicInstant>) -> Self {
-        Self { key, timestamp }
+    pub(crate) fn new(key: Arc<K>, entry_info: ArcedEntryInfo) -> Self {
+        Self { key, entry_info }
     }
 
-    pub(crate) fn timestamp(&self) -> Option<Instant> {
-        self.timestamp.instant()
+    pub(crate) fn key(&self) -> &Arc<K> {
+        &self.key
+    }
+
+    pub(crate) fn entry_info(&self) -> &ArcedEntryInfo {
+        &self.entry_info
+    }
+
+    pub(crate) fn last_modified(&self) -> Option<Instant> {
+        self.entry_info.last_modified()
     }
 }
 
 pub(crate) struct KeyHashDate<K> {
-    pub(crate) key: Arc<K>,
-    pub(crate) hash: u64,
-    pub(crate) timestamp: Arc<AtomicInstant>,
+    key: Arc<K>,
+    hash: u64,
+    entry_info: Arc<dyn EntryInfo + Send + Sync + 'static>,
 }
 
 impl<K> KeyHashDate<K> {
-    pub(crate) fn new(kh: KeyHash<K>, timestamp: Arc<AtomicInstant>) -> Self {
+    pub(crate) fn new(kh: KeyHash<K>, entry_info: ArcedEntryInfo) -> Self {
         Self {
             key: kh.key,
             hash: kh.hash,
-            timestamp,
+            entry_info,
         }
+    }
+
+    pub(crate) fn key(&self) -> &Arc<K> {
+        &self.key
+    }
+
+    pub(crate) fn entry_info(&self) -> &ArcedEntryInfo {
+        &self.entry_info
     }
 }
 
@@ -120,9 +199,7 @@ unsafe impl<K> Send for DeqNodes<K> {}
 
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: V,
-    is_admitted: Arc<AtomicBool>,
-    last_accessed: Arc<AtomicInstant>,
-    last_modified: Arc<AtomicInstant>,
+    info: ArcedEntryInfo,
     nodes: Mutex<DeqNodes<K>>,
 }
 
@@ -130,9 +207,7 @@ impl<K, V> ValueEntry<K, V> {
     pub(crate) fn new(value: V) -> Self {
         Self {
             value,
-            is_admitted: Arc::new(AtomicBool::new(false)),
-            last_accessed: Default::default(),
-            last_modified: Default::default(),
+            info: Arc::new(EntryInfoFull::default()),
             nodes: Mutex::new(DeqNodes {
                 access_order_q_node: None,
                 write_order_q_node: None,
@@ -148,36 +223,28 @@ impl<K, V> ValueEntry<K, V> {
                 write_order_q_node: other_nodes.write_order_q_node,
             }
         };
-        let last_accessed = Arc::clone(&other.last_accessed);
-        let last_modified = Arc::clone(&other.last_modified);
+        let info = Arc::clone(&other.info);
         // To prevent this updated ValueEntry from being evicted by an expiration policy,
         // set the max value to the timestamps. They will be replaced with the real
         // timestamps when applying writes.
-        last_accessed.reset();
-        last_modified.reset();
+        info.reset_timestamps();
         Self {
             value,
-            is_admitted: Arc::clone(&other.is_admitted),
-            last_accessed,
-            last_modified,
+            info,
             nodes: Mutex::new(nodes),
         }
     }
 
+    pub(crate) fn entry_info(&self) -> ArcedEntryInfo {
+        Arc::clone(&self.info)
+    }
+
     pub(crate) fn is_admitted(&self) -> bool {
-        self.is_admitted.load(Ordering::Acquire)
+        self.info.is_admitted()
     }
 
     pub(crate) fn set_is_admitted(&self, value: bool) {
-        self.is_admitted.store(value, Ordering::Release);
-    }
-
-    pub(crate) fn raw_last_accessed(&self) -> Arc<AtomicInstant> {
-        Arc::clone(&self.last_accessed)
-    }
-
-    pub(crate) fn raw_last_modified(&self) -> Arc<AtomicInstant> {
-        Arc::clone(&self.last_modified)
+        self.info.set_is_admitted(value);
     }
 
     pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
@@ -214,22 +281,22 @@ impl<K, V> ValueEntry<K, V> {
 impl<K, V> AccessTime for Arc<ValueEntry<K, V>> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
-        self.last_accessed.instant()
+        self.info.last_accessed()
     }
 
     #[inline]
-    fn set_last_accessed(&mut self, timestamp: Instant) {
-        self.last_accessed.set_instant(timestamp);
+    fn set_last_accessed(&self, timestamp: Instant) {
+        self.info.set_last_accessed(timestamp);
     }
 
     #[inline]
     fn last_modified(&self) -> Option<Instant> {
-        self.last_modified.instant()
+        self.info.last_modified()
     }
 
     #[inline]
-    fn set_last_modified(&mut self, timestamp: Instant) {
-        self.last_modified.set_instant(timestamp);
+    fn set_last_modified(&self, timestamp: Instant) {
+        self.info.set_last_modified(timestamp);
     }
 }
 
@@ -240,30 +307,30 @@ impl<K> AccessTime for DeqNode<KeyDate<K>> {
     }
 
     #[inline]
-    fn set_last_accessed(&mut self, _timestamp: Instant) {
+    fn set_last_accessed(&self, _timestamp: Instant) {
         unreachable!();
     }
 
     #[inline]
     fn last_modified(&self) -> Option<Instant> {
-        self.element.timestamp.instant()
+        self.element.entry_info.last_modified()
     }
 
     #[inline]
-    fn set_last_modified(&mut self, timestamp: Instant) {
-        self.element.timestamp.set_instant(timestamp);
+    fn set_last_modified(&self, timestamp: Instant) {
+        self.element.entry_info.set_last_modified(timestamp);
     }
 }
 
 impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
-        self.element.timestamp.instant()
+        self.element.entry_info.last_accessed()
     }
 
     #[inline]
-    fn set_last_accessed(&mut self, timestamp: Instant) {
-        self.element.timestamp.set_instant(timestamp);
+    fn set_last_accessed(&self, timestamp: Instant) {
+        self.element.entry_info.set_last_accessed(timestamp);
     }
 
     #[inline]
@@ -272,7 +339,7 @@ impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
     }
 
     #[inline]
-    fn set_last_modified(&mut self, _timestamp: Instant) {
+    fn set_last_modified(&self, _timestamp: Instant) {
         unreachable!();
     }
 }
