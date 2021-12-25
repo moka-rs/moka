@@ -4,12 +4,13 @@
 //! Moka is a fast, concurrent cache library for Rust. Moka is inspired by
 //! [Caffeine][caffeine-git] (Java).
 //!
-//! Moka provides in-memory concurrent cache implementations that support full
-//! concurrency of retrievals and a high expected concurrency for updates. <!-- , and multiple ways to bound the cache. -->
+//! Moka provides in-memory concurrent cache implementations on top of hash maps.
+//! They support full concurrency of retrievals and a high expected concurrency for
+//! updates. <!-- , and multiple ways to bound the cache. -->
 //! They utilize a lock-free concurrent hash table `SegmentedHashMap` from the
 //! [moka-cht][moka-cht-crate] crate for the central key-value storage.
 //!
-//! Moka also provides an in-memory, not thread-safe cache implementation for single
+//! Moka also provides an in-memory, non-thread-safe cache implementation for single
 //! thread applications.
 //!
 //! All cache implementations perform a best-effort bounding of the map using an
@@ -40,7 +41,7 @@
 //!
 //! See the following document:
 //!
-//! - Thread-safe, blocking caches:
+//! - Thread-safe, synchronous caches:
 //!     - [`sync::Cache`][sync-cache-struct] and
 //!       [`sync::SegmentedCache`][sync-seg-cache-struct].
 //! - An asynchronous (futures aware) cache:

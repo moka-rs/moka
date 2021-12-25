@@ -7,6 +7,10 @@
 - Remove `Send` and `'static` bounds from `get_or_insert_with` and
   `get_or_try_insert_with` methods of `future::Cache`. ([#53][gh-pull-0053])
 
+### Fixed
+
+- Protect overflow when computing expiration. ([#56][gh-pull-0056])
+
 
 ## Version 0.6.1
 
@@ -161,14 +165,16 @@
 
 [resolving-error-on-32bit]: https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
 
-[gh-pull-0053]: https://github.com/moka-rs/moka/pull/53
-[gh-pull-0047]: https://github.com/moka-rs/moka/pull/47/
 [gh-issue-0043]: https://github.com/moka-rs/moka/issues/43/
-[gh-pull-0042]: https://github.com/moka-rs/moka/pull/42/
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
+[gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
+
+[gh-pull-0056]: https://github.com/moka-rs/moka/pull/56/
+[gh-pull-0053]: https://github.com/moka-rs/moka/pull/53/
+[gh-pull-0047]: https://github.com/moka-rs/moka/pull/47/
+[gh-pull-0042]: https://github.com/moka-rs/moka/pull/42/
 [gh-pull-0037]: https://github.com/moka-rs/moka/pull/37/
 [gh-pull-0033]: https://github.com/moka-rs/moka/pull/33/
-[gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 [gh-pull-0030]: https://github.com/moka-rs/moka/pull/30/
 [gh-pull-0028]: https://github.com/moka-rs/moka/pull/28/
 [gh-pull-0024]: https://github.com/moka-rs/moka/pull/24/

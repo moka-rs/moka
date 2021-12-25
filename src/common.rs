@@ -1,3 +1,4 @@
+pub(crate) mod builder_utils;
 pub(crate) mod deque;
 pub(crate) mod error;
 pub(crate) mod frequency_sketch;

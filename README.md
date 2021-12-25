@@ -11,9 +11,9 @@
 Moka is a fast, concurrent cache library for Rust. Moka is inspired by
 [Caffeine][caffeine-git] (Java).
 
-Moka provides cache implementations that support full concurrency of retrievals and
-a high expected concurrency for updates. Moka also provides a not thread-safe cache
-implementation for single thread applications.
+Moka provides cache implementations on top of hash maps. They support full
+concurrency of retrievals and a high expected concurrency for updates. Moka also
+provides a non-thread-safe cache implementation for single thread applications.
 
 All caches perform a best-effort bounding of a hash map using an entry replacement
 algorithm to determine which entries to evict when the capacity is exceeded.
@@ -56,16 +56,17 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 
 ## Moka in Production
 
-Moka is powering production services as well as embedded devices. Here are some
-highlights:
+Moka is powering production services as well as embedded devices like home routers.
+Here are some highlights:
 
 - [crates.io](https://crates.io/): The official crate registry has been using Moka in
-  their API service to reduce the loads on PostgreSQL.
-  ([discussions][gh-discussions-51]) (Moka used: Nov 2021 &mdash; present)
-- [aliyundrive-webdav][aliyundrive-webdav-git]: This WebDAV service for a cloud drive
-  is potentially running in hundreds of home WiFi routers with 32-bit ARMv5 or MIPS
-  based SoCs. Moka is used to cache the metadata of remote files. (Moka used: Aug
-  2021 &mdash; present)
+  its API service to reduce the loads on PostgreSQL. Moka is maintaining
+  [cache hit rates of ~85%][gh-discussions-51] for the high-traffic download endpoint.
+  (Moka used: Nov 2021 &mdash; present)
+- [aliyundrive-webdav][aliyundrive-webdav-git]: This WebDAV gateway for a cloud drive
+  may have been deployed in hundreds of home WiFi routers, including inexpensive
+  models with 32-bit MIPS or ARMv5TE-based SoCs. Moka is used to cache the metadata
+  of remote files. (Moka used: Aug 2021 &mdash; present)
 
 [gh-discussions-51]: https://github.com/moka-rs/moka/discussions/51
 [aliyundrive-webdav-git]: https://github.com/messense/aliyundrive-webdav
@@ -331,8 +332,8 @@ fn main() {
 
 ### A note on expiration policies
 
-The cache builders will panic if configured with either time to live/ time to idle
-higher than 1000 years. This is done to protect against overflow when computing key
+The cache builders will panic if configured with either `time_to_live` or `time to idle`
+longer than 1000 years. This is done to protect against overflow when computing key
 expiration.
 
 
@@ -425,6 +426,13 @@ following command:
 
 ```console
 $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test --all-features
+```
+
+**Running All Tests without Default Features**
+
+```console
+$ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
+    --no-default-features --features future
 ```
 
 
