@@ -53,14 +53,26 @@ pub(crate) trait EntryInfo: AccessTime {
     fn is_admitted(&self) -> bool;
     fn set_is_admitted(&self, value: bool);
     fn reset_timestamps(&self);
+    fn weighted_size(&self) -> u32;
+    fn set_weighted_size(&self, size: u32);
 }
 
-#[derive(Default)]
 pub(crate) struct EntryInfoFull {
     is_admitted: AtomicBool,
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
-    _weighed_size: AtomicU32,
+    weighted_size: AtomicU32,
+}
+
+impl EntryInfoFull {
+    fn new(weighted_size: u32) -> Self {
+        Self {
+            is_admitted: Default::default(),
+            last_accessed: Default::default(),
+            last_modified: Default::default(),
+            weighted_size: AtomicU32::new(weighted_size),
+        }
+    }
 }
 
 impl EntryInfo for EntryInfoFull {
@@ -78,6 +90,16 @@ impl EntryInfo for EntryInfoFull {
     fn reset_timestamps(&self) {
         self.last_accessed.reset();
         self.last_modified.reset();
+    }
+
+    #[inline]
+    fn weighted_size(&self) -> u32 {
+        self.weighted_size.load(Ordering::Acquire)
+    }
+
+    #[inline]
+    fn set_weighted_size(&self, size: u32) {
+        self.weighted_size.store(size, Ordering::Release);
     }
 }
 
@@ -131,8 +153,11 @@ pub(crate) struct KeyDate<K> {
 }
 
 impl<K> KeyDate<K> {
-    pub(crate) fn new(key: Arc<K>, entry_info: ArcedEntryInfo) -> Self {
-        Self { key, entry_info }
+    pub(crate) fn new(key: Arc<K>, entry_info: &ArcedEntryInfo) -> Self {
+        Self {
+            key,
+            entry_info: Arc::clone(entry_info),
+        }
     }
 
     pub(crate) fn key(&self) -> &Arc<K> {
@@ -155,11 +180,11 @@ pub(crate) struct KeyHashDate<K> {
 }
 
 impl<K> KeyHashDate<K> {
-    pub(crate) fn new(kh: KeyHash<K>, entry_info: ArcedEntryInfo) -> Self {
+    pub(crate) fn new(kh: KeyHash<K>, entry_info: &ArcedEntryInfo) -> Self {
         Self {
             key: kh.key,
             hash: kh.hash,
-            entry_info,
+            entry_info: Arc::clone(entry_info),
         }
     }
 
@@ -204,10 +229,10 @@ pub(crate) struct ValueEntry<K, V> {
 }
 
 impl<K, V> ValueEntry<K, V> {
-    pub(crate) fn new(value: V) -> Self {
+    pub(crate) fn new(value: V, weighted_size: u32) -> Self {
         Self {
             value,
-            info: Arc::new(EntryInfoFull::default()),
+            info: Arc::new(EntryInfoFull::new(weighted_size)),
             nodes: Mutex::new(DeqNodes {
                 access_order_q_node: None,
                 write_order_q_node: None,
@@ -215,7 +240,7 @@ impl<K, V> ValueEntry<K, V> {
         }
     }
 
-    pub(crate) fn new_with(value: V, other: &Self) -> Self {
+    pub(crate) fn new_with(value: V, weighted_size: u32, other: &Self) -> Self {
         let nodes = {
             let other_nodes = other.nodes.lock();
             DeqNodes {
@@ -224,6 +249,7 @@ impl<K, V> ValueEntry<K, V> {
             }
         };
         let info = Arc::clone(&other.info);
+        info.set_weighted_size(weighted_size);
         // To prevent this updated ValueEntry from being evicted by an expiration policy,
         // set the max value to the timestamps. They will be replaced with the real
         // timestamps when applying writes.
@@ -235,8 +261,8 @@ impl<K, V> ValueEntry<K, V> {
         }
     }
 
-    pub(crate) fn entry_info(&self) -> ArcedEntryInfo {
-        Arc::clone(&self.info)
+    pub(crate) fn entry_info(&self) -> &ArcedEntryInfo {
+        &self.info
     }
 
     pub(crate) fn is_admitted(&self) -> bool {
@@ -245,6 +271,11 @@ impl<K, V> ValueEntry<K, V> {
 
     pub(crate) fn set_is_admitted(&self, value: bool) {
         self.info.set_is_admitted(value);
+    }
+
+    #[inline]
+    pub(crate) fn weighted_size(&self) -> u32 {
+        self.info.weighted_size()
     }
 
     pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
@@ -351,6 +382,16 @@ pub(crate) enum ReadOp<K, V> {
 }
 
 pub(crate) enum WriteOp<K, V> {
-    Upsert(KeyHash<K>, Arc<ValueEntry<K, V>>),
+    Insert {
+        key_hash: KeyHash<K>,
+        value_entry: Arc<ValueEntry<K, V>>,
+        new_weighted_size: u32,
+    },
+    Update {
+        key_hash: KeyHash<K>,
+        value_entry: Arc<ValueEntry<K, V>>,
+        old_weighted_size: u32,
+        new_weighted_size: u32,
+    },
     Remove(KvEntry<K, V>),
 }
