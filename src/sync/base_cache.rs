@@ -258,9 +258,10 @@ where
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((
                     cnt,
-                    WriteOp::Insert {
+                    WriteOp::Upsert {
                         key_hash: KeyHash::new(Arc::clone(&key), hash),
                         value_entry: Arc::clone(&entry),
+                        old_weighted_size: 0,
                         new_weighted_size: ws,
                     },
                 ));
@@ -277,7 +278,7 @@ where
                 op2 = Some((
                     cnt,
                     Arc::clone(old_entry),
-                    WriteOp::Update {
+                    WriteOp::Upsert {
                         key_hash: KeyHash::new(Arc::clone(&key), hash),
                         value_entry: Arc::clone(&entry),
                         old_weighted_size,
@@ -738,12 +739,7 @@ where
 
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Insert {
-                    key_hash: kh,
-                    value_entry: entry,
-                    new_weighted_size: new_size,
-                }) => self.handle_upsert(kh, entry, 0, new_size, ts, deqs, &freq, ws),
-                Ok(Update {
+                Ok(Upsert {
                     key_hash: kh,
                     value_entry: entry,
                     old_weighted_size: old_size,

@@ -382,12 +382,7 @@ pub(crate) enum ReadOp<K, V> {
 }
 
 pub(crate) enum WriteOp<K, V> {
-    Insert {
-        key_hash: KeyHash<K>,
-        value_entry: Arc<ValueEntry<K, V>>,
-        new_weighted_size: u32,
-    },
-    Update {
+    Upsert {
         key_hash: KeyHash<K>,
         value_entry: Arc<ValueEntry<K, V>>,
         old_weighted_size: u32,
