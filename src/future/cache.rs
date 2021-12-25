@@ -963,6 +963,7 @@ mod tests {
 
         let alice = ("alice", 10);
         let bob = ("bob", 15);
+        let bill = ("bill", 20);
         let cindy = ("cindy", 5);
         let david = ("david", 15);
         let dennis = ("dennis", 15);
@@ -1016,6 +1017,12 @@ mod tests {
         assert_eq!(cache.get(&"b"), Some(bob));
         assert_eq!(cache.get(&"c"), None);
         assert_eq!(cache.get(&"d"), Some(dennis));
+
+        // Update "b" with "bill" (w: 20). This should evict "d" (w: 15).
+        cache.insert("b", bill).await;
+        cache.sync();
+        assert_eq!(cache.get(&"b"), Some(bill));
+        assert_eq!(cache.get(&"d"), None);
     }
 
     #[tokio::test]

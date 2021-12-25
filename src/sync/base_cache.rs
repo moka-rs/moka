@@ -669,7 +669,7 @@ where
         }
 
         if self.has_expiry() || self.has_valid_after() {
-            self.evict(&mut deqs, EVICTION_BATCH_SIZE, &mut ws);
+            self.evict_expired(&mut deqs, EVICTION_BATCH_SIZE, &mut ws);
         }
 
         if self.invalidator_enabled {
@@ -683,6 +683,12 @@ where
                     );
                 }
             }
+        }
+
+        // Evict if this cache has more entries than its capacity.
+        let weights_to_evict = self.weights_to_evict(&ws);
+        if weights_to_evict > 0 {
+            self.evict_lru_entries(&mut deqs, EVICTION_BATCH_SIZE, weights_to_evict, &mut ws);
         }
 
         debug_assert_eq!(self.weighted_size.load(), current_ws);
@@ -712,6 +718,12 @@ where
         self.max_capacity
             .map(|limit| ws.0 + candidate_weight as u64 <= limit)
             .unwrap_or(true)
+    }
+
+    fn weights_to_evict(&self, ws: &WeightedSize) -> u64 {
+        self.max_capacity
+            .map(|limit| ws.0.saturating_sub(limit))
+            .unwrap_or_default()
     }
 
     fn apply_reads(&self, deqs: &mut Deques<K>, count: usize) {
@@ -960,7 +972,7 @@ where
         entry.unset_q_nodes();
     }
 
-    fn evict(&self, deqs: &mut Deques<K>, batch_size: usize, ws: &mut WeightedSize) {
+    fn evict_expired(&self, deqs: &mut Deques<K>, batch_size: usize, ws: &mut WeightedSize) {
         let now = self.current_time_from_expiration_clock();
 
         if self.is_write_order_queue_enabled() {
@@ -998,19 +1010,13 @@ where
         let va = &self.valid_after();
         for _ in 0..batch_size {
             // Peek the front node of the deque and check if it is expired.
-            let (key, _ts) = deq
-                .peek_front()
-                .and_then(|node| {
-                    if is_expired_entry_ao(tti, va, &*node, now) {
-                        Some((
-                            Some(Arc::clone(node.element.key())),
-                            Some(Arc::clone(node.element.entry_info())),
-                        ))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default();
+            let key = deq.peek_front().and_then(|node| {
+                if is_expired_entry_ao(tti, va, &*node, now) {
+                    Some(Arc::clone(node.element.key()))
+                } else {
+                    None
+                }
+            });
 
             if key.is_none() {
                 break;
@@ -1028,26 +1034,40 @@ where
 
             if let Some(entry) = maybe_entry {
                 Self::handle_remove_with_deques(deq_name, deq, write_order_deq, entry, ws);
-            } else if let Some(entry) = self.cache.get(key) {
-                let ts = entry.last_accessed();
-                if ts.is_none() {
-                    // The key exists and the entry has been updated.
-                    Deques::move_to_back_ao_in_deque(deq_name, deq, &entry);
-                    Deques::move_to_back_wo_in_deque(write_order_deq, &entry);
-                } else {
-                    // The key exists but something unexpected. Break.
-                    break;
-                }
-            } else {
-                // Skip this entry as the key might have been invalidated. Since the
-                // invalidated ValueEntry (which should be still in the write op
-                // queue) has a pointer to this node, move the node to the back of
-                // the deque instead of popping (dropping) it.
-                if let Some(node) = deq.peek_front() {
-                    let node = NonNull::from(node);
-                    unsafe { deq.move_to_back(node) };
-                }
+            } else if !self.try_skip_updated_entry(key, deq_name, deq, write_order_deq) {
+                break;
             }
+        }
+    }
+
+    #[inline]
+    fn try_skip_updated_entry(
+        &self,
+        key: &K,
+        deq_name: &str,
+        deq: &mut Deque<KeyHashDate<K>>,
+        write_order_deq: &mut Deque<KeyDate<K>>,
+    ) -> bool {
+        if let Some(entry) = self.cache.get(key) {
+            if entry.last_accessed().is_none() {
+                // The key exists and the entry has been updated.
+                Deques::move_to_back_ao_in_deque(deq_name, deq, &entry);
+                Deques::move_to_back_wo_in_deque(write_order_deq, &entry);
+                true
+            } else {
+                // The key exists but something unexpected.
+                false
+            }
+        } else {
+            // Skip this entry as the key might have been invalidated. Since the
+            // invalidated ValueEntry (which should be still in the write op
+            // queue) has a pointer to this node, move the node to the back of
+            // the deque instead of popping (dropping) it.
+            if let Some(node) = deq.peek_front() {
+                let node = NonNull::from(node);
+                unsafe { deq.move_to_back(node) };
+            }
+            true
         }
     }
 
@@ -1062,20 +1082,13 @@ where
         let ttl = &self.time_to_live;
         let va = &self.valid_after();
         for _ in 0..batch_size {
-            let (key, _ts) = deqs
-                .write_order
-                .peek_front()
-                .and_then(|node| {
-                    if is_expired_entry_wo(ttl, va, &*node, now) {
-                        Some((
-                            Some(Arc::clone(node.element.key())),
-                            Some(Arc::clone(node.element.entry_info())),
-                        ))
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_default();
+            let key = deqs.write_order.peek_front().and_then(|node| {
+                if is_expired_entry_wo(ttl, va, &*node, now) {
+                    Some(Arc::clone(node.element.key()))
+                } else {
+                    None
+                }
+            });
 
             if key.is_none() {
                 break;
@@ -1090,8 +1103,7 @@ where
             if let Some(entry) = maybe_entry {
                 Self::handle_remove(deqs, entry, ws);
             } else if let Some(entry) = self.cache.get(key) {
-                let ts = entry.last_modified();
-                if ts.is_none() {
+                if entry.last_modified().is_none() {
                     deqs.move_to_back_ao(&entry);
                     deqs.move_to_back_wo(&entry);
                 } else {
@@ -1175,6 +1187,59 @@ where
         if len > 0 {
             let is_truncated = len == batch_size && iter.peek().is_some();
             invalidator.submit_task(candidates, is_truncated);
+        }
+    }
+
+    fn evict_lru_entries(
+        &self,
+        deqs: &mut Deques<K>,
+        batch_size: usize,
+        weights_to_evict: u64,
+        ws: &mut WeightedSize,
+    ) {
+        const DEQ_NAME: &str = "probation";
+        let mut evicted = 0u64;
+        let (deq, write_order_deq) = (&mut deqs.probation, &mut deqs.write_order);
+
+        for _ in 0..batch_size {
+            let maybe_key_and_ts = deq.peek_front().map(|node| {
+                (
+                    Arc::clone(node.element.key()),
+                    node.element.entry_info().last_modified(),
+                )
+            });
+
+            let (key, ts) = match maybe_key_and_ts {
+                Some((key, Some(ts))) => (key, ts),
+                Some((key, None)) => {
+                    if self.try_skip_updated_entry(&key, DEQ_NAME, deq, write_order_deq) {
+                        continue;
+                    } else {
+                        break;
+                    }
+                }
+                None => break,
+            };
+
+            let maybe_entry = self.cache.remove_if(&key, |_, v| {
+                if let Some(lm) = v.last_modified() {
+                    lm == ts
+                } else {
+                    false
+                }
+            });
+
+            if let Some(entry) = maybe_entry {
+                let weight = entry.weighted_size();
+                Self::handle_remove_with_deques(DEQ_NAME, deq, write_order_deq, entry, ws);
+                evicted += weight as u64;
+            } else if !self.try_skip_updated_entry(&key, DEQ_NAME, deq, write_order_deq) {
+                break;
+            }
+
+            if evicted >= weights_to_evict {
+                break;
+            }
         }
     }
 }

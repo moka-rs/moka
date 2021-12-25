@@ -164,10 +164,6 @@ impl<K> KeyDate<K> {
         &self.key
     }
 
-    pub(crate) fn entry_info(&self) -> &ArcedEntryInfo {
-        &self.entry_info
-    }
-
     pub(crate) fn last_modified(&self) -> Option<Instant> {
         self.entry_info.last_modified()
     }
