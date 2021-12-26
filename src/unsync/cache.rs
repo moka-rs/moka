@@ -16,6 +16,8 @@ use std::{
     time::Duration,
 };
 
+const EVICTION_BATCH_SIZE: usize = 100;
+
 type CacheStore<K, V, S> = std::collections::HashMap<Rc<K>, ValueEntry<K, V>, S>;
 
 /// An in-memory cache that is _not_ thread-safe.
@@ -193,7 +195,8 @@ where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let timestamp = self.evict_if_needed();
+        let timestamp = self.evict_expired_if_needed();
+        self.evict_lru_entries();
         self.frequency_sketch.increment(self.hash(key));
 
         match (self.cache.get_mut(key), timestamp, &mut self.deques) {
@@ -222,7 +225,8 @@ where
     ///
     /// If the cache has this key present, the value is updated.
     pub fn insert(&mut self, key: K, value: V) {
-        let timestamp = self.evict_if_needed();
+        let timestamp = self.evict_expired_if_needed();
+        self.evict_lru_entries();
         let policy_weight = weigh(&mut self.weigher, &key, &value);
         let key = Rc::new(key);
         let entry = ValueEntry::new(value);
@@ -245,7 +249,8 @@ where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.evict_if_needed();
+        self.evict_expired_if_needed();
+        self.evict_lru_entries();
 
         // TODO: Update the weighted_size.
         if let Some(mut entry) = self.cache.remove(key) {
@@ -343,10 +348,10 @@ where
     }
 
     #[inline]
-    fn evict_if_needed(&mut self) -> Option<Instant> {
+    fn evict_expired_if_needed(&mut self) -> Option<Instant> {
         if self.has_expiry() {
             let ts = self.current_time_from_expiration_clock();
-            self.evict(ts);
+            self.evict_expired(ts);
             Some(ts)
         } else {
             None
@@ -405,6 +410,12 @@ where
         self.max_capacity
             .map(|limit| ws + candidate_weight as u64 <= limit)
             .unwrap_or(true)
+    }
+
+    fn weights_to_evict(&self) -> u64 {
+        self.max_capacity
+            .map(|limit| self.weighted_size.saturating_sub(limit))
+            .unwrap_or_default()
     }
 
     fn saturating_add_to_total_weight(&mut self, weight: u64) {
@@ -596,27 +607,29 @@ where
         }
         let deqs = &mut self.deques;
         deqs.move_to_back_ao(entry);
-        deqs.move_to_back_wo(entry);
+        if self.time_to_live.is_some() {
+            deqs.move_to_back_wo(entry);
+        }
 
         self.saturating_sub_from_total_weight(old_policy_weight);
         self.saturating_add_to_total_weight(policy_weight as u64);
     }
 
-    fn evict(&mut self, now: Instant) {
-        const EVICTION_BATCH_SIZE: usize = 100;
-
+    fn evict_expired(&mut self, now: Instant) {
         if self.time_to_live.is_some() {
-            self.remove_expired_wo(EVICTION_BATCH_SIZE, now);
+            let evicted = self.remove_expired_wo(EVICTION_BATCH_SIZE, now);
+            self.saturating_sub_from_total_weight(evicted);
         }
 
         if self.time_to_idle.is_some() {
             let deqs = &mut self.deques;
-            let (window, probation, protected, wo, cache, time_to_idle) = (
+            let (window, probation, protected, wo, cache, weigher, time_to_idle) = (
                 &mut deqs.window,
                 &mut deqs.probation,
                 &mut deqs.protected,
                 &mut deqs.write_order,
                 &mut self.cache,
+                &mut self.weigher,
                 &self.time_to_idle,
             );
 
@@ -627,18 +640,23 @@ where
                     wo,
                     cache,
                     time_to_idle,
+                    weigher,
                     EVICTION_BATCH_SIZE,
                     now,
                 )
             };
 
-            rm_expired_ao("window", window);
-            rm_expired_ao("probation", probation);
-            rm_expired_ao("protected", protected);
+            let evicted1 = rm_expired_ao("window", window);
+            let evicted2 = rm_expired_ao("probation", probation);
+            let evicted3 = rm_expired_ao("protected", protected);
+
+            self.saturating_sub_from_total_weight(evicted1);
+            self.saturating_sub_from_total_weight(evicted2);
+            self.saturating_sub_from_total_weight(evicted3);
         }
     }
 
-    // TODO: Update the weighted_size.
+    #[allow(clippy::too_many_arguments)]
     #[inline]
     fn remove_expired_ao(
         deq_name: &str,
@@ -646,9 +664,12 @@ where
         write_order_deq: &mut Deque<KeyDate<K>>,
         cache: &mut CacheStore<K, V, S>,
         time_to_idle: &Option<Duration>,
+        weigher: &mut Option<Weigher<K, V>>,
         batch_size: usize,
         now: Instant,
-    ) {
+    ) -> u64 {
+        let mut evicted = 0u64;
+
         for _ in 0..batch_size {
             let key = deq
                 .peek_front()
@@ -665,19 +686,26 @@ where
                 break;
             }
 
-            if let Some(mut entry) = cache.remove(&key.unwrap()) {
+            let key = key.unwrap();
+
+            if let Some(mut entry) = cache.remove(&key) {
+                let weight = weigh(weigher, &key, &entry.value);
                 Deques::unlink_ao_from_deque(deq_name, deq, &mut entry);
                 Deques::unlink_wo(write_order_deq, &mut entry);
+                evicted = evicted.saturating_add(weight as u64);
             } else {
                 deq.pop_front();
             }
         }
+
+        evicted
     }
 
-    // TODO: Update the weighted_size.
     #[inline]
-    fn remove_expired_wo(&mut self, batch_size: usize, now: Instant) {
+    fn remove_expired_wo(&mut self, batch_size: usize, now: Instant) -> u64 {
+        let mut evicted = 0u64;
         let time_to_live = &self.time_to_live;
+
         for _ in 0..batch_size {
             let key = self
                 .deques
@@ -696,13 +724,59 @@ where
                 break;
             }
 
-            if let Some(mut entry) = self.cache.remove(&key.unwrap()) {
+            let key = key.unwrap();
+
+            if let Some(mut entry) = self.cache.remove(&key) {
+                let weight = weigh(&mut self.weigher, &key, &entry.value);
                 self.deques.unlink_ao(&mut entry);
                 Deques::unlink_wo(&mut self.deques.write_order, &mut entry);
+                evicted = evicted.saturating_sub(weight as u64);
             } else {
                 self.deques.write_order.pop_front();
             }
         }
+
+        evicted
+    }
+
+    #[inline]
+    fn evict_lru_entries(&mut self) {
+        const DEQ_NAME: &str = "probation";
+
+        let weights_to_evict = self.weights_to_evict();
+        let mut evicted = 0u64;
+
+        {
+            let deqs = &mut self.deques;
+            let (probation, wo, cache) =
+                (&mut deqs.probation, &mut deqs.write_order, &mut self.cache);
+
+            for _ in 0..EVICTION_BATCH_SIZE {
+                if evicted >= weights_to_evict {
+                    break;
+                }
+
+                let key = probation
+                    .peek_front()
+                    .map(|node| Rc::clone(&node.element.key));
+
+                if key.is_none() {
+                    break;
+                }
+                let key = key.unwrap();
+
+                if let Some(mut entry) = cache.remove(&key) {
+                    let weight = weigh(&mut self.weigher, &key, &entry.value);
+                    Deques::unlink_ao_from_deque(DEQ_NAME, probation, &mut entry);
+                    Deques::unlink_wo(wo, &mut entry);
+                    evicted = evicted.saturating_add(weight as u64);
+                } else {
+                    probation.pop_front();
+                }
+            }
+        }
+
+        self.saturating_sub_from_total_weight(evicted);
     }
 }
 
@@ -813,6 +887,7 @@ mod tests {
 
         let alice = ("alice", 10);
         let bob = ("bob", 15);
+        let bill = ("bill", 20);
         let cindy = ("cindy", 5);
         let david = ("david", 15);
         let dennis = ("dennis", 15);
@@ -854,6 +929,11 @@ mod tests {
         assert_eq!(cache.get(&"b"), Some(&bob));
         assert_eq!(cache.get(&"c"), None);
         assert_eq!(cache.get(&"d"), Some(&dennis));
+
+        // Update "b" with "bill" (w: 20). This should evict "d" (w: 15).
+        cache.insert("b", bill);
+        assert_eq!(cache.get(&"b"), Some(&bill));
+        assert_eq!(cache.get(&"d"), None);
     }
 
     #[test]

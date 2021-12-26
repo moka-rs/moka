@@ -1202,6 +1202,10 @@ where
         let (deq, write_order_deq) = (&mut deqs.probation, &mut deqs.write_order);
 
         for _ in 0..batch_size {
+            if evicted >= weights_to_evict {
+                break;
+            }
+
             let maybe_key_and_ts = deq.peek_front().map(|node| {
                 (
                     Arc::clone(node.element.key()),
@@ -1232,12 +1236,8 @@ where
             if let Some(entry) = maybe_entry {
                 let weight = entry.weighted_size();
                 Self::handle_remove_with_deques(DEQ_NAME, deq, write_order_deq, entry, ws);
-                evicted += weight as u64;
+                evicted = evicted.saturating_add(weight as u64);
             } else if !self.try_skip_updated_entry(&key, DEQ_NAME, deq, write_order_deq) {
-                break;
-            }
-
-            if evicted >= weights_to_evict {
                 break;
             }
         }
