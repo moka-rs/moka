@@ -1,9 +1,10 @@
 use super::{
     deques::Deques,
+    entry_info::EntryInfoWo,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
-    AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, PredicateId, ReadOp, ValueEntry, Weigher,
-    WriteOp,
+    AccessTime, EntryInfoFull, KeyDate, KeyHash, KeyHashDate, KvEntry, PredicateId, ReadOp,
+    ValueEntry, ValueEntryBuilder, ValueEntryBuilderImpl, Weigher, WriteOp,
 };
 use crate::{
     common::{
@@ -254,7 +255,8 @@ where
             Arc::clone(&key),
             // on_insert
             || {
-                let entry = Arc::new(ValueEntry::new(value.clone(), ws));
+                // let entry = Arc::new(ValueEntry::new(value.clone(), ws));
+                let entry = self.new_value_entry(value.clone(), ws);
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((
                     cnt,
@@ -273,7 +275,8 @@ where
                 // to prevent this updated ValueEntry from being evicted by an expiration policy.
                 // See the comments in `new_with` for more details.
                 let old_weight = old_entry.policy_weight();
-                let entry = Arc::new(ValueEntry::new_with(value.clone(), ws, old_entry));
+                // let entry = Arc::new(ValueEntry::new_with(value.clone(), ws, old_entry));
+                let entry = self.new_value_entry_from(value.clone(), ws, old_entry);
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((
                     cnt,
@@ -305,6 +308,25 @@ where
             }
             (None, None) => unreachable!(),
         }
+    }
+
+    #[inline]
+    fn new_value_entry(&self, value: V, policy_weight: u32) -> Arc<ValueEntry<K, V>> {
+        Arc::new(self.inner.value_entry_builder.build(value, policy_weight))
+    }
+
+    #[inline]
+    fn new_value_entry_from(
+        &self,
+        value: V,
+        policy_weight: u32,
+        other: &ValueEntry<K, V>,
+    ) -> Arc<ValueEntry<K, V>> {
+        Arc::new(
+            self.inner
+                .value_entry_builder
+                .build_from(value, policy_weight, other),
+        )
     }
 
     #[inline]
@@ -419,11 +441,14 @@ type CacheStore<K, V, S> = moka_cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, 
 
 type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
 
+type ArcValueEntryBuilder<K, V> = Arc<dyn ValueEntryBuilder<K, V> + Send + Sync + 'static>;
+
 pub(crate) struct Inner<K, V, S> {
     max_capacity: Option<u64>,
     weighted_size: AtomicCell<u64>,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
+    value_entry_builder: ArcValueEntryBuilder<K, V>,
     deques: Mutex<Deques<K>>,
     frequency_sketch: RwLock<FrequencySketch>,
     read_op_ch: Receiver<ReadOp<K, V>>,
@@ -441,7 +466,8 @@ pub(crate) struct Inner<K, V, S> {
 // functions/methods used by BaseCache
 impl<K, V, S> Inner<K, V, S>
 where
-    K: Hash + Eq,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Send + Sync + 'static,
     S: BuildHasher + Clone,
 {
     // Disable a Clippy warning for having more than seven arguments.
@@ -468,6 +494,12 @@ where
             build_hasher.clone(),
         );
 
+        let value_entry_builder: ArcValueEntryBuilder<K, V> = if weigher.is_some() {
+            Arc::new(ValueEntryBuilderImpl::<K, V, EntryInfoFull>::new())
+        } else {
+            Arc::new(ValueEntryBuilderImpl::<K, V, EntryInfoWo>::new())
+        };
+
         // Ensure skt_capacity fits in a range of `128u32..=u32::MAX`.
         let skt_capacity = max_capacity
             .map(|n| n.try_into().unwrap_or(u32::MAX)) // Convert to u32.
@@ -480,6 +512,7 @@ where
             weighted_size: AtomicCell::default(),
             cache,
             build_hasher,
+            value_entry_builder,
             deques: Mutex::new(Deques::default()),
             frequency_sketch: RwLock::new(frequency_sketch),
             read_op_ch,
