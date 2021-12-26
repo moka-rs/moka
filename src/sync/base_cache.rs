@@ -261,8 +261,8 @@ where
                     WriteOp::Upsert {
                         key_hash: KeyHash::new(Arc::clone(&key), hash),
                         value_entry: Arc::clone(&entry),
-                        old_weighted_size: 0,
-                        new_weighted_size: ws,
+                        old_weight: 0,
+                        new_weight: ws,
                     },
                 ));
                 entry
@@ -272,7 +272,7 @@ where
                 // NOTE: `new_with` sets the max value to the last_accessed and last_modified
                 // to prevent this updated ValueEntry from being evicted by an expiration policy.
                 // See the comments in `new_with` for more details.
-                let old_weighted_size = old_entry.weighted_size();
+                let old_weight = old_entry.policy_weight();
                 let entry = Arc::new(ValueEntry::new_with(value.clone(), ws, old_entry));
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((
@@ -281,8 +281,8 @@ where
                     WriteOp::Upsert {
                         key_hash: KeyHash::new(Arc::clone(&key), hash),
                         value_entry: Arc::clone(&entry),
-                        old_weighted_size,
-                        new_weighted_size: ws,
+                        old_weight,
+                        new_weight: ws,
                     },
                 ));
                 entry
@@ -381,20 +381,20 @@ impl WeightedSize {
 
 #[derive(Default)]
 struct EntrySizeAndFrequency {
-    weight: u64,
+    policy_weight: u64,
     freq: u32,
 }
 
 impl EntrySizeAndFrequency {
     fn new(policy_weight: u32) -> Self {
         Self {
-            weight: policy_weight as u64,
+            policy_weight: policy_weight as u64,
             ..Default::default()
         }
     }
 
-    fn add_policy_weight(&mut self, weighted_size: u32) {
-        self.weight += weighted_size as u64;
+    fn add_policy_weight(&mut self, weight: u32) {
+        self.policy_weight += weight as u64;
     }
 
     fn add_frequency(&mut self, freq: &FrequencySketch, hash: u64) {
@@ -754,9 +754,9 @@ where
                 Ok(Upsert {
                     key_hash: kh,
                     value_entry: entry,
-                    old_weighted_size: old_size,
-                    new_weighted_size: new_size,
-                }) => self.handle_upsert(kh, entry, old_size, new_size, ts, deqs, &freq, ws),
+                    old_weight,
+                    new_weight,
+                }) => self.handle_upsert(kh, entry, old_weight, new_weight, ts, deqs, &freq, ws),
                 Ok(Remove(KvEntry { key: _key, entry })) => Self::handle_remove(deqs, entry, ws),
                 Err(_) => break,
             };
@@ -768,8 +768,8 @@ where
         &self,
         kh: KeyHash<K>,
         entry: Arc<ValueEntry<K, V>>,
-        old_policy_weight: u32,
-        new_policy_weight: u32,
+        old_weight: u32,
+        new_weight: u32,
         timestamp: Instant,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
@@ -780,21 +780,21 @@ where
 
         if entry.is_admitted() {
             // The entry has been already admitted, so treat this as an update.
-            ws.saturating_add(new_policy_weight - old_policy_weight);
+            ws.saturating_add(new_weight - old_weight);
             deqs.move_to_back_ao(&entry);
             deqs.move_to_back_wo(&entry);
             return;
         }
 
-        if self.has_enough_capacity(new_policy_weight, ws) {
+        if self.has_enough_capacity(new_weight, ws) {
             // There are enough room in the cache (or the cache is unbounded).
             // Add the candidate to the deques.
-            self.handle_admit(kh, &entry, new_policy_weight, deqs, ws);
+            self.handle_admit(kh, &entry, new_weight, deqs, ws);
             return;
         }
 
         if let Some(max) = self.max_capacity {
-            if new_policy_weight as u64 > max {
+            if new_weight as u64 > max {
                 // The candidate is too big to fit in the cache. Reject it.
                 self.cache.remove(&Arc::clone(&kh.key));
                 return;
@@ -802,7 +802,7 @@ where
         }
 
         let skipped_nodes;
-        let mut candidate = EntrySizeAndFrequency::new(new_policy_weight);
+        let mut candidate = EntrySizeAndFrequency::new(new_weight);
         candidate.add_frequency(freq, kh.hash);
 
         // Try to admit the candidate.
@@ -811,8 +811,6 @@ where
                 victim_nodes,
                 skipped_nodes: mut skipped,
             } => {
-                // TODO: Try not to recalculate weights in handle_remove and handle_admit.
-
                 // Try to remove the victims from the cache (hash map).
                 for victim in victim_nodes {
                     if let Some((_vic_key, vic_entry)) = self
@@ -831,7 +829,7 @@ where
                 skipped_nodes = skipped;
 
                 // Add the candidate to the deques.
-                self.handle_admit(kh, &entry, new_policy_weight, deqs, ws);
+                self.handle_admit(kh, &entry, new_weight, deqs, ws);
             }
             AdmissionResult::Rejected { skipped_nodes: s } => {
                 skipped_nodes = s;
@@ -882,7 +880,7 @@ where
         let mut next_victim = deqs.probation.peek_front();
 
         // Aggregate potential victims.
-        while victims.weight < candidate.weight {
+        while victims.policy_weight < candidate.policy_weight {
             if candidate.freq < victims.freq {
                 break;
             }
@@ -890,7 +888,7 @@ where
                 next_victim = victim.next_node();
 
                 if let Some(vic_entry) = cache.get(&victim.element.key) {
-                    victims.add_policy_weight(vic_entry.weighted_size());
+                    victims.add_policy_weight(vic_entry.policy_weight());
                     victims.add_frequency(freq, victim.element.hash);
                     victim_nodes.push(NonNull::from(victim));
                     retries = 0;
@@ -915,7 +913,7 @@ where
         // TODO: Implement some randomness to mitigate hash DoS attack.
         // See Caffeine's implementation.
 
-        if victims.weight >= candidate.weight && candidate.freq > victims.freq {
+        if victims.policy_weight >= candidate.policy_weight && candidate.freq > victims.freq {
             AdmissionResult::Admitted {
                 victim_nodes,
                 skipped_nodes,
@@ -949,7 +947,7 @@ where
     fn handle_remove(deqs: &mut Deques<K>, entry: Arc<ValueEntry<K, V>>, ws: &mut WeightedSize) {
         if entry.is_admitted() {
             entry.set_is_admitted(false);
-            ws.saturating_sub(entry.weighted_size());
+            ws.saturating_sub(entry.policy_weight());
             deqs.unlink_ao(&entry);
             Deques::unlink_wo(&mut deqs.write_order, &entry);
         }
@@ -965,7 +963,7 @@ where
     ) {
         if entry.is_admitted() {
             entry.set_is_admitted(false);
-            ws.saturating_sub(entry.weighted_size());
+            ws.saturating_sub(entry.policy_weight());
             Deques::unlink_ao_from_deque(ao_deq_name, ao_deq, &entry);
             Deques::unlink_wo(wo_deq, &entry);
         }
@@ -1234,7 +1232,7 @@ where
             });
 
             if let Some(entry) = maybe_entry {
-                let weight = entry.weighted_size();
+                let weight = entry.policy_weight();
                 Self::handle_remove_with_deques(DEQ_NAME, deq, write_order_deq, entry, ws);
                 evicted = evicted.saturating_add(weight as u64);
             } else if !self.try_skip_updated_entry(&key, DEQ_NAME, deq, write_order_deq) {

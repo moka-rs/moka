@@ -53,24 +53,24 @@ pub(crate) trait EntryInfo: AccessTime {
     fn is_admitted(&self) -> bool;
     fn set_is_admitted(&self, value: bool);
     fn reset_timestamps(&self);
-    fn weighted_size(&self) -> u32;
-    fn set_weighted_size(&self, size: u32);
+    fn policy_weight(&self) -> u32;
+    fn set_policy_weight(&self, size: u32);
 }
 
 pub(crate) struct EntryInfoFull {
     is_admitted: AtomicBool,
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
-    weighted_size: AtomicU32,
+    policy_weight: AtomicU32,
 }
 
 impl EntryInfoFull {
-    fn new(weighted_size: u32) -> Self {
+    fn new(policy_weight: u32) -> Self {
         Self {
             is_admitted: Default::default(),
             last_accessed: Default::default(),
             last_modified: Default::default(),
-            weighted_size: AtomicU32::new(weighted_size),
+            policy_weight: AtomicU32::new(policy_weight),
         }
     }
 }
@@ -93,13 +93,13 @@ impl EntryInfo for EntryInfoFull {
     }
 
     #[inline]
-    fn weighted_size(&self) -> u32 {
-        self.weighted_size.load(Ordering::Acquire)
+    fn policy_weight(&self) -> u32 {
+        self.policy_weight.load(Ordering::Acquire)
     }
 
     #[inline]
-    fn set_weighted_size(&self, size: u32) {
-        self.weighted_size.store(size, Ordering::Release);
+    fn set_policy_weight(&self, size: u32) {
+        self.policy_weight.store(size, Ordering::Release);
     }
 }
 
@@ -225,10 +225,10 @@ pub(crate) struct ValueEntry<K, V> {
 }
 
 impl<K, V> ValueEntry<K, V> {
-    pub(crate) fn new(value: V, weighted_size: u32) -> Self {
+    pub(crate) fn new(value: V, policy_weight: u32) -> Self {
         Self {
             value,
-            info: Arc::new(EntryInfoFull::new(weighted_size)),
+            info: Arc::new(EntryInfoFull::new(policy_weight)),
             nodes: Mutex::new(DeqNodes {
                 access_order_q_node: None,
                 write_order_q_node: None,
@@ -236,7 +236,7 @@ impl<K, V> ValueEntry<K, V> {
         }
     }
 
-    pub(crate) fn new_with(value: V, weighted_size: u32, other: &Self) -> Self {
+    pub(crate) fn new_with(value: V, policy_weight: u32, other: &Self) -> Self {
         let nodes = {
             let other_nodes = other.nodes.lock();
             DeqNodes {
@@ -245,7 +245,7 @@ impl<K, V> ValueEntry<K, V> {
             }
         };
         let info = Arc::clone(&other.info);
-        info.set_weighted_size(weighted_size);
+        info.set_policy_weight(policy_weight);
         // To prevent this updated ValueEntry from being evicted by an expiration policy,
         // set the max value to the timestamps. They will be replaced with the real
         // timestamps when applying writes.
@@ -270,8 +270,8 @@ impl<K, V> ValueEntry<K, V> {
     }
 
     #[inline]
-    pub(crate) fn weighted_size(&self) -> u32 {
-        self.info.weighted_size()
+    pub(crate) fn policy_weight(&self) -> u32 {
+        self.info.policy_weight()
     }
 
     pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
@@ -381,8 +381,8 @@ pub(crate) enum WriteOp<K, V> {
     Upsert {
         key_hash: KeyHash<K>,
         value_entry: Arc<ValueEntry<K, V>>,
-        old_weighted_size: u32,
-        new_weighted_size: u32,
+        old_weight: u32,
+        new_weight: u32,
     },
     Remove(KvEntry<K, V>),
 }
