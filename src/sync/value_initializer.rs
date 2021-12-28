@@ -131,8 +131,8 @@ where
                                 continue;
                             } else {
                                 panic!(
-                                    r#"Too many retries. Tried to read the return value from the `init` \
-                                closure but failed {} times. Maybe the `init` kept panicking?"#,
+                                    "Too many retries. Tried to read the return value from the `init` \
+                                closure but failed {} times. Maybe the `init` kept panicking?",
                                     retries
                                 );
                             }
