@@ -26,7 +26,7 @@ enum WaiterValue<V> {
 type Waiter<V> = Arc<RwLock<WaiterValue<V>>>;
 
 struct WaiterGuard<'a, K, V, S>
-// NOTE: We usually do not attach trait bounds to hera at the struct definition, but
+// NOTE: We usually do not attach trait bounds to here at the struct definition, but
 // the Drop trait requires these bounds here.
 where
     Arc<K>: Eq + Hash,
@@ -76,8 +76,8 @@ where
     fn drop(&mut self) {
         if !self.is_waiter_value_set {
             // Value is not set. This means the future containing
-            // `get_or_*_insert_with` has been aborted:
-            // https://github.com/moka-rs/moka/issues/59
+            // `get_or_*_insert_with` has been aborted. Remove our waiter to prevent
+            // the issue described in https://github.com/moka-rs/moka/issues/59
             *self.write_lock = WaiterValue::EnclosingFutureAborted;
             self.value_initializer.remove_waiter(self.key, self.type_id);
             self.is_waiter_value_set = true;
