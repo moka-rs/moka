@@ -504,27 +504,6 @@ where
         }
     }
 
-    // #[inline]
-    // fn find_cache_victim<'a>(
-    //     deqs: &'a mut Deques<K>,
-    //     _freq: &FrequencySketch,
-    // ) -> &'a DeqNode<KeyHashDate<K>> {
-    //     // TODO: Check its frequency. If it is not very low, maybe we should
-    //     // check frequencies of next few others and pick from them.
-    //     deqs.probation.peek_front().expect("No victim found")
-    // }
-
-    // #[inline]
-    // fn admit(
-    //     candidate_hash: u64,
-    //     victim: &DeqNode<KeyHashDate<K>>,
-    //     freq: &FrequencySketch,
-    // ) -> bool {
-    //     // TODO: Implement some randomness to mitigate hash DoS attack.
-    //     // See Caffeine's implementation.
-    //     freq.frequency(candidate_hash) > freq.frequency(victim.element.hash)
-    // }
-
     /// Performs size-aware admission explained in the paper:
     /// [Lightweight Robust Size Aware Cache Management][size-aware-cache-paper]
     /// by Gil Einziger, Ohad Eytan, Roy Friedman, Ben Manes.

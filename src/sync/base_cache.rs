@@ -441,14 +441,14 @@ type CacheStore<K, V, S> = moka_cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, 
 
 type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
 
-type ArcValueEntryBuilder<K, V> = Arc<dyn ValueEntryBuilder<K, V> + Send + Sync + 'static>;
+type BoxedValueEntryBuilder<K, V> = Box<dyn ValueEntryBuilder<K, V> + Send + Sync + 'static>;
 
 pub(crate) struct Inner<K, V, S> {
     max_capacity: Option<u64>,
     weighted_size: AtomicCell<u64>,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
-    value_entry_builder: ArcValueEntryBuilder<K, V>,
+    value_entry_builder: BoxedValueEntryBuilder<K, V>,
     deques: Mutex<Deques<K>>,
     frequency_sketch: RwLock<FrequencySketch>,
     read_op_ch: Receiver<ReadOp<K, V>>,
@@ -494,10 +494,10 @@ where
             build_hasher.clone(),
         );
 
-        let value_entry_builder: ArcValueEntryBuilder<K, V> = if weigher.is_some() {
-            Arc::new(ValueEntryBuilderImpl::<K, V, EntryInfoFull>::new())
+        let value_entry_builder: BoxedValueEntryBuilder<K, V> = if weigher.is_some() {
+            Box::new(ValueEntryBuilderImpl::<K, V, EntryInfoFull>::new())
         } else {
-            Arc::new(ValueEntryBuilderImpl::<K, V, EntryInfoWo>::new())
+            Box::new(ValueEntryBuilderImpl::<K, V, EntryInfoWo>::new())
         };
 
         // Ensure skt_capacity fits in a range of `128u32..=u32::MAX`.

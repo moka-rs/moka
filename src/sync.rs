@@ -91,7 +91,7 @@ impl<K> KeyDate<K> {
 pub(crate) struct KeyHashDate<K> {
     key: Arc<K>,
     hash: u64,
-    entry_info: Arc<dyn EntryInfo + Send + Sync + 'static>,
+    entry_info: ArcEntryInfo,
 }
 
 impl<K> KeyHashDate<K> {
