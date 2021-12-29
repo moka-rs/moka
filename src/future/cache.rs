@@ -1531,4 +1531,67 @@ mod tests {
             Ok(5)
         );
     }
+
+    #[tokio::test]
+    // https://github.com/moka-rs/moka/issues/59
+    async fn abort_get_or_insert_with() {
+        use tokio::time::{sleep, Duration};
+
+        let cache = Cache::new(16);
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(0));
+
+        let handle;
+        {
+            let cache_ref = cache.clone();
+            let semaphore_ref = semaphore.clone();
+
+            handle = tokio::task::spawn(async move {
+                let _ = cache_ref
+                    .get_or_insert_with(1, async move {
+                        semaphore_ref.add_permits(1);
+                        sleep(Duration::from_millis(50)).await;
+                        unreachable!();
+                    })
+                    .await;
+            });
+        }
+
+        let _ = semaphore.acquire().await.expect("semaphore acquire failed");
+        handle.abort();
+
+        assert_eq!(cache.get_or_insert_with(1, async { 5 }).await, 5);
+    }
+
+    #[tokio::test]
+    // https://github.com/moka-rs/moka/issues/59
+    async fn abort_get_or_try_insert_with() {
+        use tokio::time::{sleep, Duration};
+
+        let cache = Cache::new(16);
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(0));
+
+        let handle;
+        {
+            let cache_ref = cache.clone();
+            let semaphore_ref = semaphore.clone();
+
+            handle = tokio::task::spawn(async move {
+                let _ = cache_ref
+                    .get_or_try_insert_with(1, async move {
+                        semaphore_ref.add_permits(1);
+                        sleep(Duration::from_millis(50)).await;
+                        unreachable!();
+                    })
+                    .await as Result<_, Arc<Infallible>>;
+            });
+        }
+
+        let _ = semaphore.acquire().await.expect("semaphore acquire failed");
+        handle.abort();
+
+        assert_eq!(
+            cache.get_or_try_insert_with(1, async { Ok(5) }).await as Result<_, Arc<Infallible>>,
+            Ok(5)
+        );
+    }
 }

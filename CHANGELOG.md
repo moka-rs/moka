@@ -1,5 +1,14 @@
 # Moka &mdash; Change Log
 
+## Version 0.6.3
+
+### Fixed
+
+- Fix a bug in `get_or_insert_with` and `get_or_try_insert_with` methods of
+  `future::Cache`, which caused a panic if previously inserting task aborted.
+  ([#59][gh-issue-0059])
+
+
 ## Version 0.6.2
 
 ### Removed
@@ -165,6 +174,7 @@
 
 [resolving-error-on-32bit]: https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
 
+[gh-issue-0059]: https://github.com/moka-rs/moka/issues/59/
 [gh-issue-0043]: https://github.com/moka-rs/moka/issues/43/
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
