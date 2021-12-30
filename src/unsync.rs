@@ -53,61 +53,73 @@ type KeyDeqNodeAo<K> = NonNull<DeqNode<KeyHashDate<K>>>;
 // DeqNode for the write order queue.
 type KeyDeqNodeWo<K> = NonNull<DeqNode<KeyDate<K>>>;
 
-struct DeqNodes<K> {
+struct EntryInfo<K> {
     access_order_q_node: Option<KeyDeqNodeAo<K>>,
     write_order_q_node: Option<KeyDeqNodeWo<K>>,
+    policy_weight: u32,
 }
 
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: V,
-    deq_nodes: DeqNodes<K>,
+    info: EntryInfo<K>,
 }
 
 impl<K, V> ValueEntry<K, V> {
-    pub(crate) fn new(value: V) -> Self {
+    pub(crate) fn new(value: V, policy_weight: u32) -> Self {
         Self {
             value,
-            deq_nodes: DeqNodes {
+            info: EntryInfo {
                 access_order_q_node: None,
                 write_order_q_node: None,
+                policy_weight,
             },
         }
     }
 
     #[inline]
     pub(crate) fn replace_deq_nodes_with(&mut self, mut other: Self) {
-        self.deq_nodes.access_order_q_node = other.deq_nodes.access_order_q_node.take();
-        self.deq_nodes.write_order_q_node = other.deq_nodes.write_order_q_node.take();
+        self.info.access_order_q_node = other.info.access_order_q_node.take();
+        self.info.write_order_q_node = other.info.write_order_q_node.take();
     }
 
     #[inline]
     pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
-        self.deq_nodes.access_order_q_node
+        self.info.access_order_q_node
     }
 
     #[inline]
     pub(crate) fn set_access_order_q_node(&mut self, node: Option<KeyDeqNodeAo<K>>) {
-        self.deq_nodes.access_order_q_node = node;
+        self.info.access_order_q_node = node;
     }
 
     #[inline]
     pub(crate) fn take_access_order_q_node(&mut self) -> Option<KeyDeqNodeAo<K>> {
-        self.deq_nodes.access_order_q_node.take()
+        self.info.access_order_q_node.take()
     }
 
     #[inline]
     pub(crate) fn write_order_q_node(&self) -> Option<KeyDeqNodeWo<K>> {
-        self.deq_nodes.write_order_q_node
+        self.info.write_order_q_node
     }
 
     #[inline]
     pub(crate) fn set_write_order_q_node(&mut self, node: Option<KeyDeqNodeWo<K>>) {
-        self.deq_nodes.write_order_q_node = node;
+        self.info.write_order_q_node = node;
     }
 
     #[inline]
     pub(crate) fn take_write_order_q_node(&mut self) -> Option<KeyDeqNodeWo<K>> {
-        self.deq_nodes.write_order_q_node.take()
+        self.info.write_order_q_node.take()
+    }
+
+    #[inline]
+    pub(crate) fn policy_weight(&self) -> u32 {
+        self.info.policy_weight
+    }
+
+    #[inline]
+    pub(crate) fn set_policy_weight(&mut self, policy_weight: u32) {
+        self.info.policy_weight = policy_weight;
     }
 }
 
@@ -120,7 +132,7 @@ impl<K, V> AccessTime for ValueEntry<K, V> {
 
     #[inline]
     fn set_last_accessed(&mut self, timestamp: Instant) {
-        if let Some(mut node) = self.deq_nodes.access_order_q_node {
+        if let Some(mut node) = self.info.access_order_q_node {
             unsafe { node.as_mut() }.set_last_accessed(timestamp);
         }
     }
@@ -133,7 +145,7 @@ impl<K, V> AccessTime for ValueEntry<K, V> {
 
     #[inline]
     fn set_last_modified(&mut self, timestamp: Instant) {
-        if let Some(mut node) = self.deq_nodes.write_order_q_node {
+        if let Some(mut node) = self.info.write_order_q_node {
             unsafe { node.as_mut() }.set_last_modified(timestamp);
         }
     }

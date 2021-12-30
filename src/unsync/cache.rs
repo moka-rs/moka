@@ -229,11 +229,10 @@ where
         self.evict_lru_entries();
         let policy_weight = weigh(&mut self.weigher, &key, &value);
         let key = Rc::new(key);
-        let entry = ValueEntry::new(value);
+        let entry = ValueEntry::new(value, policy_weight);
 
         if let Some(old_entry) = self.cache.insert(Rc::clone(&key), entry) {
-            let old_policy_weight = weigh(&mut self.weigher, &key, &old_entry.value) as u64;
-            self.handle_update(key, timestamp, policy_weight, old_entry, old_policy_weight);
+            self.handle_update(key, timestamp, policy_weight, old_entry);
         } else {
             let hash = self.hash(&key);
             self.handle_insert(key, hash, policy_weight, timestamp);
@@ -252,10 +251,11 @@ where
         self.evict_expired_if_needed();
         self.evict_lru_entries();
 
-        // TODO: Update the weighted_size.
         if let Some(mut entry) = self.cache.remove(key) {
+            let weight = entry.policy_weight();
             self.deques.unlink_ao(&mut entry);
-            Deques::unlink_wo(&mut self.deques.write_order, &mut entry)
+            Deques::unlink_wo(&mut self.deques.write_order, &mut entry);
+            self.saturating_sub_from_total_weight(weight as u64);
         }
     }
 
@@ -298,13 +298,17 @@ where
             .map(|(key, _)| Rc::clone(key))
             .collect::<Vec<_>>();
 
-        // TODO: Update the weighted_size.
+        let mut invalidated = 0u64;
+
         keys_to_invalidate.into_iter().for_each(|k| {
             if let Some(mut entry) = cache.remove(&k) {
+                let weight = entry.policy_weight();
                 deques.unlink_ao(&mut entry);
                 Deques::unlink_wo(&mut deques.write_order, &mut entry);
+                invalidated = invalidated.saturating_sub(weight as u64);
             }
         });
+        self.saturating_sub_from_total_weight(invalidated);
     }
 
     /// Returns the `max_capacity` of this cache.
@@ -576,21 +580,24 @@ where
         timestamp: Option<Instant>,
         policy_weight: u32,
         old_entry: ValueEntry<K, V>,
-        old_policy_weight: u64,
     ) {
+        let old_policy_weight = old_entry.policy_weight();
+
         let entry = self.cache.get_mut(&key).unwrap();
         entry.replace_deq_nodes_with(old_entry);
         if let Some(ts) = timestamp {
             entry.set_last_accessed(ts);
             entry.set_last_modified(ts);
         }
+        entry.set_policy_weight(policy_weight);
+
         let deqs = &mut self.deques;
         deqs.move_to_back_ao(entry);
         if self.time_to_live.is_some() {
             deqs.move_to_back_wo(entry);
         }
 
-        self.saturating_sub_from_total_weight(old_policy_weight);
+        self.saturating_sub_from_total_weight(old_policy_weight as u64);
         self.saturating_add_to_total_weight(policy_weight as u64);
     }
 
@@ -602,13 +609,12 @@ where
 
         if self.time_to_idle.is_some() {
             let deqs = &mut self.deques;
-            let (window, probation, protected, wo, cache, weigher, time_to_idle) = (
+            let (window, probation, protected, wo, cache, time_to_idle) = (
                 &mut deqs.window,
                 &mut deqs.probation,
                 &mut deqs.protected,
                 &mut deqs.write_order,
                 &mut self.cache,
-                &mut self.weigher,
                 &self.time_to_idle,
             );
 
@@ -619,7 +625,6 @@ where
                     wo,
                     cache,
                     time_to_idle,
-                    weigher,
                     EVICTION_BATCH_SIZE,
                     now,
                 )
@@ -635,7 +640,6 @@ where
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     #[inline]
     fn remove_expired_ao(
         deq_name: &str,
@@ -643,7 +647,6 @@ where
         write_order_deq: &mut Deque<KeyDate<K>>,
         cache: &mut CacheStore<K, V, S>,
         time_to_idle: &Option<Duration>,
-        weigher: &mut Option<Weigher<K, V>>,
         batch_size: usize,
         now: Instant,
     ) -> u64 {
@@ -668,7 +671,7 @@ where
             let key = key.unwrap();
 
             if let Some(mut entry) = cache.remove(&key) {
-                let weight = weigh(weigher, &key, &entry.value);
+                let weight = entry.policy_weight();
                 Deques::unlink_ao_from_deque(deq_name, deq, &mut entry);
                 Deques::unlink_wo(write_order_deq, &mut entry);
                 evicted = evicted.saturating_add(weight as u64);
@@ -706,7 +709,7 @@ where
             let key = key.unwrap();
 
             if let Some(mut entry) = self.cache.remove(&key) {
-                let weight = weigh(&mut self.weigher, &key, &entry.value);
+                let weight = entry.policy_weight();
                 self.deques.unlink_ao(&mut entry);
                 Deques::unlink_wo(&mut self.deques.write_order, &mut entry);
                 evicted = evicted.saturating_sub(weight as u64);
@@ -745,7 +748,7 @@ where
                 let key = key.unwrap();
 
                 if let Some(mut entry) = cache.remove(&key) {
-                    let weight = weigh(&mut self.weigher, &key, &entry.value);
+                    let weight = entry.policy_weight();
                     Deques::unlink_ao_from_deque(DEQ_NAME, probation, &mut entry);
                     Deques::unlink_wo(wo, &mut entry);
                     evicted = evicted.saturating_add(weight as u64);
