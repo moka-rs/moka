@@ -1,4 +1,4 @@
-use super::{cache::Cache, ConcurrentCacheExt};
+use super::{cache::Cache, CacheBuilder, ConcurrentCacheExt, Weigher};
 use crate::PredicateError;
 
 use std::{
@@ -79,8 +79,13 @@ where
             build_hasher,
             None,
             None,
+            None,
             false,
         )
+    }
+
+    pub fn builder(num_segments: usize) -> CacheBuilder<K, V, SegmentedCache<K, V, RandomState>> {
+        CacheBuilder::default().segments(num_segments)
     }
 }
 
@@ -93,11 +98,13 @@ where
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_everything(
         max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         num_segments: usize,
         build_hasher: S,
+        weigher: Option<Weigher<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -108,6 +115,7 @@ where
                 initial_capacity,
                 num_segments,
                 build_hasher,
+                weigher,
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
@@ -360,11 +368,13 @@ where
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
+    #[allow(clippy::too_many_arguments)]
     fn new(
         max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         num_segments: usize,
         build_hasher: S,
+        weigher: Option<Weigher<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -384,7 +394,7 @@ where
                     seg_max_capacity,
                     seg_init_capacity,
                     build_hasher.clone(),
-                    None, // TODO
+                    weigher.as_ref().map(Arc::clone),
                     time_to_live,
                     time_to_idle,
                     invalidator_enabled,
@@ -477,6 +487,77 @@ mod tests {
         assert_eq!(cache.get(&"d"), Some("dennis"));
 
         cache.invalidate(&"b");
+    }
+
+    #[test]
+    fn size_aware_eviction() {
+        let weigher = |_k: &&str, v: &(&str, u32)| v.1;
+
+        let alice = ("alice", 10);
+        let bob = ("bob", 15);
+        let bill = ("bill", 20);
+        let cindy = ("cindy", 5);
+        let david = ("david", 15);
+        let dennis = ("dennis", 15);
+
+        let mut cache = SegmentedCache::builder(1)
+            .max_capacity(31)
+            .weigher(weigher)
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", alice);
+        cache.insert("b", bob);
+        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"b"), Some(bob));
+        cache.sync();
+        // order (LRU -> MRU) and counts: a -> 1, b -> 1
+
+        cache.insert("c", cindy);
+        assert_eq!(cache.get(&"c"), Some(cindy));
+        // order and counts: a -> 1, b -> 1, c -> 1
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"b"), Some(bob));
+        cache.sync();
+        // order and counts: c -> 1, a -> 2, b -> 2
+
+        // To enter "d" (weight: 15), it needs to evict "c" (w: 5) and "a" (w: 10).
+        // "d" must have higher count than 3, which is the aggregated count
+        // of "a" and "c".
+        cache.insert("d", david); //   count: d -> 0
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 1
+
+        cache.insert("d", david);
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 2
+
+        cache.insert("d", david);
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 3
+
+        cache.insert("d", david);
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 4
+
+        // Finally "d" should be admitted by evicting "c" and "a".
+        cache.insert("d", dennis);
+        cache.sync();
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), Some(bob));
+        assert_eq!(cache.get(&"c"), None);
+        assert_eq!(cache.get(&"d"), Some(dennis));
+
+        // Update "b" with "bill" (w: 20). This should evict "d" (w: 15).
+        cache.insert("b", bill);
+        cache.sync();
+        assert_eq!(cache.get(&"b"), Some(bill));
+        assert_eq!(cache.get(&"d"), None);
     }
 
     #[test]

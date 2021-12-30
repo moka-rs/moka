@@ -5,6 +5,7 @@ use std::{
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hash},
     marker::PhantomData,
+    sync::Arc,
     time::Duration,
 };
 
@@ -88,12 +89,12 @@ where
     ///
     /// # Panics
     ///
-    /// Panics if `num_segments` is less than or equals to 1.
+    /// Panics if `num_segments` is zero.
     pub fn segments(
         self,
         num_segments: usize,
     ) -> CacheBuilder<K, V, SegmentedCache<K, V, RandomState>> {
-        assert!(num_segments > 1);
+        assert!(num_segments != 0);
 
         CacheBuilder {
             max_capacity: self.max_capacity,
@@ -181,6 +182,7 @@ where
             self.initial_capacity,
             self.num_segments.unwrap(),
             build_hasher,
+            self.weigher,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -207,6 +209,7 @@ where
             self.initial_capacity,
             self.num_segments.unwrap(),
             hasher,
+            self.weigher,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -234,7 +237,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     /// Sets the weigher closure of the cache.
     pub fn weigher(self, weigher: impl Fn(&K, &V) -> u32 + Send + Sync + 'static) -> Self {
         Self {
-            weigher: Some(Box::new(weigher)),
+            weigher: Some(Arc::new(weigher)),
             ..self
         }
     }

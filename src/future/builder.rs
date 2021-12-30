@@ -5,6 +5,7 @@ use std::{
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hash},
     marker::PhantomData,
+    sync::Arc,
     time::Duration,
 };
 
@@ -155,7 +156,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     /// Sets the weigher closure of the cache.
     pub fn weigher(self, weigher: impl Fn(&K, &V) -> u32 + Send + Sync + 'static) -> Self {
         Self {
-            weigher: Some(Box::new(weigher)),
+            weigher: Some(Arc::new(weigher)),
             ..self
         }
     }

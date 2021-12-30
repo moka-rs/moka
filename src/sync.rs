@@ -37,7 +37,7 @@ pub trait ConcurrentCacheExt<K, V> {
     fn sync(&self);
 }
 
-pub(crate) type Weigher<K, V> = Box<dyn Fn(&K, &V) -> u32 + Send + Sync + 'static>;
+pub(crate) type Weigher<K, V> = Arc<dyn Fn(&K, &V) -> u32 + Send + Sync + 'static>;
 
 pub(crate) trait AccessTime {
     fn last_accessed(&self) -> Option<Instant>;
