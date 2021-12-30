@@ -1,10 +1,9 @@
 use super::{
     deques::Deques,
-    entry_info::EntryInfoWo,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
-    AccessTime, EntryInfoFull, KeyDate, KeyHash, KeyHashDate, KvEntry, PredicateId, ReadOp,
-    ValueEntry, ValueEntryBuilder, ValueEntryBuilderImpl, Weigher, WriteOp,
+    AccessTime, CacheFeatures, KeyDate, KeyHash, KeyHashDate, KvEntry, PredicateId, ReadOp,
+    ValueEntry, ValueEntryBuilder, Weigher, WriteOp,
 };
 use crate::{
     common::{
@@ -237,7 +236,7 @@ where
 
     #[inline]
     pub(crate) fn do_insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) -> WriteOp<K, V> {
-        let ws = self.inner.weigh(&key, &value);
+        let weight = self.inner.weigh(&key, &value);
         let op_cnt1 = Rc::new(AtomicU8::new(0));
         let op_cnt2 = Rc::clone(&op_cnt1);
         let mut op1 = None;
@@ -256,7 +255,7 @@ where
             // on_insert
             || {
                 // let entry = Arc::new(ValueEntry::new(value.clone(), ws));
-                let entry = self.new_value_entry(value.clone(), ws);
+                let entry = self.new_value_entry(value.clone(), weight);
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((
                     cnt,
@@ -264,19 +263,20 @@ where
                         key_hash: KeyHash::new(Arc::clone(&key), hash),
                         value_entry: Arc::clone(&entry),
                         old_weight: 0,
-                        new_weight: ws,
+                        new_weight: weight,
                     },
                 ));
                 entry
             },
             // on_modify
             |_k, old_entry| {
-                // NOTE: `new_with` sets the max value to the last_accessed and last_modified
-                // to prevent this updated ValueEntry from being evicted by an expiration policy.
-                // See the comments in `new_with` for more details.
+                // NOTES on `new_value_entry_from` method:
+                // 1. The internal EntryInfo will be shared between the old and new ValueEntries.
+                // 2. This method will set the last_accessed and last_modified to the max value to
+                //    prevent this new ValueEntry from being evicted by an expiration policy.
+                // 3. This method will update the policy_weight with the new weight.
                 let old_weight = old_entry.policy_weight();
-                // let entry = Arc::new(ValueEntry::new_with(value.clone(), ws, old_entry));
-                let entry = self.new_value_entry_from(value.clone(), ws, old_entry);
+                let entry = self.new_value_entry_from(value.clone(), weight, old_entry);
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((
                     cnt,
@@ -285,7 +285,7 @@ where
                         key_hash: KeyHash::new(Arc::clone(&key), hash),
                         value_entry: Arc::clone(&entry),
                         old_weight,
-                        new_weight: ws,
+                        new_weight: weight,
                     },
                 ));
                 entry
@@ -441,14 +441,14 @@ type CacheStore<K, V, S> = moka_cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, 
 
 type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
 
-type BoxedValueEntryBuilder<K, V> = Box<dyn ValueEntryBuilder<K, V> + Send + Sync + 'static>;
+// type BoxedValueEntryBuilder<K, V> = Box<dyn ValueEntryBuilder<K, V> + Send + Sync + 'static>;
 
 pub(crate) struct Inner<K, V, S> {
     max_capacity: Option<u64>,
     weighted_size: AtomicCell<u64>,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
-    value_entry_builder: BoxedValueEntryBuilder<K, V>,
+    value_entry_builder: ValueEntryBuilder,
     deques: Mutex<Deques<K>>,
     frequency_sketch: RwLock<FrequencySketch>,
     read_op_ch: Receiver<ReadOp<K, V>>,
@@ -494,11 +494,8 @@ where
             build_hasher.clone(),
         );
 
-        let value_entry_builder: BoxedValueEntryBuilder<K, V> = if weigher.is_some() {
-            Box::new(ValueEntryBuilderImpl::<K, V, EntryInfoFull>::new())
-        } else {
-            Box::new(ValueEntryBuilderImpl::<K, V, EntryInfoWo>::new())
-        };
+        let features = CacheFeatures::new(weigher.is_some());
+        let value_entry_builder = ValueEntryBuilder::new(features);
 
         // Ensure skt_capacity fits in a range of `128u32..=u32::MAX`.
         let skt_capacity = max_capacity

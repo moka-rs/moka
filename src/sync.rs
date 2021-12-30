@@ -3,7 +3,7 @@
 use crate::common::{deque::DeqNode, time::Instant};
 
 use parking_lot::Mutex;
-use std::{marker::PhantomData, ptr::NonNull, sync::Arc};
+use std::{ptr::NonNull, sync::Arc};
 
 pub(crate) mod base_cache;
 mod builder;
@@ -19,7 +19,7 @@ pub use builder::CacheBuilder;
 pub use cache::Cache;
 pub use segment::SegmentedCache;
 
-use self::entry_info::{ArcEntryInfo, EntryInfo, EntryInfoFull, EntryInfoWo};
+use self::entry_info::EntryInfo;
 
 /// The type of the unique ID to identify a predicate used by
 /// [`Cache#invalidate_entries_if`][invalidate-if] method.
@@ -68,14 +68,14 @@ impl<K> Clone for KeyHash<K> {
 
 pub(crate) struct KeyDate<K> {
     key: Arc<K>,
-    entry_info: ArcEntryInfo,
+    entry_info: EntryInfo,
 }
 
 impl<K> KeyDate<K> {
-    pub(crate) fn new(key: Arc<K>, entry_info: &ArcEntryInfo) -> Self {
+    pub(crate) fn new(key: Arc<K>, entry_info: &EntryInfo) -> Self {
         Self {
             key,
-            entry_info: Arc::clone(entry_info),
+            entry_info: entry_info.clone(),
         }
     }
 
@@ -91,15 +91,15 @@ impl<K> KeyDate<K> {
 pub(crate) struct KeyHashDate<K> {
     key: Arc<K>,
     hash: u64,
-    entry_info: ArcEntryInfo,
+    entry_info: EntryInfo,
 }
 
 impl<K> KeyHashDate<K> {
-    pub(crate) fn new(kh: KeyHash<K>, entry_info: &ArcEntryInfo) -> Self {
+    pub(crate) fn new(kh: KeyHash<K>, entry_info: &EntryInfo) -> Self {
         Self {
             key: kh.key,
             hash: kh.hash,
-            entry_info: Arc::clone(entry_info),
+            entry_info: entry_info.clone(),
         }
     }
 
@@ -107,7 +107,7 @@ impl<K> KeyHashDate<K> {
         &self.key
     }
 
-    pub(crate) fn entry_info(&self) -> &ArcEntryInfo {
+    pub(crate) fn entry_info(&self) -> &EntryInfo {
         &self.entry_info
     }
 }
@@ -183,12 +183,12 @@ unsafe impl<K> Send for DeqNodes<K> {}
 
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: V,
-    info: ArcEntryInfo,
+    info: EntryInfo,
     nodes: Mutex<DeqNodes<K>>,
 }
 
 impl<K, V> ValueEntry<K, V> {
-    fn new(value: V, entry_info: ArcEntryInfo) -> Self {
+    fn new(value: V, entry_info: EntryInfo) -> Self {
         Self {
             value,
             info: entry_info,
@@ -199,7 +199,7 @@ impl<K, V> ValueEntry<K, V> {
         }
     }
 
-    fn new_from(value: V, entry_info: ArcEntryInfo, other: &Self) -> Self {
+    fn new_from(value: V, entry_info: EntryInfo, other: &Self) -> Self {
         let nodes = {
             let other_nodes = other.nodes.lock();
             DeqNodes {
@@ -218,7 +218,7 @@ impl<K, V> ValueEntry<K, V> {
         }
     }
 
-    pub(crate) fn entry_info(&self) -> &ArcEntryInfo {
+    pub(crate) fn entry_info(&self) -> &EntryInfo {
         &self.info
     }
 
@@ -288,56 +288,41 @@ impl<K, V> AccessTime for Arc<ValueEntry<K, V>> {
     }
 }
 
-pub(crate) trait ValueEntryBuilder<K, V> {
-    fn build(&self, value: V, policy_weight: u32) -> ValueEntry<K, V>;
-
-    fn build_from(
-        &self,
-        value: V,
-        policy_weight: u32,
-        other: &ValueEntry<K, V>,
-    ) -> ValueEntry<K, V>;
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum CacheFeatures {
+    Plain,
+    Weighted,
 }
 
-pub(crate) struct ValueEntryBuilderImpl<K, V, EI>(PhantomData<(K, V, EI)>);
-
-impl<K, V, EI: EntryInfo> ValueEntryBuilderImpl<K, V, EI> {
-    pub(crate) fn new() -> Self {
-        Self(PhantomData::default())
+impl CacheFeatures {
+    pub(crate) fn new(is_weighter_defined: bool) -> Self {
+        if is_weighter_defined {
+            Self::Weighted
+        } else {
+            Self::Plain
+        }
     }
 }
 
-impl<K, V> ValueEntryBuilder<K, V> for ValueEntryBuilderImpl<K, V, EntryInfoFull> {
-    fn build(&self, value: V, policy_weight: u32) -> ValueEntry<K, V> {
-        let info = Arc::new(EntryInfoFull::new(policy_weight));
+pub(crate) struct ValueEntryBuilder(CacheFeatures);
+
+impl ValueEntryBuilder {
+    pub(crate) fn new(features: CacheFeatures) -> Self {
+        Self(features)
+    }
+
+    pub(crate) fn build<K, V>(&self, value: V, policy_weight: u32) -> ValueEntry<K, V> {
+        let info = EntryInfo::new(self.0, policy_weight);
         ValueEntry::new(value, info)
     }
 
-    fn build_from(
+    pub(crate) fn build_from<K, V>(
         &self,
         value: V,
         policy_weight: u32,
         other: &ValueEntry<K, V>,
     ) -> ValueEntry<K, V> {
-        let info = Arc::clone(&other.info);
-        info.set_policy_weight(policy_weight);
-        ValueEntry::new_from(value, info, other)
-    }
-}
-
-impl<K, V> ValueEntryBuilder<K, V> for ValueEntryBuilderImpl<K, V, EntryInfoWo> {
-    fn build(&self, value: V, policy_weight: u32) -> ValueEntry<K, V> {
-        let info = Arc::new(EntryInfoWo::new(policy_weight));
-        ValueEntry::new(value, info)
-    }
-
-    fn build_from(
-        &self,
-        value: V,
-        policy_weight: u32,
-        other: &ValueEntry<K, V>,
-    ) -> ValueEntry<K, V> {
-        let info = Arc::clone(&other.info);
+        let info = other.info.clone();
         info.set_policy_weight(policy_weight);
         ValueEntry::new_from(value, info, other)
     }
