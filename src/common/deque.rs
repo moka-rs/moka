@@ -49,6 +49,10 @@ impl<T> DeqNode<T> {
             element,
         }
     }
+
+    pub(crate) fn next_node(&self) -> Option<&DeqNode<T>> {
+        self.next.as_ref().map(|node| unsafe { node.as_ref() })
+    }
 }
 
 /// Cursor is used to remember the current iterating position.
@@ -648,6 +652,51 @@ mod tests {
         deque.pop_front(); // "c"
         assert!((&mut deque).next().is_none());
         assert!((&mut deque).next().is_none());
+    }
+
+    #[test]
+    fn next_node() {
+        let mut deque: Deque<String> = Deque::new(MainProbation);
+
+        let node1 = DeqNode::new(MainProbation, "a".into());
+        deque.push_back(Box::new(node1));
+        let node2 = DeqNode::new(MainProbation, "b".into());
+        let node2_ptr = deque.push_back(Box::new(node2));
+        let node3 = DeqNode::new(MainProbation, "c".into());
+        let node3_ptr = deque.push_back(Box::new(node3));
+
+        // -------------------------------------------------------
+        // First iteration.
+        // peek_front() -> node1
+        let node1a = deque.peek_front().unwrap();
+        assert_eq!(node1a.element, "a".to_string());
+        let node2a = node1a.next_node().unwrap();
+        assert_eq!(node2a.element, "b".to_string());
+        let node3a = node2a.next_node().unwrap();
+        assert_eq!(node3a.element, "c".to_string());
+        assert!(node3a.next_node().is_none());
+
+        // -------------------------------------------------------
+        // Iterate after a move_to_back.
+        // Move "b" to the back. So now "a" -> "c" -> "b".
+        unsafe { deque.move_to_back(node2_ptr) };
+        let node1a = deque.peek_front().unwrap();
+        assert_eq!(node1a.element, "a".to_string());
+        let node3a = node1a.next_node().unwrap();
+        assert_eq!(node3a.element, "c".to_string());
+        let node2a = node3a.next_node().unwrap();
+        assert_eq!(node2a.element, "b".to_string());
+        assert!(node2a.next_node().is_none());
+
+        // -------------------------------------------------------
+        // Iterate after an unlink.
+        // Unlink the second node "c". Now "a" -> "c".
+        unsafe { deque.unlink(node3_ptr) };
+        let node1a = deque.peek_front().unwrap();
+        assert_eq!(node1a.element, "a".to_string());
+        let node2a = node1a.next_node().unwrap();
+        assert_eq!(node2a.element, "b".to_string());
+        assert!(node2a.next_node().is_none());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.6.3"
+version = "0.7.0"
 authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
 
@@ -33,12 +33,14 @@ atomic64 = []
 
 [dependencies]
 crossbeam-channel = "0.5"
+crossbeam-utils = "0.8"
 moka-cht = "0.4.2"
 num_cpus = "1.13"
 once_cell = "1.7"
 parking_lot = "0.11"
 quanta = "0.9.3"
 scheduled-thread-pool = "0.2"
+smallvec = "1.6"
 thiserror = "1.0"
 uuid = { version = "0.8", features = ["v4"] }
 

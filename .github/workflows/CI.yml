@@ -64,6 +64,19 @@ jobs:
         if: ${{ matrix.rust != '1.45.2' }}
         with:
           command: test
+          args: --features future
+
+      - name: Run tests (release, no features)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --release
+
+      - name: Run tests (release, future)
+        uses: actions-rs/cargo@v1
+        if: ${{ matrix.rust != '1.45.2' }}
+        with:
+          command: test
           args: --release --features future
         env:
           RUSTFLAGS: '--cfg skeptic'

@@ -5,12 +5,11 @@ use crate::{
         thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
         time::Instant,
         unsafe_weak_pointer::UnsafeWeakPointer,
-        AccessTime,
     },
     PredicateError,
 };
 
-use super::{base_cache::Inner, PredicateId, PredicateIdStr, ValueEntry};
+use super::{base_cache::Inner, AccessTime, KvEntry, PredicateId, PredicateIdStr, ValueEntry};
 
 use parking_lot::{Mutex, RwLock};
 use std::{
@@ -59,12 +58,12 @@ impl<K> KeyDateLite<K> {
 }
 
 pub(crate) struct InvalidationResult<K, V> {
-    pub(crate) invalidated: Vec<Arc<ValueEntry<K, V>>>,
+    pub(crate) invalidated: Vec<KvEntry<K, V>>,
     pub(crate) is_done: bool,
 }
 
 impl<K, V> InvalidationResult<K, V> {
-    fn new(invalidated: Vec<Arc<ValueEntry<K, V>>>, is_done: bool) -> Self {
+    fn new(invalidated: Vec<KvEntry<K, V>>, is_done: bool) -> Self {
         Self {
             invalidated,
             is_done,
@@ -399,7 +398,10 @@ where
             let ts = candidate.timestamp;
             if Self::apply(&predicates, cache, key, ts) {
                 if let Some(entry) = Self::invalidate(cache, key, ts) {
-                    invalidated.push(entry)
+                    invalidated.push(KvEntry {
+                        key: Arc::clone(key),
+                        entry,
+                    })
                 }
             }
             newest_timestamp = Some(ts);
@@ -447,7 +449,7 @@ where
 }
 
 struct ScanResult<K, V> {
-    invalidated: Vec<Arc<ValueEntry<K, V>>>,
+    invalidated: Vec<KvEntry<K, V>>,
     is_truncated: bool,
     newest_timestamp: Option<Instant>,
 }

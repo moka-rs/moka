@@ -1,5 +1,14 @@
 # Moka &mdash; Change Log
 
+## Version 0.7.0
+
+### Added
+
+- Add support for weight-based (size aware) cache management.
+  ([#24][gh-pull-0024])
+- Add support for unbound cache. ([#24][gh-pull-0024])
+
+
 ## Version 0.6.3
 
 ### Fixed
@@ -182,6 +191,7 @@
 [gh-pull-0033]: https://github.com/moka-rs/moka/pull/33/
 [gh-pull-0030]: https://github.com/moka-rs/moka/pull/30/
 [gh-pull-0028]: https://github.com/moka-rs/moka/pull/28/
+[gh-pull-0024]: https://github.com/moka-rs/moka/pull/24/
 [gh-pull-0023]: https://github.com/moka-rs/moka/pull/23/
 [gh-pull-0022]: https://github.com/moka-rs/moka/pull/22/
 [gh-pull-0020]: https://github.com/moka-rs/moka/pull/20/

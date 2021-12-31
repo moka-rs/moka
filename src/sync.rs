@@ -1,20 +1,15 @@
 //! Provides thread-safe, blocking cache implementations.
 
-use crate::common::{atomic_time::AtomicInstant, deque::DeqNode, time::Instant, AccessTime};
+use crate::common::{deque::DeqNode, time::Instant};
 
 use parking_lot::Mutex;
-use std::{
-    ptr::NonNull,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
-    },
-};
+use std::{ptr::NonNull, sync::Arc};
 
 pub(crate) mod base_cache;
 mod builder;
 mod cache;
 mod deques;
+mod entry_info;
 pub(crate) mod housekeeper;
 mod invalidator;
 mod segment;
@@ -23,6 +18,8 @@ mod value_initializer;
 pub use builder::CacheBuilder;
 pub use cache::Cache;
 pub use segment::SegmentedCache;
+
+use self::entry_info::EntryInfo;
 
 /// The type of the unique ID to identify a predicate used by
 /// [`Cache#invalidate_entries_if`][invalidate-if] method.
@@ -38,6 +35,15 @@ pub(crate) type PredicateIdStr<'a> = &'a str;
 pub trait ConcurrentCacheExt<K, V> {
     /// Performs any pending maintenance operations needed by the cache.
     fn sync(&self);
+}
+
+pub(crate) type Weigher<K, V> = Arc<dyn Fn(&K, &V) -> u32 + Send + Sync + 'static>;
+
+pub(crate) trait AccessTime {
+    fn last_accessed(&self) -> Option<Instant>;
+    fn set_last_accessed(&self, timestamp: Instant);
+    fn last_modified(&self) -> Option<Instant>;
+    fn set_last_modified(&self, timestamp: Instant);
 }
 
 pub(crate) struct KeyHash<K> {
@@ -61,33 +67,103 @@ impl<K> Clone for KeyHash<K> {
 }
 
 pub(crate) struct KeyDate<K> {
-    pub(crate) key: Arc<K>,
-    pub(crate) timestamp: Arc<AtomicInstant>,
+    key: Arc<K>,
+    entry_info: EntryInfo,
 }
 
 impl<K> KeyDate<K> {
-    pub(crate) fn new(key: Arc<K>, timestamp: Arc<AtomicInstant>) -> Self {
-        Self { key, timestamp }
+    pub(crate) fn new(key: Arc<K>, entry_info: &EntryInfo) -> Self {
+        Self {
+            key,
+            entry_info: entry_info.clone(),
+        }
     }
 
-    pub(crate) fn timestamp(&self) -> Option<Instant> {
-        self.timestamp.instant()
+    pub(crate) fn key(&self) -> &Arc<K> {
+        &self.key
+    }
+
+    pub(crate) fn last_modified(&self) -> Option<Instant> {
+        self.entry_info.last_modified()
     }
 }
 
 pub(crate) struct KeyHashDate<K> {
-    pub(crate) key: Arc<K>,
-    pub(crate) hash: u64,
-    pub(crate) timestamp: Arc<AtomicInstant>,
+    key: Arc<K>,
+    hash: u64,
+    entry_info: EntryInfo,
 }
 
 impl<K> KeyHashDate<K> {
-    pub(crate) fn new(kh: KeyHash<K>, timestamp: Arc<AtomicInstant>) -> Self {
+    pub(crate) fn new(kh: KeyHash<K>, entry_info: &EntryInfo) -> Self {
         Self {
             key: kh.key,
             hash: kh.hash,
-            timestamp,
+            entry_info: entry_info.clone(),
         }
+    }
+
+    pub(crate) fn key(&self) -> &Arc<K> {
+        &self.key
+    }
+
+    pub(crate) fn entry_info(&self) -> &EntryInfo {
+        &self.entry_info
+    }
+}
+
+pub(crate) struct KvEntry<K, V> {
+    pub(crate) key: Arc<K>,
+    pub(crate) entry: Arc<ValueEntry<K, V>>,
+}
+
+impl<K, V> KvEntry<K, V> {
+    pub(crate) fn new(key: Arc<K>, entry: Arc<ValueEntry<K, V>>) -> Self {
+        Self { key, entry }
+    }
+}
+
+impl<K> AccessTime for DeqNode<KeyDate<K>> {
+    #[inline]
+    fn last_accessed(&self) -> Option<Instant> {
+        None
+    }
+
+    #[inline]
+    fn set_last_accessed(&self, _timestamp: Instant) {
+        unreachable!();
+    }
+
+    #[inline]
+    fn last_modified(&self) -> Option<Instant> {
+        self.element.entry_info.last_modified()
+    }
+
+    #[inline]
+    fn set_last_modified(&self, timestamp: Instant) {
+        self.element.entry_info.set_last_modified(timestamp);
+    }
+}
+
+impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
+    #[inline]
+    fn last_accessed(&self) -> Option<Instant> {
+        self.element.entry_info.last_accessed()
+    }
+
+    #[inline]
+    fn set_last_accessed(&self, timestamp: Instant) {
+        self.element.entry_info.set_last_accessed(timestamp);
+    }
+
+    #[inline]
+    fn last_modified(&self) -> Option<Instant> {
+        None
+    }
+
+    #[inline]
+    fn set_last_modified(&self, _timestamp: Instant) {
+        unreachable!();
     }
 }
 
@@ -107,19 +183,15 @@ unsafe impl<K> Send for DeqNodes<K> {}
 
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: V,
-    is_admitted: Arc<AtomicBool>,
-    last_accessed: Arc<AtomicInstant>,
-    last_modified: Arc<AtomicInstant>,
+    info: EntryInfo,
     nodes: Mutex<DeqNodes<K>>,
 }
 
 impl<K, V> ValueEntry<K, V> {
-    pub(crate) fn new(value: V) -> Self {
+    fn new(value: V, entry_info: EntryInfo) -> Self {
         Self {
             value,
-            is_admitted: Arc::new(AtomicBool::new(false)),
-            last_accessed: Default::default(),
-            last_modified: Default::default(),
+            info: entry_info,
             nodes: Mutex::new(DeqNodes {
                 access_order_q_node: None,
                 write_order_q_node: None,
@@ -127,7 +199,7 @@ impl<K, V> ValueEntry<K, V> {
         }
     }
 
-    pub(crate) fn new_with(value: V, other: &Self) -> Self {
+    fn new_from(value: V, entry_info: EntryInfo, other: &Self) -> Self {
         let nodes = {
             let other_nodes = other.nodes.lock();
             DeqNodes {
@@ -135,36 +207,32 @@ impl<K, V> ValueEntry<K, V> {
                 write_order_q_node: other_nodes.write_order_q_node,
             }
         };
-        let last_accessed = Arc::clone(&other.last_accessed);
-        let last_modified = Arc::clone(&other.last_modified);
-        // To prevent this updated ValueEntry from being evicted by a expiration policy,
+        // To prevent this updated ValueEntry from being evicted by an expiration policy,
         // set the max value to the timestamps. They will be replaced with the real
         // timestamps when applying writes.
-        last_accessed.reset();
-        last_modified.reset();
+        entry_info.reset_timestamps();
         Self {
             value,
-            is_admitted: Arc::clone(&other.is_admitted),
-            last_accessed,
-            last_modified,
+            info: entry_info,
             nodes: Mutex::new(nodes),
         }
     }
 
+    pub(crate) fn entry_info(&self) -> &EntryInfo {
+        &self.info
+    }
+
     pub(crate) fn is_admitted(&self) -> bool {
-        self.is_admitted.load(Ordering::Acquire)
+        self.info.is_admitted()
     }
 
     pub(crate) fn set_is_admitted(&self, value: bool) {
-        self.is_admitted.store(value, Ordering::Release);
+        self.info.set_is_admitted(value);
     }
 
-    pub(crate) fn raw_last_accessed(&self) -> Arc<AtomicInstant> {
-        Arc::clone(&self.last_accessed)
-    }
-
-    pub(crate) fn raw_last_modified(&self) -> Arc<AtomicInstant> {
-        Arc::clone(&self.last_modified)
+    #[inline]
+    pub(crate) fn policy_weight(&self) -> u32 {
+        self.info.policy_weight()
     }
 
     pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
@@ -201,75 +269,77 @@ impl<K, V> ValueEntry<K, V> {
 impl<K, V> AccessTime for Arc<ValueEntry<K, V>> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
-        self.last_accessed.instant()
+        self.info.last_accessed()
     }
 
     #[inline]
-    fn set_last_accessed(&mut self, timestamp: Instant) {
-        self.last_accessed.set_instant(timestamp);
+    fn set_last_accessed(&self, timestamp: Instant) {
+        self.info.set_last_accessed(timestamp);
     }
 
     #[inline]
     fn last_modified(&self) -> Option<Instant> {
-        self.last_modified.instant()
+        self.info.last_modified()
     }
 
     #[inline]
-    fn set_last_modified(&mut self, timestamp: Instant) {
-        self.last_modified.set_instant(timestamp);
+    fn set_last_modified(&self, timestamp: Instant) {
+        self.info.set_last_modified(timestamp);
     }
 }
 
-impl<K> AccessTime for DeqNode<KeyDate<K>> {
-    #[inline]
-    fn last_accessed(&self) -> Option<Instant> {
-        None
-    }
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum CacheFeatures {
+    Plain,
+    Weighted,
+}
 
-    #[inline]
-    fn set_last_accessed(&mut self, _timestamp: Instant) {
-        unreachable!();
-    }
-
-    #[inline]
-    fn last_modified(&self) -> Option<Instant> {
-        self.element.timestamp.instant()
-    }
-
-    #[inline]
-    fn set_last_modified(&mut self, timestamp: Instant) {
-        self.element.timestamp.set_instant(timestamp);
+impl CacheFeatures {
+    pub(crate) fn new(is_weighter_defined: bool) -> Self {
+        if is_weighter_defined {
+            Self::Weighted
+        } else {
+            Self::Plain
+        }
     }
 }
 
-impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
-    #[inline]
-    fn last_accessed(&self) -> Option<Instant> {
-        self.element.timestamp.instant()
+pub(crate) struct ValueEntryBuilder(CacheFeatures);
+
+impl ValueEntryBuilder {
+    pub(crate) fn new(features: CacheFeatures) -> Self {
+        Self(features)
     }
 
-    #[inline]
-    fn set_last_accessed(&mut self, timestamp: Instant) {
-        self.element.timestamp.set_instant(timestamp);
+    pub(crate) fn build<K, V>(&self, value: V, policy_weight: u32) -> ValueEntry<K, V> {
+        let info = EntryInfo::new(self.0, policy_weight);
+        ValueEntry::new(value, info)
     }
 
-    #[inline]
-    fn last_modified(&self) -> Option<Instant> {
-        None
-    }
-
-    #[inline]
-    fn set_last_modified(&mut self, _timestamp: Instant) {
-        unreachable!();
+    pub(crate) fn build_from<K, V>(
+        &self,
+        value: V,
+        policy_weight: u32,
+        other: &ValueEntry<K, V>,
+    ) -> ValueEntry<K, V> {
+        let info = other.info.clone();
+        info.set_policy_weight(policy_weight);
+        ValueEntry::new_from(value, info, other)
     }
 }
 
 pub(crate) enum ReadOp<K, V> {
+    // u64 is the hash of the key.
     Hit(u64, Arc<ValueEntry<K, V>>, Instant),
     Miss(u64),
 }
 
 pub(crate) enum WriteOp<K, V> {
-    Upsert(KeyHash<K>, Arc<ValueEntry<K, V>>),
-    Remove(Arc<ValueEntry<K, V>>),
+    Upsert {
+        key_hash: KeyHash<K>,
+        value_entry: Arc<ValueEntry<K, V>>,
+        old_weight: u32,
+        new_weight: u32,
+    },
+    Remove(KvEntry<K, V>),
 }

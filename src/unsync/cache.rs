@@ -1,11 +1,11 @@
-use super::{deques::Deques, KeyDate, KeyHashDate, ValueEntry};
+use super::{deques::Deques, AccessTime, CacheBuilder, KeyDate, KeyHashDate, ValueEntry, Weigher};
 use crate::common::{
     deque::{CacheRegion, DeqNode, Deque},
     frequency_sketch::FrequencySketch,
     time::{CheckedTimeOps, Clock, Instant},
-    AccessTime,
 };
 
+use smallvec::SmallVec;
 use std::{
     borrow::Borrow,
     collections::{hash_map::RandomState, HashMap},
@@ -15,6 +15,8 @@ use std::{
     rc::Rc,
     time::Duration,
 };
+
+const EVICTION_BATCH_SIZE: usize = 100;
 
 type CacheStore<K, V, S> = std::collections::HashMap<Rc<K>, ValueEntry<K, V>, S>;
 
@@ -109,9 +111,11 @@ type CacheStore<K, V, S> = std::collections::HashMap<Rc<K>, ValueEntry<K, V>, S>
 /// [ahash-crate]: https://crates.io/crates/ahash
 ///
 pub struct Cache<K, V, S = RandomState> {
-    max_capacity: usize,
+    max_capacity: Option<u64>,
+    weighted_size: u64,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
+    weigher: Option<Weigher<K, V>>,
     deques: Deques<K>,
     frequency_sketch: FrequencySketch,
     time_to_live: Option<Duration>,
@@ -131,7 +135,15 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(max_capacity, None, build_hasher, None, None)
+        Self::with_everything(Some(max_capacity), None, build_hasher, None, None, None)
+    }
+
+    /// Returns a [`CacheBuilder`][builder-struct], which can builds a `Cache` with
+    /// various configuration knobs.
+    ///
+    /// [builder-struct]: ./struct.CacheBuilder.html
+    pub fn builder() -> CacheBuilder<K, V, Cache<K, V, RandomState>> {
+        CacheBuilder::default()
     }
 }
 
@@ -144,9 +156,10 @@ where
     S: BuildHasher + Clone,
 {
     pub(crate) fn with_everything(
-        max_capacity: usize,
+        max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         build_hasher: S,
+        weigher: Option<Weigher<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
     ) -> Self {
@@ -157,14 +170,16 @@ where
 
         // Ensure skt_capacity fits in a range of `128u32..=u32::MAX`.
         let skt_capacity = max_capacity
-            .try_into() // Convert to u32.
-            .unwrap_or(u32::MAX)
+            .map(|n| n.try_into().unwrap_or(u32::MAX)) // Convert to u32.
+            .unwrap_or_default()
             .max(128);
         let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
         Self {
-            max_capacity,
+            max_capacity: max_capacity.map(|n| n as u64),
+            weighted_size: 0,
             cache,
             build_hasher,
+            weigher,
             deques: Deques::default(),
             frequency_sketch,
             time_to_live,
@@ -184,7 +199,8 @@ where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        let timestamp = self.evict_if_needed();
+        let timestamp = self.evict_expired_if_needed();
+        self.evict_lru_entries();
         self.frequency_sketch.increment(self.hash(key));
 
         match (self.cache.get_mut(key), timestamp, &mut self.deques) {
@@ -213,15 +229,17 @@ where
     ///
     /// If the cache has this key present, the value is updated.
     pub fn insert(&mut self, key: K, value: V) {
-        let timestamp = self.evict_if_needed();
+        let timestamp = self.evict_expired_if_needed();
+        self.evict_lru_entries();
+        let policy_weight = weigh(&mut self.weigher, &key, &value);
         let key = Rc::new(key);
-        let entry = ValueEntry::new(value);
+        let entry = ValueEntry::new(value, policy_weight);
 
         if let Some(old_entry) = self.cache.insert(Rc::clone(&key), entry) {
-            self.handle_update(key, timestamp, old_entry);
+            self.handle_update(key, timestamp, policy_weight, old_entry);
         } else {
             let hash = self.hash(&key);
-            self.handle_insert(key, hash, timestamp);
+            self.handle_insert(key, hash, policy_weight, timestamp);
         }
     }
 
@@ -234,11 +252,14 @@ where
         Rc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.evict_if_needed();
+        self.evict_expired_if_needed();
+        self.evict_lru_entries();
 
         if let Some(mut entry) = self.cache.remove(key) {
+            let weight = entry.policy_weight();
             self.deques.unlink_ao(&mut entry);
-            Deques::unlink_wo(&mut self.deques.write_order, &mut entry)
+            Deques::unlink_wo(&mut self.deques.write_order, &mut entry);
+            self.saturating_sub_from_total_weight(weight as u64);
         }
     }
 
@@ -250,6 +271,7 @@ where
     pub fn invalidate_all(&mut self) {
         self.cache.clear();
         self.deques.clear();
+        self.weighted_size = 0;
     }
 
     /// Discards cached values that satisfy a predicate.
@@ -280,17 +302,22 @@ where
             .map(|(key, _)| Rc::clone(key))
             .collect::<Vec<_>>();
 
+        let mut invalidated = 0u64;
+
         keys_to_invalidate.into_iter().for_each(|k| {
             if let Some(mut entry) = cache.remove(&k) {
+                let weight = entry.policy_weight();
                 deques.unlink_ao(&mut entry);
                 Deques::unlink_wo(&mut deques.write_order, &mut entry);
+                invalidated = invalidated.saturating_sub(weight as u64);
             }
         });
+        self.saturating_sub_from_total_weight(invalidated);
     }
 
     /// Returns the `max_capacity` of this cache.
-    pub fn max_capacity(&self) -> usize {
-        self.max_capacity
+    pub fn max_capacity(&self) -> Option<usize> {
+        self.max_capacity.map(|n| n as usize)
     }
 
     /// Returns the `time_to_live` of this cache.
@@ -329,10 +356,10 @@ where
     }
 
     #[inline]
-    fn evict_if_needed(&mut self) -> Option<Instant> {
+    fn evict_expired_if_needed(&mut self) -> Option<Instant> {
         if self.has_expiry() {
             let ts = self.current_time_from_expiration_clock();
-            self.evict(ts);
+            self.evict_expired(ts);
             Some(ts)
         } else {
             None
@@ -387,9 +414,37 @@ where
         deques.move_to_back_ao(entry)
     }
 
+    fn has_enough_capacity(&self, candidate_weight: u32, ws: u64) -> bool {
+        self.max_capacity
+            .map(|limit| ws + candidate_weight as u64 <= limit)
+            .unwrap_or(true)
+    }
+
+    fn weights_to_evict(&self) -> u64 {
+        self.max_capacity
+            .map(|limit| self.weighted_size.saturating_sub(limit))
+            .unwrap_or_default()
+    }
+
+    fn saturating_add_to_total_weight(&mut self, weight: u64) {
+        let total = &mut self.weighted_size;
+        *total = total.saturating_add(weight as u64);
+    }
+
+    fn saturating_sub_from_total_weight(&mut self, weight: u64) {
+        let total = &mut self.weighted_size;
+        *total = total.saturating_sub(weight as u64);
+    }
+
     #[inline]
-    fn handle_insert(&mut self, key: Rc<K>, hash: u64, timestamp: Option<Instant>) {
-        let has_free_space = self.cache.len() <= self.max_capacity;
+    fn handle_insert(
+        &mut self,
+        key: Rc<K>,
+        hash: u64,
+        policy_weight: u32,
+        timestamp: Option<Instant>,
+    ) {
+        let has_free_space = self.has_enough_capacity(policy_weight, self.weighted_size);
         let (cache, deqs, freq) = (&mut self.cache, &mut self.deques, &self.frequency_sketch);
 
         if has_free_space {
@@ -404,26 +459,39 @@ where
             if self.time_to_live.is_some() {
                 deqs.push_back_wo(KeyDate::new(key, timestamp), entry);
             }
-        } else {
-            let victim = Self::find_cache_victim(deqs, freq);
-            if Self::admit(hash, victim, freq) {
-                // Remove the victim from the cache and deque.
-                //
-                // TODO: Check if the selected victim was actually removed. If not,
-                // maybe we should find another victim. This can happen because it
-                // could have been already removed from the cache but the removal
-                // from the deque is still on the write operations queue and is not
-                // yet executed.
-                if let Some(mut vic_entry) = cache.remove(&victim.element.key) {
+            self.saturating_add_to_total_weight(policy_weight as u64);
+            return;
+        }
+
+        if let Some(max) = self.max_capacity {
+            if policy_weight as u64 > max {
+                // The candidate is too big to fit in the cache. Reject it.
+                cache.remove(&Rc::clone(&key));
+                return;
+            }
+        }
+
+        let mut candidate = EntrySizeAndFrequency::new(policy_weight as u64);
+        candidate.add_frequency(freq, hash);
+
+        match Self::admit(&candidate, cache, deqs, freq, &mut self.weigher) {
+            AdmissionResult::Admitted {
+                victim_nodes,
+                victims_weight,
+            } => {
+                // Remove the victims from the cache (hash map) and deque.
+                for victim in victim_nodes {
+                    // Remove the victim from the hash map.
+                    let mut vic_entry = cache
+                        .remove(unsafe { &victim.as_ref().element.key })
+                        .expect("Cannot remove a victim from the hash map");
+                    // And then remove the victim from the deques.
                     deqs.unlink_ao(&mut vic_entry);
                     Deques::unlink_wo(&mut deqs.write_order, &mut vic_entry);
-                } else {
-                    let victim = NonNull::from(victim);
-                    deqs.unlink_node_ao(victim);
                 }
+
                 // Add the candidate to the deque.
                 let entry = cache.get_mut(&key).unwrap();
-
                 let key = Rc::clone(&key);
                 deqs.push_back_ao(
                     CacheRegion::MainProbation,
@@ -433,56 +501,114 @@ where
                 if self.time_to_live.is_some() {
                     deqs.push_back_wo(KeyDate::new(key, timestamp), entry);
                 }
-            } else {
+
+                Self::saturating_sub_from_total_weight(self, victims_weight);
+                Self::saturating_add_to_total_weight(self, policy_weight as u64);
+            }
+            AdmissionResult::Rejected => {
                 // Remove the candidate from the cache.
                 cache.remove(&key);
             }
         }
     }
 
-    #[inline]
-    fn find_cache_victim<'a>(
-        deqs: &'a mut Deques<K>,
-        _freq: &FrequencySketch,
-    ) -> &'a DeqNode<KeyHashDate<K>> {
-        // TODO: Check its frequency. If it is not very low, maybe we should
-        // check frequencies of next few others and pick from them.
-        deqs.probation.peek_front().expect("No victim found")
-    }
-
+    /// Performs size-aware admission explained in the paper:
+    /// [Lightweight Robust Size Aware Cache Management][size-aware-cache-paper]
+    /// by Gil Einziger, Ohad Eytan, Roy Friedman, Ben Manes.
+    ///
+    /// [size-aware-cache-paper]: https://arxiv.org/abs/2105.08770
+    ///
+    /// There are some modifications in this implementation:
+    /// - To admit to the main space, candidate's frequency must be higher than
+    ///   the aggregated frequencies of the potential victims. (In the paper,
+    ///   `>=` operator is used rather than `>`)  The `>` operator will do a better
+    ///   job to prevent the main space from polluting.
+    /// - When a candidate is rejected, the potential victims will stay at the LRU
+    ///   position of the probation access-order queue. (In the paper, they will be
+    ///   promoted (to the MRU position?) to force the eviction policy to select a
+    ///   different set of victims for the next candidate). We may implement the
+    ///   paper's behavior later?
+    ///
     #[inline]
     fn admit(
-        candidate_hash: u64,
-        victim: &DeqNode<KeyHashDate<K>>,
+        candidate: &EntrySizeAndFrequency,
+        cache: &CacheStore<K, V, S>,
+        deqs: &Deques<K>,
         freq: &FrequencySketch,
-    ) -> bool {
+        weigher: &mut Option<Weigher<K, V>>,
+    ) -> AdmissionResult<K> {
+        let mut victims = EntrySizeAndFrequency::default();
+        let mut victim_nodes = SmallVec::default();
+
+        // Get first potential victim at the LRU position.
+        let mut next_victim = deqs.probation.peek_front();
+
+        // Aggregate potential victims.
+        while victims.weight < candidate.weight {
+            if candidate.freq < victims.freq {
+                break;
+            }
+            if let Some(victim) = next_victim.take() {
+                next_victim = victim.next_node();
+
+                let vic_entry = cache
+                    .get(&victim.element.key)
+                    .expect("Cannot get an victim entry");
+                victims.add_policy_weight(victim.element.key.as_ref(), &vic_entry.value, weigher);
+                victims.add_frequency(freq, victim.element.hash);
+                victim_nodes.push(NonNull::from(victim));
+            } else {
+                // No more potential victims.
+                break;
+            }
+        }
+
+        // Admit or reject the candidate.
+
         // TODO: Implement some randomness to mitigate hash DoS attack.
         // See Caffeine's implementation.
-        freq.frequency(candidate_hash) > freq.frequency(victim.element.hash)
+
+        if victims.weight >= candidate.weight && candidate.freq > victims.freq {
+            AdmissionResult::Admitted {
+                victim_nodes,
+                victims_weight: victims.weight,
+            }
+        } else {
+            AdmissionResult::Rejected
+        }
     }
 
     fn handle_update(
         &mut self,
         key: Rc<K>,
         timestamp: Option<Instant>,
+        policy_weight: u32,
         old_entry: ValueEntry<K, V>,
     ) {
+        let old_policy_weight = old_entry.policy_weight();
+
         let entry = self.cache.get_mut(&key).unwrap();
         entry.replace_deq_nodes_with(old_entry);
         if let Some(ts) = timestamp {
             entry.set_last_accessed(ts);
             entry.set_last_modified(ts);
         }
+        entry.set_policy_weight(policy_weight);
+
         let deqs = &mut self.deques;
         deqs.move_to_back_ao(entry);
-        deqs.move_to_back_wo(entry)
+        if self.time_to_live.is_some() {
+            deqs.move_to_back_wo(entry);
+        }
+
+        self.saturating_sub_from_total_weight(old_policy_weight as u64);
+        self.saturating_add_to_total_weight(policy_weight as u64);
     }
 
-    fn evict(&mut self, now: Instant) {
-        const EVICTION_BATCH_SIZE: usize = 100;
-
+    fn evict_expired(&mut self, now: Instant) {
         if self.time_to_live.is_some() {
-            self.remove_expired_wo(EVICTION_BATCH_SIZE, now);
+            let evicted = self.remove_expired_wo(EVICTION_BATCH_SIZE, now);
+            self.saturating_sub_from_total_weight(evicted);
         }
 
         if self.time_to_idle.is_some() {
@@ -508,9 +634,13 @@ where
                 )
             };
 
-            rm_expired_ao("window", window);
-            rm_expired_ao("probation", probation);
-            rm_expired_ao("protected", protected);
+            let evicted1 = rm_expired_ao("window", window);
+            let evicted2 = rm_expired_ao("probation", probation);
+            let evicted3 = rm_expired_ao("protected", protected);
+
+            self.saturating_sub_from_total_weight(evicted1);
+            self.saturating_sub_from_total_weight(evicted2);
+            self.saturating_sub_from_total_weight(evicted3);
         }
     }
 
@@ -523,7 +653,9 @@ where
         time_to_idle: &Option<Duration>,
         batch_size: usize,
         now: Instant,
-    ) {
+    ) -> u64 {
+        let mut evicted = 0u64;
+
         for _ in 0..batch_size {
             let key = deq
                 .peek_front()
@@ -540,18 +672,26 @@ where
                 break;
             }
 
-            if let Some(mut entry) = cache.remove(&key.unwrap()) {
+            let key = key.unwrap();
+
+            if let Some(mut entry) = cache.remove(&key) {
+                let weight = entry.policy_weight();
                 Deques::unlink_ao_from_deque(deq_name, deq, &mut entry);
                 Deques::unlink_wo(write_order_deq, &mut entry);
+                evicted = evicted.saturating_add(weight as u64);
             } else {
                 deq.pop_front();
             }
         }
+
+        evicted
     }
 
     #[inline]
-    fn remove_expired_wo(&mut self, batch_size: usize, now: Instant) {
+    fn remove_expired_wo(&mut self, batch_size: usize, now: Instant) -> u64 {
+        let mut evicted = 0u64;
         let time_to_live = &self.time_to_live;
+
         for _ in 0..batch_size {
             let key = self
                 .deques
@@ -570,13 +710,59 @@ where
                 break;
             }
 
-            if let Some(mut entry) = self.cache.remove(&key.unwrap()) {
+            let key = key.unwrap();
+
+            if let Some(mut entry) = self.cache.remove(&key) {
+                let weight = entry.policy_weight();
                 self.deques.unlink_ao(&mut entry);
                 Deques::unlink_wo(&mut self.deques.write_order, &mut entry);
+                evicted = evicted.saturating_sub(weight as u64);
             } else {
                 self.deques.write_order.pop_front();
             }
         }
+
+        evicted
+    }
+
+    #[inline]
+    fn evict_lru_entries(&mut self) {
+        const DEQ_NAME: &str = "probation";
+
+        let weights_to_evict = self.weights_to_evict();
+        let mut evicted = 0u64;
+
+        {
+            let deqs = &mut self.deques;
+            let (probation, wo, cache) =
+                (&mut deqs.probation, &mut deqs.write_order, &mut self.cache);
+
+            for _ in 0..EVICTION_BATCH_SIZE {
+                if evicted >= weights_to_evict {
+                    break;
+                }
+
+                let key = probation
+                    .peek_front()
+                    .map(|node| Rc::clone(&node.element.key));
+
+                if key.is_none() {
+                    break;
+                }
+                let key = key.unwrap();
+
+                if let Some(mut entry) = cache.remove(&key) {
+                    let weight = entry.policy_weight();
+                    Deques::unlink_ao_from_deque(DEQ_NAME, probation, &mut entry);
+                    Deques::unlink_wo(wo, &mut entry);
+                    evicted = evicted.saturating_add(weight as u64);
+                } else {
+                    probation.pop_front();
+                }
+            }
+        }
+
+        self.saturating_sub_from_total_weight(evicted);
     }
 }
 
@@ -592,6 +778,48 @@ where
     fn set_expiration_clock(&mut self, clock: Option<crate::common::time::Clock>) {
         self.expiration_clock = clock;
     }
+}
+
+#[derive(Default)]
+struct EntrySizeAndFrequency {
+    weight: u64,
+    freq: u32,
+}
+
+impl EntrySizeAndFrequency {
+    fn new(policy_weight: u64) -> Self {
+        Self {
+            weight: policy_weight,
+            ..Default::default()
+        }
+    }
+
+    fn add_policy_weight<K, V>(&mut self, key: &K, value: &V, weigher: &mut Option<Weigher<K, V>>) {
+        self.weight += weigh(weigher, key, value) as u64;
+    }
+
+    fn add_frequency(&mut self, freq: &FrequencySketch, hash: u64) {
+        self.freq += freq.frequency(hash) as u32;
+    }
+}
+
+// Access-Order Queue Node
+type AoqNode<K> = NonNull<DeqNode<KeyHashDate<K>>>;
+
+enum AdmissionResult<K> {
+    Admitted {
+        victim_nodes: SmallVec<[AoqNode<K>; 8]>,
+        victims_weight: u64,
+    },
+    Rejected,
+}
+
+//
+// private free-standing functions
+//
+#[inline]
+fn weigh<K, V>(weigher: &mut Option<Weigher<K, V>>, key: &K, value: &V) -> u32 {
+    weigher.as_mut().map(|w| w(key, value)).unwrap_or(1)
 }
 
 // To see the debug prints, run test as `cargo test -- --nocapture`
@@ -628,7 +856,7 @@ mod tests {
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
-        // because d's frequency is higher then c's.
+        // because d's frequency is higher than c's.
         cache.insert("d", "dennis");
         assert_eq!(cache.get(&"a"), Some(&"alice"));
         assert_eq!(cache.get(&"b"), Some(&"bob"));
@@ -637,6 +865,61 @@ mod tests {
 
         cache.invalidate(&"b");
         assert_eq!(cache.get(&"b"), None);
+    }
+
+    #[test]
+    fn size_aware_eviction() {
+        let weigher = |_k: &&str, v: &(&str, u32)| v.1;
+
+        let alice = ("alice", 10);
+        let bob = ("bob", 15);
+        let bill = ("bill", 20);
+        let cindy = ("cindy", 5);
+        let david = ("david", 15);
+        let dennis = ("dennis", 15);
+
+        let mut cache = Cache::builder().max_capacity(31).weigher(weigher).build();
+
+        cache.insert("a", alice);
+        cache.insert("b", bob);
+        assert_eq!(cache.get(&"a"), Some(&alice));
+        assert_eq!(cache.get(&"b"), Some(&bob));
+        // order (LRU -> MRU) and counts: a -> 1, b -> 1
+
+        cache.insert("c", cindy);
+        assert_eq!(cache.get(&"c"), Some(&cindy));
+        // order and counts: a -> 1, b -> 1, c -> 1
+
+        assert_eq!(cache.get(&"a"), Some(&alice));
+        assert_eq!(cache.get(&"b"), Some(&bob));
+        // order and counts: c -> 1, a -> 2, b -> 2
+
+        // To enter "d" (weight: 15), it needs to evict "c" (w: 5) and "a" (w: 10).
+        // "d" must have higher count than 3, which is the aggregated count
+        // of "a" and "c".
+        cache.insert("d", david); //   count: d -> 0
+        assert_eq!(cache.get(&"d"), None); //   d -> 1
+
+        cache.insert("d", david);
+        assert_eq!(cache.get(&"d"), None); //   d -> 2
+
+        cache.insert("d", david);
+        assert_eq!(cache.get(&"d"), None); //   d -> 3
+
+        cache.insert("d", david);
+        assert_eq!(cache.get(&"d"), None); //   d -> 4
+
+        // Finally "d" should be admitted by evicting "c" and "a".
+        cache.insert("d", dennis);
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), Some(&bob));
+        assert_eq!(cache.get(&"c"), None);
+        assert_eq!(cache.get(&"d"), Some(&dennis));
+
+        // Update "b" with "bill" (w: 20). This should evict "d" (w: 15).
+        cache.insert("b", bill);
+        assert_eq!(cache.get(&"b"), Some(&bill));
+        assert_eq!(cache.get(&"d"), None);
     }
 
     #[test]

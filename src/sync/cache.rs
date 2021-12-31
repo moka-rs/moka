@@ -2,7 +2,7 @@ use super::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
     housekeeper::InnerSync,
     value_initializer::ValueInitializer,
-    ConcurrentCacheExt, PredicateId, WriteOp,
+    CacheBuilder, ConcurrentCacheExt, PredicateId, Weigher, WriteOp,
 };
 use crate::{sync::value_initializer::InitResult, PredicateError};
 
@@ -30,7 +30,8 @@ use std::{
 ///
 /// # Examples
 ///
-/// Cache entries are manually added using `insert` method, and are stored in the
+/// Cache entries are manually added using [`insert`](#method.insert) or
+/// [`get_or_insert_with`](#method.get_or_insert_with) method, and are stored in the
 /// cache until either evicted or manually invalidated.
 ///
 /// Here's an example of reading and updating a cache by using multiple threads:
@@ -88,6 +89,107 @@ use std::{
 /// }
 /// ```
 ///
+/// If you want to atomically initialize and insert a value when the key is not
+/// present, you might want to check other insertion methods
+/// [`get_or_insert_with`](#method.get_or_insert_with) and
+/// [`get_or_try_insert_with`](#method.get_or_try_insert_with).
+///
+/// # Avoiding to clone the value at `get`
+///
+/// The return type of `get` method is `Option<V>` instead of `Option<&V>`. Every
+/// time `get` is called for an existing key, it creates a clone of the stored value
+/// `V` and returns it. This is because the `Cache` allows concurrent updates from
+/// threads so a value stored in the cache can be dropped or replaced at any time by
+/// any other thread. `get` cannot return a reference `&V` as it is impossible to
+/// guarantee the value outlives the reference.
+///
+/// If you want to store values that will be expensive to clone, wrap them by
+/// `std::sync::Arc` before storing in a cache. [`Arc`][rustdoc-std-arc] is a
+/// thread-safe reference-counted pointer and its `clone()` method is cheap.
+///
+/// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
+///
+/// # Evictions
+///
+/// `Cache` provides two types of eviction: size-based eviction and time-based
+/// eviction.
+///
+/// ## Size-based
+///
+/// ```rust
+/// use std::convert::TryInto;
+/// use moka::sync::Cache;
+///
+/// // Evict based on the number of entries in the cache.
+/// let cache = Cache::builder()
+///     // Up to 10,000 entries.
+///     .max_capacity(10_000)
+///     // Create the cache.
+///     .build();
+/// cache.insert(1, "one".to_string());
+///
+/// // Evict based on the byte length of strings in the cache.
+/// let cache = Cache::builder()
+///     // A weigher closure takes &K and &V and returns a u32
+///     // representing the relative size of the entry.
+///     .weigher(|_key, value: &String| -> u32 {
+///         value.len().try_into().unwrap_or(u32::MAX)
+///     })
+///     // This cache will hold up to 32MiB of values.
+///     .max_capacity(32 * 1024 * 1024)
+///     .build();
+/// cache.insert(2, "two".to_string());
+/// ```
+///
+/// If your cache should not grow beyond a certain size, use the `max_capacity`
+/// method of the [`CacheBuilder`][builder-struct] to set the upper bound. The cache
+/// will try to evict entries that have not been used recently or very often.
+///
+/// At the cache creation time, a weigher closure can be set by the `weigher` method
+/// of the `CacheBuilder`. A weigher closure takes `&K` and `&V` as the arguments and
+/// returns a `u32` representing the relative size of the entry:
+///
+/// - If the `weigher` is _not_ set, the cache will treat each entry has the same
+///   size of `1`. This means the cache will be bounded by the number of entries.
+/// - If the `weigher` is set, the cache will call the weigher to calculate the
+///   weighted size (relative size) on an entry. This means the cache will be bounded
+///   by the total weighted size of entries.
+///
+/// Note that weighted sizes are not used when making eviction selections.
+///
+/// [builder-struct]: ./struct.CacheBuilder.html
+///
+/// ## Time-based (Expirations)
+///
+/// `Cache` supports the following expiration policies:
+///
+/// - **Time to live**: A cached entry will be expired after the specified duration
+///   past from `insert`.
+/// - **Time to idle**: A cached entry will be expired after the specified duration
+///   past from `get` or `insert`.
+///
+/// ```rust
+/// use moka::sync::Cache;
+/// use std::time::Duration;
+///
+/// let cache = Cache::builder()
+///     // Time to live (TTL): 30 minutes
+///     .time_to_live(Duration::from_secs(30 * 60))
+///     // Time to idle (TTI):  5 minutes
+///     .time_to_idle(Duration::from_secs( 5 * 60))
+///     // Create the cache.
+///     .build();
+///
+/// // This entry will expire after 5 minutes (TTI) if there is no get().
+/// cache.insert(0, "zero");
+///
+/// // This get() will extend the entry life for another 5 minutes.
+/// cache.get(&0);
+///
+/// // Even though we keep calling get(), the entry will expire
+/// // after 30 minutes (TTL) from the insert().
+/// ```
+///
 /// # Thread Safety
 ///
 /// All methods provided by the `Cache` are considered thread-safe, and can be safely
@@ -110,35 +212,6 @@ use std::{
 /// reference-counted pointers to the internal data structures.
 ///
 /// [once-cell-crate]: https://crates.io/crates/once_cell
-///
-/// # Avoiding to clone the value at `get`
-///
-/// The return type of `get` method is `Option<V>` instead of `Option<&V>`. Every
-/// time `get` is called for an existing key, it creates a clone of the stored value
-/// `V` and returns it. This is because the `Cache` allows concurrent updates from
-/// threads so a value stored in the cache can be dropped or replaced at any time by
-/// any other thread. `get` cannot return a reference `&V` as it is impossible to
-/// guarantee the value outlives the reference.
-///
-/// If you want to store values that will be expensive to clone, wrap them by
-/// `std::sync::Arc` before storing in a cache. [`Arc`][rustdoc-std-arc] is a
-/// thread-safe reference-counted pointer and its `clone()` method is cheap.
-///
-/// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
-///
-/// # Expiration Policies
-///
-/// `Cache` supports the following expiration policies:
-///
-/// - **Time to live**: A cached entry will be expired after the specified duration
-///   past from `insert`.
-/// - **Time to idle**: A cached entry will be expired after the specified duration
-///   past from `get` or `insert`.
-///
-/// See the [`CacheBuilder`][builder-struct]'s doc for how to configure a cache
-/// with them.
-///
-/// [builder-struct]: ./struct.CacheBuilder.html
 ///
 /// # Hashing Algorithm
 ///
@@ -188,7 +261,7 @@ where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    /// Constructs a new `Cache<K, V>` that will store up to the `max_capacity` entries.
+    /// Constructs a new `Cache<K, V>` that will store up to the `max_capacity`.
     ///
     /// To adjust various configuration knobs such as `initial_capacity` or
     /// `time_to_live`, use the [`CacheBuilder`][builder-struct].
@@ -196,7 +269,23 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: usize) -> Self {
         let build_hasher = RandomState::default();
-        Self::with_everything(max_capacity, None, build_hasher, None, None, false)
+        Self::with_everything(
+            Some(max_capacity),
+            None,
+            build_hasher,
+            None,
+            None,
+            None,
+            false,
+        )
+    }
+
+    /// Returns a [`CacheBuilder`][builder-struct], which can builds a `Cache` or
+    /// `SegmentedCache` with various configuration knobs.
+    ///
+    /// [builder-struct]: ./struct.CacheBuilder.html
+    pub fn builder() -> CacheBuilder<K, V, Cache<K, V, RandomState>> {
+        CacheBuilder::default()
     }
 }
 
@@ -207,9 +296,10 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn with_everything(
-        max_capacity: usize,
+        max_capacity: Option<usize>,
         initial_capacity: Option<usize>,
         build_hasher: S,
+        weigher: Option<Weigher<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -219,6 +309,7 @@ where
                 max_capacity,
                 initial_capacity,
                 build_hasher.clone(),
+                weigher,
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
@@ -500,8 +591,8 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(entry) = self.base.remove(key) {
-            let op = WriteOp::Remove(entry);
+        if let Some(kv) = self.base.remove_entry(key) {
+            let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
             Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to remove");
         }
@@ -564,7 +655,7 @@ where
     }
 
     /// Returns the `max_capacity` of this cache.
-    pub fn max_capacity(&self) -> usize {
+    pub fn max_capacity(&self) -> Option<usize> {
         self.base.max_capacity()
     }
 
@@ -703,7 +794,7 @@ mod tests {
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
-        // because d's frequency is higher then c's.
+        // because d's frequency is higher than c's.
         cache.insert("d", "dennis");
         cache.sync();
         assert_eq!(cache.get(&"a"), Some("alice"));
@@ -713,6 +804,74 @@ mod tests {
 
         cache.invalidate(&"b");
         assert_eq!(cache.get(&"b"), None);
+    }
+
+    #[test]
+    fn size_aware_eviction() {
+        let weigher = |_k: &&str, v: &(&str, u32)| v.1;
+
+        let alice = ("alice", 10);
+        let bob = ("bob", 15);
+        let bill = ("bill", 20);
+        let cindy = ("cindy", 5);
+        let david = ("david", 15);
+        let dennis = ("dennis", 15);
+
+        let mut cache = Cache::builder().max_capacity(31).weigher(weigher).build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", alice);
+        cache.insert("b", bob);
+        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"b"), Some(bob));
+        cache.sync();
+        // order (LRU -> MRU) and counts: a -> 1, b -> 1
+
+        cache.insert("c", cindy);
+        assert_eq!(cache.get(&"c"), Some(cindy));
+        // order and counts: a -> 1, b -> 1, c -> 1
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"b"), Some(bob));
+        cache.sync();
+        // order and counts: c -> 1, a -> 2, b -> 2
+
+        // To enter "d" (weight: 15), it needs to evict "c" (w: 5) and "a" (w: 10).
+        // "d" must have higher count than 3, which is the aggregated count
+        // of "a" and "c".
+        cache.insert("d", david); //   count: d -> 0
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 1
+
+        cache.insert("d", david);
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 2
+
+        cache.insert("d", david);
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 3
+
+        cache.insert("d", david);
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None); //   d -> 4
+
+        // Finally "d" should be admitted by evicting "c" and "a".
+        cache.insert("d", dennis);
+        cache.sync();
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), Some(bob));
+        assert_eq!(cache.get(&"c"), None);
+        assert_eq!(cache.get(&"d"), Some(dennis));
+
+        // Update "b" with "bill" (w: 20). This should evict "d" (w: 15).
+        cache.insert("b", bill);
+        cache.sync();
+        assert_eq!(cache.get(&"b"), Some(bill));
+        assert_eq!(cache.get(&"d"), None);
     }
 
     #[test]
