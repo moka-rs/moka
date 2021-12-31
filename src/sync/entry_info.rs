@@ -6,6 +6,10 @@ use std::sync::{
 use super::{AccessTime, CacheFeatures};
 use crate::common::{atomic_time::AtomicInstant, time::Instant};
 
+// We use enum-based dynamic dispatch here, rather than using trait-object-based
+// dynamic dispatch. Our benchmark programs showed enum-based dispatch was slightly
+// (1% or 2%) faster than other in our use cases.
+
 pub(crate) enum EntryInfo {
     Plain(Arc<Plain>),
     Weighted(Arc<Weighted>),

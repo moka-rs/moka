@@ -254,7 +254,6 @@ where
             Arc::clone(&key),
             // on_insert
             || {
-                // let entry = Arc::new(ValueEntry::new(value.clone(), ws));
                 let entry = self.new_value_entry(value.clone(), weight);
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((

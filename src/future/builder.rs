@@ -145,10 +145,10 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
-    /// Sets the initial capacity of the cache.
-    pub fn initial_capacity(self, capacity: usize) -> Self {
+    /// Sets the initial capacity (number of entries) of the cache.
+    pub fn initial_capacity(self, number_of_entries: usize) -> Self {
         Self {
-            initial_capacity: Some(capacity),
+            initial_capacity: Some(number_of_entries),
             ..self
         }
     }
