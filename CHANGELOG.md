@@ -1,5 +1,14 @@
 # Moka &mdash; Change Log
 
+## Version 0.7.0
+
+### Added
+
+- Add support for weight-based (size aware) cache management.
+  ([#24][gh-pull-0024])
+- Add support for unbound cache. ([#24][gh-pull-0024])
+
+
 ## Version 0.6.3
 
 ### Fixed
@@ -36,11 +45,6 @@
   `future::Cache` and `sync::Cache`; a panic in the `init` future/closure
   causes subsequent calls on the same key to get "unreachable code" panics.
   ([#43][gh-issue-0043])
-
-### Added
-
-- Add support for size aware admission policy. ([#24][gh-pull-0024])
-- Add support for unbound cache. ([#24][gh-pull-0024])
 
 ### Changed
 
