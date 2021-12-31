@@ -58,7 +58,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.6", features = ["future"] }
+/// // moka = { version = "0.7", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures = "0.3"
 ///
@@ -148,7 +148,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.6", features = ["future"] }
+/// // moka = { version = "0.7", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures = "0.3"
 ///
@@ -210,7 +210,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.6", features = ["future"] }
+/// // moka = { version = "0.7", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures = "0.3"
 ///
@@ -398,7 +398,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.6", features = ["future"] }
+    /// // moka = { version = "0.7", features = ["future"] }
     /// // futures = "0.3"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
@@ -489,7 +489,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.6", features = ["future"] }
+    /// // moka = { version = "0.7", features = ["future"] }
     /// // futures = "0.3"
     /// // reqwest = "0.11"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
