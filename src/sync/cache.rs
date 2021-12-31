@@ -30,7 +30,8 @@ use std::{
 ///
 /// # Examples
 ///
-/// Cache entries are manually added using `insert` method, and are stored in the
+/// Cache entries are manually added using [`insert`](#method.insert) or
+/// [`get_or_insert_with`](#method.get_or_insert_with) method, and are stored in the
 /// cache until either evicted or manually invalidated.
 ///
 /// Here's an example of reading and updating a cache by using multiple threads:
@@ -88,6 +89,11 @@ use std::{
 /// }
 /// ```
 ///
+/// If you want to atomically initialize and insert a value when the key is not
+/// present, you might want to check other insertion methods
+/// [`get_or_insert_with`](#method.get_or_insert_with) and
+/// [`get_or_try_insert_with`](#method.get_or_try_insert_with).
+///
 /// # Avoiding to clone the value at `get`
 ///
 /// The return type of `get` method is `Option<V>` instead of `Option<&V>`. Every
@@ -124,14 +130,13 @@ use std::{
 ///
 /// // Evict based on the byte length of strings in the cache.
 /// let cache = Cache::builder()
-///     // Up to 32MiB instead of 3M entries because this cache is going to have
-///     // a weigher.
-///     .max_capacity(32 * 1024 * 1024)
-///     // A weigher closure takes &K and &V and returns a u32 representing the
-///     // relative size of the entry.
+///     // A weigher closure takes &K and &V and returns a u32
+///     // representing the relative size of the entry.
 ///     .weigher(|_key, value: &String| -> u32 {
 ///         value.len().try_into().unwrap_or(u32::MAX)
 ///     })
+///     // This cache will hold up to 32MiB of values.
+///     .max_capacity(32 * 1024 * 1024)
 ///     .build();
 /// cache.insert(2, "two".to_string());
 /// ```
@@ -275,6 +280,10 @@ where
         )
     }
 
+    /// Returns a [`CacheBuilder`][builder-struct], which can builds a `Cache` or
+    /// `SegmentedCache` with various configuration knobs.
+    ///
+    /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn builder() -> CacheBuilder<K, V, Cache<K, V, RandomState>> {
         CacheBuilder::default()
     }

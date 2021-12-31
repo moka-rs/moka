@@ -84,6 +84,10 @@ where
         )
     }
 
+    /// Returns a [`CacheBuilder`][builder-struct], which can builds a
+    /// `SegmentedCache` with various configuration knobs.
+    ///
+    /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn builder(num_segments: usize) -> CacheBuilder<K, V, SegmentedCache<K, V, RandomState>> {
         CacheBuilder::default().segments(num_segments)
     }

@@ -42,8 +42,9 @@ use std::{
 /// cache until either evicted or manually invalidated:
 ///
 /// - Inside an async context (`async fn` or `async` block), use
-///   [`insert`](#method.insert) or [`invalidate`](#method.invalidate) method for
-///   updating the cache and `await` them.
+///   [`insert`](#method.insert), [`get_or_insert_with`](#method.get_or_insert_with)
+///   or [`invalidate`](#method.invalidate) method for updating the cache and `await`
+///   them.
 /// - Outside any async context, use [`blocking_insert`](#method.blocking_insert) or
 ///   [`blocking_invalidate`](#method.blocking_invalidate) methods. They will block
 ///   for a short time under heavy updates.
@@ -116,6 +117,11 @@ use std::{
 /// }
 /// ```
 ///
+/// If you want to atomically initialize and insert a value when the key is not
+/// present, you might want to check other insertion methods
+/// [`get_or_insert_with`](#method.get_or_insert_with) and
+/// [`get_or_try_insert_with`](#method.get_or_try_insert_with).
+///
 /// # Avoiding to clone the value at `get`
 ///
 /// The return type of `get` method is `Option<V>` instead of `Option<&V>`. Every
@@ -161,14 +167,13 @@ use std::{
 ///
 ///     // Evict based on the byte length of strings in the cache.
 ///     let cache = Cache::builder()
-///         // Up to 32MiB instead of 3M entries because this cache is going to have
-///         // a weigher.
+///         // A weigher closure takes &K and &V and returns a u32
+///         // representing the relative size of the entry.
+///         .weigher(|_key, value: &String| -> u32 {
+///             value.len().try_into().unwrap_or(u32::MAX)
+///         })
+///         // This cache will hold up to 32MiB of values.
 ///         .max_capacity(32 * 1024 * 1024)
-///         // A weigher closure takes &K and &V and returns a u32 representing the
-///         // relative size of the entry.
-///        .weigher(|_key, value: &String| -> u32 {
-///            value.len().try_into().unwrap_or(u32::MAX)
-///        })
 ///         .build();
 ///     cache.insert(2, "two".to_string()).await;
 /// }
@@ -221,13 +226,13 @@ use std::{
 ///         .time_to_idle(Duration::from_secs( 5 * 60))
 ///         // Create the cache.
 ///         .build();
-///    
+///
 ///     // This entry will expire after 5 minutes (TTI) if there is no get().
 ///     cache.insert(0, "zero").await;
-///    
+///
 ///     // This get() will extend the entry life for another 5 minutes.
 ///     cache.get(&0);
-///    
+///
 ///     // Even though we keep calling get(), the entry will expire
 ///     // after 30 minutes (TTL) from the insert().
 /// }
@@ -323,6 +328,10 @@ where
         )
     }
 
+    /// Returns a [`CacheBuilder`][builder-struct], which can builds a `Cache` with
+    /// various configuration knobs.
+    ///
+    /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn builder() -> CacheBuilder<K, V, Cache<K, V, RandomState>> {
         CacheBuilder::default()
     }

@@ -138,6 +138,10 @@ where
         Self::with_everything(Some(max_capacity), None, build_hasher, None, None, None)
     }
 
+    /// Returns a [`CacheBuilder`][builder-struct], which can builds a `Cache` with
+    /// various configuration knobs.
+    ///
+    /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn builder() -> CacheBuilder<K, V, Cache<K, V, RandomState>> {
         CacheBuilder::default()
     }

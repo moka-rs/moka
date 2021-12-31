@@ -8,8 +8,8 @@
 [![license][license-badge]](#license)
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_shield)
 
-Moka is a fast, concurrent cache library for Rust. Moka is inspired by
-[Caffeine][caffeine-git] (Java).
+Moka is a fast, concurrent cache library for Rust. Moka is inspired by the
+[Caffeine][caffeine-git] library for Java.
 
 Moka provides cache implementations on top of hash maps. They support full
 concurrency of retrievals and a high expected concurrency for updates. Moka also
@@ -56,15 +56,15 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 
 ## Moka in Production
 
-Moka is powering production services as well as embedded devices like home routers.
-Here are some highlights:
+Moka is powering production services as well as embedded Linux devices like home
+routers. Here are some highlights:
 
 - [crates.io](https://crates.io/): The official crate registry has been using Moka in
   its API service to reduce the loads on PostgreSQL. Moka is maintaining
   [cache hit rates of ~85%][gh-discussions-51] for the high-traffic download endpoint.
   (Moka used: Nov 2021 &mdash; present)
 - [aliyundrive-webdav][aliyundrive-webdav-git]: This WebDAV gateway for a cloud drive
-  may have been deployed in hundreds of home WiFi routers, including inexpensive
+  may have been deployed in hundreds of home Wi-Fi routers, including inexpensive
   models with 32-bit MIPS or ARMv5TE-based SoCs. Moka is used to cache the metadata
   of remote files. (Moka used: Aug 2021 &mdash; present)
 
@@ -93,8 +93,8 @@ moka = { version = "0.6", features = ["future"] }
 
 The thread-safe, synchronous caches are defined in the `sync` module.
 
-Cache entries are manually added using `insert` method, and are stored in the cache
-until either evicted or manually invalidated.
+Cache entries are manually added using `insert` or `get_or_insert_with` method, and
+are stored in the cache until either evicted or manually invalidated.
 
 Here's an example of reading and updating a cache by using multiple threads:
 
@@ -153,6 +153,12 @@ fn main() {
     }
 }
 ```
+
+If you want to atomically initialize and insert a value when the key is not present,
+you might want to check [the document][doc-sync-cache] for other insertion methods
+`get_or_insert_with` and `get_or_try_insert_with`.
+
+[doc-sync-cache]: https://docs.rs/moka/*/moka/sync/struct.Cache.html#method.get_or_insert_with
 
 
 ## Example: Asynchronous Cache
@@ -241,6 +247,12 @@ async fn main() {
 }
 ```
 
+If you want to atomically initialize and insert a value when the key is not present,
+you might want to check [the document][doc-future-cache] for other insertion methods
+`get_or_insert_with` and `get_or_try_insert_with`.
+
+[doc-future-cache]: https://docs.rs/moka/*/moka/future/struct.Cache.html#method.get_or_insert_with
+
 
 ## Avoiding to clone the value at `get`
 
@@ -283,7 +295,6 @@ use std::convert::TryInto;
 use moka::sync::Cache;
 
 fn main() {
-    // Evict based on the byte length of strings in the cache.
     let cache = Cache::builder()
         // A weigher closure takes &K and &V and returns a u32 representing the
         // relative size of the entry. Here, we use the byte length of the value
@@ -297,6 +308,8 @@ fn main() {
     cache.insert(0, "zero".to_string());
 }
 ```
+
+Note that weighted sizes are not used when making eviction selections.
 
 
 ## Example: Expiration Policies
@@ -443,8 +456,18 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
 ## Road Map
 
 - [x] `async` optimized caches. (`v0.2.0`)
-- [ ] Weight based cache management ([#24](https://github.com/moka-rs/moka/pull/24))
+- [x] Bounding a cache with weighted size of entry.
+      (`v0.7.0` via [#24](https://github.com/moka-rs/moka/pull/24))
+- [ ] API stabilization. (Smaller core API, shorter names for frequently used
+      methods)
+    - e.g.
+    - `get(&Q)` → `get_if_present(&Q)`
+    - `get_or_insert_with(K, F)` → `get(K, F)`
+    - `get_or_try_insert_with(K, F)` → `try_get(K, F)`
+    - `blocking_insert(K, V)` → `blocking().insert(K, V)`.
+    - `time_to_live()` → `config().time_to_live()`
 - [ ] Cache statistics. (Hit rate, etc.)
+- [ ] Notifications on eviction, etc.
 - [ ] Upgrade TinyLFU to Window TinyLFU.
 - [ ] The variable (per-entry) expiration, using a hierarchical timer wheel.
 
@@ -453,6 +476,14 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
 
 Moka is named after the [moka pot][moka-pot-wikipedia], a stove-top coffee maker that
 brews espresso-like coffee using boiling water pressurized by steam.
+
+This name would imply the following facts and hopes:
+
+- Moka is a part of the Java Caffeine cache family.
+- It is written in Rust. (Many moka pots are made of aluminum alloy or stainless
+  steel. We know they don't rust though)
+- It should be fast. ("Espresso" in Italian means express)
+- It should be easy to use, like a moka pot.
 
 [moka-pot-wikipedia]: https://en.wikipedia.org/wiki/Moka_pot
 

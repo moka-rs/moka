@@ -154,6 +154,9 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     }
 
     /// Sets the weigher closure of the cache.
+    ///
+    /// The closure should take `&K` and `&V` as the arguments and returns a `u32`
+    /// representing the relative size of the entry.
     pub fn weigher(self, weigher: impl Fn(&K, &V) -> u32 + Send + Sync + 'static) -> Self {
         Self {
             weigher: Some(Arc::new(weigher)),
