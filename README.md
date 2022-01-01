@@ -458,13 +458,13 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
 - [x] `async` optimized caches. (`v0.2.0`)
 - [x] Bounding a cache with weighted size of entry.
       (`v0.7.0` via [#24](https://github.com/moka-rs/moka/pull/24))
-- [ ] API stabilization. (Smaller core API, shorter names for frequently used
-      methods)
+- [ ] API stabilization. (Smaller core cache API, shorter names for frequently
+      used methods)
     - e.g.
-    - `get(&Q)` → `get_if_present(&Q)`
     - `get_or_insert_with(K, F)` → `get(K, F)`
     - `get_or_try_insert_with(K, F)` → `try_get(K, F)`
-    - `blocking_insert(K, V)` → `blocking().insert(K, V)`.
+    - `get(&Q)` → `get_if_present(&Q)`
+    - `blocking_insert(K, V)` → `blocking().insert(K, V)`
     - `time_to_live()` → `config().time_to_live()`
 - [ ] Cache statistics. (Hit rate, etc.)
 - [ ] Notifications on eviction, etc.

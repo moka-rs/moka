@@ -70,7 +70,7 @@ where
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
-    pub fn new(max_capacity: usize, num_segments: usize) -> Self {
+    pub fn new(max_capacity: u64, num_segments: usize) -> Self {
         let build_hasher = RandomState::default();
         Self::with_everything(
             Some(max_capacity),
@@ -104,7 +104,7 @@ where
     /// Panics if `num_segments` is 0.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_everything(
-        max_capacity: Option<usize>,
+        max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         num_segments: usize,
         build_hasher: S,
@@ -256,7 +256,7 @@ where
     }
 
     /// Returns the `max_capacity` of this cache.
-    pub fn max_capacity(&self) -> Option<usize> {
+    pub fn max_capacity(&self) -> Option<u64> {
         self.inner.desired_capacity
     }
 
@@ -273,6 +273,24 @@ where
     /// Returns the number of internal segments of this cache.
     pub fn num_segments(&self) -> usize {
         self.inner.segments.len()
+    }
+
+    #[cfg(test)]
+    fn estimated_entry_count(&self) -> u64 {
+        self.inner
+            .segments
+            .iter()
+            .map(|seg| seg.estimated_entry_count())
+            .sum()
+    }
+
+    #[cfg(test)]
+    fn weighted_size(&self) -> u64 {
+        self.inner
+            .segments
+            .iter()
+            .map(|seg| seg.weighted_size())
+            .sum()
     }
 
     // /// This is used by unit tests to get consistent result.
@@ -303,13 +321,9 @@ where
 impl<K, V, S> SegmentedCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    fn table_size(&self) -> usize {
-        self.inner.segments.iter().map(|seg| seg.table_size()).sum()
-    }
-
     fn invalidation_predicate_count(&self) -> usize {
         self.inner
             .segments
@@ -357,7 +371,7 @@ impl MockExpirationClock {
 }
 
 struct Inner<K, V, S> {
-    desired_capacity: Option<usize>,
+    desired_capacity: Option<u64>,
     segments: Box<[Cache<K, V, S>]>,
     build_hasher: S,
     segment_shift: u32,
@@ -374,7 +388,7 @@ where
     /// Panics if `num_segments` is 0.
     #[allow(clippy::too_many_arguments)]
     fn new(
-        max_capacity: Option<usize>,
+        max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         num_segments: usize,
         build_hasher: S,
@@ -388,7 +402,7 @@ where
         let actual_num_segments = num_segments.next_power_of_two();
         let segment_shift = 64 - actual_num_segments.trailing_zeros();
         // TODO: Round up.
-        let seg_max_capacity = max_capacity.map(|n| n / actual_num_segments);
+        let seg_max_capacity = max_capacity.map(|n| n / actual_num_segments as u64);
         let seg_init_capacity = initial_capacity.map(|cap| cap / actual_num_segments);
         // NOTE: We cannot initialize the segments as `vec![cache; actual_num_segments]`
         // because Cache::clone() does not clone its inner but shares the same inner.
@@ -557,11 +571,23 @@ mod tests {
         assert_eq!(cache.get(&"c"), None);
         assert_eq!(cache.get(&"d"), Some(dennis));
 
-        // Update "b" with "bill" (w: 20). This should evict "d" (w: 15).
+        // Update "b" with "bill" (w: 15 -> 20). This should evict "d" (w: 15).
         cache.insert("b", bill);
         cache.sync();
         assert_eq!(cache.get(&"b"), Some(bill));
         assert_eq!(cache.get(&"d"), None);
+
+        // Re-add "a" (w: 10) and update "b" with "bob" (w: 20 -> 15).
+        cache.insert("a", alice);
+        cache.insert("b", bob);
+        cache.sync();
+        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"b"), Some(bob));
+        assert_eq!(cache.get(&"d"), None);
+
+        // Verify the sizes.
+        assert_eq!(cache.estimated_entry_count(), 2);
+        assert_eq!(cache.weighted_size(), 25);
     }
 
     #[test]
@@ -670,7 +696,7 @@ mod tests {
         assert_eq!(cache.get(&1), Some("bob"));
         // This should survive as it was inserted after calling invalidate_entries_if.
         assert_eq!(cache.get(&3), Some("alice"));
-        assert_eq!(cache.table_size(), 2);
+        assert_eq!(cache.estimated_entry_count(), 2);
         assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 0);
 
         mock.increment(Duration::from_secs(5)); // 15 secs from the start.
@@ -687,7 +713,7 @@ mod tests {
 
         assert!(cache.get(&1).is_none());
         assert!(cache.get(&3).is_none());
-        assert_eq!(cache.table_size(), 0);
+        assert_eq!(cache.estimated_entry_count(), 0);
         assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 0);
 
         Ok(())

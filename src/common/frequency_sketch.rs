@@ -14,6 +14,7 @@
 /// A probabilistic multi-set for estimating the popularity of an element within
 /// a time window. The maximum frequency of an element is limited to 15 (4-bits)
 /// and an aging process periodically halves the popularity of all elements.
+#[derive(Default)]
 pub(crate) struct FrequencySketch {
     sample_size: u32,
     table_mask: u64,
@@ -67,8 +68,11 @@ static ONE_MASK: u64 = 0x1111_1111_1111_1111;
 // -------------------------------------------------------------------------------
 
 impl FrequencySketch {
-    /// Creates a frequency sketch with the capacity.
-    pub(crate) fn with_capacity(cap: u32) -> Self {
+    /// Initializes and increases the capacity of this `FrequencySketch` instance,
+    /// if necessary, to ensure that it can accurately estimate the popularity of
+    /// elements given the maximum size of the cache. This operation forgets all
+    /// previous counts when resizing.
+    pub(crate) fn ensure_capacity(&mut self, cap: u32) {
         // The max byte size of the table, Box<[u64; table_size]>
         //
         // | Pointer width    | Max size |
@@ -91,24 +95,27 @@ impl FrequencySketch {
         } else {
             maximum.next_power_of_two()
         };
-        let table = vec![0; table_size as usize].into_boxed_slice();
-        let table_mask = 0.max(table_size - 1) as u64;
-        let sample_size = if cap == 0 {
+
+        if self.table.len() as u32 >= table_size {
+            return;
+        }
+
+        self.table = vec![0; table_size as usize].into_boxed_slice();
+        self.table_mask = 0.max(table_size - 1) as u64;
+        self.sample_size = if cap == 0 {
             10
         } else {
             maximum.saturating_mul(10).min(i32::MAX as u32)
         };
-        Self {
-            sample_size,
-            table_mask,
-            table,
-            size: 0,
-        }
     }
 
     /// Takes the hash value of an element, and returns the estimated number of
     /// occurrences of the element, up to the maximum (15).
     pub(crate) fn frequency(&self, hash: u64) -> u8 {
+        if self.table.is_empty() {
+            return 0;
+        }
+
         let start = ((hash & 3) << 2) as u8;
         let mut frequency = std::u8::MAX;
         for i in 0..4 {
@@ -125,6 +132,10 @@ impl FrequencySketch {
     /// exceeds a threshold. This process provides a frequency aging to allow
     /// expired long term entries to fade away.
     pub(crate) fn increment(&mut self, hash: u64) {
+        if self.table.is_empty() {
+            return;
+        }
+
         let start = ((hash & 3) << 2) as u8;
         let mut added = false;
         for i in 0..4 {
@@ -201,7 +212,8 @@ mod tests {
     // This test was ported from Caffeine.
     #[test]
     fn increment_once() {
-        let mut sketch = FrequencySketch::with_capacity(512);
+        let mut sketch = FrequencySketch::default();
+        sketch.ensure_capacity(512);
         let hasher = hasher();
         let item_hash = hasher(*ITEM);
         sketch.increment(item_hash);
@@ -211,7 +223,8 @@ mod tests {
     // This test was ported from Caffeine.
     #[test]
     fn increment_max() {
-        let mut sketch = FrequencySketch::with_capacity(512);
+        let mut sketch = FrequencySketch::default();
+        sketch.ensure_capacity(512);
         let hasher = hasher();
         let item_hash = hasher(*ITEM);
         for _ in 0..20 {
@@ -223,7 +236,8 @@ mod tests {
     // This test was ported from Caffeine.
     #[test]
     fn increment_distinct() {
-        let mut sketch = FrequencySketch::with_capacity(512);
+        let mut sketch = FrequencySketch::default();
+        sketch.ensure_capacity(512);
         let hasher = hasher();
         sketch.increment(hasher(*ITEM));
         sketch.increment(hasher(ITEM.wrapping_add(1)));
@@ -235,7 +249,8 @@ mod tests {
     // This test was ported from Caffeine.
     #[test]
     fn index_of_around_zero() {
-        let sketch = FrequencySketch::with_capacity(512);
+        let mut sketch = FrequencySketch::default();
+        sketch.ensure_capacity(512);
         let mut indexes = std::collections::HashSet::new();
         let hashes = vec![std::u64::MAX, 0, 1];
         for hash in hashes.iter() {
@@ -250,7 +265,8 @@ mod tests {
     #[test]
     fn reset() {
         let mut reset = false;
-        let mut sketch = FrequencySketch::with_capacity(64);
+        let mut sketch = FrequencySketch::default();
+        sketch.ensure_capacity(64);
         let hasher = hasher();
 
         for i in 1..(20 * sketch.table.len() as u32) {
@@ -268,7 +284,8 @@ mod tests {
     // This test was ported from Caffeine.
     #[test]
     fn heavy_hitters() {
-        let mut sketch = FrequencySketch::with_capacity(65_536);
+        let mut sketch = FrequencySketch::default();
+        sketch.ensure_capacity(65_536);
         let hasher = hasher();
 
         for i in 100..100_000 {

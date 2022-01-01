@@ -267,7 +267,7 @@ where
     /// `time_to_live`, use the [`CacheBuilder`][builder-struct].
     ///
     /// [builder-struct]: ./struct.CacheBuilder.html
-    pub fn new(max_capacity: usize) -> Self {
+    pub fn new(max_capacity: u64) -> Self {
         let build_hasher = RandomState::default();
         Self::with_everything(
             Some(max_capacity),
@@ -296,7 +296,7 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn with_everything(
-        max_capacity: Option<usize>,
+        max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
@@ -675,6 +675,16 @@ where
     pub fn num_segments(&self) -> usize {
         1
     }
+
+    #[cfg(test)]
+    pub(crate) fn estimated_entry_count(&self) -> u64 {
+        self.base.estimated_entry_count()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn weighted_size(&self) -> u64 {
+        self.base.weighted_size()
+    }
 }
 
 impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
@@ -727,15 +737,11 @@ where
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn is_table_empty(&self) -> bool {
-        self.table_size() == 0
-    }
-
-    pub(crate) fn table_size(&self) -> usize {
-        self.base.table_size()
+        self.estimated_entry_count() == 0
     }
 
     pub(crate) fn invalidation_predicate_count(&self) -> usize {
@@ -867,11 +873,23 @@ mod tests {
         assert_eq!(cache.get(&"c"), None);
         assert_eq!(cache.get(&"d"), Some(dennis));
 
-        // Update "b" with "bill" (w: 20). This should evict "d" (w: 15).
+        // Update "b" with "bill" (w: 15 -> 20). This should evict "d" (w: 15).
         cache.insert("b", bill);
         cache.sync();
         assert_eq!(cache.get(&"b"), Some(bill));
         assert_eq!(cache.get(&"d"), None);
+
+        // Re-add "a" (w: 10) and update "b" with "bob" (w: 20 -> 15).
+        cache.insert("a", alice);
+        cache.insert("b", bob);
+        cache.sync();
+        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"b"), Some(bob));
+        assert_eq!(cache.get(&"d"), None);
+
+        // Verify the sizes.
+        assert_eq!(cache.estimated_entry_count(), 2);
+        assert_eq!(cache.weighted_size(), 25);
     }
 
     #[test]
@@ -971,7 +989,7 @@ mod tests {
         assert_eq!(cache.get(&1), Some("bob"));
         // This should survive as it was inserted after calling invalidate_entries_if.
         assert_eq!(cache.get(&3), Some("alice"));
-        assert_eq!(cache.table_size(), 2);
+        assert_eq!(cache.estimated_entry_count(), 2);
         assert_eq!(cache.invalidation_predicate_count(), 0);
 
         mock.increment(Duration::from_secs(5)); // 15 secs from the start.
@@ -988,7 +1006,7 @@ mod tests {
 
         assert!(cache.get(&1).is_none());
         assert!(cache.get(&3).is_none());
-        assert_eq!(cache.table_size(), 0);
+        assert_eq!(cache.estimated_entry_count(), 0);
         assert_eq!(cache.invalidation_predicate_count(), 0);
 
         Ok(())
@@ -1025,13 +1043,13 @@ mod tests {
         cache.insert("b", "bob");
         cache.sync();
 
-        assert_eq!(cache.table_size(), 1);
+        assert_eq!(cache.estimated_entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 15 secs.
         cache.sync();
 
         assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.table_size(), 1);
+        assert_eq!(cache.estimated_entry_count(), 1);
 
         cache.insert("b", "bill");
         cache.sync();
@@ -1040,7 +1058,7 @@ mod tests {
         cache.sync();
 
         assert_eq!(cache.get(&"b"), Some("bill"));
-        assert_eq!(cache.table_size(), 1);
+        assert_eq!(cache.estimated_entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 25 secs
         cache.sync();
@@ -1078,14 +1096,14 @@ mod tests {
         cache.insert("b", "bob");
         cache.sync();
 
-        assert_eq!(cache.table_size(), 2);
+        assert_eq!(cache.estimated_entry_count(), 2);
 
         mock.increment(Duration::from_secs(5)); // 15 secs.
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.table_size(), 1);
+        assert_eq!(cache.estimated_entry_count(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
         cache.sync();
