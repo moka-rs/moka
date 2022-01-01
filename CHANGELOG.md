@@ -2,6 +2,10 @@
 
 ## Version 0.7.0
 
+- **Breaking change**: The type of the `max_capacity` has been changed from `usize`
+  to `u64`. This was necessary to have the weight-based cache management consistent
+  across different CPU architectures.
+
 ### Added
 
 - Add support for weight-based (size aware) cache management.
