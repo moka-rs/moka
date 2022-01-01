@@ -959,10 +959,21 @@ mod tests {
         assert_eq!(cache.get(&"c"), None);
         assert_eq!(cache.get(&"d"), Some(&dennis));
 
-        // Update "b" with "bill" (w: 20). This should evict "d" (w: 15).
+        // Update "b" with "bill" (w: 15 -> 20). This should evict "d" (w: 15).
         cache.insert("b", bill);
         assert_eq!(cache.get(&"b"), Some(&bill));
         assert_eq!(cache.get(&"d"), None);
+
+        // Re-add "a" (w: 10) and update "b" with "bob" (w: 20 -> 15).
+        cache.insert("a", alice);
+        cache.insert("b", bob);
+        assert_eq!(cache.get(&"a"), Some(&alice));
+        assert_eq!(cache.get(&"b"), Some(&bob));
+        assert_eq!(cache.get(&"d"), None);
+
+        // Verify the sizes.
+        assert_eq!(cache.entry_count, 2);
+        assert_eq!(cache.weighted_size, 25);
     }
 
     #[test]

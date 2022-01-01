@@ -212,6 +212,16 @@ where
     pub(crate) fn time_to_idle(&self) -> Option<Duration> {
         self.inner.time_to_idle()
     }
+
+    #[cfg(test)]
+    pub(crate) fn estimated_entry_count(&self) -> u64 {
+        self.inner.estimated_entry_count()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn weighted_size(&self) -> u64 {
+        self.inner.weighted_size()
+    }
 }
 
 //
@@ -357,13 +367,9 @@ where
 impl<K, V, S> BaseCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    pub(crate) fn table_size(&self) -> usize {
-        self.inner.len()
-    }
-
     pub(crate) fn invalidation_predicate_count(&self) -> usize {
         self.inner.invalidation_predicate_count()
     }
@@ -582,6 +588,18 @@ where
     #[inline]
     fn time_to_idle(&self) -> Option<Duration> {
         self.time_to_idle
+    }
+
+    #[cfg(test)]
+    #[inline]
+    fn estimated_entry_count(&self) -> u64 {
+        self.entry_count.load()
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn weighted_size(&self) -> u64 {
+        self.weighted_size.load()
     }
 
     #[inline]
@@ -1343,10 +1361,6 @@ where
     K: Hash + Eq,
     S: BuildHasher + Clone,
 {
-    fn len(&self) -> usize {
-        self.cache.len()
-    }
-
     fn invalidation_predicate_count(&self) -> usize {
         self.invalidator
             .read()

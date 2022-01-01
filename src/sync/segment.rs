@@ -275,6 +275,24 @@ where
         self.inner.segments.len()
     }
 
+    #[cfg(test)]
+    fn estimated_entry_count(&self) -> u64 {
+        self.inner
+            .segments
+            .iter()
+            .map(|seg| seg.estimated_entry_count())
+            .sum()
+    }
+
+    #[cfg(test)]
+    fn weighted_size(&self) -> u64 {
+        self.inner
+            .segments
+            .iter()
+            .map(|seg| seg.weighted_size())
+            .sum()
+    }
+
     // /// This is used by unit tests to get consistent result.
     // #[cfg(test)]
     // pub(crate) fn reconfigure_for_testing(&mut self) {
@@ -303,13 +321,9 @@ where
 impl<K, V, S> SegmentedCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    fn table_size(&self) -> usize {
-        self.inner.segments.iter().map(|seg| seg.table_size()).sum()
-    }
-
     fn invalidation_predicate_count(&self) -> usize {
         self.inner
             .segments
@@ -557,11 +571,23 @@ mod tests {
         assert_eq!(cache.get(&"c"), None);
         assert_eq!(cache.get(&"d"), Some(dennis));
 
-        // Update "b" with "bill" (w: 20). This should evict "d" (w: 15).
+        // Update "b" with "bill" (w: 15 -> 20). This should evict "d" (w: 15).
         cache.insert("b", bill);
         cache.sync();
         assert_eq!(cache.get(&"b"), Some(bill));
         assert_eq!(cache.get(&"d"), None);
+
+        // Re-add "a" (w: 10) and update "b" with "bob" (w: 20 -> 15).
+        cache.insert("a", alice);
+        cache.insert("b", bob);
+        cache.sync();
+        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"b"), Some(bob));
+        assert_eq!(cache.get(&"d"), None);
+
+        // Verify the sizes.
+        assert_eq!(cache.estimated_entry_count(), 2);
+        assert_eq!(cache.weighted_size(), 25);
     }
 
     #[test]
@@ -670,7 +696,7 @@ mod tests {
         assert_eq!(cache.get(&1), Some("bob"));
         // This should survive as it was inserted after calling invalidate_entries_if.
         assert_eq!(cache.get(&3), Some("alice"));
-        assert_eq!(cache.table_size(), 2);
+        assert_eq!(cache.estimated_entry_count(), 2);
         assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 0);
 
         mock.increment(Duration::from_secs(5)); // 15 secs from the start.
@@ -687,7 +713,7 @@ mod tests {
 
         assert!(cache.get(&1).is_none());
         assert!(cache.get(&3).is_none());
-        assert_eq!(cache.table_size(), 0);
+        assert_eq!(cache.estimated_entry_count(), 0);
         assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 0);
 
         Ok(())
