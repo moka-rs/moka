@@ -7,6 +7,7 @@ use super::{
 };
 use crate::{
     common::{
+        self,
         atomic_time::AtomicInstant,
         deque::{CacheRegion, DeqNode, Deque},
         frequency_sketch::FrequencySketch,
@@ -21,7 +22,6 @@ use smallvec::SmallVec;
 use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
-    convert::TryInto,
     hash::{BuildHasher, Hash, Hasher},
     ptr::NonNull,
     rc::Rc,
@@ -86,7 +86,7 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn new(
-        max_capacity: Option<usize>,
+        max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
@@ -377,6 +377,8 @@ where
                 job.cancel();
             }
         }
+        // Enable the frequency sketch.
+        self.inner.enable_frequency_sketch();
     }
 
     pub(crate) fn set_expiration_clock(&self, clock: Option<Clock>) {
@@ -384,18 +386,31 @@ where
     }
 }
 
-struct WeightedSize(u64);
+struct EvictionCounters {
+    entry_count: u64,
+    weighted_size: u64,
+}
 
-impl WeightedSize {
+impl EvictionCounters {
+    #[inline]
+    fn new(entry_count: u64, weighted_size: u64) -> Self {
+        Self {
+            entry_count,
+            weighted_size,
+        }
+    }
+
     #[inline]
     fn saturating_add(&mut self, weight: u32) {
-        let total = &mut self.0;
+        self.entry_count += 1;
+        let total = &mut self.weighted_size;
         *total = total.saturating_add(weight as u64);
     }
 
     #[inline]
     fn saturating_sub(&mut self, weight: u32) {
-        let total = &mut self.0;
+        self.entry_count -= 1;
+        let total = &mut self.weighted_size;
         *total = total.saturating_sub(weight as u64);
     }
 }
@@ -444,6 +459,7 @@ type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
 
 pub(crate) struct Inner<K, V, S> {
     max_capacity: Option<u64>,
+    entry_count: AtomicCell<u64>,
     weighted_size: AtomicCell<u64>,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
@@ -473,7 +489,7 @@ where
     // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
     #[allow(clippy::too_many_arguments)]
     fn new(
-        max_capacity: Option<usize>,
+        max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
@@ -496,26 +512,20 @@ where
         let features = CacheFeatures::new(weigher.is_some());
         let value_entry_builder = ValueEntryBuilder::new(features);
 
-        // Ensure skt_capacity fits in a range of `128u32..=u32::MAX`.
-        let skt_capacity = max_capacity
-            .map(|n| n.try_into().unwrap_or(u32::MAX)) // Convert to u32.
-            .unwrap_or_default()
-            .max(128);
-        let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
-
         Self {
             max_capacity: max_capacity.map(|n| n as u64),
-            weighted_size: AtomicCell::default(),
+            entry_count: Default::default(),
+            weighted_size: Default::default(),
             cache,
             build_hasher,
             value_entry_builder,
-            deques: Mutex::new(Deques::default()),
-            frequency_sketch: RwLock::new(frequency_sketch),
+            deques: Mutex::new(Default::default()),
+            frequency_sketch: RwLock::new(Default::default()),
             read_op_ch,
             write_op_ch,
             time_to_live,
             time_to_idle,
-            valid_after: AtomicInstant::default(),
+            valid_after: Default::default(),
             weigher,
             invalidator_enabled,
             // When enabled, this field will be set later via the set_invalidator method.
@@ -680,8 +690,10 @@ where
         let mut calls = 0;
         let mut should_sync = true;
 
+        let current_ec = self.entry_count.load();
         let current_ws = self.weighted_size.load();
-        let mut ws = WeightedSize(current_ws);
+        let mut counters = EvictionCounters::new(current_ec, current_ws);
+
         while should_sync && calls <= max_repeats {
             let r_len = self.read_op_ch.len();
             if r_len > 0 {
@@ -690,15 +702,20 @@ where
 
             let w_len = self.write_op_ch.len();
             if w_len > 0 {
-                self.apply_writes(&mut deqs, w_len, &mut ws);
+                self.apply_writes(&mut deqs, w_len, &mut counters);
             }
+
+            if self.should_enable_frequency_sketch(counters.weighted_size) {
+                self.enable_frequency_sketch();
+            }
+
             calls += 1;
             should_sync = self.read_op_ch.len() >= READ_LOG_FLUSH_POINT
                 || self.write_op_ch.len() >= WRITE_LOG_FLUSH_POINT;
         }
 
         if self.has_expiry() || self.has_valid_after() {
-            self.evict_expired(&mut deqs, EVICTION_BATCH_SIZE, &mut ws);
+            self.evict_expired(&mut deqs, EVICTION_BATCH_SIZE, &mut counters);
         }
 
         if self.invalidator_enabled {
@@ -708,20 +725,27 @@ where
                         invalidator,
                         &mut deqs,
                         INVALIDATION_BATCH_SIZE,
-                        &mut ws,
+                        &mut counters,
                     );
                 }
             }
         }
 
         // Evict if this cache has more entries than its capacity.
-        let weights_to_evict = self.weights_to_evict(&ws);
+        let weights_to_evict = self.weights_to_evict(&counters);
         if weights_to_evict > 0 {
-            self.evict_lru_entries(&mut deqs, EVICTION_BATCH_SIZE, weights_to_evict, &mut ws);
+            self.evict_lru_entries(
+                &mut deqs,
+                EVICTION_BATCH_SIZE,
+                weights_to_evict,
+                &mut counters,
+            );
         }
 
+        debug_assert_eq!(self.entry_count.load(), current_ec);
         debug_assert_eq!(self.weighted_size.load(), current_ws);
-        self.weighted_size.store(ws.0);
+        self.entry_count.store(counters.entry_count);
+        self.weighted_size.store(counters.weighted_size);
 
         if should_sync {
             Some(SyncPace::Fast)
@@ -743,16 +767,38 @@ where
     V: Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    fn has_enough_capacity(&self, candidate_weight: u32, ws: &WeightedSize) -> bool {
+    fn has_enough_capacity(&self, candidate_weight: u32, counters: &EvictionCounters) -> bool {
         self.max_capacity
-            .map(|limit| ws.0 + candidate_weight as u64 <= limit)
+            .map(|limit| counters.weighted_size + candidate_weight as u64 <= limit)
             .unwrap_or(true)
     }
 
-    fn weights_to_evict(&self, ws: &WeightedSize) -> u64 {
+    fn weights_to_evict(&self, counters: &EvictionCounters) -> u64 {
         self.max_capacity
-            .map(|limit| ws.0.saturating_sub(limit))
+            .map(|limit| counters.weighted_size.saturating_sub(limit))
             .unwrap_or_default()
+    }
+
+    #[inline]
+    fn should_enable_frequency_sketch(&self, weighted_size: u64) -> bool {
+        if let Some(max_cap) = self.max_capacity {
+            weighted_size >= max_cap / 2
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    fn enable_frequency_sketch(&self) {
+        if let Some(max_cap) = self.max_capacity {
+            let num_entries = if self.weigher.is_some() {
+                self.entry_count.load()
+            } else {
+                max_cap
+            };
+            let skt_capacity = common::sketch_capacity(num_entries);
+            self.frequency_sketch.write().ensure_capacity(skt_capacity);
+        }
     }
 
     fn apply_reads(&self, deqs: &mut Deques<K>, count: usize) {
@@ -772,7 +818,7 @@ where
         }
     }
 
-    fn apply_writes(&self, deqs: &mut Deques<K>, count: usize, ws: &mut WeightedSize) {
+    fn apply_writes(&self, deqs: &mut Deques<K>, count: usize, counters: &mut EvictionCounters) {
         use WriteOp::*;
         let freq = self.frequency_sketch.read();
         let ch = &self.write_op_ch;
@@ -785,8 +831,12 @@ where
                     value_entry: entry,
                     old_weight,
                     new_weight,
-                }) => self.handle_upsert(kh, entry, old_weight, new_weight, ts, deqs, &freq, ws),
-                Ok(Remove(KvEntry { key: _key, entry })) => Self::handle_remove(deqs, entry, ws),
+                }) => {
+                    self.handle_upsert(kh, entry, old_weight, new_weight, ts, deqs, &freq, counters)
+                }
+                Ok(Remove(KvEntry { key: _key, entry })) => {
+                    Self::handle_remove(deqs, entry, counters)
+                }
                 Err(_) => break,
             };
         }
@@ -802,23 +852,23 @@ where
         timestamp: Instant,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
-        ws: &mut WeightedSize,
+        counters: &mut EvictionCounters,
     ) {
         entry.set_last_accessed(timestamp);
         entry.set_last_modified(timestamp);
 
         if entry.is_admitted() {
             // The entry has been already admitted, so treat this as an update.
-            ws.saturating_add(new_weight - old_weight);
+            counters.saturating_add(new_weight - old_weight);
             deqs.move_to_back_ao(&entry);
             deqs.move_to_back_wo(&entry);
             return;
         }
 
-        if self.has_enough_capacity(new_weight, ws) {
+        if self.has_enough_capacity(new_weight, counters) {
             // There are enough room in the cache (or the cache is unbounded).
             // Add the candidate to the deques.
-            self.handle_admit(kh, &entry, new_weight, deqs, ws);
+            self.handle_admit(kh, &entry, new_weight, deqs, counters);
             return;
         }
 
@@ -847,7 +897,7 @@ where
                         .remove_entry(unsafe { &victim.as_ref().element.key })
                     {
                         // And then remove the victim from the deques.
-                        Self::handle_remove(deqs, vic_entry, ws);
+                        Self::handle_remove(deqs, vic_entry, counters);
                     } else {
                         // Could not remove the victim from the cache. Skip this
                         // victim node as its ValueEntry might have been
@@ -858,7 +908,7 @@ where
                 skipped_nodes = skipped;
 
                 // Add the candidate to the deques.
-                self.handle_admit(kh, &entry, new_weight, deqs, ws);
+                self.handle_admit(kh, &entry, new_weight, deqs, counters);
             }
             AdmissionResult::Rejected { skipped_nodes: s } => {
                 skipped_nodes = s;
@@ -958,10 +1008,10 @@ where
         entry: &Arc<ValueEntry<K, V>>,
         policy_weight: u32,
         deqs: &mut Deques<K>,
-        ws: &mut WeightedSize,
+        counters: &mut EvictionCounters,
     ) {
         let key = Arc::clone(&kh.key);
-        ws.saturating_add(policy_weight);
+        counters.saturating_add(policy_weight);
         deqs.push_back_ao(
             CacheRegion::MainProbation,
             KeyHashDate::new(kh, entry.entry_info()),
@@ -973,10 +1023,14 @@ where
         entry.set_is_admitted(true);
     }
 
-    fn handle_remove(deqs: &mut Deques<K>, entry: Arc<ValueEntry<K, V>>, ws: &mut WeightedSize) {
+    fn handle_remove(
+        deqs: &mut Deques<K>,
+        entry: Arc<ValueEntry<K, V>>,
+        counters: &mut EvictionCounters,
+    ) {
         if entry.is_admitted() {
             entry.set_is_admitted(false);
-            ws.saturating_sub(entry.policy_weight());
+            counters.saturating_sub(entry.policy_weight());
             deqs.unlink_ao(&entry);
             Deques::unlink_wo(&mut deqs.write_order, &entry);
         }
@@ -988,22 +1042,27 @@ where
         ao_deq: &mut Deque<KeyHashDate<K>>,
         wo_deq: &mut Deque<KeyDate<K>>,
         entry: Arc<ValueEntry<K, V>>,
-        ws: &mut WeightedSize,
+        counters: &mut EvictionCounters,
     ) {
         if entry.is_admitted() {
             entry.set_is_admitted(false);
-            ws.saturating_sub(entry.policy_weight());
+            counters.saturating_sub(entry.policy_weight());
             Deques::unlink_ao_from_deque(ao_deq_name, ao_deq, &entry);
             Deques::unlink_wo(wo_deq, &entry);
         }
         entry.unset_q_nodes();
     }
 
-    fn evict_expired(&self, deqs: &mut Deques<K>, batch_size: usize, ws: &mut WeightedSize) {
+    fn evict_expired(
+        &self,
+        deqs: &mut Deques<K>,
+        batch_size: usize,
+        counters: &mut EvictionCounters,
+    ) {
         let now = self.current_time_from_expiration_clock();
 
         if self.is_write_order_queue_enabled() {
-            self.remove_expired_wo(deqs, batch_size, now, ws);
+            self.remove_expired_wo(deqs, batch_size, now, counters);
         }
 
         if self.time_to_idle.is_some() || self.has_valid_after() {
@@ -1015,7 +1074,7 @@ where
             );
 
             let mut rm_expired_ao =
-                |name, deq| self.remove_expired_ao(name, deq, wo, batch_size, now, ws);
+                |name, deq| self.remove_expired_ao(name, deq, wo, batch_size, now, counters);
 
             rm_expired_ao("window", window);
             rm_expired_ao("probation", probation);
@@ -1031,7 +1090,7 @@ where
         write_order_deq: &mut Deque<KeyDate<K>>,
         batch_size: usize,
         now: Instant,
-        ws: &mut WeightedSize,
+        counters: &mut EvictionCounters,
     ) {
         let tti = &self.time_to_idle;
         let va = &self.valid_after();
@@ -1060,7 +1119,7 @@ where
                 .remove_if(key, |_, v| is_expired_entry_ao(tti, va, v, now));
 
             if let Some(entry) = maybe_entry {
-                Self::handle_remove_with_deques(deq_name, deq, write_order_deq, entry, ws);
+                Self::handle_remove_with_deques(deq_name, deq, write_order_deq, entry, counters);
             } else if !self.try_skip_updated_entry(key, deq_name, deq, write_order_deq) {
                 break;
             }
@@ -1104,7 +1163,7 @@ where
         deqs: &mut Deques<K>,
         batch_size: usize,
         now: Instant,
-        ws: &mut WeightedSize,
+        counters: &mut EvictionCounters,
     ) {
         let ttl = &self.time_to_live;
         let va = &self.valid_after();
@@ -1128,7 +1187,7 @@ where
                 .remove_if(key, |_, v| is_expired_entry_wo(ttl, va, v, now));
 
             if let Some(entry) = maybe_entry {
-                Self::handle_remove(deqs, entry, ws);
+                Self::handle_remove(deqs, entry, counters);
             } else if let Some(entry) = self.cache.get(key) {
                 if entry.last_modified().is_none() {
                     deqs.move_to_back_ao(&entry);
@@ -1155,9 +1214,9 @@ where
         invalidator: &Invalidator<K, V, S>,
         deqs: &mut Deques<K>,
         batch_size: usize,
-        ws: &mut WeightedSize,
+        counters: &mut EvictionCounters,
     ) {
-        self.process_invalidation_result(invalidator, deqs, ws);
+        self.process_invalidation_result(invalidator, deqs, counters);
         self.submit_invalidation_task(invalidator, &mut deqs.write_order, batch_size);
     }
 
@@ -1165,7 +1224,7 @@ where
         &self,
         invalidator: &Invalidator<K, V, S>,
         deqs: &mut Deques<K>,
-        ws: &mut WeightedSize,
+        counters: &mut EvictionCounters,
     ) {
         if let Some(InvalidationResult {
             invalidated,
@@ -1173,7 +1232,7 @@ where
         }) = invalidator.task_result()
         {
             for KvEntry { key: _, entry } in invalidated {
-                Self::handle_remove(deqs, entry, ws);
+                Self::handle_remove(deqs, entry, counters);
             }
             if is_done {
                 deqs.write_order.reset_cursor();
@@ -1222,7 +1281,7 @@ where
         deqs: &mut Deques<K>,
         batch_size: usize,
         weights_to_evict: u64,
-        ws: &mut WeightedSize,
+        counters: &mut EvictionCounters,
     ) {
         const DEQ_NAME: &str = "probation";
         let mut evicted = 0u64;
@@ -1262,7 +1321,7 @@ where
 
             if let Some(entry) = maybe_entry {
                 let weight = entry.policy_weight();
-                Self::handle_remove_with_deques(DEQ_NAME, deq, write_order_deq, entry, ws);
+                Self::handle_remove_with_deques(DEQ_NAME, deq, write_order_deq, entry, counters);
                 evicted = evicted.saturating_add(weight as u64);
             } else if !self.try_skip_updated_entry(&key, DEQ_NAME, deq, write_order_deq) {
                 break;
@@ -1365,7 +1424,7 @@ mod tests {
         use std::collections::hash_map::RandomState;
 
         // power of two
-        let pot = |exp| 2_usize.pow(exp);
+        let pot = |exp| 2u64.pow(exp);
 
         let ensure_sketch_len = |max_capacity, len, name| {
             let cache = BaseCache::<u8, u8>::new(
@@ -1377,9 +1436,10 @@ mod tests {
                 None,
                 false,
             );
+            cache.inner.enable_frequency_sketch();
             assert_eq!(
                 cache.inner.frequency_sketch.read().table_len(),
-                len,
+                len as usize,
                 "{}",
                 name
             );
@@ -1397,7 +1457,7 @@ mod tests {
             ensure_sketch_len(pot24 - 1, pot24, "pot24 - 1");
             ensure_sketch_len(pot24, pot24, "pot24");
             ensure_sketch_len(pot(27), pot24, "pot(27)");
-            ensure_sketch_len(usize::MAX, pot24, "usize::MAX");
+            ensure_sketch_len(u32::MAX as u64, pot24, "u32::MAX");
         } else {
             // target_pointer_width: 64 or larger.
             let pot30 = pot(30);
@@ -1410,7 +1470,7 @@ mod tests {
             // due to ceiling to next_power_of_two
             ensure_sketch_len(pot30 - 1, pot30, "pot30- 1");
             ensure_sketch_len(pot30, pot30, "pot30");
-            ensure_sketch_len(usize::MAX, pot30, "usize::MAX");
+            ensure_sketch_len(u64::MAX, pot30, "u64::MAX");
         };
     }
 }

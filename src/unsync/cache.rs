@@ -1,5 +1,6 @@
 use super::{deques::Deques, AccessTime, CacheBuilder, KeyDate, KeyHashDate, ValueEntry, Weigher};
 use crate::common::{
+    self,
     deque::{CacheRegion, DeqNode, Deque},
     frequency_sketch::FrequencySketch,
     time::{CheckedTimeOps, Clock, Instant},
@@ -9,7 +10,6 @@ use smallvec::SmallVec;
 use std::{
     borrow::Borrow,
     collections::{hash_map::RandomState, HashMap},
-    convert::TryInto,
     hash::{BuildHasher, Hash, Hasher},
     ptr::NonNull,
     rc::Rc,
@@ -112,6 +112,7 @@ type CacheStore<K, V, S> = std::collections::HashMap<Rc<K>, ValueEntry<K, V>, S>
 ///
 pub struct Cache<K, V, S = RandomState> {
     max_capacity: Option<u64>,
+    entry_count: u64,
     weighted_size: u64,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
@@ -133,7 +134,7 @@ where
     /// `time_to_live`, use the [`CacheBuilder`][builder-struct].
     ///
     /// [builder-struct]: ./struct.CacheBuilder.html
-    pub fn new(max_capacity: usize) -> Self {
+    pub fn new(max_capacity: u64) -> Self {
         let build_hasher = RandomState::default();
         Self::with_everything(Some(max_capacity), None, build_hasher, None, None, None)
     }
@@ -156,7 +157,7 @@ where
     S: BuildHasher + Clone,
 {
     pub(crate) fn with_everything(
-        max_capacity: Option<usize>,
+        max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
@@ -168,20 +169,15 @@ where
             build_hasher.clone(),
         );
 
-        // Ensure skt_capacity fits in a range of `128u32..=u32::MAX`.
-        let skt_capacity = max_capacity
-            .map(|n| n.try_into().unwrap_or(u32::MAX)) // Convert to u32.
-            .unwrap_or_default()
-            .max(128);
-        let frequency_sketch = FrequencySketch::with_capacity(skt_capacity);
         Self {
             max_capacity: max_capacity.map(|n| n as u64),
+            entry_count: 0,
             weighted_size: 0,
             cache,
             build_hasher,
             weigher,
-            deques: Deques::default(),
-            frequency_sketch,
+            deques: Default::default(),
+            frequency_sketch: Default::default(),
             time_to_live,
             time_to_idle,
             expiration_clock: None,
@@ -426,6 +422,28 @@ where
             .unwrap_or_default()
     }
 
+    #[inline]
+    fn should_enable_frequency_sketch(&self) -> bool {
+        if let Some(max_cap) = self.max_capacity {
+            self.weighted_size >= max_cap / 2
+        } else {
+            false
+        }
+    }
+
+    #[inline]
+    fn enable_frequency_sketch(&mut self) {
+        if let Some(max_cap) = self.max_capacity {
+            let num_entries = if self.weigher.is_some() {
+                self.entry_count
+            } else {
+                max_cap
+            };
+            let skt_capacity = common::sketch_capacity(num_entries);
+            self.frequency_sketch.ensure_capacity(skt_capacity);
+        }
+    }
+
     fn saturating_add_to_total_weight(&mut self, weight: u64) {
         let total = &mut self.weighted_size;
         *total = total.saturating_add(weight as u64);
@@ -459,7 +477,13 @@ where
             if self.time_to_live.is_some() {
                 deqs.push_back_wo(KeyDate::new(key, timestamp), entry);
             }
+            self.entry_count += 1;
             self.saturating_add_to_total_weight(policy_weight as u64);
+
+            if self.should_enable_frequency_sketch() {
+                self.enable_frequency_sketch();
+            }
+
             return;
         }
 
@@ -488,6 +512,7 @@ where
                     // And then remove the victim from the deques.
                     deqs.unlink_ao(&mut vic_entry);
                     Deques::unlink_wo(&mut deqs.write_order, &mut vic_entry);
+                    self.entry_count -= 1;
                 }
 
                 // Add the candidate to the deque.
@@ -502,8 +527,13 @@ where
                     deqs.push_back_wo(KeyDate::new(key, timestamp), entry);
                 }
 
+                self.entry_count += 1;
                 Self::saturating_sub_from_total_weight(self, victims_weight);
                 Self::saturating_add_to_total_weight(self, policy_weight as u64);
+
+                if self.should_enable_frequency_sketch() {
+                    self.enable_frequency_sketch();
+                }
             }
             AdmissionResult::Rejected => {
                 // Remove the candidate from the cache.
@@ -607,8 +637,9 @@ where
 
     fn evict_expired(&mut self, now: Instant) {
         if self.time_to_live.is_some() {
-            let evicted = self.remove_expired_wo(EVICTION_BATCH_SIZE, now);
-            self.saturating_sub_from_total_weight(evicted);
+            let (count, weight) = self.remove_expired_wo(EVICTION_BATCH_SIZE, now);
+            self.entry_count -= count;
+            self.saturating_sub_from_total_weight(weight);
         }
 
         if self.time_to_idle.is_some() {
@@ -634,16 +665,18 @@ where
                 )
             };
 
-            let evicted1 = rm_expired_ao("window", window);
-            let evicted2 = rm_expired_ao("probation", probation);
-            let evicted3 = rm_expired_ao("protected", protected);
+            let (count1, weight1) = rm_expired_ao("window", window);
+            let (count2, weight2) = rm_expired_ao("probation", probation);
+            let (count3, weight3) = rm_expired_ao("protected", protected);
 
-            self.saturating_sub_from_total_weight(evicted1);
-            self.saturating_sub_from_total_weight(evicted2);
-            self.saturating_sub_from_total_weight(evicted3);
+            self.entry_count -= count1 + count2 + count3;
+            self.saturating_sub_from_total_weight(weight1);
+            self.saturating_sub_from_total_weight(weight2);
+            self.saturating_sub_from_total_weight(weight3);
         }
     }
 
+    // Returns (u64, u64) where (evicted_entry_count, evicted_policy_weight).
     #[inline]
     fn remove_expired_ao(
         deq_name: &str,
@@ -653,8 +686,9 @@ where
         time_to_idle: &Option<Duration>,
         batch_size: usize,
         now: Instant,
-    ) -> u64 {
-        let mut evicted = 0u64;
+    ) -> (u64, u64) {
+        let mut evicted_entry_count = 0u64;
+        let mut evicted_policy_weight = 0u64;
 
         for _ in 0..batch_size {
             let key = deq
@@ -678,18 +712,21 @@ where
                 let weight = entry.policy_weight();
                 Deques::unlink_ao_from_deque(deq_name, deq, &mut entry);
                 Deques::unlink_wo(write_order_deq, &mut entry);
-                evicted = evicted.saturating_add(weight as u64);
+                evicted_entry_count += 1;
+                evicted_policy_weight = evicted_policy_weight.saturating_add(weight as u64);
             } else {
                 deq.pop_front();
             }
         }
 
-        evicted
+        (evicted_entry_count, evicted_policy_weight)
     }
 
+    // Returns (u64, u64) where (evicted_entry_count, evicted_policy_weight).
     #[inline]
-    fn remove_expired_wo(&mut self, batch_size: usize, now: Instant) -> u64 {
-        let mut evicted = 0u64;
+    fn remove_expired_wo(&mut self, batch_size: usize, now: Instant) -> (u64, u64) {
+        let mut evicted_entry_count = 0u64;
+        let mut evicted_policy_weight = 0u64;
         let time_to_live = &self.time_to_live;
 
         for _ in 0..batch_size {
@@ -716,13 +753,14 @@ where
                 let weight = entry.policy_weight();
                 self.deques.unlink_ao(&mut entry);
                 Deques::unlink_wo(&mut self.deques.write_order, &mut entry);
-                evicted = evicted.saturating_sub(weight as u64);
+                evicted_entry_count += 1;
+                evicted_policy_weight = evicted_policy_weight.saturating_sub(weight as u64);
             } else {
                 self.deques.write_order.pop_front();
             }
         }
 
-        evicted
+        (evicted_entry_count, evicted_policy_weight)
     }
 
     #[inline]
@@ -730,7 +768,8 @@ where
         const DEQ_NAME: &str = "probation";
 
         let weights_to_evict = self.weights_to_evict();
-        let mut evicted = 0u64;
+        let mut evicted_count = 0u64;
+        let mut evicted_policy_weight = 0u64;
 
         {
             let deqs = &mut self.deques;
@@ -738,7 +777,7 @@ where
                 (&mut deqs.probation, &mut deqs.write_order, &mut self.cache);
 
             for _ in 0..EVICTION_BATCH_SIZE {
-                if evicted >= weights_to_evict {
+                if evicted_policy_weight >= weights_to_evict {
                     break;
                 }
 
@@ -755,14 +794,16 @@ where
                     let weight = entry.policy_weight();
                     Deques::unlink_ao_from_deque(DEQ_NAME, probation, &mut entry);
                     Deques::unlink_wo(wo, &mut entry);
-                    evicted = evicted.saturating_add(weight as u64);
+                    evicted_count += 1;
+                    evicted_policy_weight = evicted_policy_weight.saturating_add(weight as u64);
                 } else {
                     probation.pop_front();
                 }
             }
         }
 
-        self.saturating_sub_from_total_weight(evicted);
+        self.entry_count -= evicted_count;
+        self.saturating_sub_from_total_weight(evicted_policy_weight);
     }
 }
 
@@ -833,6 +874,7 @@ mod tests {
     #[test]
     fn basic_single_thread() {
         let mut cache = Cache::new(3);
+        cache.enable_frequency_sketch();
 
         cache.insert("a", "alice");
         cache.insert("b", "bob");
@@ -879,6 +921,7 @@ mod tests {
         let dennis = ("dennis", 15);
 
         let mut cache = Cache::builder().max_capacity(31).weigher(weigher).build();
+        cache.enable_frequency_sketch();
 
         cache.insert("a", alice);
         cache.insert("b", bob);
@@ -925,6 +968,7 @@ mod tests {
     #[test]
     fn invalidate_all() {
         let mut cache = Cache::new(100);
+        cache.enable_frequency_sketch();
 
         cache.insert("a", "alice");
         cache.insert("b", "bob");
@@ -948,6 +992,7 @@ mod tests {
         use std::collections::HashSet;
 
         let mut cache = Cache::new(100);
+        cache.enable_frequency_sketch();
 
         let (clock, mock) = Clock::mock();
         cache.set_expiration_clock(Some(clock));
@@ -991,6 +1036,7 @@ mod tests {
         let mut cache = CacheBuilder::new(100)
             .time_to_live(Duration::from_secs(10))
             .build();
+        cache.enable_frequency_sketch();
 
         let (clock, mock) = Clock::mock();
         cache.set_expiration_clock(Some(clock));
@@ -1034,6 +1080,7 @@ mod tests {
         let mut cache = CacheBuilder::new(100)
             .time_to_idle(Duration::from_secs(10))
             .build();
+        cache.enable_frequency_sketch();
 
         let (clock, mock) = Clock::mock();
         cache.set_expiration_clock(Some(clock));
@@ -1067,11 +1114,12 @@ mod tests {
     #[test]
     fn test_skt_capacity_will_not_overflow() {
         // power of two
-        let pot = |exp| 2_usize.pow(exp);
+        let pot = |exp| 2u64.pow(exp);
 
         let ensure_sketch_len = |max_capacity, len, name| {
-            let cache = Cache::<u8, u8>::new(max_capacity);
-            assert_eq!(cache.frequency_sketch.table_len(), len, "{}", name);
+            let mut cache = Cache::<u8, u8>::new(max_capacity);
+            cache.enable_frequency_sketch();
+            assert_eq!(cache.frequency_sketch.table_len(), len as usize, "{}", name);
         };
 
         if cfg!(target_pointer_width = "32") {
@@ -1086,7 +1134,7 @@ mod tests {
             ensure_sketch_len(pot24 - 1, pot24, "pot24 - 1");
             ensure_sketch_len(pot24, pot24, "pot24");
             ensure_sketch_len(pot(27), pot24, "pot(27)");
-            ensure_sketch_len(usize::MAX, pot24, "usize::MAX");
+            ensure_sketch_len(u32::MAX as u64, pot24, "u32::MAX");
         } else {
             // target_pointer_width: 64 or larger.
             let pot30 = pot(30);
@@ -1099,7 +1147,7 @@ mod tests {
             // due to ceiling to next_power_of_two
             ensure_sketch_len(pot30 - 1, pot30, "pot30- 1");
             ensure_sketch_len(pot30, pot30, "pot30");
-            ensure_sketch_len(usize::MAX, pot30, "usize::MAX");
+            ensure_sketch_len(u64::MAX, pot30, "u64::MAX");
         };
     }
 }

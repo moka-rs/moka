@@ -70,7 +70,7 @@ where
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
-    pub fn new(max_capacity: usize, num_segments: usize) -> Self {
+    pub fn new(max_capacity: u64, num_segments: usize) -> Self {
         let build_hasher = RandomState::default();
         Self::with_everything(
             Some(max_capacity),
@@ -104,7 +104,7 @@ where
     /// Panics if `num_segments` is 0.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_everything(
-        max_capacity: Option<usize>,
+        max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         num_segments: usize,
         build_hasher: S,
@@ -256,7 +256,7 @@ where
     }
 
     /// Returns the `max_capacity` of this cache.
-    pub fn max_capacity(&self) -> Option<usize> {
+    pub fn max_capacity(&self) -> Option<u64> {
         self.inner.desired_capacity
     }
 
@@ -357,7 +357,7 @@ impl MockExpirationClock {
 }
 
 struct Inner<K, V, S> {
-    desired_capacity: Option<usize>,
+    desired_capacity: Option<u64>,
     segments: Box<[Cache<K, V, S>]>,
     build_hasher: S,
     segment_shift: u32,
@@ -374,7 +374,7 @@ where
     /// Panics if `num_segments` is 0.
     #[allow(clippy::too_many_arguments)]
     fn new(
-        max_capacity: Option<usize>,
+        max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         num_segments: usize,
         build_hasher: S,
@@ -388,7 +388,7 @@ where
         let actual_num_segments = num_segments.next_power_of_two();
         let segment_shift = 64 - actual_num_segments.trailing_zeros();
         // TODO: Round up.
-        let seg_max_capacity = max_capacity.map(|n| n / actual_num_segments);
+        let seg_max_capacity = max_capacity.map(|n| n / actual_num_segments as u64);
         let seg_init_capacity = initial_capacity.map(|cap| cap / actual_num_segments);
         // NOTE: We cannot initialize the segments as `vec![cache; actual_num_segments]`
         // because Cache::clone() does not clone its inner but shares the same inner.

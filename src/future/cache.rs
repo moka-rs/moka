@@ -315,7 +315,7 @@ where
     /// `time_to_live`, use the [`CacheBuilder`][builder-struct].
     ///
     /// [builder-struct]: ./struct.CacheBuilder.html
-    pub fn new(max_capacity: usize) -> Self {
+    pub fn new(max_capacity: u64) -> Self {
         let build_hasher = RandomState::default();
         Self::with_everything(
             Some(max_capacity),
@@ -344,7 +344,7 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn with_everything(
-        max_capacity: Option<usize>,
+        max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,

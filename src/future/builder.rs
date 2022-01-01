@@ -50,7 +50,7 @@ use std::{
 /// ```
 ///
 pub struct CacheBuilder<K, V, C> {
-    max_capacity: Option<usize>,
+    max_capacity: Option<u64>,
     initial_capacity: Option<usize>,
     weigher: Option<Weigher<K, V>>,
     time_to_live: Option<Duration>,
@@ -84,7 +84,7 @@ where
 {
     /// Construct a new `CacheBuilder` that will be used to build a `Cache` holding
     /// up to `max_capacity` entries.
-    pub fn new(max_capacity: usize) -> Self {
+    pub fn new(max_capacity: u64) -> Self {
         Self {
             max_capacity: Some(max_capacity),
             ..Default::default()
@@ -138,7 +138,7 @@ where
 
 impl<K, V, C> CacheBuilder<K, V, C> {
     /// Sets the max capacity of the cache.
-    pub fn max_capacity(self, max_capacity: usize) -> Self {
+    pub fn max_capacity(self, max_capacity: u64) -> Self {
         Self {
             max_capacity: Some(max_capacity),
             ..self
