@@ -706,7 +706,7 @@ where
     }
 
     #[cfg(test)]
-    pub(crate) fn weighted_size(&self) -> u64 {
+    fn weighted_size(&self) -> u64 {
         self.base.weighted_size()
     }
 }
