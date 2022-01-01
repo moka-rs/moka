@@ -401,15 +401,15 @@ impl EvictionCounters {
     }
 
     #[inline]
-    fn saturating_add(&mut self, weight: u32) {
-        self.entry_count += 1;
+    fn saturating_add(&mut self, entry_count: u64, weight: u32) {
+        self.entry_count += entry_count;
         let total = &mut self.weighted_size;
         *total = total.saturating_add(weight as u64);
     }
 
     #[inline]
-    fn saturating_sub(&mut self, weight: u32) {
-        self.entry_count -= 1;
+    fn saturating_sub(&mut self, entry_count: u64, weight: u32) {
+        self.entry_count -= entry_count;
         let total = &mut self.weighted_size;
         *total = total.saturating_sub(weight as u64);
     }
@@ -862,7 +862,8 @@ where
 
         if entry.is_admitted() {
             // The entry has been already admitted, so treat this as an update.
-            counters.saturating_add(new_weight - old_weight);
+            counters.saturating_sub(0, old_weight);
+            counters.saturating_add(0, new_weight);
             deqs.move_to_back_ao(&entry);
             deqs.move_to_back_wo(&entry);
             return;
@@ -1014,7 +1015,7 @@ where
         counters: &mut EvictionCounters,
     ) {
         let key = Arc::clone(&kh.key);
-        counters.saturating_add(policy_weight);
+        counters.saturating_add(1, policy_weight);
         deqs.push_back_ao(
             CacheRegion::MainProbation,
             KeyHashDate::new(kh, entry.entry_info()),
@@ -1033,7 +1034,7 @@ where
     ) {
         if entry.is_admitted() {
             entry.set_is_admitted(false);
-            counters.saturating_sub(entry.policy_weight());
+            counters.saturating_sub(1, entry.policy_weight());
             deqs.unlink_ao(&entry);
             Deques::unlink_wo(&mut deqs.write_order, &entry);
         }
@@ -1049,7 +1050,7 @@ where
     ) {
         if entry.is_admitted() {
             entry.set_is_admitted(false);
-            counters.saturating_sub(entry.policy_weight());
+            counters.saturating_sub(1, entry.policy_weight());
             Deques::unlink_ao_from_deque(ao_deq_name, ao_deq, &entry);
             Deques::unlink_wo(wo_deq, &entry);
         }
