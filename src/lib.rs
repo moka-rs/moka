@@ -27,7 +27,7 @@
 //!       outside of asynchronous contexts.
 //! - A cache can be bounded by one of the followings:
 //!     - The maximum number of entries.
-//!     - The total weighted size of entries.
+//!     - The total weighted size of entries. (Size aware eviction)
 //! - Maintains good hit rate by using entry replacement algorithms inspired by
 //!   [Caffeine][caffeine-git]:
 //!     - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.

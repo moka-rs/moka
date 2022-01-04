@@ -44,7 +44,7 @@ algorithm to determine which entries to evict when the capacity is exceeded.
       of asynchronous contexts.
 - A cache can be bounded by one of the followings:
     - The maximum number of entries.
-    - The total weighted size of entries.
+    - The total weighted size of entries. (Size aware eviction)
 - Maintains good hit rate by using an entry replacement algorithms inspired by
   [Caffeine][caffeine-git]:
     - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.
@@ -284,11 +284,13 @@ cache.get(&key);
 ```
 
 
-## Example: Bounding a Cache with Weighted Size of Entry
+## Example: Size Aware Eviction
 
-A `weigher` closure can be set at the cache creation time. It will calculate and
-return a weighted size (relative size) of an entry. When it is set, a cache tries to
-evict entries when the total weighted size exceeds its `max_capacity`.
+If different cache entries have different "weights" &mdash; e.g. each entry has
+different memory footprints &mdash; you can specify a `weigher` closure at the cache
+creation time. The closure should return a weighted size (relative size) of an entry
+in `u32`, and the cache will evict entries when the total weighted size exceeds its
+`max_capacity`.
 
 ```rust
 use std::convert::TryInto;
@@ -456,8 +458,8 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
 ## Road Map
 
 - [x] `async` optimized caches. (`v0.2.0`)
-- [x] Bounding a cache with weighted size of entry.
-      (`v0.7.0` via [#24](https://github.com/moka-rs/moka/pull/24))
+- [x] Size-aware eviction. (`v0.7.0` via
+      [#24](https://github.com/moka-rs/moka/pull/24))
 - [ ] API stabilization. (Smaller core cache API, shorter names for frequently
       used methods)
     - e.g.
