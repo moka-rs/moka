@@ -77,7 +77,52 @@ type CacheStore<K, V, S> = std::collections::HashMap<Rc<K>, ValueEntry<K, V>, S>
 /// }
 /// ```
 ///
-/// # Expiration Policies
+/// # Size-based Eviction
+///
+/// ```rust
+/// use std::convert::TryInto;
+/// use moka::unsync::Cache;
+///
+/// // Evict based on the number of entries in the cache.
+/// let mut cache = Cache::builder()
+///     // Up to 10,000 entries.
+///     .max_capacity(10_000)
+///     // Create the cache.
+///     .build();
+/// cache.insert(1, "one".to_string());
+///
+/// // Evict based on the byte length of strings in the cache.
+/// let mut cache = Cache::builder()
+///     // A weigher closure takes &K and &V and returns a u32
+///     // representing the relative size of the entry.
+///     .weigher(|_key, value: &String| -> u32 {
+///         value.len().try_into().unwrap_or(u32::MAX)
+///     })
+///     // This cache will hold up to 32MiB of values.
+///     .max_capacity(32 * 1024 * 1024)
+///     .build();
+/// cache.insert(2, "two".to_string());
+/// ```
+///
+/// If your cache should not grow beyond a certain size, use the `max_capacity`
+/// method of the [`CacheBuilder`][builder-struct] to set the upper bound. The cache
+/// will try to evict entries that have not been used recently or very often.
+///
+/// At the cache creation time, a weigher closure can be set by the `weigher` method
+/// of the `CacheBuilder`. A weigher closure takes `&K` and `&V` as the arguments and
+/// returns a `u32` representing the relative size of the entry:
+///
+/// - If the `weigher` is _not_ set, the cache will treat each entry has the same
+///   size of `1`. This means the cache will be bounded by the number of entries.
+/// - If the `weigher` is set, the cache will call the weigher to calculate the
+///   weighted size (relative size) on an entry. This means the cache will be bounded
+///   by the total weighted size of entries.
+///
+/// Note that weighted sizes are not used when making eviction selections.
+///
+/// [builder-struct]: ./struct.CacheBuilder.html
+///
+/// # Time-based Expirations
 ///
 /// `Cache` supports the following expiration policies:
 ///

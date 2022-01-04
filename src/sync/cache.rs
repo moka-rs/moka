@@ -109,12 +109,7 @@ use std::{
 ///
 /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
 ///
-/// # Evictions
-///
-/// `Cache` provides two types of eviction: size-based eviction and time-based
-/// eviction.
-///
-/// ## Size-based
+/// # Size-based Eviction
 ///
 /// ```rust
 /// use std::convert::TryInto;
@@ -159,7 +154,7 @@ use std::{
 ///
 /// [builder-struct]: ./struct.CacheBuilder.html
 ///
-/// ## Time-based (Expirations)
+/// # Time-based Expirations
 ///
 /// `Cache` supports the following expiration policies:
 ///
