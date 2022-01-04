@@ -1,9 +1,0 @@
-tasks:
-  - init: cargo build
-    command: cargo watch -x run
-
-vscode:
-  extensions:
-    - eamodio.gitlens@11.4.1:5426ef7c59a1fd3c808d1e1514afb539
-    - bungcip.better-toml@0.3.2:6c7597fbefd4d2edc80cd4ab9e510078
-    - streetsidesoftware.code-spell-checker@1.10.4:92856cb92ade23ff2764841b46d2fac2
