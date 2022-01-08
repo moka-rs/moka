@@ -45,14 +45,16 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 - A cache can be bounded by one of the followings:
     - The maximum number of entries.
     - The total weighted size of entries. (Size aware eviction)
-- Maintains good hit rate by using an entry replacement algorithms inspired by
-  [Caffeine][caffeine-git]:
+- Maintains near optimal hit ratio by using an entry replacement algorithms inspired
+  by Caffeine:
     - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.
     - Eviction from a cache is controlled by the Least Recently Used (LRU) policy.
+    - [More details and some benchmark results are available here][tiny-lfu].
 - Supports expiration policies:
     - Time to live
     - Time to idle
 
+[tiny-lfu]: https://github.com/moka-rs/moka/wiki#admission-and-eviction-policies
 
 ## Moka in Production
 
@@ -470,7 +472,7 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
     - `time_to_live()` → `config().time_to_live()`
 - [ ] Cache statistics. (Hit rate, etc.)
 - [ ] Notifications on eviction, etc.
-- [ ] Upgrade TinyLFU to Window TinyLFU.
+- [ ] Upgrade TinyLFU to Window-TinyLFU. ([details][tiny-lfu])
 - [ ] The variable (per-entry) expiration, using a hierarchical timer wheel.
 
 
