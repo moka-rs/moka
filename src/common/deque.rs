@@ -698,8 +698,7 @@ mod tests {
         // -------------------------------------------------------
         // Iterate after an unlink.
         // Unlink the second node "c". Now "a" -> "c".
-        unsafe { deque.unlink(node3_ptr) };
-        std::mem::drop(unsafe { Box::from_raw(node3_ptr.as_ptr()) });
+        unsafe { deque.unlink_and_drop(node3_ptr) };
         let node1a = deque.peek_front().unwrap();
         assert_eq!(node1a.element, "a".to_string());
         let node2a = node1a.next_node().unwrap();
