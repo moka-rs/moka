@@ -1,5 +1,22 @@
 # Moka &mdash; Change Log
 
+## Version 0.7.1
+
+- **Important Fix**: A memory leak issue (#65 below) was found in all previous
+  versions (since v0.1.0) and fixed in this version. All users are encouraged to
+  upgrade to this version.
+
+### Fixed
+
+- Fix a memory leak that will happen when evicting/expiring an entry or manually
+  invalidating an entry. ([#65][gh-pull-0065])
+
+### Changed
+
+- Update the minimum depending version of crossbeam-channel from v0.5.0 to v0.5.2.
+  ([#67][gh-pull-0067])
+
+
 ## Version 0.7.0
 
 - **Breaking change**: The type of the `max_capacity` has been changed from `usize`
@@ -187,6 +204,8 @@
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0067]: https://github.com/moka-rs/moka/pull/67/
+[gh-pull-0065]: https://github.com/moka-rs/moka/pull/65/
 [gh-pull-0056]: https://github.com/moka-rs/moka/pull/56/
 [gh-pull-0053]: https://github.com/moka-rs/moka/pull/53/
 [gh-pull-0047]: https://github.com/moka-rs/moka/pull/47/
