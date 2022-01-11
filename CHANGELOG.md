@@ -1,5 +1,17 @@
 # Moka &mdash; Change Log
 
+## Version 0.6.4
+
+- **Important Fix**: A memory leak issue (#66 below) was found in all previous
+  versions (since v0.1.0) and v0.7.0. It was fixed in this version and v0.7.1. All
+  users are encouraged to upgrade to this version or v0.7.1.
+
+### Fixed
+
+- Fix a memory leak that will happen when evicting/expiring an entry or manually
+  invalidating an entry. ([#66][gh-pull-0066])
+
+
 ## Version 0.6.3
 
 ### Fixed
@@ -174,6 +186,7 @@
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0066]: https://github.com/moka-rs/moka/pull/66/
 [gh-pull-0056]: https://github.com/moka-rs/moka/pull/56/
 [gh-pull-0053]: https://github.com/moka-rs/moka/pull/53/
 [gh-pull-0047]: https://github.com/moka-rs/moka/pull/47/
