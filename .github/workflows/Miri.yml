@@ -1,0 +1,47 @@
+name: Miri tests
+
+on:
+  push:
+    paths-ignore:
+    - '.devcontainer/**'
+    - '.gitpod.yml'
+    - '.vscode/**'
+    - 'tests/**'
+  pull_request:
+    paths-ignore:
+    - '.devcontainer/**'
+    - '.gitpod.yml'
+    - '.vscode/**'
+    - 'tests/**'
+  schedule:
+    # Run against the last commit on the default branch on Friday at 9pm (UTC?)
+    - cron:  '0 21 * * 5'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Moka
+        uses: actions/checkout@v2
+
+      - name: Install Rust nightly toolchain with Miri
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+          components: miri
+
+      - uses: Swatinem/rust-cache@v1
+
+      - name: cargo clean
+        uses: actions-rs/cargo@v1
+        with:
+          command: clean
+
+      - name: Run Miri test (deque)
+        uses: actions-rs/cargo@v1
+        with:
+          command: miri
+          args: test deque
