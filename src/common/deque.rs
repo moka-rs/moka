@@ -246,6 +246,17 @@ impl<T> Deque<T> {
         self.len -= 1;
     }
 
+    /// Unlinks the specified node from the current list, and then drop the node.
+    ///
+    /// This method takes care not to create mutable references to `element`, to
+    /// maintain validity of aliasing pointers.
+    ///
+    /// Panics:
+    pub(crate) unsafe fn unlink_and_drop(&mut self, node: NonNull<DeqNode<T>>) {
+        self.unlink(node);
+        std::mem::drop(Box::from_raw(node.as_ptr()));
+    }
+
     #[allow(unused)]
     pub(crate) fn reset_cursor(&mut self) {
         self.cursor = None;
@@ -625,8 +636,7 @@ mod tests {
         // Try to unlink during iteration.
         assert_eq!((&mut deque).next(), Some(&"a".into()));
         // Next will be "c", but we unlink it.
-        unsafe { deque.unlink(node3_ptr) };
-        std::mem::drop(unsafe { Box::from_raw(node3_ptr.as_ptr()) });
+        unsafe { deque.unlink_and_drop(node3_ptr) };
         // Now, next should be "b".
         assert_eq!((&mut deque).next(), Some(&"b".into()));
         assert!((&mut deque).next().is_none());
