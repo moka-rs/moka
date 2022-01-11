@@ -32,7 +32,10 @@ future = ["async-io", "async-lock", "futures-util"]
 atomic64 = []
 
 [dependencies]
-crossbeam-channel = "0.5"
+# It will be safer to use 0.5.2 or newer, as 0.5.2 addressed some stacked
+# borrow violations found by Miri.
+# https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-channel/CHANGELOG.md#version-052
+crossbeam-channel = "0.5.2"
 crossbeam-utils = "0.8"
 moka-cht = "0.4.2"
 num_cpus = "1.13"
