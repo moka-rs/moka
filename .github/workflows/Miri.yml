@@ -43,4 +43,5 @@ jobs:
       - name: Run Miri test (deque)
         uses: actions-rs/cargo@v1
         with:
-          command: miri test deque
+          command: miri
+          args: test deque
