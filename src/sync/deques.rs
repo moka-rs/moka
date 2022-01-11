@@ -167,6 +167,8 @@ impl<K> Deques<K> {
         if &p.region == deq.region() {
             if deq.contains(p) {
                 deq.unlink(node);
+                // https://github.com/moka-rs/moka/issues/64
+                drop(Box::from_raw(node.as_ptr()));
             }
         } else {
             panic!(
@@ -182,6 +184,8 @@ impl<K> Deques<K> {
             if &p.region == deq.region() {
                 if deq.contains(p) {
                     deq.unlink(node);
+                    // https://github.com/moka-rs/moka/issues/64
+                    drop(Box::from_raw(node.as_ptr()));
                 }
             } else {
                 panic!(

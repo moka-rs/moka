@@ -123,6 +123,8 @@ impl<K> Deques<K> {
     ) {
         if deq.contains(node.as_ref()) {
             deq.unlink(node);
+            // https://github.com/moka-rs/moka/issues/64
+            drop(Box::from_raw(node.as_ptr()));
         } else {
             panic!(
                 "unlink_node - node is not a member of {} deque. {:?}",
@@ -139,6 +141,8 @@ impl<K> Deques<K> {
             debug_assert_eq!(&p.region, &WriteOrder);
             if deq.contains(p) {
                 deq.unlink(node);
+                // https://github.com/moka-rs/moka/issues/64
+                drop(Box::from_raw(node.as_ptr()));
             } else {
                 panic!(
                     "unlink_node - node is not a member of write_order deque. {:?}",
