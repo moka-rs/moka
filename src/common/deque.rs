@@ -246,6 +246,17 @@ impl<T> Deque<T> {
         self.len -= 1;
     }
 
+    /// Unlinks the specified node from the current list, and then drop the node.
+    ///
+    /// This method takes care not to create mutable references to `element`, to
+    /// maintain validity of aliasing pointers.
+    ///
+    /// Panics:
+    pub(crate) unsafe fn unlink_and_drop(&mut self, node: NonNull<DeqNode<T>>) {
+        self.unlink(node);
+        std::mem::drop(Box::from_raw(node.as_ptr()));
+    }
+
     #[allow(unused)]
     pub(crate) fn reset_cursor(&mut self) {
         self.cursor = None;
@@ -504,11 +515,7 @@ mod tests {
         assert!(!deque.contains(node3_ref));
         assert!(node3_ref.next.is_none());
         assert!(node3_ref.next.is_none());
-
-        // This does not work as expected because NonNull implements Copy trait.
-        // See clippy(clippy::drop_copy) at
-        // https://rust-lang.github.io/rust-clippy/master/index.html#drop_copy
-        // std::mem::drop(node3_ptr);
+        std::mem::drop(unsafe { Box::from_raw(node3_ptr.as_ptr()) });
 
         // peek_front() -> node2
         let head_h = deque.peek_front().unwrap();
@@ -541,7 +548,7 @@ mod tests {
         assert!(!deque.contains(node2_ref));
         assert!(node2_ref.next.is_none());
         assert!(node2_ref.next.is_none());
-        // std::mem::drop(node2_ptr);
+        std::mem::drop(unsafe { Box::from_raw(node2_ptr.as_ptr()) });
 
         // peek_front() -> node1
         let head_g = deque.peek_front().unwrap();
@@ -568,7 +575,7 @@ mod tests {
         assert!(!deque.contains(node1_ref));
         assert!(node1_ref.next.is_none());
         assert!(node1_ref.next.is_none());
-        // std::mem::drop(node1_ptr);
+        std::mem::drop(unsafe { Box::from_raw(node1_ptr.as_ptr()) });
 
         // peek_front() -> node1
         let head_h = deque.peek_front();
@@ -629,7 +636,7 @@ mod tests {
         // Try to unlink during iteration.
         assert_eq!((&mut deque).next(), Some(&"a".into()));
         // Next will be "c", but we unlink it.
-        unsafe { deque.unlink(node3_ptr) };
+        unsafe { deque.unlink_and_drop(node3_ptr) };
         // Now, next should be "b".
         assert_eq!((&mut deque).next(), Some(&"b".into()));
         assert!((&mut deque).next().is_none());
@@ -691,7 +698,7 @@ mod tests {
         // -------------------------------------------------------
         // Iterate after an unlink.
         // Unlink the second node "c". Now "a" -> "c".
-        unsafe { deque.unlink(node3_ptr) };
+        unsafe { deque.unlink_and_drop(node3_ptr) };
         let node1a = deque.peek_front().unwrap();
         assert_eq!(node1a.element, "a".to_string());
         let node2a = node1a.next_node().unwrap();
