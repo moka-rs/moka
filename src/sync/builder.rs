@@ -39,6 +39,7 @@ use std::{
 /// // after 30 minutes (TTL) from the insert().
 /// ```
 ///
+#[must_use]
 pub struct CacheBuilder<C> {
     max_capacity: usize,
     initial_capacity: Option<usize>,
