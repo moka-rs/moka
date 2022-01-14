@@ -60,7 +60,11 @@ impl<T> Drop for Housekeeper<T> {
         }
 
         // Wait for the periodical sync job to finish.
-        let _ = self.periodical_sync_running.lock();
+        //
+        // NOTE: As suggested by Clippy 1.59, drop the lock explicitly rather
+        // than doing non-binding let to `_`.
+        // https://rust-lang.github.io/rust-clippy/master/index.html#let_underscore_lock
+        std::mem::drop(self.periodical_sync_running.lock());
 
         // Wait for the on-demand sync job to finish. (busy loop)
         while self.on_demand_sync_scheduled.load(Ordering::Acquire) {
