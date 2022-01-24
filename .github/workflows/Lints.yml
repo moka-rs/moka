@@ -1,4 +1,4 @@
-name: CI
+name: Clippy lints and Rustfmt
 
 on:
   push:
@@ -6,14 +6,9 @@ on:
     - '.devcontainer/**'
     - '.gitpod.yml'
     - '.vscode/**'
-  pull_request:
-    paths-ignore:
-    - '.devcontainer/**'
-    - '.gitpod.yml'
-    - '.vscode/**'
   schedule:
-    # Run against the last commit on the default branch on Friday at 8pm (UTC?)
-    - cron:  '0 20 * * 5'
+    # Run against the last commit on the default branch on Friday at 7pm (UTC?)
+    - cron:  '0 19 * * 5'
 
 jobs:
   test:
@@ -23,9 +18,6 @@ jobs:
         rust:
           - stable
           - beta
-          # - 1.46.0  # MSRV (future)
-          # - 1.45.2  # MSRV (no features)
-          - 1.49.0  # Temporary MSRV
 
     steps:
       - name: Checkout Moka
@@ -46,20 +38,16 @@ jobs:
         with:
           command: clean
 
-      - name: Build (no features)
-        uses: actions-rs/cargo@v1
+      - name: Run Clippy
+        uses: actions-rs/clippy-check@v1
+        if: ${{ matrix.rust == 'stable' || matrix.rust == 'beta' }}
         with:
-          command: build
+          token: ${{ secrets.GITHUB_TOKEN }}
+          args: --lib --tests --all-features --all-targets -- -D warnings
 
-      - name: Run tests (future)
+      - name: Run Rustfmt
         uses: actions-rs/cargo@v1
-        if: ${{ matrix.rust != '1.45.2' }}
+        if: ${{ matrix.rust == 'stable' }}
         with:
-          command: test
-          args: --features future
-
-      - name: Run tests (release, no features)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release
+          command: fmt
+          args: --all -- --check

@@ -600,6 +600,8 @@ mod tests {
         // Make the cache exterior immutable.
         let cache = cache;
 
+        // https://rust-lang.github.io/rust-clippy/master/index.html#needless_collect
+        #[allow(clippy::needless_collect)]
         let handles = (0..num_threads)
             .map(|id| {
                 let cache = cache.clone();
