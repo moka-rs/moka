@@ -346,29 +346,29 @@ mod tests {
 
         // peek_front() -> node1
         let head_a = deque.peek_front().unwrap();
-        assert!(deque.contains(&head_a));
-        assert!(deque.is_head(&head_a));
-        assert!(deque.is_tail(&head_a));
+        assert!(deque.contains(head_a));
+        assert!(deque.is_head(head_a));
+        assert!(deque.is_tail(head_a));
         assert_eq!(head_a.element, "a".to_string());
 
         // move_to_back(node1)
-        unsafe { deque.move_to_back(node1_ptr.clone()) };
+        unsafe { deque.move_to_back(node1_ptr) };
         assert_eq!(deque.len(), 1);
 
         // peek_front() -> node1
         let head_b = deque.peek_front().unwrap();
-        assert!(deque.contains(&head_b));
-        assert!(deque.is_head(&head_b));
-        assert!(deque.is_tail(&head_b));
+        assert!(deque.contains(head_b));
+        assert!(deque.is_head(head_b));
+        assert!(deque.is_tail(head_b));
         assert!(std::ptr::eq(head_b, unsafe { node1_ptr.as_ref() }));
         assert!(head_b.prev.is_none());
         assert!(head_b.next.is_none());
 
         // peek_back() -> node1
         let tail_a = deque.peek_back().unwrap();
-        assert!(deque.contains(&tail_a));
-        assert!(deque.is_head(&tail_a));
-        assert!(deque.is_tail(&tail_a));
+        assert!(deque.contains(tail_a));
+        assert!(deque.is_head(tail_a));
+        assert!(deque.is_tail(tail_a));
         assert!(std::ptr::eq(tail_a, unsafe { node1_ptr.as_ref() }));
         assert!(tail_a.prev.is_none());
         assert!(tail_a.next.is_none());
@@ -381,9 +381,9 @@ mod tests {
 
         // peek_front() -> node1
         let head_c = deque.peek_front().unwrap();
-        assert!(deque.contains(&head_c));
-        assert!(deque.is_head(&head_c));
-        assert!(!deque.is_tail(&head_c));
+        assert!(deque.contains(head_c));
+        assert!(deque.is_head(head_c));
+        assert!(!deque.is_tail(head_c));
         assert!(std::ptr::eq(head_c, unsafe { node1_ptr.as_ref() }));
         assert!(head_c.prev.is_none());
         assert!(std::ptr::eq(
@@ -392,14 +392,14 @@ mod tests {
         ));
 
         // move_to_back(node2)
-        unsafe { deque.move_to_back(node2_ptr.clone()) };
+        unsafe { deque.move_to_back(node2_ptr) };
         assert_eq!(deque.len(), 2);
 
         // peek_front() -> node1
         let head_d = deque.peek_front().unwrap();
-        assert!(deque.contains(&head_d));
-        assert!(deque.is_head(&head_d));
-        assert!(!deque.is_tail(&head_d));
+        assert!(deque.contains(head_d));
+        assert!(deque.is_head(head_d));
+        assert!(!deque.is_tail(head_d));
         assert!(std::ptr::eq(head_d, unsafe { node1_ptr.as_ref() }));
         assert!(head_d.prev.is_none());
         assert!(std::ptr::eq(
@@ -409,9 +409,9 @@ mod tests {
 
         // peek_back() -> node2
         let tail_b = deque.peek_back().unwrap();
-        assert!(deque.contains(&tail_b));
-        assert!(!deque.is_head(&tail_b));
-        assert!(deque.is_tail(&tail_b));
+        assert!(deque.contains(tail_b));
+        assert!(!deque.is_head(tail_b));
+        assert!(deque.is_tail(tail_b));
         assert!(std::ptr::eq(tail_b, unsafe { node2_ptr.as_ref() }));
         assert!(std::ptr::eq(
             unsafe { tail_b.prev.unwrap().as_ref() },
@@ -421,14 +421,14 @@ mod tests {
         assert!(tail_b.next.is_none());
 
         // move_to_back(node1)
-        unsafe { deque.move_to_back(node1_ptr.clone()) };
+        unsafe { deque.move_to_back(node1_ptr) };
         assert_eq!(deque.len(), 2);
 
         // peek_front() -> node2
         let head_e = deque.peek_front().unwrap();
-        assert!(deque.contains(&head_e));
-        assert!(deque.is_head(&head_e));
-        assert!(!deque.is_tail(&head_e));
+        assert!(deque.contains(head_e));
+        assert!(deque.is_head(head_e));
+        assert!(!deque.is_tail(head_e));
         assert!(std::ptr::eq(head_e, unsafe { node2_ptr.as_ref() }));
         assert!(head_e.prev.is_none());
         assert!(std::ptr::eq(
@@ -438,9 +438,9 @@ mod tests {
 
         // peek_back() -> node1
         let tail_c = deque.peek_back().unwrap();
-        assert!(deque.contains(&tail_c));
-        assert!(!deque.is_head(&tail_c));
-        assert!(deque.is_tail(&tail_c));
+        assert!(deque.contains(tail_c));
+        assert!(!deque.is_head(tail_c));
+        assert!(deque.is_tail(tail_c));
         assert!(std::ptr::eq(tail_c, unsafe { node1_ptr.as_ref() }));
         assert!(std::ptr::eq(
             unsafe { tail_c.prev.unwrap().as_ref() },
@@ -456,9 +456,9 @@ mod tests {
 
         // peek_front() -> node2
         let head_f = deque.peek_front().unwrap();
-        assert!(deque.contains(&head_f));
-        assert!(deque.is_head(&head_f));
-        assert!(!deque.is_tail(&head_f));
+        assert!(deque.contains(head_f));
+        assert!(deque.is_head(head_f));
+        assert!(!deque.is_tail(head_f));
         assert!(std::ptr::eq(head_f, unsafe { node2_ptr.as_ref() }));
         assert!(head_f.prev.is_none());
         assert!(std::ptr::eq(
@@ -470,9 +470,9 @@ mod tests {
         let tail_d = deque.peek_back().unwrap();
         assert!(std::ptr::eq(tail_d, unsafe { node3_ptr.as_ref() }));
         assert_eq!(tail_d.element, "c".to_string());
-        assert!(deque.contains(&tail_d));
-        assert!(!deque.is_head(&tail_d));
-        assert!(deque.is_tail(&tail_d));
+        assert!(deque.contains(tail_d));
+        assert!(!deque.is_head(tail_d));
+        assert!(deque.is_tail(tail_d));
         assert!(std::ptr::eq(tail_d, unsafe { node3_ptr.as_ref() }));
         assert!(std::ptr::eq(
             unsafe { tail_d.prev.unwrap().as_ref() },
@@ -481,14 +481,14 @@ mod tests {
         assert!(tail_d.next.is_none());
 
         // move_to_back(node1)
-        unsafe { deque.move_to_back(node1_ptr.clone()) };
+        unsafe { deque.move_to_back(node1_ptr) };
         assert_eq!(deque.len(), 3);
 
         // peek_front() -> node2
         let head_g = deque.peek_front().unwrap();
-        assert!(deque.contains(&head_g));
-        assert!(deque.is_head(&head_g));
-        assert!(!deque.is_tail(&head_g));
+        assert!(deque.contains(head_g));
+        assert!(deque.is_head(head_g));
+        assert!(!deque.is_tail(head_g));
         assert!(std::ptr::eq(head_g, unsafe { node2_ptr.as_ref() }));
         assert!(head_g.prev.is_none());
         assert!(std::ptr::eq(
@@ -498,9 +498,9 @@ mod tests {
 
         // peek_back() -> node1
         let tail_e = deque.peek_back().unwrap();
-        assert!(deque.contains(&tail_e));
-        assert!(!deque.is_head(&tail_e));
-        assert!(deque.is_tail(&tail_e));
+        assert!(deque.contains(tail_e));
+        assert!(!deque.is_head(tail_e));
+        assert!(deque.is_tail(tail_e));
         assert!(std::ptr::eq(tail_e, unsafe { node1_ptr.as_ref() }));
         assert!(std::ptr::eq(
             unsafe { tail_e.prev.unwrap().as_ref() },
@@ -519,9 +519,9 @@ mod tests {
 
         // peek_front() -> node2
         let head_h = deque.peek_front().unwrap();
-        assert!(deque.contains(&head_h));
-        assert!(deque.is_head(&head_h));
-        assert!(!deque.is_tail(&head_h));
+        assert!(deque.contains(head_h));
+        assert!(deque.is_head(head_h));
+        assert!(!deque.is_tail(head_h));
         assert!(std::ptr::eq(head_h, unsafe { node2_ptr.as_ref() }));
         assert!(head_h.prev.is_none());
         assert!(std::ptr::eq(
@@ -531,9 +531,9 @@ mod tests {
 
         // peek_back() -> node1
         let tail_f = deque.peek_back().unwrap();
-        assert!(deque.contains(&tail_f));
-        assert!(!deque.is_head(&tail_f));
-        assert!(deque.is_tail(&tail_f));
+        assert!(deque.contains(tail_f));
+        assert!(!deque.is_head(tail_f));
+        assert!(deque.is_tail(tail_f));
         assert!(std::ptr::eq(tail_f, unsafe { node1_ptr.as_ref() }));
         assert!(std::ptr::eq(
             unsafe { tail_f.prev.unwrap().as_ref() },
@@ -552,18 +552,18 @@ mod tests {
 
         // peek_front() -> node1
         let head_g = deque.peek_front().unwrap();
-        assert!(deque.contains(&head_g));
-        assert!(deque.is_head(&head_g));
-        assert!(deque.is_tail(&head_g));
+        assert!(deque.contains(head_g));
+        assert!(deque.is_head(head_g));
+        assert!(deque.is_tail(head_g));
         assert!(std::ptr::eq(head_g, unsafe { node1_ptr.as_ref() }));
         assert!(head_g.prev.is_none());
         assert!(head_g.next.is_none());
 
         // peek_back() -> node1
         let tail_g = deque.peek_back().unwrap();
-        assert!(deque.contains(&tail_g));
-        assert!(deque.is_head(&tail_g));
-        assert!(deque.is_tail(&tail_g));
+        assert!(deque.contains(tail_g));
+        assert!(deque.is_head(tail_g));
+        assert!(deque.is_tail(tail_g));
         assert!(std::ptr::eq(tail_g, unsafe { node1_ptr.as_ref() }));
         assert!(tail_g.next.is_none());
         assert!(tail_g.next.is_none());
