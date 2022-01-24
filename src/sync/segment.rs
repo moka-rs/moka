@@ -679,7 +679,7 @@ mod tests {
 
         let names = ["alice", "alex"].iter().cloned().collect::<HashSet<_>>();
         cache.invalidate_entries_if(move |_k, &v| names.contains(v))?;
-        assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 1);
+        assert_eq!(cache.invalidation_predicate_count(), SEGMENTS);
 
         mock.increment(Duration::from_secs(5)); // 10 secs from the start.
 
@@ -697,7 +697,7 @@ mod tests {
         // This should survive as it was inserted after calling invalidate_entries_if.
         assert_eq!(cache.get(&3), Some("alice"));
         assert_eq!(cache.estimated_entry_count(), 2);
-        assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 0);
+        assert_eq!(cache.invalidation_predicate_count(), 0);
 
         mock.increment(Duration::from_secs(5)); // 15 secs from the start.
 
@@ -714,7 +714,7 @@ mod tests {
         assert!(cache.get(&1).is_none());
         assert!(cache.get(&3).is_none());
         assert_eq!(cache.estimated_entry_count(), 0);
-        assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 0);
+        assert_eq!(cache.invalidation_predicate_count(), 0);
 
         Ok(())
     }
