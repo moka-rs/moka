@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use super::{base_cache::Inner, AccessTime, KvEntry, PredicateId, PredicateIdStr, ValueEntry};
 use crate::{
     common::{
         thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
@@ -8,7 +9,6 @@ use crate::{
     },
     PredicateError,
 };
-use super::{base_cache::Inner, AccessTime, KvEntry, PredicateId, PredicateIdStr, ValueEntry};
 
 use parking_lot::{Mutex, RwLock};
 use std::{
@@ -29,7 +29,11 @@ pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 
 pub(crate) trait GetOrRemoveEntry<K, V> {
     fn get_value_entry(&self, key: &Arc<K>) -> Option<TrioArc<ValueEntry<K, V>>>;
 
-    fn remove_key_value_if<F>(&self, key: &Arc<K>, condition: F) -> Option<TrioArc<ValueEntry<K, V>>>
+    fn remove_key_value_if<F>(
+        &self,
+        key: &Arc<K>,
+        condition: F,
+    ) -> Option<TrioArc<ValueEntry<K, V>>>
     where
         F: FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool;
 }

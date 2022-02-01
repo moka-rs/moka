@@ -676,7 +676,11 @@ where
         self.cache.get(key)
     }
 
-    fn remove_key_value_if<F>(&self, key: &Arc<K>, condition: F) -> Option<TrioArc<ValueEntry<K, V>>>
+    fn remove_key_value_if<F>(
+        &self,
+        key: &Arc<K>,
+        condition: F,
+    ) -> Option<TrioArc<ValueEntry<K, V>>>
     where
         F: FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool,
     {
