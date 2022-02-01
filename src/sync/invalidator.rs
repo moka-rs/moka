@@ -1,5 +1,6 @@
 #![allow(unused)]
 
+use super::{base_cache::Inner, AccessTime, KvEntry, PredicateId, PredicateIdStr, ValueEntry};
 use crate::{
     common::{
         thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
@@ -8,8 +9,6 @@ use crate::{
     },
     PredicateError,
 };
-
-use super::{base_cache::Inner, AccessTime, KvEntry, PredicateId, PredicateIdStr, ValueEntry};
 
 use parking_lot::{Mutex, RwLock};
 use std::{
@@ -22,16 +21,21 @@ use std::{
     },
     time::Duration,
 };
+use triomphe::Arc as TrioArc;
 use uuid::Uuid;
 
 pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 'static>;
 
 pub(crate) trait GetOrRemoveEntry<K, V> {
-    fn get_value_entry(&self, key: &Arc<K>) -> Option<Arc<ValueEntry<K, V>>>;
+    fn get_value_entry(&self, key: &Arc<K>) -> Option<TrioArc<ValueEntry<K, V>>>;
 
-    fn remove_key_value_if<F>(&self, key: &Arc<K>, condition: F) -> Option<Arc<ValueEntry<K, V>>>
+    fn remove_key_value_if<F>(
+        &self,
+        key: &Arc<K>,
+        condition: F,
+    ) -> Option<TrioArc<ValueEntry<K, V>>>
     where
-        F: FnMut(&Arc<K>, &Arc<ValueEntry<K, V>>) -> bool;
+        F: FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool;
 }
 
 pub(crate) struct KeyDateLite<K> {
@@ -161,7 +165,7 @@ impl<K, V, S> Invalidator<K, V, S> {
 
     // This method will be called by the get method of Cache.
     #[inline]
-    pub(crate) fn apply_predicates(&self, key: &Arc<K>, entry: &Arc<ValueEntry<K, V>>) -> bool {
+    pub(crate) fn apply_predicates(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>) -> bool {
         if self.is_empty() {
             false
         } else if let Some(ts) = entry.last_modified() {
@@ -434,7 +438,7 @@ where
         false
     }
 
-    fn invalidate<C>(cache: &Arc<C>, key: &Arc<K>, ts: Instant) -> Option<Arc<ValueEntry<K, V>>>
+    fn invalidate<C>(cache: &Arc<C>, key: &Arc<K>, ts: Instant) -> Option<TrioArc<ValueEntry<K, V>>>
     where
         Arc<C>: GetOrRemoveEntry<K, V>,
     {

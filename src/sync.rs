@@ -4,6 +4,7 @@ use crate::common::{deque::DeqNode, time::Instant};
 
 use parking_lot::Mutex;
 use std::{ptr::NonNull, sync::Arc};
+use triomphe::Arc as TrioArc;
 
 pub(crate) mod base_cache;
 mod builder;
@@ -68,14 +69,14 @@ impl<K> Clone for KeyHash<K> {
 
 pub(crate) struct KeyDate<K> {
     key: Arc<K>,
-    entry_info: Arc<EntryInfo>,
+    entry_info: TrioArc<EntryInfo>,
 }
 
 impl<K> KeyDate<K> {
-    pub(crate) fn new(key: Arc<K>, entry_info: &Arc<EntryInfo>) -> Self {
+    pub(crate) fn new(key: Arc<K>, entry_info: &TrioArc<EntryInfo>) -> Self {
         Self {
             key,
-            entry_info: Arc::clone(entry_info),
+            entry_info: TrioArc::clone(entry_info),
         }
     }
 
@@ -91,15 +92,15 @@ impl<K> KeyDate<K> {
 pub(crate) struct KeyHashDate<K> {
     key: Arc<K>,
     hash: u64,
-    entry_info: Arc<EntryInfo>,
+    entry_info: TrioArc<EntryInfo>,
 }
 
 impl<K> KeyHashDate<K> {
-    pub(crate) fn new(kh: KeyHash<K>, entry_info: &Arc<EntryInfo>) -> Self {
+    pub(crate) fn new(kh: KeyHash<K>, entry_info: &TrioArc<EntryInfo>) -> Self {
         Self {
             key: kh.key,
             hash: kh.hash,
-            entry_info: Arc::clone(entry_info),
+            entry_info: TrioArc::clone(entry_info),
         }
     }
 
@@ -114,11 +115,11 @@ impl<K> KeyHashDate<K> {
 
 pub(crate) struct KvEntry<K, V> {
     pub(crate) key: Arc<K>,
-    pub(crate) entry: Arc<ValueEntry<K, V>>,
+    pub(crate) entry: TrioArc<ValueEntry<K, V>>,
 }
 
 impl<K, V> KvEntry<K, V> {
-    pub(crate) fn new(key: Arc<K>, entry: Arc<ValueEntry<K, V>>) -> Self {
+    pub(crate) fn new(key: Arc<K>, entry: TrioArc<ValueEntry<K, V>>) -> Self {
         Self { key, entry }
     }
 }
@@ -183,12 +184,12 @@ unsafe impl<K> Send for DeqNodes<K> {}
 
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: V,
-    info: Arc<EntryInfo>,
+    info: TrioArc<EntryInfo>,
     nodes: Mutex<DeqNodes<K>>,
 }
 
 impl<K, V> ValueEntry<K, V> {
-    fn new(value: V, entry_info: Arc<EntryInfo>) -> Self {
+    fn new(value: V, entry_info: TrioArc<EntryInfo>) -> Self {
         Self {
             value,
             info: entry_info,
@@ -199,7 +200,7 @@ impl<K, V> ValueEntry<K, V> {
         }
     }
 
-    fn new_from(value: V, entry_info: Arc<EntryInfo>, other: &Self) -> Self {
+    fn new_from(value: V, entry_info: TrioArc<EntryInfo>, other: &Self) -> Self {
         let nodes = {
             let other_nodes = other.nodes.lock();
             DeqNodes {
@@ -218,7 +219,7 @@ impl<K, V> ValueEntry<K, V> {
         }
     }
 
-    pub(crate) fn entry_info(&self) -> &Arc<EntryInfo> {
+    pub(crate) fn entry_info(&self) -> &TrioArc<EntryInfo> {
         &self.info
     }
 
@@ -266,7 +267,7 @@ impl<K, V> ValueEntry<K, V> {
     }
 }
 
-impl<K, V> AccessTime for Arc<ValueEntry<K, V>> {
+impl<K, V> AccessTime for TrioArc<ValueEntry<K, V>> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
         self.info.last_accessed()
@@ -290,14 +291,14 @@ impl<K, V> AccessTime for Arc<ValueEntry<K, V>> {
 
 pub(crate) enum ReadOp<K, V> {
     // u64 is the hash of the key.
-    Hit(u64, Arc<ValueEntry<K, V>>, Instant),
+    Hit(u64, TrioArc<ValueEntry<K, V>>, Instant),
     Miss(u64),
 }
 
 pub(crate) enum WriteOp<K, V> {
     Upsert {
         key_hash: KeyHash<K>,
-        value_entry: Arc<ValueEntry<K, V>>,
+        value_entry: TrioArc<ValueEntry<K, V>>,
         old_weight: u32,
         new_weight: u32,
     },

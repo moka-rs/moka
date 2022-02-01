@@ -4,10 +4,11 @@ use std::{
     hash::{BuildHasher, Hash},
     sync::Arc,
 };
+use triomphe::Arc as TrioArc;
 
 type ErrorObject = Arc<dyn Any + Send + Sync + 'static>;
 type WaiterValue<V> = Option<Result<V, ErrorObject>>;
-type Waiter<V> = Arc<RwLock<WaiterValue<V>>>;
+type Waiter<V> = TrioArc<RwLock<WaiterValue<V>>>;
 
 pub(crate) enum InitResult<V, E> {
     Initialized(V),
@@ -97,7 +98,7 @@ where
         let mut retries = 0;
 
         loop {
-            let waiter = Arc::new(RwLock::new(None));
+            let waiter = TrioArc::new(RwLock::new(None));
             let mut lock = waiter.write();
 
             match self.try_insert_waiter(key, type_id, &waiter) {
@@ -157,9 +158,9 @@ where
         waiter: &Waiter<V>,
     ) -> Option<Waiter<V>> {
         let key = Arc::clone(key);
-        let waiter = Arc::clone(waiter);
+        let waiter = TrioArc::clone(waiter);
 
         self.waiters
-            .insert_with_or_modify((key, type_id), || waiter, |_, w| Arc::clone(w))
+            .insert_with_or_modify((key, type_id), || waiter, |_, w| TrioArc::clone(w))
     }
 }
