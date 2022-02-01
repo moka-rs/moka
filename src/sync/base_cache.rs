@@ -1,9 +1,10 @@
 use super::{
     deques::Deques,
+    entry_info::EntryInfo,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
-    AccessTime, CacheFeatures, KeyDate, KeyHash, KeyHashDate, KvEntry, PredicateId, ReadOp,
-    ValueEntry, ValueEntryBuilder, Weigher, WriteOp,
+    AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, PredicateId, ReadOp, ValueEntry, Weigher,
+    WriteOp,
 };
 use crate::{
     common::{
@@ -321,7 +322,8 @@ where
 
     #[inline]
     fn new_value_entry(&self, value: V, policy_weight: u32) -> Arc<ValueEntry<K, V>> {
-        Arc::new(self.inner.value_entry_builder.build(value, policy_weight))
+        let info = Arc::new(EntryInfo::new(policy_weight));
+        Arc::new(ValueEntry::new(value, info))
     }
 
     #[inline]
@@ -331,11 +333,9 @@ where
         policy_weight: u32,
         other: &ValueEntry<K, V>,
     ) -> Arc<ValueEntry<K, V>> {
-        Arc::new(
-            self.inner
-                .value_entry_builder
-                .build_from(value, policy_weight, other),
-        )
+        let info = other.info.clone();
+        info.set_policy_weight(policy_weight);
+        Arc::new(ValueEntry::new_from(value, info, other))
     }
 
     #[inline]
@@ -461,15 +461,12 @@ type CacheStore<K, V, S> = moka_cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, 
 
 type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
 
-// type BoxedValueEntryBuilder<K, V> = Box<dyn ValueEntryBuilder<K, V> + Send + Sync + 'static>;
-
 pub(crate) struct Inner<K, V, S> {
     max_capacity: Option<u64>,
     entry_count: AtomicCell<u64>,
     weighted_size: AtomicCell<u64>,
     cache: CacheStore<K, V, S>,
     build_hasher: S,
-    value_entry_builder: ValueEntryBuilder,
     deques: Mutex<Deques<K>>,
     frequency_sketch: RwLock<FrequencySketch>,
     frequency_sketch_enabled: AtomicBool,
@@ -516,16 +513,12 @@ where
             build_hasher.clone(),
         );
 
-        let features = CacheFeatures::new(weigher.is_some());
-        let value_entry_builder = ValueEntryBuilder::new(features);
-
         Self {
             max_capacity: max_capacity.map(|n| n as u64),
             entry_count: Default::default(),
             weighted_size: Default::default(),
             cache,
             build_hasher,
-            value_entry_builder,
             deques: Mutex::new(Default::default()),
             frequency_sketch: RwLock::new(Default::default()),
             frequency_sketch_enabled: Default::default(),

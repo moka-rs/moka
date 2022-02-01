@@ -9,7 +9,7 @@ pub(crate) mod base_cache;
 mod builder;
 mod cache;
 mod deques;
-mod entry_info;
+pub(crate) mod entry_info;
 pub(crate) mod housekeeper;
 mod invalidator;
 mod segment;
@@ -68,14 +68,14 @@ impl<K> Clone for KeyHash<K> {
 
 pub(crate) struct KeyDate<K> {
     key: Arc<K>,
-    entry_info: EntryInfo,
+    entry_info: Arc<EntryInfo>,
 }
 
 impl<K> KeyDate<K> {
-    pub(crate) fn new(key: Arc<K>, entry_info: &EntryInfo) -> Self {
+    pub(crate) fn new(key: Arc<K>, entry_info: &Arc<EntryInfo>) -> Self {
         Self {
             key,
-            entry_info: entry_info.clone(),
+            entry_info: Arc::clone(entry_info),
         }
     }
 
@@ -91,15 +91,15 @@ impl<K> KeyDate<K> {
 pub(crate) struct KeyHashDate<K> {
     key: Arc<K>,
     hash: u64,
-    entry_info: EntryInfo,
+    entry_info: Arc<EntryInfo>,
 }
 
 impl<K> KeyHashDate<K> {
-    pub(crate) fn new(kh: KeyHash<K>, entry_info: &EntryInfo) -> Self {
+    pub(crate) fn new(kh: KeyHash<K>, entry_info: &Arc<EntryInfo>) -> Self {
         Self {
             key: kh.key,
             hash: kh.hash,
-            entry_info: entry_info.clone(),
+            entry_info: Arc::clone(entry_info),
         }
     }
 
@@ -173,7 +173,7 @@ type KeyDeqNodeAo<K> = NonNull<DeqNode<KeyHashDate<K>>>;
 // DeqNode for the write order queue.
 type KeyDeqNodeWo<K> = NonNull<DeqNode<KeyDate<K>>>;
 
-struct DeqNodes<K> {
+pub(crate) struct DeqNodes<K> {
     access_order_q_node: Option<KeyDeqNodeAo<K>>,
     write_order_q_node: Option<KeyDeqNodeWo<K>>,
 }
@@ -183,12 +183,12 @@ unsafe impl<K> Send for DeqNodes<K> {}
 
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: V,
-    info: EntryInfo,
+    info: Arc<EntryInfo>,
     nodes: Mutex<DeqNodes<K>>,
 }
 
 impl<K, V> ValueEntry<K, V> {
-    fn new(value: V, entry_info: EntryInfo) -> Self {
+    fn new(value: V, entry_info: Arc<EntryInfo>) -> Self {
         Self {
             value,
             info: entry_info,
@@ -199,7 +199,7 @@ impl<K, V> ValueEntry<K, V> {
         }
     }
 
-    fn new_from(value: V, entry_info: EntryInfo, other: &Self) -> Self {
+    fn new_from(value: V, entry_info: Arc<EntryInfo>, other: &Self) -> Self {
         let nodes = {
             let other_nodes = other.nodes.lock();
             DeqNodes {
@@ -218,7 +218,7 @@ impl<K, V> ValueEntry<K, V> {
         }
     }
 
-    pub(crate) fn entry_info(&self) -> &EntryInfo {
+    pub(crate) fn entry_info(&self) -> &Arc<EntryInfo> {
         &self.info
     }
 
@@ -285,46 +285,6 @@ impl<K, V> AccessTime for Arc<ValueEntry<K, V>> {
     #[inline]
     fn set_last_modified(&self, timestamp: Instant) {
         self.info.set_last_modified(timestamp);
-    }
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum CacheFeatures {
-    Plain,
-    Weighted,
-}
-
-impl CacheFeatures {
-    pub(crate) fn new(is_weighter_defined: bool) -> Self {
-        if is_weighter_defined {
-            Self::Weighted
-        } else {
-            Self::Plain
-        }
-    }
-}
-
-pub(crate) struct ValueEntryBuilder(CacheFeatures);
-
-impl ValueEntryBuilder {
-    pub(crate) fn new(features: CacheFeatures) -> Self {
-        Self(features)
-    }
-
-    pub(crate) fn build<K, V>(&self, value: V, policy_weight: u32) -> ValueEntry<K, V> {
-        let info = EntryInfo::new(self.0, policy_weight);
-        ValueEntry::new(value, info)
-    }
-
-    pub(crate) fn build_from<K, V>(
-        &self,
-        value: V,
-        policy_weight: u32,
-        other: &ValueEntry<K, V>,
-    ) -> ValueEntry<K, V> {
-        let info = other.info.clone();
-        info.set_policy_weight(policy_weight);
-        ValueEntry::new_from(value, info, other)
     }
 }
 
