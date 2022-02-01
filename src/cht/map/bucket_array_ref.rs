@@ -1,4 +1,4 @@
-use super::bucket::{self, Bucket, BucketArray, InsertOrModifyState};
+use super::bucket::{self, Bucket, BucketArray, InsertOrModifyState, RehashOp};
 
 use std::{
     borrow::Borrow,
@@ -49,7 +49,8 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> BucketArrayRef<'a, K, V, S> {
                     break;
                 }
                 Err(_) => {
-                    bucket_array_ref = bucket_array_ref.rehash(guard, self.build_hasher);
+                    bucket_array_ref =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
                 }
             }
         }
@@ -81,6 +82,18 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> BucketArrayRef<'a, K, V, S> {
         let result;
 
         loop {
+            loop {
+                let rehash_op = RehashOp::new(
+                    bucket_array_ref.capacity(),
+                    &bucket_array_ref.tombstone_count,
+                    self.len,
+                );
+                if rehash_op.is_skip() {
+                    break;
+                }
+                bucket_array_ref = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op);
+            }
+
             match bucket_array_ref.remove_if(guard, hash, key, condition) {
                 Ok(previous_bucket_ptr) => {
                     if let Some(previous_bucket_ref) = unsafe { previous_bucket_ptr.as_ref() } {
@@ -89,6 +102,9 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> BucketArrayRef<'a, K, V, S> {
                             maybe_value: value,
                         } = previous_bucket_ref;
                         self.len.fetch_sub(1, Ordering::Relaxed);
+                        bucket_array_ref
+                            .tombstone_count
+                            .fetch_add(1, Ordering::Relaxed);
                         result = Some(with_previous_entry(key, unsafe { &*value.as_ptr() }));
 
                         unsafe { bucket::defer_destroy_tombstone(guard, previous_bucket_ptr) };
@@ -100,7 +116,8 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> BucketArrayRef<'a, K, V, S> {
                 }
                 Err(c) => {
                     condition = c;
-                    bucket_array_ref = bucket_array_ref.rehash(guard, self.build_hasher);
+                    bucket_array_ref =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
                 }
             }
         }
@@ -131,8 +148,16 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> BucketArrayRef<'a, K, V, S> {
         let result;
 
         loop {
-            while self.len.load(Ordering::Relaxed) > bucket_array_ref.capacity() {
-                bucket_array_ref = bucket_array_ref.rehash(guard, self.build_hasher);
+            loop {
+                let rehash_op = RehashOp::new(
+                    bucket_array_ref.capacity(),
+                    &bucket_array_ref.tombstone_count,
+                    self.len,
+                );
+                if rehash_op.is_skip() {
+                    break;
+                }
+                bucket_array_ref = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op);
             }
 
             match bucket_array_ref.insert_or_modify(guard, hash, state, on_modify) {
@@ -160,7 +185,8 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> BucketArrayRef<'a, K, V, S> {
                 Err((s, f)) => {
                     state = s;
                     on_modify = f;
-                    bucket_array_ref = bucket_array_ref.rehash(guard, self.build_hasher);
+                    bucket_array_ref =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
                 }
             }
         }
@@ -173,8 +199,6 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> BucketArrayRef<'a, K, V, S> {
 
 impl<'a, 'g, K, V, S> BucketArrayRef<'a, K, V, S> {
     fn get(&self, guard: &'g Guard) -> &'g BucketArray<K, V> {
-        const DEFAULT_LENGTH: usize = 128;
-
         let mut maybe_new_bucket_array = None;
 
         loop {
@@ -184,8 +208,8 @@ impl<'a, 'g, K, V, S> BucketArrayRef<'a, K, V, S> {
                 return bucket_array_ref;
             }
 
-            let new_bucket_array = maybe_new_bucket_array
-                .unwrap_or_else(|| Owned::new(BucketArray::with_length(0, DEFAULT_LENGTH)));
+            let new_bucket_array =
+                maybe_new_bucket_array.unwrap_or_else(|| Owned::new(BucketArray::default()));
 
             match self.bucket_array.compare_and_set_weak(
                 Shared::null(),
