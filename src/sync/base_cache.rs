@@ -333,7 +333,7 @@ where
         policy_weight: u32,
         other: &ValueEntry<K, V>,
     ) -> Arc<ValueEntry<K, V>> {
-        let info = other.info.clone();
+        let info = Arc::clone(other.entry_info());
         info.set_policy_weight(policy_weight);
         Arc::new(ValueEntry::new_from(value, info, other))
     }
