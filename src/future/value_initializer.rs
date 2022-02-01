@@ -5,6 +5,7 @@ use std::{
     hash::{BuildHasher, Hash},
     sync::Arc,
 };
+use triomphe::Arc as TrioArc;
 
 type ErrorObject = Arc<dyn Any + Send + Sync + 'static>;
 
@@ -23,7 +24,7 @@ enum WaiterValue<V> {
     EnclosingFutureAborted,
 }
 
-type Waiter<V> = Arc<RwLock<WaiterValue<V>>>;
+type Waiter<V> = TrioArc<RwLock<WaiterValue<V>>>;
 
 struct WaiterGuard<'a, K, V, S>
 // NOTE: We usually do not attach trait bounds to here at the struct definition, but
@@ -172,7 +173,7 @@ where
         let mut retries = 0;
 
         loop {
-            let waiter = Arc::new(RwLock::new(WaiterValue::Computing));
+            let waiter = TrioArc::new(RwLock::new(WaiterValue::Computing));
             let mut lock = waiter.write().await;
 
             match self.try_insert_waiter(key, type_id, &waiter) {
@@ -246,10 +247,10 @@ where
         waiter: &Waiter<V>,
     ) -> Option<Waiter<V>> {
         let key = Arc::clone(key);
-        let waiter = Arc::clone(waiter);
+        let waiter = TrioArc::clone(waiter);
 
         self.waiters
-            .insert_with_or_modify((key, type_id), || waiter, |_, w| Arc::clone(w))
+            .insert_with_or_modify((key, type_id), || waiter, |_, w| TrioArc::clone(w))
     }
 }
 

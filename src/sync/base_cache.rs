@@ -32,6 +32,7 @@ use std::{
     },
     time::Duration,
 };
+use triomphe::Arc as TrioArc;
 
 pub(crate) const MAX_SYNC_REPEATS: usize = 4;
 
@@ -271,7 +272,7 @@ where
                     cnt,
                     WriteOp::Upsert {
                         key_hash: KeyHash::new(Arc::clone(&key), hash),
-                        value_entry: Arc::clone(&entry),
+                        value_entry: TrioArc::clone(&entry),
                         old_weight: 0,
                         new_weight: weight,
                     },
@@ -290,10 +291,10 @@ where
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((
                     cnt,
-                    Arc::clone(old_entry),
+                    TrioArc::clone(old_entry),
                     WriteOp::Upsert {
                         key_hash: KeyHash::new(Arc::clone(&key), hash),
-                        value_entry: Arc::clone(&entry),
+                        value_entry: TrioArc::clone(&entry),
                         old_weight,
                         new_weight: weight,
                     },
@@ -321,9 +322,9 @@ where
     }
 
     #[inline]
-    fn new_value_entry(&self, value: V, policy_weight: u32) -> Arc<ValueEntry<K, V>> {
-        let info = Arc::new(EntryInfo::new(policy_weight));
-        Arc::new(ValueEntry::new(value, info))
+    fn new_value_entry(&self, value: V, policy_weight: u32) -> TrioArc<ValueEntry<K, V>> {
+        let info = TrioArc::new(EntryInfo::new(policy_weight));
+        TrioArc::new(ValueEntry::new(value, info))
     }
 
     #[inline]
@@ -332,10 +333,10 @@ where
         value: V,
         policy_weight: u32,
         other: &ValueEntry<K, V>,
-    ) -> Arc<ValueEntry<K, V>> {
-        let info = Arc::clone(other.entry_info());
+    ) -> TrioArc<ValueEntry<K, V>> {
+        let info = TrioArc::clone(other.entry_info());
         info.set_policy_weight(policy_weight);
-        Arc::new(ValueEntry::new_from(value, info, other))
+        TrioArc::new(ValueEntry::new_from(value, info, other))
     }
 
     #[inline]
@@ -457,9 +458,9 @@ enum AdmissionResult<K> {
     },
 }
 
-type CacheStore<K, V, S> = crate::cht::SegmentedHashMap<Arc<K>, Arc<ValueEntry<K, V>>, S>;
+type CacheStore<K, V, S> = crate::cht::SegmentedHashMap<Arc<K>, TrioArc<ValueEntry<K, V>>, S>;
 
-type CacheEntry<K, V> = (Arc<K>, Arc<ValueEntry<K, V>>);
+type CacheEntry<K, V> = (Arc<K>, TrioArc<ValueEntry<K, V>>);
 
 pub(crate) struct Inner<K, V, S> {
     max_capacity: Option<u64>,
@@ -636,7 +637,7 @@ where
     }
 
     #[inline]
-    fn is_invalidated_entry(&self, key: &Arc<K>, entry: &Arc<ValueEntry<K, V>>) -> bool {
+    fn is_invalidated_entry(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>) -> bool {
         if self.invalidator_enabled {
             if let Some(inv) = &*self.invalidator.read() {
                 return inv.apply_predicates(key, entry);
@@ -671,13 +672,13 @@ where
     K: Hash + Eq,
     S: BuildHasher,
 {
-    fn get_value_entry(&self, key: &Arc<K>) -> Option<Arc<ValueEntry<K, V>>> {
+    fn get_value_entry(&self, key: &Arc<K>) -> Option<TrioArc<ValueEntry<K, V>>> {
         self.cache.get(key)
     }
 
-    fn remove_key_value_if<F>(&self, key: &Arc<K>, condition: F) -> Option<Arc<ValueEntry<K, V>>>
+    fn remove_key_value_if<F>(&self, key: &Arc<K>, condition: F) -> Option<TrioArc<ValueEntry<K, V>>>
     where
-        F: FnMut(&Arc<K>, &Arc<ValueEntry<K, V>>) -> bool,
+        F: FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool,
     {
         self.cache.remove_if(key, condition)
     }
@@ -875,7 +876,7 @@ where
     fn handle_upsert(
         &self,
         kh: KeyHash<K>,
-        entry: Arc<ValueEntry<K, V>>,
+        entry: TrioArc<ValueEntry<K, V>>,
         old_weight: u32,
         new_weight: u32,
         timestamp: Instant,
@@ -1035,7 +1036,7 @@ where
     fn handle_admit(
         &self,
         kh: KeyHash<K>,
-        entry: &Arc<ValueEntry<K, V>>,
+        entry: &TrioArc<ValueEntry<K, V>>,
         policy_weight: u32,
         deqs: &mut Deques<K>,
         counters: &mut EvictionCounters,
@@ -1055,7 +1056,7 @@ where
 
     fn handle_remove(
         deqs: &mut Deques<K>,
-        entry: Arc<ValueEntry<K, V>>,
+        entry: TrioArc<ValueEntry<K, V>>,
         counters: &mut EvictionCounters,
     ) {
         if entry.is_admitted() {
@@ -1071,7 +1072,7 @@ where
         ao_deq_name: &str,
         ao_deq: &mut Deque<KeyHashDate<K>>,
         wo_deq: &mut Deque<KeyDate<K>>,
-        entry: Arc<ValueEntry<K, V>>,
+        entry: TrioArc<ValueEntry<K, V>>,
         counters: &mut EvictionCounters,
     ) {
         if entry.is_admitted() {
