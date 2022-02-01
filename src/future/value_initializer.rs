@@ -90,7 +90,7 @@ pub(crate) struct ValueInitializer<K, V, S> {
     // try_init_or_read(). We use the type ID as a part of the key to ensure that
     // we can always downcast the trait object ErrorObject (in Waiter<V>) into
     // its concrete type.
-    waiters: moka_cht::SegmentedHashMap<(Arc<K>, TypeId), Waiter<V>, S>,
+    waiters: crate::cht::SegmentedHashMap<(Arc<K>, TypeId), Waiter<V>, S>,
 }
 
 impl<K, V, S> ValueInitializer<K, V, S>
@@ -101,7 +101,7 @@ where
 {
     pub(crate) fn with_hasher(hasher: S) -> Self {
         Self {
-            waiters: moka_cht::SegmentedHashMap::with_num_segments_and_hasher(16, hasher),
+            waiters: crate::cht::SegmentedHashMap::with_num_segments_and_hasher(16, hasher),
         }
     }
 

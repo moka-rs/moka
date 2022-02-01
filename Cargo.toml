@@ -36,8 +36,8 @@ atomic64 = []
 # borrow violations found by Miri.
 # https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-channel/CHANGELOG.md#version-052
 crossbeam-channel = "0.5.2"
+crossbeam-epoch = "0.8.2"
 crossbeam-utils = "0.8"
-moka-cht = "0.4.2"
 num_cpus = "1.13"
 once_cell = "1.7"
 parking_lot = "0.11"

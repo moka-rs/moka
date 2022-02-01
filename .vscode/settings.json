@@ -29,6 +29,7 @@
         "Ohad",
         "peekable",
         "preds",
+        "repr",
         "reqwest",
         "runtimes",
         "rustdoc",
@@ -41,6 +42,7 @@
         "thiserror",
         "toolchain",
         "trybuild",
+        "Uninit",
         "unsync",
         "Upsert",
         "usize"

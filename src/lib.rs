@@ -157,6 +157,7 @@ pub mod future;
 pub mod sync;
 pub mod unsync;
 
+pub(crate) mod cht;
 pub(crate) mod common;
 
 pub use common::error::PredicateError;
