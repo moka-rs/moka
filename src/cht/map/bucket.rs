@@ -3,15 +3,24 @@ use std::{
     hash::{BuildHasher, Hash, Hasher},
     mem::{self, MaybeUninit},
     ptr,
-    sync::atomic::{self, Ordering},
+    sync::atomic::{self, AtomicUsize, Ordering},
 };
 
 use crossbeam_epoch::{Atomic, CompareAndSetError, Guard, Owned, Shared};
+
+pub(crate) const BUCKET_ARRAY_DEFAULT_LENGTH: usize = 128;
 
 pub(crate) struct BucketArray<K, V> {
     pub(crate) buckets: Box<[Atomic<Bucket<K, V>>]>,
     pub(crate) next: Atomic<BucketArray<K, V>>,
     pub(crate) epoch: usize,
+    pub(crate) tombstone_count: AtomicUsize,
+}
+
+impl<K, V> Default for BucketArray<K, V> {
+    fn default() -> Self {
+        Self::with_length(0, BUCKET_ARRAY_DEFAULT_LENGTH)
+    }
 }
 
 impl<K, V> BucketArray<K, V> {
@@ -30,6 +39,7 @@ impl<K, V> BucketArray<K, V> {
             buckets,
             next: Atomic::null(),
             epoch,
+            tombstone_count: Default::default(),
         }
     }
 
@@ -275,12 +285,12 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
         &self,
         guard: &'g Guard,
         build_hasher: &H,
+        rehash_op: RehashOp,
     ) -> &'g BucketArray<K, V>
     where
         K: Hash + Eq,
     {
-        let next_array = self.next_array(guard);
-        assert!(self.buckets.len() <= next_array.buckets.len());
+        let next_array = self.next_array(guard, rehash_op);
 
         for this_bucket in self.buckets.iter() {
             let mut maybe_state: Option<(usize, Shared<'g, Bucket<K, V>>)> = None;
@@ -329,6 +339,7 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
                     )
                     .is_ok()
                 {
+                    // TODO: If else, we may need to count tombstone.
                     if !this_bucket_ptr.is_null()
                         && this_bucket_ptr.tag() & TOMBSTONE_TAG != 0
                         && maybe_state.is_none()
@@ -344,7 +355,7 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
         next_array
     }
 
-    fn next_array(&self, guard: &'g Guard) -> &'g BucketArray<K, V> {
+    fn next_array(&self, guard: &'g Guard, rehash_op: RehashOp) -> &'g BucketArray<K, V> {
         let mut maybe_new_next = None;
 
         loop {
@@ -354,11 +365,9 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
                 return next_ref;
             }
 
+            let new_length = rehash_op.new_len(self.buckets.len());
             let new_next = maybe_new_next.unwrap_or_else(|| {
-                Owned::new(BucketArray::with_length(
-                    self.epoch + 1,
-                    self.buckets.len() * 2,
-                ))
+                Owned::new(BucketArray::with_length(self.epoch + 1, new_length))
             });
 
             match self.next.compare_and_set_weak(
@@ -547,6 +556,50 @@ pub(crate) unsafe fn defer_acquire_destroy<'g, T>(guard: &'g Guard, ptr: Shared<
         atomic::fence(Ordering::Acquire);
         mem::drop(ptr.into_owned());
     });
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum RehashOp {
+    Expand,
+    Shrink,
+    GcOnly,
+    Skip,
+}
+
+impl RehashOp {
+    pub(crate) fn new(cap: usize, tombstone_count: &AtomicUsize, len: &AtomicUsize) -> Self {
+        let real_cap = cap as f64 * 2.0;
+        let quarter_cap = real_cap / 4.0;
+        let tbc = tombstone_count.load(Ordering::Relaxed) as f64;
+        let len = len.load(Ordering::Relaxed) as f64;
+
+        if tbc / real_cap >= 0.1 {
+            if len - tbc < quarter_cap && quarter_cap as usize >= BUCKET_ARRAY_DEFAULT_LENGTH {
+                return Self::Shrink;
+            } else {
+                return Self::GcOnly;
+            }
+        }
+
+        if len > real_cap * 0.7 {
+            return Self::Expand;
+        }
+
+        Self::Skip
+    }
+
+    pub(crate) fn is_skip(&self) -> bool {
+        matches!(self, &Self::Skip)
+    }
+
+    fn new_len(&self, current_len: usize) -> usize {
+        match self {
+            Self::Expand => current_len * 2,
+            Self::Shrink => current_len / 2,
+            Self::GcOnly => current_len,
+            Self::Skip => unreachable!(),
+        }
+    }
 }
 
 pub(crate) const SENTINEL_TAG: usize = 0b001; // set on old table buckets when copied into a new table
