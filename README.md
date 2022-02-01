@@ -492,6 +492,20 @@ This name would imply the following facts and hopes:
 [moka-pot-wikipedia]: https://en.wikipedia.org/wiki/Moka_pot
 
 
+## Credits
+
+### cht
+
+The source files of the concurrent hash table under `moka::cht` module were copied
+from the [cht v0.4.1][cht-v041] and modified by us. We did so for better integration
+between Moka and cht.
+
+The cht is authored by Gregory Meyer and its v0.4.1 and earlier versions are licensed
+under the MIT license.
+
+[cht-v041]: https://github.com/Gregory-Meyer/cht/tree/v0.4.1
+
+
 ## License
 
 Moka is distributed under either of
@@ -504,18 +518,6 @@ at your option.
 See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.
 
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_large)
-
-
-## Credits
-
-The source files of the concurrent hash table under `moka::cht` module were copied
-from the [cht v0.4.1][cht-v041] and modified by us. We did so for better integration
-between Moka and cht.
-
-The cht is authored by Gregory Meyer and its v0.4.1 and earlier versions are licensed
-under the MIT license.
-
-[cht-v041]: https://github.com/Gregory-Meyer/cht/tree/v0.4.1
 
 <!--
 
