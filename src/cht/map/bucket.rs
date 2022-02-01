@@ -9,7 +9,7 @@ use std::{
 use crossbeam_epoch::{Atomic, CompareAndSetError, Guard, Owned, Shared};
 use once_cell::sync::Lazy;
 
-pub(crate) static BUCKET_COUNTERS: Lazy<Counters> = Lazy::new(|| Counters::default());
+pub(crate) static BUCKET_COUNTERS: Lazy<Counters> = Lazy::new(Counters::default);
 
 #[derive(Default)]
 pub(crate) struct Counters {
