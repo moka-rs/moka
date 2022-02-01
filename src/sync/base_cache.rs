@@ -384,7 +384,7 @@ where
             }
         }
         // Enable the frequency sketch.
-        self.inner.enable_frequency_sketch();
+        self.inner.enable_frequency_sketch_for_testing();
     }
 
     pub(crate) fn set_expiration_clock(&self, clock: Option<Clock>) {
@@ -472,6 +472,7 @@ pub(crate) struct Inner<K, V, S> {
     value_entry_builder: ValueEntryBuilder,
     deques: Mutex<Deques<K>>,
     frequency_sketch: RwLock<FrequencySketch>,
+    frequency_sketch_enabled: AtomicBool,
     read_op_ch: Receiver<ReadOp<K, V>>,
     write_op_ch: Receiver<WriteOp<K, V>>,
     time_to_live: Option<Duration>,
@@ -527,6 +528,7 @@ where
             value_entry_builder,
             deques: Mutex::new(Default::default()),
             frequency_sketch: RwLock::new(Default::default()),
+            frequency_sketch_enabled: Default::default(),
             read_op_ch,
             write_op_ch,
             time_to_live,
@@ -723,7 +725,9 @@ where
                 self.apply_writes(&mut deqs, w_len, &mut counters);
             }
 
-            self.enable_frequency_sketch_if_needed(&counters);
+            if self.should_enable_frequency_sketch(&counters) {
+                self.enable_frequency_sketch(&counters);
+            }
 
             calls += 1;
             should_sync = self.read_op_ch.len() >= READ_LOG_FLUSH_POINT
@@ -796,30 +800,41 @@ where
     }
 
     #[inline]
-    fn enable_frequency_sketch_if_needed(&self, counters: &EvictionCounters) {
-        if let Some(max_cap) = self.max_capacity {
-            if counters.weighted_size >= max_cap / 2 {
-                self.do_enable_frequency_sketch(counters.entry_count, max_cap);
-            }
-        }
-    }
-
-    #[cfg(test)]
-    fn enable_frequency_sketch(&self) {
-        if let Some(max_cap) = self.max_capacity {
-            self.do_enable_frequency_sketch(self.entry_count.load(), max_cap);
+    fn should_enable_frequency_sketch(&self, counters: &EvictionCounters) -> bool {
+        if self.frequency_sketch_enabled.load(Ordering::Acquire) {
+            false
+        } else if let Some(max_cap) = self.max_capacity {
+            counters.weighted_size >= max_cap / 2
+        } else {
+            false
         }
     }
 
     #[inline]
-    fn do_enable_frequency_sketch(&self, entry_count: u64, max_capacity: u64) {
-        let num_entries = if self.weigher.is_some() {
-            entry_count * 2
-        } else {
-            max_capacity
-        };
-        let skt_capacity = common::sketch_capacity(num_entries);
+    fn enable_frequency_sketch(&self, counters: &EvictionCounters) {
+        if let Some(max_cap) = self.max_capacity {
+            let c = counters;
+            let cap = if self.weigher.is_none() {
+                max_cap
+            } else {
+                (c.entry_count as f64 * (c.weighted_size as f64 / max_cap as f64)) as u64
+            };
+            self.do_enable_frequency_sketch(cap);
+        }
+    }
+
+    #[cfg(test)]
+    fn enable_frequency_sketch_for_testing(&self) {
+        if let Some(max_cap) = self.max_capacity {
+            self.do_enable_frequency_sketch(max_cap);
+        }
+    }
+
+    #[inline]
+    fn do_enable_frequency_sketch(&self, cache_capacity: u64) {
+        let skt_capacity = common::sketch_capacity(cache_capacity);
         self.frequency_sketch.write().ensure_capacity(skt_capacity);
+        self.frequency_sketch_enabled.store(true, Ordering::Release);
     }
 
     fn apply_reads(&self, deqs: &mut Deques<K>, count: usize) {
@@ -1454,7 +1469,7 @@ mod tests {
                 None,
                 false,
             );
-            cache.inner.enable_frequency_sketch();
+            cache.inner.enable_frequency_sketch_for_testing();
             assert_eq!(
                 cache.inner.frequency_sketch.read().table_len(),
                 len as usize,

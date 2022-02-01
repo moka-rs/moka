@@ -164,6 +164,7 @@ pub struct Cache<K, V, S = RandomState> {
     weigher: Option<Weigher<K, V>>,
     deques: Deques<K>,
     frequency_sketch: FrequencySketch,
+    frequency_sketch_enabled: bool,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     expiration_clock: Option<Clock>,
@@ -223,6 +224,7 @@ where
             weigher,
             deques: Default::default(),
             frequency_sketch: Default::default(),
+            frequency_sketch_enabled: false,
             time_to_live,
             time_to_idle,
             expiration_clock: None,
@@ -469,7 +471,9 @@ where
 
     #[inline]
     fn should_enable_frequency_sketch(&self) -> bool {
-        if let Some(max_cap) = self.max_capacity {
+        if self.frequency_sketch_enabled {
+            false
+        } else if let Some(max_cap) = self.max_capacity {
             self.weighted_size >= max_cap / 2
         } else {
             false
@@ -479,14 +483,27 @@ where
     #[inline]
     fn enable_frequency_sketch(&mut self) {
         if let Some(max_cap) = self.max_capacity {
-            let num_entries = if self.weigher.is_some() {
-                self.entry_count
-            } else {
+            let cap = if self.weigher.is_none() {
                 max_cap
+            } else {
+                (self.entry_count as f64 * (self.weighted_size as f64 / max_cap as f64)) as u64
             };
-            let skt_capacity = common::sketch_capacity(num_entries);
-            self.frequency_sketch.ensure_capacity(skt_capacity);
+            self.do_enable_frequency_sketch(cap);
         }
+    }
+
+    #[cfg(test)]
+    fn enable_frequency_sketch_for_testing(&mut self) {
+        if let Some(max_cap) = self.max_capacity {
+            self.do_enable_frequency_sketch(max_cap);
+        }
+    }
+
+    #[inline]
+    fn do_enable_frequency_sketch(&mut self, cache_capacity: u64) {
+        let skt_capacity = common::sketch_capacity(cache_capacity);
+        self.frequency_sketch.ensure_capacity(skt_capacity);
+        self.frequency_sketch_enabled = true;
     }
 
     fn saturating_add_to_total_weight(&mut self, weight: u64) {
@@ -919,7 +936,7 @@ mod tests {
     #[test]
     fn basic_single_thread() {
         let mut cache = Cache::new(3);
-        cache.enable_frequency_sketch();
+        cache.enable_frequency_sketch_for_testing();
 
         cache.insert("a", "alice");
         cache.insert("b", "bob");
@@ -966,7 +983,7 @@ mod tests {
         let dennis = ("dennis", 15);
 
         let mut cache = Cache::builder().max_capacity(31).weigher(weigher).build();
-        cache.enable_frequency_sketch();
+        cache.enable_frequency_sketch_for_testing();
 
         cache.insert("a", alice);
         cache.insert("b", bob);
@@ -1024,7 +1041,7 @@ mod tests {
     #[test]
     fn invalidate_all() {
         let mut cache = Cache::new(100);
-        cache.enable_frequency_sketch();
+        cache.enable_frequency_sketch_for_testing();
 
         cache.insert("a", "alice");
         cache.insert("b", "bob");
@@ -1048,7 +1065,7 @@ mod tests {
         use std::collections::HashSet;
 
         let mut cache = Cache::new(100);
-        cache.enable_frequency_sketch();
+        cache.enable_frequency_sketch_for_testing();
 
         let (clock, mock) = Clock::mock();
         cache.set_expiration_clock(Some(clock));
@@ -1092,7 +1109,7 @@ mod tests {
         let mut cache = CacheBuilder::new(100)
             .time_to_live(Duration::from_secs(10))
             .build();
-        cache.enable_frequency_sketch();
+        cache.enable_frequency_sketch_for_testing();
 
         let (clock, mock) = Clock::mock();
         cache.set_expiration_clock(Some(clock));
@@ -1136,7 +1153,7 @@ mod tests {
         let mut cache = CacheBuilder::new(100)
             .time_to_idle(Duration::from_secs(10))
             .build();
-        cache.enable_frequency_sketch();
+        cache.enable_frequency_sketch_for_testing();
 
         let (clock, mock) = Clock::mock();
         cache.set_expiration_clock(Some(clock));
@@ -1174,7 +1191,7 @@ mod tests {
 
         let ensure_sketch_len = |max_capacity, len, name| {
             let mut cache = Cache::<u8, u8>::new(max_capacity);
-            cache.enable_frequency_sketch();
+            cache.enable_frequency_sketch_for_testing();
             assert_eq!(cache.frequency_sketch.table_len(), len as usize, "{}", name);
         };
 
