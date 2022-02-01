@@ -3,23 +3,10 @@ use std::{
     hash::{BuildHasher, Hash, Hasher},
     mem::{self, MaybeUninit},
     ptr,
-    sync::atomic::{self, AtomicU64, Ordering},
+    sync::atomic::{self, Ordering},
 };
 
 use crossbeam_epoch::{Atomic, CompareAndSetError, Guard, Owned, Shared};
-use once_cell::sync::Lazy;
-
-pub(crate) static BUCKET_COUNTERS: Lazy<Counters> = Lazy::new(Counters::default);
-
-#[derive(Default)]
-pub(crate) struct Counters {
-    pub(crate) bucket_array_creation_count: AtomicU64,
-    pub(crate) bucket_array_allocation_bytes: AtomicU64,
-    pub(crate) bucket_array_drop_count: AtomicU64,
-    pub(crate) bucket_array_release_bytes: AtomicU64,
-    pub(crate) bucket_creation_count: AtomicU64,
-    pub(crate) bucket_drop_count: AtomicU64,
-}
 
 pub(crate) struct BucketArray<K, V> {
     pub(crate) buckets: Box<[Atomic<Bucket<K, V>>]>,
@@ -39,14 +26,6 @@ impl<K, V> BucketArray<K, V> {
 
         let buckets = buckets.into_boxed_slice();
 
-        let size = (buckets.len() * std::mem::size_of::<Atomic<Bucket<K, V>>>()) as u64;
-        BUCKET_COUNTERS
-            .bucket_array_creation_count
-            .fetch_add(1, Ordering::AcqRel);
-        BUCKET_COUNTERS
-            .bucket_array_allocation_bytes
-            .fetch_add(size, Ordering::AcqRel);
-
         Self {
             buckets,
             next: Atomic::null(),
@@ -58,18 +37,6 @@ impl<K, V> BucketArray<K, V> {
         assert!(self.buckets.len().is_power_of_two());
 
         self.buckets.len() / 2
-    }
-}
-
-impl<K, V> Drop for BucketArray<K, V> {
-    fn drop(&mut self) {
-        let size = (self.buckets.len() * std::mem::size_of::<Atomic<Bucket<K, V>>>()) as u64;
-        BUCKET_COUNTERS
-            .bucket_array_drop_count
-            .fetch_add(1, Ordering::AcqRel);
-        BUCKET_COUNTERS
-            .bucket_array_release_bytes
-            .fetch_add(size, Ordering::AcqRel);
     }
 }
 
@@ -418,22 +385,10 @@ pub(crate) struct Bucket<K, V> {
 
 impl<K, V> Bucket<K, V> {
     pub(crate) fn new(key: K, value: V) -> Bucket<K, V> {
-        let b = Bucket {
+        Self {
             key,
             maybe_value: MaybeUninit::new(value),
-        };
-        BUCKET_COUNTERS
-            .bucket_creation_count
-            .fetch_add(1, Ordering::AcqRel);
-        b
-    }
-}
-
-impl<K, V> Drop for Bucket<K, V> {
-    fn drop(&mut self) {
-        BUCKET_COUNTERS
-            .bucket_drop_count
-            .fetch_add(1, Ordering::AcqRel);
+        }
     }
 }
 
