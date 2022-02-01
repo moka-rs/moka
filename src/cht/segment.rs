@@ -29,6 +29,6 @@
 //!
 //! [`ConcurrentHashMap`]: https://github.com/openjdk-mirror/jdk7u-jdk/blob/master/src/share/classes/java/util/concurrent/ConcurrentHashMap.java
 
-pub mod map;
+pub(crate) mod map;
 
-pub use map::HashMap;
+pub(crate) use map::HashMap;

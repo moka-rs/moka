@@ -74,112 +74,46 @@ use crossbeam_epoch::Atomic;
 /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
 /// [`Cell`]: https://doc.rust-lang.org/std/cell/struct.Ref.html
 /// [`RefCell`]: https://doc.rust-lang.org/std/cell/struct.RefCell.html
-pub struct HashMap<K, V, S = DefaultHashBuilder> {
+pub(crate) struct HashMap<K, V, S = DefaultHashBuilder> {
     segments: Box<[Segment<K, V>]>,
     build_hasher: S,
     len: AtomicUsize,
     segment_shift: u32,
 }
 
-#[cfg(feature = "num-cpus")]
-impl<K, V> HashMap<K, V, DefaultHashBuilder> {
-    /// Creates an empty `HashMap`.
-    ///
-    /// The hash map is initially created with a capacity of 0, so it will not
-    /// allocate bucket pointer arrays until it is first inserted into. However,
-    /// it will always allocate memory for segment pointers and lengths.
-    ///
-    /// The `HashMap` will be created with at least twice as many segments as
-    /// the system has CPUs.
-    pub fn new() -> Self {
-        Self::with_num_segments_capacity_and_hasher(
-            default_num_segments(),
-            0,
-            DefaultHashBuilder::default(),
-        )
-    }
+// impl<K, V> HashMap<K, V, DefaultHashBuilder> {
+//     /// Creates an empty `HashMap` with the specified number of segments.
+//     ///
+//     /// The hash map is initially created with a capacity of 0, so it will not
+//     /// allocate bucket pointer arrays until it is first inserted into. However,
+//     /// it will always allocate memory for segment pointers and lengths.
+//     ///
+//     /// # Panics
+//     ///
+//     /// Panics if `num_segments` is 0.
+//     pub(crate) fn with_num_segments(num_segments: usize) -> Self {
+//         Self::with_num_segments_capacity_and_hasher(num_segments, 0, DefaultHashBuilder::default())
+//     }
 
-    /// Creates an empty `HashMap` with the specified capacity.
-    ///
-    /// The hash map will be able to hold at least `capacity` elements without
-    /// reallocating any bucket pointer arrays. If `capacity` is 0, the hash map
-    /// will not allocate any bucket pointer arrays. However, it will always
-    /// allocate memory for segment pointers and lengths.
-    ///
-    /// The `HashMap` will be created with at least twice as many segments as
-    /// the system has CPUs.
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self::with_num_segments_capacity_and_hasher(
-            default_num_segments(),
-            capacity,
-            DefaultHashBuilder::default(),
-        )
-    }
-}
-
-#[cfg(feature = "num-cpus")]
-impl<K, V, S: BuildHasher> HashMap<K, V, S> {
-    /// Creates an empty `HashMap` which will use the given hash builder to hash
-    /// keys.
-    ///
-    /// The hash map is initially created with a capacity of 0, so it will not
-    /// allocate bucket pointer arrays until it is first inserted into. However,
-    /// it will always allocate memory for segment pointers and lengths.
-    ///
-    /// The `HashMap` will be created with at least twice as many segments as
-    /// the system has CPUs.
-    pub fn with_hasher(build_hasher: S) -> Self {
-        Self::with_num_segments_capacity_and_hasher(default_num_segments(), 0, build_hasher)
-    }
-
-    /// Creates an empty `HashMap` with the specified capacity, using
-    /// `build_hasher` to hash the keys.
-    ///
-    /// The hash map will be able to hold at least `capacity` elements without
-    /// reallocating any bucket pointer arrays. If `capacity` is 0, the hash map
-    /// will not allocate any bucket pointer arrays. However, it will always
-    /// allocate memory for segment pointers and lengths.
-    ///
-    /// The `HashMap` will be created with at least twice as many segments as
-    /// the system has CPUs.
-    pub fn with_capacity_and_hasher(capacity: usize, build_hasher: S) -> Self {
-        Self::with_num_segments_capacity_and_hasher(default_num_segments(), capacity, build_hasher)
-    }
-}
-
-impl<K, V> HashMap<K, V, DefaultHashBuilder> {
-    /// Creates an empty `HashMap` with the specified number of segments.
-    ///
-    /// The hash map is initially created with a capacity of 0, so it will not
-    /// allocate bucket pointer arrays until it is first inserted into. However,
-    /// it will always allocate memory for segment pointers and lengths.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `num_segments` is 0.
-    pub fn with_num_segments(num_segments: usize) -> Self {
-        Self::with_num_segments_capacity_and_hasher(num_segments, 0, DefaultHashBuilder::default())
-    }
-
-    /// Creates an empty `HashMap` with the specified number of segments and
-    /// capacity.
-    ///
-    /// The hash map will be able to hold at least `capacity` elements without
-    /// reallocating any bucket pointer arrays. If `capacity` is 0, the hash map
-    /// will not allocate any bucket pointer arrays. However, it will always
-    /// allocate memory for segment pointers and lengths.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `num_segments` is 0.
-    pub fn with_num_segments_and_capacity(num_segments: usize, capacity: usize) -> Self {
-        Self::with_num_segments_capacity_and_hasher(
-            num_segments,
-            capacity,
-            DefaultHashBuilder::default(),
-        )
-    }
-}
+//     /// Creates an empty `HashMap` with the specified number of segments and
+//     /// capacity.
+//     ///
+//     /// The hash map will be able to hold at least `capacity` elements without
+//     /// reallocating any bucket pointer arrays. If `capacity` is 0, the hash map
+//     /// will not allocate any bucket pointer arrays. However, it will always
+//     /// allocate memory for segment pointers and lengths.
+//     ///
+//     /// # Panics
+//     ///
+//     /// Panics if `num_segments` is 0.
+//     pub(crate) fn with_num_segments_and_capacity(num_segments: usize, capacity: usize) -> Self {
+//         Self::with_num_segments_capacity_and_hasher(
+//             num_segments,
+//             capacity,
+//             DefaultHashBuilder::default(),
+//         )
+//     }
+// }
 
 impl<K, V, S> HashMap<K, V, S> {
     /// Creates an empty `HashMap` with the specified number of segments, using
@@ -192,7 +126,7 @@ impl<K, V, S> HashMap<K, V, S> {
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
-    pub fn with_num_segments_and_hasher(num_segments: usize, build_hasher: S) -> Self {
+    pub(crate) fn with_num_segments_and_hasher(num_segments: usize, build_hasher: S) -> Self {
         Self::with_num_segments_capacity_and_hasher(num_segments, 0, build_hasher)
     }
 
@@ -207,7 +141,7 @@ impl<K, V, S> HashMap<K, V, S> {
     /// # Panics
     ///
     /// Panics if `num_segments` is 0.
-    pub fn with_num_segments_capacity_and_hasher(
+    pub(crate) fn with_num_segments_capacity_and_hasher(
         num_segments: usize,
         capacity: usize,
         build_hasher: S,
@@ -245,90 +179,90 @@ impl<K, V, S> HashMap<K, V, S> {
         }
     }
 
-    /// Returns the number of elements in the map.
-    ///
-    /// # Safety
-    ///
-    /// This method on its own is safe, but other threads can add or remove
-    /// elements at any time.
-    pub fn len(&self) -> usize {
-        self.len.load(Ordering::Relaxed)
-    }
+    // /// Returns the number of elements in the map.
+    // ///
+    // /// # Safety
+    // ///
+    // /// This method on its own is safe, but other threads can add or remove
+    // /// elements at any time.
+    // pub(crate) fn len(&self) -> usize {
+    //     self.len.load(Ordering::Relaxed)
+    // }
 
-    /// Returns `true` if the map contains no elements.
-    ///
-    /// # Safety
-    ///
-    /// This method on its own is safe, but other threads can add or remove
-    /// elements at any time.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
+    // /// Returns `true` if the map contains no elements.
+    // ///
+    // /// # Safety
+    // ///
+    // /// This method on its own is safe, but other threads can add or remove
+    // /// elements at any time.
+    // pub(crate) fn is_empty(&self) -> bool {
+    //     self.len() == 0
+    // }
 
-    /// Returns the number of elements the map can hold without reallocating any
-    /// bucket pointer arrays.
-    ///
-    /// Note that all mutating operations except removal will result in a bucket
-    /// being allocated or reallocated.
-    ///
-    /// # Safety
-    ///
-    /// This method on its own is safe, but other threads can increase the
-    /// capacity of each segment at any time by adding elements.
-    pub fn capacity(&self) -> usize {
-        let guard = &crossbeam_epoch::pin();
+    // /// Returns the number of elements the map can hold without reallocating any
+    // /// bucket pointer arrays.
+    // ///
+    // /// Note that all mutating operations except removal will result in a bucket
+    // /// being allocated or reallocated.
+    // ///
+    // /// # Safety
+    // ///
+    // /// This method on its own is safe, but other threads can increase the
+    // /// capacity of each segment at any time by adding elements.
+    // pub(crate) fn capacity(&self) -> usize {
+    //     let guard = &crossbeam_epoch::pin();
 
-        self.segments
-            .iter()
-            .map(|s| s.bucket_array.load_consume(guard))
-            .map(|p| unsafe { p.as_ref() })
-            .map(|a| a.map(BucketArray::capacity).unwrap_or(0))
-            .sum::<usize>()
-    }
+    //     self.segments
+    //         .iter()
+    //         .map(|s| s.bucket_array.load_consume(guard))
+    //         .map(|p| unsafe { p.as_ref() })
+    //         .map(|a| a.map(BucketArray::capacity).unwrap_or(0))
+    //         .sum::<usize>()
+    // }
 
-    /// Returns the number of elements the `index`-th segment of the map can
-    /// hold without reallocating a bucket pointer array.
-    ///
-    /// Note that all mutating operations, with the exception of removing
-    /// elements, will result in an allocation for a new bucket.
-    ///
-    /// # Safety
-    ///
-    /// This method on its own is safe, but other threads can increase the
-    /// capacity of a segment at any time by adding elements.
-    pub fn segment_capacity(&self, index: usize) -> usize {
-        assert!(index < self.segments.len());
+    // /// Returns the number of elements the `index`-th segment of the map can
+    // /// hold without reallocating a bucket pointer array.
+    // ///
+    // /// Note that all mutating operations, with the exception of removing
+    // /// elements, will result in an allocation for a new bucket.
+    // ///
+    // /// # Safety
+    // ///
+    // /// This method on its own is safe, but other threads can increase the
+    // /// capacity of a segment at any time by adding elements.
+    // pub(crate) fn segment_capacity(&self, index: usize) -> usize {
+    //     assert!(index < self.segments.len());
 
-        let guard = &crossbeam_epoch::pin();
+    //     let guard = &crossbeam_epoch::pin();
 
-        unsafe {
-            self.segments[index]
-                .bucket_array
-                .load_consume(guard)
-                .as_ref()
-        }
-        .map(BucketArray::capacity)
-        .unwrap_or(0)
-    }
+    //     unsafe {
+    //         self.segments[index]
+    //             .bucket_array
+    //             .load_consume(guard)
+    //             .as_ref()
+    //     }
+    //     .map(BucketArray::capacity)
+    //     .unwrap_or(0)
+    // }
 
-    /// Returns the number of segments in the map.
-    pub fn num_segments(&self) -> usize {
-        self.segments.len()
-    }
+    // /// Returns the number of segments in the map.
+    // pub(crate) fn num_segments(&self) -> usize {
+    //     self.segments.len()
+    // }
 }
 
-impl<K, V, S: BuildHasher> HashMap<K, V, S> {
-    /// Returns the index of the segment that `key` would belong to if inserted
-    /// into the map.
-    pub fn segment_index<Q: Hash>(&self, key: &Q) -> usize
-    where
-        K: Borrow<Q>,
-    {
-        let hash = bucket::hash(&self.build_hasher, key);
+// impl<K, V, S: BuildHasher> HashMap<K, V, S> {
+//     /// Returns the index of the segment that `key` would belong to if inserted
+//     /// into the map.
+//     pub(crate) fn segment_index<Q: Hash>(&self, key: &Q) -> usize
+//     where
+//         K: Borrow<Q>,
+//     {
+//         let hash = bucket::hash(&self.build_hasher, key);
 
-        self.segment_index_from_hash(hash)
-    }
-}
+//         self.segment_index_from_hash(hash)
+//     }
+// }
 
 impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// Returns a clone of the value corresponding to the key.
@@ -340,7 +274,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     #[inline]
-    pub fn get<Q: Hash + Eq + ?Sized>(&self, key: &Q) -> Option<V>
+    pub(crate) fn get<Q: Hash + Eq + ?Sized>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
         V: Clone,
@@ -358,7 +292,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     #[inline]
-    pub fn get_key_value<Q: Hash + Eq + ?Sized>(&self, key: &Q) -> Option<(K, V)>
+    pub(crate) fn get_key_value<Q: Hash + Eq + ?Sized>(&self, key: &Q) -> Option<(K, V)>
     where
         K: Borrow<Q> + Clone,
         V: Clone,
@@ -376,7 +310,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     #[inline]
-    pub fn get_key_value_and<Q: Hash + Eq + ?Sized, F: FnOnce(&K, &V) -> T, T>(
+    pub(crate) fn get_key_value_and<Q: Hash + Eq + ?Sized, F: FnOnce(&K, &V) -> T, T>(
         &self,
         key: &Q,
         with_entry: F,
@@ -400,7 +334,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     #[inline]
-    pub fn remove<Q: Hash + Eq + ?Sized>(&self, key: &Q) -> Option<V>
+    pub(crate) fn remove<Q: Hash + Eq + ?Sized>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
         V: Clone,
@@ -418,7 +352,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     #[inline]
-    pub fn remove_entry<Q: Hash + Eq + ?Sized>(&self, key: &Q) -> Option<(K, V)>
+    pub(crate) fn remove_entry<Q: Hash + Eq + ?Sized>(&self, key: &Q) -> Option<(K, V)>
     where
         K: Borrow<Q> + Clone,
         V: Clone,
@@ -440,7 +374,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     /// [`Some`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.Some
     /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
-    pub fn remove_if<Q: Hash + Eq + ?Sized, F: FnMut(&K, &V) -> bool>(
+    pub(crate) fn remove_if<Q: Hash + Eq + ?Sized, F: FnMut(&K, &V) -> bool>(
         &self,
         key: &Q,
         condition: F,
@@ -468,7 +402,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// [`Some`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.Some
     /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
     #[inline]
-    pub fn remove_entry_if_and<
+    pub(crate) fn remove_entry_if_and<
         Q: Hash + Eq + ?Sized,
         F: FnMut(&K, &V) -> bool,
         G: FnOnce(&K, &V) -> T,
@@ -506,7 +440,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     ///
     /// Moka
     #[inline]
-    pub fn insert_with_or_modify<F: FnOnce() -> V, G: FnMut(&K, &V) -> V>(
+    pub(crate) fn insert_with_or_modify<F: FnOnce() -> V, G: FnMut(&K, &V) -> V>(
         &self,
         key: K,
         on_insert: F,
@@ -531,7 +465,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// [`Some`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.Some
     /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
     #[inline]
-    pub fn insert_with_or_modify_entry_and<
+    pub(crate) fn insert_with_or_modify_entry_and<
         F: FnOnce() -> V,
         G: FnMut(&K, &V) -> V,
         H: FnOnce(&K, &V) -> T,
@@ -558,13 +492,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
         }
 
         result
-    }
-}
-
-#[cfg(feature = "num-cpus")]
-impl<K, V, S: Default> Default for HashMap<K, V, S> {
-    fn default() -> Self {
-        HashMap::with_num_segments_capacity_and_hasher(default_num_segments(), 0, S::default())
     }
 }
 
@@ -635,11 +562,6 @@ impl<K, V, S> HashMap<K, V, S> {
 struct Segment<K, V> {
     bucket_array: Atomic<BucketArray<K, V>>,
     len: AtomicUsize,
-}
-
-#[cfg(feature = "num-cpus")]
-fn default_num_segments() -> usize {
-    num_cpus::get() * 2
 }
 
 // #[cfg(test)]
