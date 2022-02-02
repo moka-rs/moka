@@ -162,6 +162,9 @@ pub(crate) mod common;
 
 pub use common::error::PredicateError;
 
+#[cfg(feature = "unstable-debug-counters")]
+pub use sync::debug_counters::GlobalDebugCounters;
+
 #[cfg(test)]
 mod tests {
     // #[cfg(trybuild)]

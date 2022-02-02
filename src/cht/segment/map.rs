@@ -199,26 +199,27 @@ impl<K, V, S> HashMap<K, V, S> {
     //     self.len() == 0
     // }
 
-    // /// Returns the number of elements the map can hold without reallocating any
-    // /// bucket pointer arrays.
-    // ///
-    // /// Note that all mutating operations except removal will result in a bucket
-    // /// being allocated or reallocated.
-    // ///
-    // /// # Safety
-    // ///
-    // /// This method on its own is safe, but other threads can increase the
-    // /// capacity of each segment at any time by adding elements.
-    // pub(crate) fn capacity(&self) -> usize {
-    //     let guard = &crossbeam_epoch::pin();
+    #[cfg(feature = "unstable-debug-counters")]
+    /// Returns the number of elements the map can hold without reallocating any
+    /// bucket pointer arrays.
+    ///
+    /// Note that all mutating operations except removal will result in a bucket
+    /// being allocated or reallocated.
+    ///
+    /// # Safety
+    ///
+    /// This method on its own is safe, but other threads can increase the
+    /// capacity of each segment at any time by adding elements.
+    pub(crate) fn capacity(&self) -> usize {
+        let guard = &crossbeam_epoch::pin();
 
-    //     self.segments
-    //         .iter()
-    //         .map(|s| s.bucket_array.load_consume(guard))
-    //         .map(|p| unsafe { p.as_ref() })
-    //         .map(|a| a.map(BucketArray::capacity).unwrap_or(0))
-    //         .sum::<usize>()
-    // }
+        self.segments
+            .iter()
+            .map(|s| s.bucket_array.load_consume(guard))
+            .map(|p| unsafe { p.as_ref() })
+            .map(|a| a.map(BucketArray::capacity).unwrap_or(0))
+            .sum::<usize>()
+    }
 
     // /// Returns the number of elements the `index`-th segment of the map can
     // /// hold without reallocating a bucket pointer array.
