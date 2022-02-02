@@ -28,7 +28,7 @@ future = ["async-io", "async-lock", "futures-util"]
 atomic64 = []
 
 # This unstable feature adds `GlobalDebugCounters::current` function, which returns
-# counters of internal object construction and destruction`. It will have some
+# counters of internal object construction and destruction. It will have some
 # performance impacts and is intended for debugging perpose.
 unstable-debug-counters = ["future"]
 
