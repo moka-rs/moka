@@ -16,6 +16,9 @@ mod invalidator;
 mod segment;
 mod value_initializer;
 
+#[cfg(feature = "unstable-debug-counters")]
+pub(crate) mod debug_counters;
+
 pub use builder::CacheBuilder;
 pub use cache::Cache;
 pub use segment::SegmentedCache;
@@ -190,6 +193,9 @@ pub(crate) struct ValueEntry<K, V> {
 
 impl<K, V> ValueEntry<K, V> {
     fn new(value: V, entry_info: TrioArc<EntryInfo>) -> Self {
+        #[cfg(feature = "unstable-debug-counters")]
+        self::debug_counters::InternalGlobalDebugCounters::value_entry_created();
+
         Self {
             value,
             info: entry_info,
@@ -201,6 +207,9 @@ impl<K, V> ValueEntry<K, V> {
     }
 
     fn new_from(value: V, entry_info: TrioArc<EntryInfo>, other: &Self) -> Self {
+        #[cfg(feature = "unstable-debug-counters")]
+        self::debug_counters::InternalGlobalDebugCounters::value_entry_created();
+
         let nodes = {
             let other_nodes = other.nodes.lock();
             DeqNodes {
@@ -264,6 +273,13 @@ impl<K, V> ValueEntry<K, V> {
         let mut nodes = self.nodes.lock();
         nodes.access_order_q_node = None;
         nodes.write_order_q_node = None;
+    }
+}
+
+#[cfg(feature = "unstable-debug-counters")]
+impl<K, V> Drop for ValueEntry<K, V> {
+    fn drop(&mut self) {
+        self::debug_counters::InternalGlobalDebugCounters::value_entry_dropped();
     }
 }
 

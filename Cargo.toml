@@ -15,10 +15,6 @@ readme = "README.md"
 exclude = [".circleci", ".devcontainer", ".github", ".gitpod.yml", ".vscode"]
 build = "build.rs"
 
-# https://docs.rs/about/metadata
-[package.metadata.docs.rs]
-features = ["future"]
-
 [features]
 default = ["atomic64"]
 
@@ -30,6 +26,11 @@ future = ["async-io", "async-lock", "futures-util"]
 # or `mips-unknown-linux-musl`)
 # https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
 atomic64 = []
+
+# This unstable feature adds `GlobalDebugCounters::current` function, which returns
+# counters of internal object construction and destruction`. It will have some
+# performance impacts and is intended for debugging perpose.
+unstable-debug-counters = ["future"]
 
 [dependencies]
 crossbeam-channel = "0.5.2"
@@ -64,6 +65,11 @@ trybuild = "1.0"
 
 [target.'cfg(skeptic)'.build-dependencies]
 skeptic = "0.13"
+
+# https://docs.rs/about/metadata
+[package.metadata.docs.rs]
+# Build the doc with "future" feature enabled.
+features = ["future"]
 
 # ----------------------------------
 # RUSTSEC, etc.

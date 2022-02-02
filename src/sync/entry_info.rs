@@ -13,6 +13,9 @@ pub(crate) struct EntryInfo {
 impl EntryInfo {
     #[inline]
     pub(crate) fn new(policy_weight: u32) -> Self {
+        #[cfg(feature = "unstable-debug-counters")]
+        super::debug_counters::InternalGlobalDebugCounters::entry_info_created();
+
         Self {
             is_admitted: Default::default(),
             last_accessed: Default::default(),
@@ -44,6 +47,13 @@ impl EntryInfo {
 
     pub(crate) fn set_policy_weight(&self, size: u32) {
         self.policy_weight.store(size, Ordering::Release);
+    }
+}
+
+#[cfg(feature = "unstable-debug-counters")]
+impl Drop for EntryInfo {
+    fn drop(&mut self) {
+        super::debug_counters::InternalGlobalDebugCounters::entry_info_dropped();
     }
 }
 

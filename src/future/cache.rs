@@ -11,6 +11,9 @@ use crate::{
     PredicateError,
 };
 
+#[cfg(feature = "unstable-debug-counters")]
+use crate::sync::debug_counters::CacheDebugStats;
+
 use crossbeam_channel::{Sender, TrySendError};
 use std::{
     any::TypeId,
@@ -693,6 +696,11 @@ where
     /// `Cache` always returns `1`.
     pub fn num_segments(&self) -> usize {
         1
+    }
+
+    #[cfg(feature = "unstable-debug-counters")]
+    pub fn debug_stats(&self) -> CacheDebugStats {
+        self.base.debug_stats()
     }
 
     #[cfg(test)]

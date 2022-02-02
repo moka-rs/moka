@@ -6,6 +6,10 @@ use super::{
     AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, PredicateId, ReadOp, ValueEntry, Weigher,
     WriteOp,
 };
+
+#[cfg(feature = "unstable-debug-counters")]
+use super::debug_counters::CacheDebugStats;
+
 use crate::{
     common::{
         self,
@@ -213,6 +217,11 @@ where
 
     pub(crate) fn time_to_idle(&self) -> Option<Duration> {
         self.inner.time_to_idle()
+    }
+
+    #[cfg(feature = "unstable-debug-counters")]
+    pub fn debug_stats(&self) -> CacheDebugStats {
+        self.inner.debug_stats()
     }
 
     #[cfg(test)]
@@ -586,6 +595,19 @@ where
         self.time_to_idle
     }
 
+    #[cfg(feature = "unstable-debug-counters")]
+    pub fn debug_stats(&self) -> CacheDebugStats {
+        let ec = self.entry_count.load();
+        let ws = self.weighted_size.load();
+
+        CacheDebugStats::new(
+            ec,
+            ws,
+            (self.cache.capacity() * 2) as u64,
+            self.frequency_sketch.read().table_size(),
+        )
+    }
+
     #[cfg(test)]
     #[inline]
     fn estimated_entry_count(&self) -> u64 {
@@ -688,6 +710,18 @@ where
     }
 }
 
+#[cfg(feature = "unstable-debug-counters")]
+mod batch_size {
+    pub(crate) const EVICTION_BATCH_SIZE: usize = 10_000;
+    pub(crate) const INVALIDATION_BATCH_SIZE: usize = 10_000;
+}
+
+#[cfg(not(feature = "unstable-debug-counters"))]
+mod batch_size {
+    pub(crate) const EVICTION_BATCH_SIZE: usize = 500;
+    pub(crate) const INVALIDATION_BATCH_SIZE: usize = 500;
+}
+
 // TODO: Divide this method into smaller methods so that unit tests can do more
 // precise testing.
 // - sync_reads
@@ -701,9 +735,6 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
-        const EVICTION_BATCH_SIZE: usize = 500;
-        const INVALIDATION_BATCH_SIZE: usize = 500;
-
         let mut deqs = self.deques.lock();
         let mut calls = 0;
         let mut should_sync = true;
@@ -733,7 +764,7 @@ where
         }
 
         if self.has_expiry() || self.has_valid_after() {
-            self.evict_expired(&mut deqs, EVICTION_BATCH_SIZE, &mut counters);
+            self.evict_expired(&mut deqs, batch_size::EVICTION_BATCH_SIZE, &mut counters);
         }
 
         if self.invalidator_enabled {
@@ -742,7 +773,7 @@ where
                     self.invalidate_entries(
                         invalidator,
                         &mut deqs,
-                        INVALIDATION_BATCH_SIZE,
+                        batch_size::INVALIDATION_BATCH_SIZE,
                         &mut counters,
                     );
                 }
@@ -754,7 +785,7 @@ where
         if weights_to_evict > 0 {
             self.evict_lru_entries(
                 &mut deqs,
-                EVICTION_BATCH_SIZE,
+                batch_size::EVICTION_BATCH_SIZE,
                 weights_to_evict,
                 &mut counters,
             );

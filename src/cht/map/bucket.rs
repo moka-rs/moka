@@ -35,6 +35,14 @@ impl<K, V> BucketArray<K, V> {
 
         let buckets = buckets.into_boxed_slice();
 
+        #[cfg(feature = "unstable-debug-counters")]
+        {
+            use crate::sync::debug_counters::InternalGlobalDebugCounters as Counters;
+
+            let size = (buckets.len() * std::mem::size_of::<Atomic<Bucket<K, V>>>()) as u64;
+            Counters::bucket_array_created(size);
+        }
+
         Self {
             buckets,
             next: Atomic::null(),
@@ -47,6 +55,16 @@ impl<K, V> BucketArray<K, V> {
         assert!(self.buckets.len().is_power_of_two());
 
         self.buckets.len() / 2
+    }
+}
+
+#[cfg(feature = "unstable-debug-counters")]
+impl<K, V> Drop for BucketArray<K, V> {
+    fn drop(&mut self) {
+        use crate::sync::debug_counters::InternalGlobalDebugCounters as Counters;
+
+        let size = (self.buckets.len() * std::mem::size_of::<Atomic<Bucket<K, V>>>()) as u64;
+        Counters::bucket_array_dropped(size);
     }
 }
 
@@ -394,10 +412,20 @@ pub(crate) struct Bucket<K, V> {
 
 impl<K, V> Bucket<K, V> {
     pub(crate) fn new(key: K, value: V) -> Bucket<K, V> {
+        #[cfg(feature = "unstable-debug-counters")]
+        crate::sync::debug_counters::InternalGlobalDebugCounters::bucket_created();
+
         Self {
             key,
             maybe_value: MaybeUninit::new(value),
         }
+    }
+}
+
+#[cfg(feature = "unstable-debug-counters")]
+impl<K, V> Drop for Bucket<K, V> {
+    fn drop(&mut self) {
+        crate::sync::debug_counters::InternalGlobalDebugCounters::bucket_dropped();
     }
 }
 

@@ -42,6 +42,9 @@ impl<T> std::fmt::Debug for DeqNode<T> {
 
 impl<T> DeqNode<T> {
     pub(crate) fn new(region: CacheRegion, element: T) -> Self {
+        #[cfg(feature = "unstable-debug-counters")]
+        crate::sync::debug_counters::InternalGlobalDebugCounters::deq_node_created();
+
         Self {
             region,
             next: None,
@@ -52,6 +55,13 @@ impl<T> DeqNode<T> {
 
     pub(crate) fn next_node(&self) -> Option<&DeqNode<T>> {
         self.next.as_ref().map(|node| unsafe { node.as_ref() })
+    }
+}
+
+#[cfg(feature = "unstable-debug-counters")]
+impl<T> Drop for DeqNode<T> {
+    fn drop(&mut self) {
+        crate::sync::debug_counters::InternalGlobalDebugCounters::deq_node_dropped();
     }
 }
 
