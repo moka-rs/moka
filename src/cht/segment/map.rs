@@ -159,7 +159,7 @@ impl<K, V, S> HashMap<K, V, S> {
                 segments.set_len(actual_num_segments);
             }
         } else {
-            let actual_capacity = (capacity * 2).next_power_of_two();
+            let actual_capacity = (capacity * 2 / actual_num_segments).next_power_of_two();
 
             for _ in 0..actual_num_segments {
                 segments.push(Segment {
