@@ -601,7 +601,7 @@ impl RehashOp {
         let tbc = tombstone_count.load(Ordering::Relaxed) as f64;
         let len = len.load(Ordering::Relaxed) as f64;
 
-        if tbc / real_cap >= 0.1 {
+        if tbc >= 25_000.0 || tbc / real_cap >= 0.1 {
             if len - tbc < quarter_cap && quarter_cap as usize >= BUCKET_ARRAY_DEFAULT_LENGTH {
                 return Self::Shrink;
             } else {
