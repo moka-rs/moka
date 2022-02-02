@@ -32,18 +32,15 @@ future = ["async-io", "async-lock", "futures-util"]
 atomic64 = []
 
 [dependencies]
-# It will be safer to use 0.5.2 or newer, as 0.5.2 addressed some stacked
-# borrow violations found by Miri.
-# https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-channel/CHANGELOG.md#version-052
 crossbeam-channel = "0.5.2"
 crossbeam-epoch = "0.8.2"
 crossbeam-utils = "0.8"
 num_cpus = "1.13"
 once_cell = "1.7"
-parking_lot = "0.11"
+parking_lot = "0.12"
 quanta = "0.9.3"
 scheduled-thread-pool = "0.2"
-smallvec = "1.6"
+smallvec = "1.8"
 thiserror = "1.0"
 triomphe = "0.1"
 uuid = { version = "0.8", features = ["v4"] }
@@ -60,12 +57,24 @@ async-std = { version = "1", default-features = false, features = ["attributes"]
 getrandom = "0.2"
 reqwest = "0.11"
 skeptic = "0.13"
-# It will be safer to use 1.9 or newer.
-# https://github.com/rustsec/advisory-db/blob/main/crates/tokio/RUSTSEC-2021-0072.md
-tokio = { version = "1.9", features = ["rt-multi-thread", "macros", "sync", "time" ] }
+tokio = { version = "1.16", features = ["rt-multi-thread", "macros", "sync", "time" ] }
 
 [target.'cfg(trybuild)'.dev-dependencies]
 trybuild = "1.0"
 
 [target.'cfg(skeptic)'.build-dependencies]
 skeptic = "0.13"
+
+# ----------------------------------
+# RUSTSEC, etc.
+#
+# crossbeam-channel:
+# - Addressed some stacked borrow violations found by Miri:
+#   - https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-channel/CHANGELOG.md#version-052 (Patched >= 0.5.2)
+#
+# smallvec:
+# - https://rustsec.org/advisories/RUSTSEC-2021-0003.html (Patched >= 1.6.1)
+#
+# Tokio:
+# - https://rustsec.org/advisories/RUSTSEC-2021-0124.html (Patched >= 1.13.1)
+# - https://rustsec.org/advisories/RUSTSEC-2021-0072.html (Patched >= 1.8.1)
