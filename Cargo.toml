@@ -32,9 +32,6 @@ future = ["async-io", "async-lock", "futures-util"]
 atomic64 = []
 
 [dependencies]
-# It will be safer to use 0.5.2 or newer, as 0.5.2 addressed some stacked
-# borrow violations found by Miri.
-# https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-channel/CHANGELOG.md#version-052
 crossbeam-channel = "0.5.2"
 crossbeam-epoch = "0.8.2"
 crossbeam-utils = "0.8"
@@ -67,3 +64,17 @@ trybuild = "1.0"
 
 [target.'cfg(skeptic)'.build-dependencies]
 skeptic = "0.13"
+
+# ----------------------------------
+# RUSTSEC, etc.
+#
+# crossbeam-channel:
+# - Addressed some stacked borrow violations found by Miri:
+#   - https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-channel/CHANGELOG.md#version-052 (Patched >= 0.5.2)
+#
+# smallvec:
+# - https://rustsec.org/advisories/RUSTSEC-2021-0003.html (Patched >= 1.6.1)
+#
+# Tokio:
+# - https://rustsec.org/advisories/RUSTSEC-2021-0124.html (Patched >= 1.13.1)
+# - https://rustsec.org/advisories/RUSTSEC-2021-0072.html (Patched >= 1.8.1)
