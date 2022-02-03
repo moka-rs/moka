@@ -1,9 +1,10 @@
 use super::{deques::Deques, AccessTime, CacheBuilder, KeyDate, KeyHashDate, ValueEntry, Weigher};
 use crate::common::{
     self,
-    deque::{CacheRegion, DeqNode, Deque},
+    deque::{DeqNode, Deque},
     frequency_sketch::FrequencySketch,
     time::{CheckedTimeOps, Clock, Instant},
+    CacheRegion,
 };
 
 use smallvec::SmallVec;

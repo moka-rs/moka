@@ -4,6 +4,7 @@ use crate::common::{deque::DeqNode, time::Instant};
 
 use parking_lot::Mutex;
 use std::{ptr::NonNull, sync::Arc};
+use tagptr::TagNonNull;
 use triomphe::Arc as TrioArc;
 
 pub(crate) mod base_cache;
@@ -172,7 +173,7 @@ impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
 }
 
 // DeqNode for an access order queue.
-type KeyDeqNodeAo<K> = NonNull<DeqNode<KeyHashDate<K>>>;
+type KeyDeqNodeAo<K> = TagNonNull<DeqNode<KeyHashDate<K>>, 2>;
 
 // DeqNode for the write order queue.
 type KeyDeqNodeWo<K> = NonNull<DeqNode<KeyDate<K>>>;

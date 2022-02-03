@@ -14,17 +14,15 @@
 
 use std::{marker::PhantomData, ptr::NonNull};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum CacheRegion {
-    Window,
-    MainProbation,
-    MainProtected,
-    WriteOrder,
-}
+use super::CacheRegion;
 
+// `crate::{sync,unsync}::DeqNodes` uses a `tagptr::TagNonNull<DeqNode<T>, 2>`
+// pointer. To reserve the space for the 2-bit tag, use 4 bytes as the *minimum*
+// alignment.
+// https://doc.rust-lang.org/reference/type-layout.html#the-alignment-modifiers
+#[repr(align(4))]
 #[derive(PartialEq, Eq)]
 pub(crate) struct DeqNode<T> {
-    pub(crate) region: CacheRegion,
     next: Option<NonNull<DeqNode<T>>>,
     prev: Option<NonNull<DeqNode<T>>>,
     pub(crate) element: T,
@@ -33,7 +31,6 @@ pub(crate) struct DeqNode<T> {
 impl<T> std::fmt::Debug for DeqNode<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DeqNode")
-            .field("region", &self.region)
             .field("next", &self.next)
             .field("prev", &self.prev)
             .finish()
@@ -41,12 +38,11 @@ impl<T> std::fmt::Debug for DeqNode<T> {
 }
 
 impl<T> DeqNode<T> {
-    pub(crate) fn new(region: CacheRegion, element: T) -> Self {
+    pub(crate) fn new(element: T) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
         crate::sync::debug_counters::InternalGlobalDebugCounters::deq_node_created();
 
         Self {
-            region,
             next: None,
             prev: None,
             element,
@@ -113,8 +109,8 @@ impl<T> Deque<T> {
         }
     }
 
-    pub(crate) fn region(&self) -> &CacheRegion {
-        &self.region
+    pub(crate) fn region(&self) -> CacheRegion {
+        self.region
     }
 
     pub(crate) fn len(&self) -> usize {
@@ -122,7 +118,7 @@ impl<T> Deque<T> {
     }
 
     pub(crate) fn contains(&self, node: &DeqNode<T>) -> bool {
-        self.region == node.region && (node.prev.is_some() || self.is_head(node))
+        node.prev.is_some() || self.is_head(node)
     }
 
     pub(crate) fn peek_front(&self) -> Option<&DeqNode<T>> {
@@ -229,8 +225,6 @@ impl<T> Deque<T> {
     ///
     /// Panics:
     pub(crate) unsafe fn unlink(&mut self, mut node: NonNull<DeqNode<T>>) {
-        assert_eq!(self.region, node.as_ref().region);
-
         if self.is_at_cursor(node.as_ref()) {
             self.advance_cursor();
         }
@@ -348,7 +342,7 @@ mod tests {
         assert!(deque.peek_back().is_none());
 
         // push_back(node1)
-        let node1 = DeqNode::new(MainProbation, "a".to_string());
+        let node1 = DeqNode::new("a".to_string());
         assert!(!deque.contains(&node1));
         let node1 = Box::new(node1);
         let node1_ptr = deque.push_back(node1);
@@ -384,7 +378,7 @@ mod tests {
         assert!(tail_a.next.is_none());
 
         // push_back(node2)
-        let node2 = DeqNode::new(MainProbation, "b".to_string());
+        let node2 = DeqNode::new("b".to_string());
         assert!(!deque.contains(&node2));
         let node2_ptr = deque.push_back(Box::new(node2));
         assert_eq!(deque.len(), 2);
@@ -459,7 +453,7 @@ mod tests {
         assert!(tail_c.next.is_none());
 
         // push_back(node3)
-        let node3 = DeqNode::new(MainProbation, "c".to_string());
+        let node3 = DeqNode::new("c".to_string());
         assert!(!deque.contains(&node3));
         let node3_ptr = deque.push_back(Box::new(node3));
         assert_eq!(deque.len(), 3);
@@ -601,11 +595,11 @@ mod tests {
         let mut deque: Deque<String> = Deque::new(MainProbation);
         assert!((&mut deque).next().is_none());
 
-        let node1 = DeqNode::new(MainProbation, "a".into());
+        let node1 = DeqNode::new("a".into());
         deque.push_back(Box::new(node1));
-        let node2 = DeqNode::new(MainProbation, "b".into());
+        let node2 = DeqNode::new("b".into());
         let node2_ptr = deque.push_back(Box::new(node2));
-        let node3 = DeqNode::new(MainProbation, "c".into());
+        let node3 = DeqNode::new("c".into());
         let node3_ptr = deque.push_back(Box::new(node3));
 
         // -------------------------------------------------------
@@ -653,7 +647,7 @@ mod tests {
 
         // -------------------------------------------------------
         // Try pop_front during iteration.
-        let node3 = DeqNode::new(MainProbation, "c".into());
+        let node3 = DeqNode::new("c".into());
         deque.push_back(Box::new(node3));
 
         assert_eq!((&mut deque).next(), Some(&"a".into()));
@@ -675,11 +669,11 @@ mod tests {
     fn next_node() {
         let mut deque: Deque<String> = Deque::new(MainProbation);
 
-        let node1 = DeqNode::new(MainProbation, "a".into());
+        let node1 = DeqNode::new("a".into());
         deque.push_back(Box::new(node1));
-        let node2 = DeqNode::new(MainProbation, "b".into());
+        let node2 = DeqNode::new("b".into());
         let node2_ptr = deque.push_back(Box::new(node2));
-        let node3 = DeqNode::new(MainProbation, "c".into());
+        let node3 = DeqNode::new("c".into());
         let node3_ptr = deque.push_back(Box::new(node3));
 
         // -------------------------------------------------------
@@ -731,10 +725,10 @@ mod tests {
         let mut deque: Deque<X> = Deque::new(MainProbation);
         let dropped = Rc::new(RefCell::new(Vec::default()));
 
-        let node1 = DeqNode::new(MainProbation, X(1, Rc::clone(&dropped)));
-        let node2 = DeqNode::new(MainProbation, X(2, Rc::clone(&dropped)));
-        let node3 = DeqNode::new(MainProbation, X(3, Rc::clone(&dropped)));
-        let node4 = DeqNode::new(MainProbation, X(4, Rc::clone(&dropped)));
+        let node1 = DeqNode::new(X(1, Rc::clone(&dropped)));
+        let node2 = DeqNode::new(X(2, Rc::clone(&dropped)));
+        let node3 = DeqNode::new(X(3, Rc::clone(&dropped)));
+        let node4 = DeqNode::new(X(4, Rc::clone(&dropped)));
         deque.push_back(Box::new(node1));
         deque.push_back(Box::new(node2));
         deque.push_back(Box::new(node3));

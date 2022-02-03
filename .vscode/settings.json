@@ -38,6 +38,7 @@
         "semver",
         "smallvec",
         "structs",
+        "tagptr",
         "Tatsuya",
         "thiserror",
         "toolchain",

@@ -14,9 +14,10 @@ use crate::{
     common::{
         self,
         atomic_time::AtomicInstant,
-        deque::{CacheRegion, DeqNode, Deque},
+        deque::{DeqNode, Deque},
         frequency_sketch::FrequencySketch,
         time::{CheckedTimeOps, Clock, Instant},
+        CacheRegion,
     },
     PredicateError,
 };
@@ -1097,10 +1098,12 @@ where
         if entry.is_admitted() {
             entry.set_is_admitted(false);
             counters.saturating_sub(1, entry.policy_weight());
+            // The following two unlink_* functions will unset the deq nodes.
             deqs.unlink_ao(&entry);
             Deques::unlink_wo(&mut deqs.write_order, &entry);
+        } else {
+            entry.unset_q_nodes();
         }
-        entry.unset_q_nodes();
     }
 
     fn handle_remove_with_deques(
@@ -1113,10 +1116,12 @@ where
         if entry.is_admitted() {
             entry.set_is_admitted(false);
             counters.saturating_sub(1, entry.policy_weight());
+            // The following two unlink_* functions will unset the deq nodes.
             Deques::unlink_ao_from_deque(ao_deq_name, ao_deq, &entry);
             Deques::unlink_wo(wo_deq, &entry);
+        } else {
+            entry.unset_q_nodes();
         }
-        entry.unset_q_nodes();
     }
 
     fn evict_expired(
