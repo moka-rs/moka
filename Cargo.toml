@@ -3,6 +3,7 @@ name = "moka"
 version = "0.7.2"
 authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
+rust-version = "1.51"
 
 description = "A fast and concurrent cache library inspired by Caffeine (Java)"
 license = "MIT OR Apache-2.0"
