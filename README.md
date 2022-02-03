@@ -498,8 +498,8 @@ This name would imply the following facts and hopes:
 ### cht
 
 The source files of the concurrent hash table under `moka::cht` module were copied
-from the [cht v0.4.1][cht-v041] and modified by us. We did so for better integration
-between Moka and cht.
+from the [cht crate v0.4.1][cht-v041] and modified by us. We did so for better
+integration.
 
 The cht is authored by Gregory Meyer and its v0.4.1 and earlier versions are licensed
 under the MIT license.

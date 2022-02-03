@@ -6,8 +6,8 @@
 //!
 //! Moka provides in-memory concurrent cache implementations on top of hash maps.
 //! They support full concurrency of retrievals and a high expected concurrency for
-//! updates. They utilize a lock-free concurrent hash table `SegmentedHashMap` from
-//! the [moka-cht][moka-cht-crate] crate for the central key-value storage.
+//! updates. They utilize a lock-free concurrent hash table as the central key-value
+//! storage.
 //!
 //! Moka also provides an in-memory, non-thread-safe cache implementation for single
 //! thread applications.
@@ -17,7 +17,6 @@
 //! is exceeded.
 //!
 //! [caffeine-git]: https://github.com/ben-manes/caffeine
-//! [moka-cht-crate]: https://crates.io/crates/moka-cht
 //!
 //! # Features
 //!

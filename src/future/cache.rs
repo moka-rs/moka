@@ -30,14 +30,12 @@ use std::{
 /// `Cache` supports full concurrency of retrievals and a high expected concurrency
 /// for updates. It can be accessed inside and outside of asynchronous contexts.
 ///
-/// `Cache` utilizes a lock-free concurrent hash table `SegmentedHashMap` from the
-/// [moka-cht][moka-cht-crate] crate for the central key-value storage. `Cache`
-/// performs a best-effort bounding of the map using an entry replacement algorithm
-/// to determine which entries to evict when the capacity is exceeded.
+/// `Cache` utilizes a lock-free concurrent hash table as the central key-value
+/// storage. `Cache` performs a best-effort bounding of the map using an entry
+/// replacement algorithm to determine which entries to evict when the capacity is
+/// exceeded.
 ///
 /// To use this cache, enable a crate feature called "future".
-///
-/// [moka-cht-crate]: https://crates.io/crates/moka-cht
 ///
 /// # Examples
 ///
