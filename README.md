@@ -386,9 +386,9 @@ This crate's minimum supported Rust versions (MSRV) are the followings:
 
 | Feature    | Enabled by default? | MSRV        |
 |:-----------|:-------------------:|:-----------:|
-| no feature |                     | Rust 1.45.2 |
-| `atomic64` |       yes           | Rust 1.45.2 |
-| `future`   |                     | Rust 1.46.0 |
+| no feature |                     | Rust 1.51.0 |
+| `atomic64` |       yes           | Rust 1.51.0 |
+| `future`   |                     | Rust 1.51.0 |
 
 If only the default features are enabled, MSRV will be updated conservatively. When
 using other features, like `future`, MSRV might be updated more frequently, up to the
@@ -396,6 +396,7 @@ latest stable. In both cases, increasing MSRV is _not_ considered a semver-break
 change.
 
 <!--
+- tagptr 0.2.0 requires 1.51.
 - socket2 0.4.0 requires 1.46.
 - quanta requires 1.45.
 - moka-cht requires 1.41.
