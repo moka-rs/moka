@@ -5,6 +5,7 @@ mod cache;
 mod deques;
 
 use std::{ptr::NonNull, rc::Rc};
+use tagptr::TagNonNull;
 
 pub use builder::CacheBuilder;
 pub use cache::Cache;
@@ -48,7 +49,7 @@ impl<K> KeyHashDate<K> {
 }
 
 // DeqNode for an access order queue.
-type KeyDeqNodeAo<K> = NonNull<DeqNode<KeyHashDate<K>>>;
+type KeyDeqNodeAo<K> = TagNonNull<DeqNode<KeyHashDate<K>>, 2>;
 
 // DeqNode for the write order queue.
 type KeyDeqNodeWo<K> = NonNull<DeqNode<KeyDate<K>>>;

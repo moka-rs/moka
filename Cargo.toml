@@ -3,6 +3,7 @@ name = "moka"
 version = "0.7.2"
 authors = ["Tatsuya Kawano <tatsuya@hibaridb.org>"]
 edition = "2018"
+rust-version = "1.51"
 
 description = "A fast and concurrent cache library inspired by Caffeine (Java)"
 license = "MIT OR Apache-2.0"
@@ -42,6 +43,7 @@ parking_lot = "0.12"
 quanta = "0.9.3"
 scheduled-thread-pool = "0.2"
 smallvec = "1.8"
+tagptr = "0.2"
 thiserror = "1.0"
 triomphe = "0.1"
 uuid = { version = "0.8", features = ["v4"] }
