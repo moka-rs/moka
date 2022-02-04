@@ -74,8 +74,8 @@
 pub(crate) mod map;
 pub(crate) mod segment;
 
-// #[cfg(test)]
-// #[macro_use]
-// pub(crate) mod test_util;
+#[cfg(test)]
+#[macro_use]
+pub(crate) mod test_util;
 
 pub(crate) use segment::HashMap as SegmentedHashMap;
