@@ -551,7 +551,10 @@ struct Segment<K, V> {
 
 #[cfg(test)]
 fn default_num_segments() -> usize {
-    num_cpus::get() * 2
+    // Some platforms may return 0. In that case, use 1.
+    // https://github.com/moka-rs/moka/pull/39#issuecomment-916888859
+    // https://github.com/seanmonstar/num_cpus/issues/69
+    num_cpus::get().max(1) * 2
 }
 
 #[cfg(test)]
