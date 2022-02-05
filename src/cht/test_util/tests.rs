@@ -53,7 +53,7 @@ macro_rules! write_test_cases_for_me {
 
         // Ignore this test and some other tests on 32-bit mips targets to avoid the following
         // error on QEMU user space emulator:
-        // 
+        //
         //     memory allocation of 1052 bytes failed
         //     process didn't exit successfully: ... (signal: 6, SIGABRT: process abort signal)
         #[cfg_attr(mips, ignore)]
@@ -158,6 +158,7 @@ macro_rules! write_test_cases_for_me {
             $crate::cht::test_util::run_deferred();
         }
 
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_removal() {
             const MAX_VALUE: i32 = 512;
@@ -435,7 +436,7 @@ macro_rules! write_test_cases_for_me {
 
         // Ignore this test on 32-bit mips and armv5te targets to avoid the following
         // error on QEMU user space emulator:
-        // 
+        //
         // (mips)
         //     memory allocation of 1052 bytes failed
         //     process didn't exit successfully: ... (signal: 6, SIGABRT: process abort signal)
@@ -480,6 +481,7 @@ macro_rules! write_test_cases_for_me {
             $crate::cht::test_util::run_deferred();
         }
 
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_overlapped_removal() {
             const NUM_THREADS: usize = 64;
