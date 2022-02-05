@@ -8,14 +8,14 @@ macro_rules! write_test_cases_for_me {
             let map = $m::with_capacity(MAX_VALUE as usize);
 
             for i in 0..MAX_VALUE {
-                assert_eq!(map.insert(i, i), None);
+                assert_eq!(map.insert_entry_and(i, i, |_, v| v.clone()), None);
 
                 assert!(!map.is_empty());
                 assert_eq!(map.len(), (i + 1) as usize);
 
                 for j in 0..=i {
                     assert_eq!(map.get(&j), Some(j));
-                    assert_eq!(map.insert(j, j), Some(j));
+                    assert_eq!(map.insert_entry_and(j, j, |_, v| v.clone()), Some(j));
                 }
 
                 for k in i + 1..MAX_VALUE {
@@ -23,24 +23,24 @@ macro_rules! write_test_cases_for_me {
                 }
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
         }
 
         #[test]
         fn growth() {
             const MAX_VALUE: i32 = 512;
 
-            let map = $m::new();
+            let map = $m::with_capacity(0);
 
             for i in 0..MAX_VALUE {
-                assert_eq!(map.insert(i, i), None);
+                assert_eq!(map.insert_entry_and(i, i, |_, v| v.clone()), None);
 
                 assert!(!map.is_empty());
                 assert_eq!(map.len(), (i + 1) as usize);
 
                 for j in 0..=i {
                     assert_eq!(map.get(&j), Some(j));
-                    assert_eq!(map.insert(j, j), Some(j));
+                    assert_eq!(map.insert_entry_and(j, j, |_, v| v.clone()), Some(j));
                 }
 
                 for k in i + 1..MAX_VALUE {
@@ -48,9 +48,15 @@ macro_rules! write_test_cases_for_me {
                 }
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
         }
 
+        // Ignore this test and some other tests on 32-bit mips targets to avoid the following
+        // error on QEMU user space emulator:
+        //
+        //     memory allocation of 1052 bytes failed
+        //     process didn't exit successfully: ... (signal: 6, SIGABRT: process abort signal)
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_insertion() {
             const MAX_VALUE: i32 = 512;
@@ -69,7 +75,7 @@ macro_rules! write_test_cases_for_me {
                         barrier.wait();
 
                         for j in (0..MAX_VALUE).map(|j| j + (i as i32 * MAX_VALUE)) {
-                            assert_eq!(map.insert(j, j), None);
+                            assert_eq!(map.insert_entry_and(j, j, |_, v| v.clone()), None);
                         }
                     })
                 })
@@ -86,16 +92,17 @@ macro_rules! write_test_cases_for_me {
                 assert_eq!(map.get(&i), Some(i));
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
         }
 
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_growth() {
             const MAX_VALUE: i32 = 512;
             const NUM_THREADS: usize = 64;
             const MAX_INSERTED_VALUE: i32 = (NUM_THREADS as i32) * MAX_VALUE;
 
-            let map = std::sync::Arc::new($m::new());
+            let map = std::sync::Arc::new($m::with_capacity(0));
             let barrier = std::sync::Arc::new(std::sync::Barrier::new(NUM_THREADS));
 
             let threads: Vec<_> = (0..NUM_THREADS)
@@ -107,7 +114,7 @@ macro_rules! write_test_cases_for_me {
                         barrier.wait();
 
                         for j in (0..MAX_VALUE).map(|j| j + (i as i32 * MAX_VALUE)) {
-                            assert_eq!(map.insert(j, j), None);
+                            assert_eq!(map.insert_entry_and(j, j, |_, v| *v), None);
                         }
                     })
                 })
@@ -124,7 +131,7 @@ macro_rules! write_test_cases_for_me {
                 assert_eq!(map.get(&i), Some(i));
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
         }
 
         #[test]
@@ -134,7 +141,7 @@ macro_rules! write_test_cases_for_me {
             let map = $m::with_capacity(MAX_VALUE as usize);
 
             for i in 0..MAX_VALUE {
-                assert_eq!(map.insert(i, i), None);
+                assert_eq!(map.insert_entry_and(i, i, |_, v| *v), None);
             }
 
             for i in 0..MAX_VALUE {
@@ -148,9 +155,10 @@ macro_rules! write_test_cases_for_me {
                 assert_eq!(map.get(&i), None);
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
         }
 
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_removal() {
             const MAX_VALUE: i32 = 512;
@@ -160,7 +168,7 @@ macro_rules! write_test_cases_for_me {
             let map = $m::with_capacity(MAX_INSERTED_VALUE as usize);
 
             for i in 0..MAX_INSERTED_VALUE {
-                assert_eq!(map.insert(i, i), None);
+                assert_eq!(map.insert_entry_and(i, i, |_, v| *v), None);
             }
 
             let map = std::sync::Arc::new(map);
@@ -191,9 +199,10 @@ macro_rules! write_test_cases_for_me {
                 assert_eq!(map.get(&i), None);
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
         }
 
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_insertion_and_removal() {
             const MAX_VALUE: i32 = 512;
@@ -204,7 +213,7 @@ macro_rules! write_test_cases_for_me {
             let map = $m::with_capacity(MAX_INSERTED_VALUE as usize);
 
             for i in INSERTED_MIDPOINT..MAX_INSERTED_VALUE {
-                assert_eq!(map.insert(i, i), None);
+                assert_eq!(map.insert_entry_and(i, i, |_, v| *v), None);
             }
 
             let map = std::sync::Arc::new(map);
@@ -219,7 +228,7 @@ macro_rules! write_test_cases_for_me {
                         barrier.wait();
 
                         for j in (0..MAX_VALUE).map(|j| j + (i as i32 * MAX_VALUE)) {
-                            assert_eq!(map.insert(j, j), None);
+                            assert_eq!(map.insert_entry_and(j, j, |_, v| *v), None);
                         }
                     })
                 })
@@ -261,9 +270,10 @@ macro_rules! write_test_cases_for_me {
                 assert_eq!(map.get(&i), None);
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
         }
 
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_growth_and_removal() {
             const MAX_VALUE: i32 = 512;
@@ -274,7 +284,7 @@ macro_rules! write_test_cases_for_me {
             let map = $m::with_capacity(INSERTED_MIDPOINT as usize);
 
             for i in INSERTED_MIDPOINT..MAX_INSERTED_VALUE {
-                assert_eq!(map.insert(i, i), None);
+                assert_eq!(map.insert_entry_and(i, i, |_, v| *v), None);
             }
 
             let map = std::sync::Arc::new(map);
@@ -289,7 +299,7 @@ macro_rules! write_test_cases_for_me {
                         barrier.wait();
 
                         for j in (0..MAX_VALUE).map(|j| j + (i as i32 * MAX_VALUE)) {
-                            assert_eq!(map.insert(j, j), None);
+                            assert_eq!(map.insert_entry_and(j, j, |_, v| *v), None);
                         }
                     })
                 })
@@ -331,142 +341,32 @@ macro_rules! write_test_cases_for_me {
                 assert_eq!(map.get(&i), None);
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
         }
 
         #[test]
-        fn modify() {
-            let map = $m::new();
+        fn insert_with_or_modify() {
+            let map = $m::with_capacity(0);
 
-            assert!(map.is_empty());
-            assert_eq!(map.len(), 0);
-
-            assert_eq!(map.modify("foo", |_, x| x * 2), None);
-
-            assert!(map.is_empty());
-            assert_eq!(map.len(), 0);
-
-            map.insert("foo", 1);
-            assert_eq!(map.modify("foo", |_, x| x * 2), Some(1));
-
-            assert!(!map.is_empty());
-            assert_eq!(map.len(), 1);
-
-            map.remove("foo");
-            assert_eq!(map.modify("foo", |_, x| x * 2), None);
-
-            assert!(map.is_empty());
-            assert_eq!(map.len(), 0);
-
-            $crate::test_util::run_deferred();
-        }
-
-        #[test]
-        fn concurrent_modification() {
-            const MAX_VALUE: i32 = 512;
-            const NUM_THREADS: usize = 64;
-            const MAX_INSERTED_VALUE: i32 = (NUM_THREADS as i32) * MAX_VALUE;
-
-            let map = $m::with_capacity(MAX_INSERTED_VALUE as usize);
-
-            for i in 0..MAX_INSERTED_VALUE {
-                map.insert(i, i);
-            }
-
-            let map = std::sync::Arc::new(map);
-            let barrier = std::sync::Arc::new(std::sync::Barrier::new(NUM_THREADS));
-
-            let threads: Vec<_> = (0..NUM_THREADS)
-                .map(|i| {
-                    let map = std::sync::Arc::clone(&map);
-                    let barrier = std::sync::Arc::clone(&barrier);
-
-                    std::thread::spawn(move || {
-                        barrier.wait();
-
-                        for j in (i as i32 * MAX_VALUE)..((i as i32 + 1) * MAX_VALUE) {
-                            assert_eq!(map.modify(j, |_, x| x * 2), Some(j));
-                        }
-                    })
-                })
-                .collect();
-
-            for result in threads.into_iter().map(std::thread::JoinHandle::join) {
-                assert!(result.is_ok());
-            }
-
-            assert!(!map.is_empty());
-            assert_eq!(map.len(), MAX_INSERTED_VALUE as usize);
-
-            for i in 0..MAX_INSERTED_VALUE {
-                assert_eq!(map.get(&i), Some(i * 2));
-            }
-
-            $crate::test_util::run_deferred();
-        }
-
-        #[test]
-        fn concurrent_overlapped_modification() {
-            const MAX_VALUE: i32 = 512;
-            const NUM_THREADS: usize = 64;
-
-            let map = $m::with_capacity(MAX_VALUE as usize);
-
-            for i in 0..MAX_VALUE {
-                assert_eq!(map.insert(i, 0), None);
-            }
-
-            let map = std::sync::Arc::new(map);
-            let barrier = std::sync::Arc::new(std::sync::Barrier::new(NUM_THREADS));
-
-            let threads: Vec<_> = (0..NUM_THREADS)
-                .map(|_| {
-                    let map = std::sync::Arc::clone(&map);
-                    let barrier = std::sync::Arc::clone(&barrier);
-
-                    std::thread::spawn(move || {
-                        barrier.wait();
-
-                        for i in 0..MAX_VALUE {
-                            assert!(map.modify(i, |_, x| x + 1).is_some());
-                        }
-                    })
-                })
-                .collect();
-
-            for result in threads.into_iter().map(std::thread::JoinHandle::join) {
-                assert!(result.is_ok());
-            }
-
-            assert!(!map.is_empty());
-            assert_eq!(map.len(), MAX_VALUE as usize);
-
-            for i in 0..MAX_VALUE {
-                assert_eq!(map.get(&i), Some(NUM_THREADS as i32));
-            }
-
-            $crate::test_util::run_deferred();
-        }
-
-        #[test]
-        fn insert_or_modify() {
-            let map = $m::new();
-
-            assert_eq!(map.insert_or_modify("foo", 1, |_, x| x + 1), None);
+            assert_eq!(map.insert_with_or_modify("foo", || 1, |_, x| x + 1), None);
             assert_eq!(map.get("foo"), Some(1));
 
-            assert_eq!(map.insert_or_modify("foo", 1, |_, x| x + 1), Some(1));
+            assert_eq!(
+                map.insert_with_or_modify("foo", || 1, |_, x| x + 1),
+                Some(1)
+            );
             assert_eq!(map.get("foo"), Some(2));
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
         }
 
+        #[cfg_attr(mips, ignore)]
         #[test]
-        fn concurrent_insert_or_modify() {
+        fn concurrent_insert_with_or_modify() {
             const NUM_THREADS: usize = 64;
             const MAX_VALUE: i32 = 512;
 
-            let map = std::sync::Arc::new($m::new());
+            let map = std::sync::Arc::new($m::with_capacity(0));
             let barrier = std::sync::Arc::new(std::sync::Barrier::new(NUM_THREADS));
 
             let threads: Vec<_> = (0..NUM_THREADS)
@@ -478,7 +378,7 @@ macro_rules! write_test_cases_for_me {
                         barrier.wait();
 
                         for j in 0..MAX_VALUE {
-                            map.insert_or_modify(j, 1, |_, x| x + 1);
+                            map.insert_with_or_modify(j, || 1, |_, x| x + 1);
                         }
                     })
                 })
@@ -494,9 +394,10 @@ macro_rules! write_test_cases_for_me {
                 assert_eq!(map.get(&i), Some(NUM_THREADS as i32));
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
         }
 
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_overlapped_insertion() {
             const NUM_THREADS: usize = 64;
@@ -514,7 +415,7 @@ macro_rules! write_test_cases_for_me {
                         barrier.wait();
 
                         for j in 0..MAX_VALUE {
-                            map.insert(j, j);
+                            map.insert_entry_and(j, j, |_, v| *v);
                         }
                     })
                 })
@@ -530,9 +431,20 @@ macro_rules! write_test_cases_for_me {
                 assert_eq!(map.get(&i), Some(i));
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
         }
 
+        // Ignore this test on 32-bit mips and armv5te targets to avoid the following
+        // error on QEMU user space emulator:
+        //
+        // (mips)
+        //     memory allocation of 1052 bytes failed
+        //     process didn't exit successfully: ... (signal: 6, SIGABRT: process abort signal)
+        //
+        // (armv5te)
+        //     process didn't exit successfully: ... (signal: 4, SIGILL: illegal instruction)
+        //
+        #[cfg_attr(any(armv5te, mips), ignore)]
         #[test]
         fn concurrent_overlapped_growth() {
             const NUM_THREADS: usize = 64;
@@ -550,7 +462,7 @@ macro_rules! write_test_cases_for_me {
                         barrier.wait();
 
                         for j in 0..MAX_VALUE {
-                            map.insert(j, j);
+                            map.insert_entry_and(j, j, |_, v| *v);
                         }
                     })
                 })
@@ -566,9 +478,10 @@ macro_rules! write_test_cases_for_me {
                 assert_eq!(map.get(&i), Some(i));
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
         }
 
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_overlapped_removal() {
             const NUM_THREADS: usize = 64;
@@ -577,7 +490,7 @@ macro_rules! write_test_cases_for_me {
             let map = $m::with_capacity(MAX_VALUE as usize);
 
             for i in 0..MAX_VALUE {
-                map.insert(i, i);
+                map.insert_entry_and(i, i, |_, v| *v);
             }
 
             let map = std::sync::Arc::new(map);
@@ -613,44 +526,47 @@ macro_rules! write_test_cases_for_me {
                 assert_eq!(map.get(&i), None);
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
         }
 
         #[test]
         fn drop_value() {
-            let key_parent = std::sync::Arc::new($crate::test_util::DropNotifier::new());
-            let value_parent = std::sync::Arc::new($crate::test_util::DropNotifier::new());
+            let key_parent = std::sync::Arc::new($crate::cht::test_util::DropNotifier::new());
+            let value_parent = std::sync::Arc::new($crate::cht::test_util::DropNotifier::new());
 
             {
-                let map = $m::new();
+                let map = $m::with_capacity(0);
 
                 assert_eq!(
-                    map.insert_and(
-                        $crate::test_util::NoisyDropper::new(std::sync::Arc::clone(&key_parent), 0),
-                        $crate::test_util::NoisyDropper::new(
+                    map.insert_entry_and(
+                        $crate::cht::test_util::NoisyDropper::new(
+                            std::sync::Arc::clone(&key_parent),
+                            0
+                        ),
+                        $crate::cht::test_util::NoisyDropper::new(
                             std::sync::Arc::clone(&value_parent),
                             0
                         ),
-                        |_| ()
+                        |_, _| ()
                     ),
                     None
                 );
                 assert!(!map.is_empty());
                 assert_eq!(map.len(), 1);
-                map.get_and(&0, |v| assert_eq!(v, &0));
+                map.get_key_value_and(&0, |_k, v| assert_eq!(v, &0));
 
-                map.remove_and(&0, |v| assert_eq!(v, &0));
+                map.remove_entry_if_and(&0, |_, _| true, |_k, v| assert_eq!(v, &0));
                 assert!(map.is_empty());
                 assert_eq!(map.len(), 0);
-                assert_eq!(map.get_and(&0, |_| ()), None);
+                assert_eq!(map.get_key_value_and(&0, |_, _| ()), None);
 
-                $crate::test_util::run_deferred();
+                $crate::cht::test_util::run_deferred();
 
                 assert!(!key_parent.was_dropped());
                 assert!(value_parent.was_dropped());
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
 
             assert!(key_parent.was_dropped());
             assert!(value_parent.was_dropped());
@@ -661,18 +577,18 @@ macro_rules! write_test_cases_for_me {
             const NUM_VALUES: usize = 1 << 16;
 
             let key_parents: Vec<_> = std::iter::repeat_with(|| {
-                std::sync::Arc::new($crate::test_util::DropNotifier::new())
+                std::sync::Arc::new($crate::cht::test_util::DropNotifier::new())
             })
             .take(NUM_VALUES)
             .collect();
             let value_parents: Vec<_> = std::iter::repeat_with(|| {
-                std::sync::Arc::new($crate::test_util::DropNotifier::new())
+                std::sync::Arc::new($crate::cht::test_util::DropNotifier::new())
             })
             .take(NUM_VALUES)
             .collect();
 
             {
-                let map = $m::new();
+                let map = $m::with_capacity(0);
                 assert!(map.is_empty());
                 assert_eq!(map.len(), 0);
 
@@ -680,16 +596,16 @@ macro_rules! write_test_cases_for_me {
                     key_parents.iter().zip(value_parents.iter()).enumerate()
                 {
                     assert_eq!(
-                        map.insert_and(
-                            $crate::test_util::NoisyDropper::new(
+                        map.insert_entry_and(
+                            $crate::cht::test_util::NoisyDropper::new(
                                 std::sync::Arc::clone(&this_key_parent),
                                 i
                             ),
-                            $crate::test_util::NoisyDropper::new(
+                            $crate::cht::test_util::NoisyDropper::new(
                                 std::sync::Arc::clone(&this_value_parent),
                                 i
                             ),
-                            |_| ()
+                            |_, _| ()
                         ),
                         None
                     );
@@ -710,10 +626,14 @@ macro_rules! write_test_cases_for_me {
 
                 for i in 0..NUM_VALUES {
                     assert_eq!(
-                        map.remove_entry_and(&i, |k, v| {
-                            assert_eq!(*k, i);
-                            assert_eq!(*v, i);
-                        }),
+                        map.remove_entry_if_and(
+                            &i,
+                            |_, _| true,
+                            |k, v| {
+                                assert_eq!(*k, i);
+                                assert_eq!(*v, i);
+                            }
+                        ),
                         Some(())
                     );
                 }
@@ -721,22 +641,24 @@ macro_rules! write_test_cases_for_me {
                 assert!(map.is_empty());
                 assert_eq!(map.len(), 0);
 
-                $crate::test_util::run_deferred();
+                $crate::cht::test_util::run_deferred();
 
-                for this_key_parent in key_parents.iter() {
-                    assert!(!this_key_parent.was_dropped());
-                }
+                let live_key_count =
+                    NUM_VALUES - key_parents.iter().filter(|k| k.was_dropped()).count();
+                let bucket_array_len = map.capacity() * 2;
+                assert_eq!(bucket_array_len, map.num_segments() * 128 * 2);
+                assert!(live_key_count <= bucket_array_len / 10);
 
                 for this_value_parent in value_parents.iter() {
                     assert!(this_value_parent.was_dropped());
                 }
 
                 for i in 0..NUM_VALUES {
-                    assert_eq!(map.get_and(&i, |_| ()), None);
+                    assert_eq!(map.get_key_value_and(&i, |_, _| ()), None);
                 }
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
 
             for this_key_parent in key_parents.into_iter() {
                 assert!(this_key_parent.was_dropped());
@@ -755,21 +677,21 @@ macro_rules! write_test_cases_for_me {
 
             let key_parents: std::sync::Arc<Vec<_>> = std::sync::Arc::new(
                 std::iter::repeat_with(|| {
-                    std::sync::Arc::new($crate::test_util::DropNotifier::new())
+                    std::sync::Arc::new($crate::cht::test_util::DropNotifier::new())
                 })
                 .take(NUM_VALUES)
                 .collect(),
             );
             let value_parents: std::sync::Arc<Vec<_>> = std::sync::Arc::new(
                 std::iter::repeat_with(|| {
-                    std::sync::Arc::new($crate::test_util::DropNotifier::new())
+                    std::sync::Arc::new($crate::cht::test_util::DropNotifier::new())
                 })
                 .take(NUM_VALUES)
                 .collect(),
             );
 
             {
-                let map = std::sync::Arc::new($m::new());
+                let map = std::sync::Arc::new($m::with_capacity(0));
                 assert!(map.is_empty());
                 assert_eq!(map.len(), 0);
 
@@ -798,16 +720,16 @@ macro_rules! write_test_cases_for_me {
                                 let key_value = i * NUM_VALUES_PER_THREAD + j;
 
                                 assert_eq!(
-                                    map.insert_and(
-                                        $crate::test_util::NoisyDropper::new(
+                                    map.insert_entry_and(
+                                        $crate::cht::test_util::NoisyDropper::new(
                                             std::sync::Arc::clone(&this_key_parent),
                                             key_value as i32
                                         ),
-                                        $crate::test_util::NoisyDropper::new(
+                                        $crate::cht::test_util::NoisyDropper::new(
                                             std::sync::Arc::clone(&this_value_parent),
                                             key_value as i32
                                         ),
-                                        |_| ()
+                                        |_, _| ()
                                     ),
                                     None
                                 );
@@ -823,7 +745,7 @@ macro_rules! write_test_cases_for_me {
                 assert!(!map.is_empty());
                 assert_eq!(map.len(), NUM_VALUES);
 
-                $crate::test_util::run_deferred();
+                $crate::cht::test_util::run_deferred();
 
                 for this_key_parent in key_parents.iter() {
                     assert!(!this_key_parent.was_dropped());
@@ -855,10 +777,14 @@ macro_rules! write_test_cases_for_me {
                                 let key_value = (i * NUM_VALUES_PER_THREAD + j) as i32;
 
                                 assert_eq!(
-                                    map.remove_entry_and(&key_value, |k, v| {
-                                        assert_eq!(*k, key_value);
-                                        assert_eq!(*v, key_value);
-                                    }),
+                                    map.remove_entry_if_and(
+                                        &key_value,
+                                        |_, _| true,
+                                        |k, v| {
+                                            assert_eq!(*k, key_value);
+                                            assert_eq!(*v, key_value);
+                                        }
+                                    ),
                                     Some(())
                                 );
                             }
@@ -873,22 +799,24 @@ macro_rules! write_test_cases_for_me {
                 assert!(map.is_empty());
                 assert_eq!(map.len(), 0);
 
-                $crate::test_util::run_deferred();
+                $crate::cht::test_util::run_deferred();
 
-                for this_key_parent in key_parents.iter() {
-                    assert!(!this_key_parent.was_dropped());
-                }
+                let live_key_count =
+                    NUM_VALUES - key_parents.iter().filter(|k| k.was_dropped()).count();
+                let bucket_array_len = map.capacity() * 2;
+                assert_eq!(bucket_array_len, map.num_segments() * 128 * 2);
+                assert!(live_key_count <= bucket_array_len / 10);
 
                 for this_value_parent in value_parents.iter() {
                     assert!(this_value_parent.was_dropped());
                 }
 
                 for i in (0..NUM_VALUES).map(|i| i as i32) {
-                    assert_eq!(map.get_and(&i, |_| ()), None);
+                    assert_eq!(map.get_key_value_and(&i, |_, _| ()), None);
                 }
             }
 
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
 
             for this_key_parent in key_parents.iter() {
                 assert!(this_key_parent.was_dropped());
@@ -905,10 +833,10 @@ macro_rules! write_test_cases_for_me {
 
             let is_even = |_: &i32, v: &i32| *v % 2 == 0;
 
-            let map = $m::new();
+            let map = $m::with_capacity(0);
 
             for i in 0..NUM_VALUES {
-                assert_eq!(map.insert(i, i), None);
+                assert_eq!(map.insert_entry_and(i, i, |_, v| *v), None);
             }
 
             for i in 0..NUM_VALUES {
@@ -927,41 +855,7 @@ macro_rules! write_test_cases_for_me {
                 assert_eq!(map.get(&i), Some(i));
             }
 
-            $crate::test_util::run_deferred();
-        }
-
-        #[test]
-        fn default() {
-            let map = $m::<_, _, $crate::map::DefaultHashBuilder>::default();
-
-            assert!(map.is_empty());
-            assert_eq!(map.len(), 0);
-
-            assert_eq!(map.insert("foo", 5), None);
-            assert_eq!(map.insert("bar", 10), None);
-            assert_eq!(map.insert("baz", 15), None);
-            assert_eq!(map.insert("qux", 20), None);
-
-            assert!(!map.is_empty());
-            assert_eq!(map.len(), 4);
-
-            assert_eq!(map.insert("foo", 5), Some(5));
-            assert_eq!(map.insert("bar", 10), Some(10));
-            assert_eq!(map.insert("baz", 15), Some(15));
-            assert_eq!(map.insert("qux", 20), Some(20));
-
-            assert!(!map.is_empty());
-            assert_eq!(map.len(), 4);
-
-            assert_eq!(map.remove("foo"), Some(5));
-            assert_eq!(map.remove("bar"), Some(10));
-            assert_eq!(map.remove("baz"), Some(15));
-            assert_eq!(map.remove("qux"), Some(20));
-
-            assert!(map.is_empty());
-            assert_eq!(map.len(), 0);
-
-            $crate::test_util::run_deferred();
+            $crate::cht::test_util::run_deferred();
         }
     };
 }

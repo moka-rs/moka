@@ -13,7 +13,7 @@ use std::{
 
 use crossbeam_epoch::Owned;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(crate) struct NoisyDropper<T: ?Sized> {
     parent: Arc<DropNotifier>,
     pub elem: T,
@@ -27,7 +27,7 @@ impl<T> NoisyDropper<T> {
 
 impl<T: ?Sized> Drop for NoisyDropper<T> {
     fn drop(&mut self) {
-        assert_eq!(self.parent.dropped.swap(true, Ordering::Relaxed), false);
+        assert!(!self.parent.dropped.swap(true, Ordering::Relaxed));
     }
 }
 
