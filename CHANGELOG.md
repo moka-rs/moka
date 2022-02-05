@@ -6,8 +6,8 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 
 ### Fixed
 
-- Addressed a memory utilization issue that will get worse when keys have very
-  high cardinality ([#72][gh-issue-0072]):
+- Addressed a memory utilization issue that will get worse when keys have hight
+  cardinality ([#72][gh-issue-0072]):
     - Reduce memory overhead in the internal concurrent hash table (cht).
       ([#79][gh-pull-0079])
     - Fix a bug that can create oversized frequency sketch when weigher is set.
@@ -27,7 +27,8 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 
 ### Changed
 
-- Import (include) cht source files for better integration. ([#77][gh-pull-0077])
+- Import (include) cht source files for better integration. ([#77][gh-pull-0077],
+  [#86](gh-pull-0086))
 
 
 ## Version 0.7.1
@@ -235,6 +236,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0086]: https://github.com/moka-rs/moka/pull/86/
 [gh-pull-0084]: https://github.com/moka-rs/moka/pull/84/
 [gh-pull-0083]: https://github.com/moka-rs/moka/pull/83/
 [gh-pull-0082]: https://github.com/moka-rs/moka/pull/82/

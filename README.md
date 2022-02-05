@@ -74,6 +74,10 @@ routers. Here are some highlights:
 [aliyundrive-webdav-git]: https://github.com/messense/aliyundrive-webdav
 
 
+## Change Log
+
+- [CHANGELOG.md](https://github.com/moka-rs/moka/blob/master/CHANGELOG.md)
+
 ## Usage
 
 Add this to your `Cargo.toml`:
