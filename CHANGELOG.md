@@ -1,10 +1,41 @@
 # Moka &mdash; Change Log
 
+## Version 0.7.2
+
+The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
+
+### Fixed
+
+- Addressed a memory utilization issue that will get worse when keys have hight
+  cardinality ([#72][gh-issue-0072]):
+    - Reduce memory overhead in the internal concurrent hash table (cht).
+      ([#79][gh-pull-0079])
+    - Fix a bug that can create oversized frequency sketch when weigher is set.
+      ([#75][gh-pull-0075])
+    - Change `EntryInfo` from `enum` to `struct` to reduce memory utilization.
+      ([#76][gh-pull-0076])
+    - Replace some `std::sync::Arc` usages with `triomphe::Arc` to reduce memory
+      utilization. ([#80][gh-pull-0080])
+    - Embed `CacheRegion` value into a 2-bit tag space of `TagNonNull` pointer.
+      ([#84][gh-pull-0084])
+- Fix a bug that will use wrong (oversized) initial capacity for the internal cht.
+  ([#83][gh-pull-0083])
+
+### Added
+
+- Add `unstable-debug-counters` feature for testing purpose. ([#82][gh-pull-0082])
+
+### Changed
+
+- Import (include) cht source files for better integration. ([#77][gh-pull-0077],
+  [#86](gh-pull-0086))
+
+
 ## Version 0.7.1
 
 - **Important Fix**: A memory leak issue (#65 below) was found in all previous
   versions (since v0.1.0) and fixed in this version. All users are encouraged to
-  upgrade to this version.
+  upgrade to this or newer version.
 
 ### Fixed
 
@@ -199,11 +230,21 @@
 
 [resolving-error-on-32bit]: https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
 
+[gh-issue-0072]: https://github.com/moka-rs/moka/issues/72/
 [gh-issue-0059]: https://github.com/moka-rs/moka/issues/59/
 [gh-issue-0043]: https://github.com/moka-rs/moka/issues/43/
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0086]: https://github.com/moka-rs/moka/pull/86/
+[gh-pull-0084]: https://github.com/moka-rs/moka/pull/84/
+[gh-pull-0083]: https://github.com/moka-rs/moka/pull/83/
+[gh-pull-0082]: https://github.com/moka-rs/moka/pull/82/
+[gh-pull-0080]: https://github.com/moka-rs/moka/pull/80/
+[gh-pull-0079]: https://github.com/moka-rs/moka/pull/79/
+[gh-pull-0077]: https://github.com/moka-rs/moka/pull/77/
+[gh-pull-0076]: https://github.com/moka-rs/moka/pull/76/
+[gh-pull-0075]: https://github.com/moka-rs/moka/pull/75/
 [gh-pull-0067]: https://github.com/moka-rs/moka/pull/67/
 [gh-pull-0065]: https://github.com/moka-rs/moka/pull/65/
 [gh-pull-0056]: https://github.com/moka-rs/moka/pull/56/

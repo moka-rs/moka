@@ -264,7 +264,7 @@ where
         let mut op1 = None;
         let mut op2 = None;
 
-        // Since the cache (moka-cht::SegmentedHashMap) employs optimistic locking
+        // Since the cache (cht::SegmentedHashMap) employs optimistic locking
         // strategy, insert_with_or_modify() may get an insert/modify operation
         // conflicted with other concurrent hash table operations. In that case, it
         // has to retry the insertion or modification, so on_insert and/or on_modify
