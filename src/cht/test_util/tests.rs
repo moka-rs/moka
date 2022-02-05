@@ -51,6 +51,12 @@ macro_rules! write_test_cases_for_me {
             $crate::cht::test_util::run_deferred();
         }
 
+        // Ignore this test and some other tests on 32-bit mips targets to avoid the following
+        // error on QEMU user space emulator:
+        // 
+        //     memory allocation of 1052 bytes failed
+        //     process didn't exit successfully: ... (signal: 6, SIGABRT: process abort signal)
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_insertion() {
             const MAX_VALUE: i32 = 512;
@@ -89,6 +95,7 @@ macro_rules! write_test_cases_for_me {
             $crate::cht::test_util::run_deferred();
         }
 
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_growth() {
             const MAX_VALUE: i32 = 512;
@@ -194,6 +201,7 @@ macro_rules! write_test_cases_for_me {
             $crate::cht::test_util::run_deferred();
         }
 
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_insertion_and_removal() {
             const MAX_VALUE: i32 = 512;
@@ -264,6 +272,7 @@ macro_rules! write_test_cases_for_me {
             $crate::cht::test_util::run_deferred();
         }
 
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_growth_and_removal() {
             const MAX_VALUE: i32 = 512;
@@ -350,6 +359,7 @@ macro_rules! write_test_cases_for_me {
             $crate::cht::test_util::run_deferred();
         }
 
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_insert_with_or_modify() {
             const NUM_THREADS: usize = 64;
@@ -386,6 +396,7 @@ macro_rules! write_test_cases_for_me {
             $crate::cht::test_util::run_deferred();
         }
 
+        #[cfg_attr(mips, ignore)]
         #[test]
         fn concurrent_overlapped_insertion() {
             const NUM_THREADS: usize = 64;
@@ -422,6 +433,17 @@ macro_rules! write_test_cases_for_me {
             $crate::cht::test_util::run_deferred();
         }
 
+        // Ignore this test on 32-bit mips and armv5te targets to avoid the following
+        // error on QEMU user space emulator:
+        // 
+        // (mips)
+        //     memory allocation of 1052 bytes failed
+        //     process didn't exit successfully: ... (signal: 6, SIGABRT: process abort signal)
+        //
+        // (armv5te)
+        //     process didn't exit successfully: ... (signal: 4, SIGILL: illegal instruction)
+        //
+        #[cfg_attr(any(armv5te, mips), ignore)]
         #[test]
         fn concurrent_overlapped_growth() {
             const NUM_THREADS: usize = 64;
