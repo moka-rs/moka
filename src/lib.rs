@@ -58,9 +58,9 @@
 //!
 //! | Feature    | Enabled by default? | MSRV        |
 //! |:-----------|:-------------------:|:-----------:|
-//! | no feature |                     | Rust 1.45.2 |
-//! | `atomic64` |       yes           | Rust 1.45.2 |
-//! | `future`   |                     | Rust 1.46.0 |
+//! | no feature |                     | Rust 1.51.0 |
+//! | `atomic64` |       yes           | Rust 1.51.0 |
+//! | `future`   |                     | Rust 1.51.0 |
 //!
 //! If only the default features are enabled, MSRV will be updated conservatively.
 //! When using other features, like `future`, MSRV might be updated more frequently,
