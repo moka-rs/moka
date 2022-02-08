@@ -14,15 +14,16 @@ pub(crate) struct BucketArrayRef<'a, K, V, S> {
     pub(crate) len: &'a AtomicUsize,
 }
 
-impl<'a, K: Hash + Eq, V, S: BuildHasher> BucketArrayRef<'a, K, V, S> {
-    pub(crate) fn get_key_value_and<Q: Hash + Eq + ?Sized, F: FnOnce(&K, &V) -> T, T>(
-        &self,
-        key: &Q,
-        hash: u64,
-        with_entry: F,
-    ) -> Option<T>
+impl<'a, K, V, S> BucketArrayRef<'a, K, V, S>
+where
+    K: Hash + Eq,
+    S: BuildHasher,
+{
+    pub(crate) fn get_key_value_and<Q, F, T>(&self, key: &Q, hash: u64, with_entry: F) -> Option<T>
     where
+        Q: Hash + Eq + ?Sized,
         K: Borrow<Q>,
+        F: FnOnce(&K, &V) -> T,
     {
         let guard = &crossbeam_epoch::pin();
         let current_ref = self.get(guard);
@@ -60,12 +61,7 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> BucketArrayRef<'a, K, V, S> {
         result
     }
 
-    pub(crate) fn remove_entry_if_and<
-        Q: Hash + Eq + ?Sized,
-        F: FnMut(&K, &V) -> bool,
-        G: FnOnce(&K, &V) -> T,
-        T,
-    >(
+    pub(crate) fn remove_entry_if_and<Q, F, G, T>(
         &self,
         key: &Q,
         hash: u64,
@@ -73,7 +69,10 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> BucketArrayRef<'a, K, V, S> {
         with_previous_entry: G,
     ) -> Option<T>
     where
+        Q: Hash + Eq + ?Sized,
         K: Borrow<Q>,
+        F: FnMut(&K, &V) -> bool,
+        G: FnOnce(&K, &V) -> T,
     {
         let guard = &crossbeam_epoch::pin();
         let current_ref = self.get(guard);
@@ -127,19 +126,83 @@ impl<'a, K: Hash + Eq, V, S: BuildHasher> BucketArrayRef<'a, K, V, S> {
         result
     }
 
-    pub(crate) fn insert_with_or_modify_entry_and<
+    pub(crate) fn insert_if_not_present_and<F, G, T>(
+        &self,
+        key: K,
+        hash: u64,
+        on_insert: F,
+        with_previous_entry: G,
+    ) -> Option<T>
+    where
         F: FnOnce() -> V,
-        G: FnMut(&K, &V) -> V,
-        H: FnOnce(&K, &V) -> T,
-        T,
-    >(
+        G: FnOnce(&K, &V) -> T,
+    {
+        let guard = &crossbeam_epoch::pin();
+        let current_ref = self.get(guard);
+        let mut bucket_array_ref = current_ref;
+        let mut state = InsertOrModifyState::New(key, on_insert);
+
+        let result;
+
+        loop {
+            loop {
+                let rehash_op = RehashOp::new(
+                    bucket_array_ref.capacity(),
+                    &bucket_array_ref.tombstone_count,
+                    self.len,
+                );
+                if rehash_op.is_skip() {
+                    break;
+                }
+                bucket_array_ref = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op);
+            }
+
+            match bucket_array_ref.insert_if_not_present(guard, hash, state) {
+                Ok(previous_bucket_ptr) => {
+                    if let Some(previous_bucket_ref) = unsafe { previous_bucket_ptr.as_ref() } {
+                        if previous_bucket_ptr.tag() & bucket::TOMBSTONE_TAG != 0 {
+                            self.len.fetch_add(1, Ordering::Relaxed);
+                            result = None;
+                        } else {
+                            let Bucket {
+                                key,
+                                maybe_value: value,
+                            } = previous_bucket_ref;
+                            result = Some(with_previous_entry(key, unsafe { &*value.as_ptr() }));
+                        }
+                    } else {
+                        self.len.fetch_add(1, Ordering::Relaxed);
+                        result = None;
+                    }
+
+                    break;
+                }
+                Err(s) => {
+                    state = s;
+                    bucket_array_ref =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
+                }
+            }
+        }
+
+        self.swing(guard, current_ref, bucket_array_ref);
+
+        result
+    }
+
+    pub(crate) fn insert_with_or_modify_entry_and<T, F, G, H>(
         &self,
         key: K,
         hash: u64,
         on_insert: F,
         mut on_modify: G,
         with_old_entry: H,
-    ) -> Option<T> {
+    ) -> Option<T>
+    where
+        F: FnOnce() -> V,
+        G: FnMut(&K, &V) -> V,
+        H: FnOnce(&K, &V) -> T,
+    {
         let guard = &crossbeam_epoch::pin();
         let current_ref = self.get(guard);
         let mut bucket_array_ref = current_ref;

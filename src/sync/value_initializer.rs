@@ -159,8 +159,6 @@ where
     ) -> Option<Waiter<V>> {
         let key = Arc::clone(key);
         let waiter = TrioArc::clone(waiter);
-
-        self.waiters
-            .insert_with_or_modify((key, type_id), || waiter, |_, w| TrioArc::clone(w))
+        self.waiters.insert_if_not_present((key, type_id), waiter)
     }
 }

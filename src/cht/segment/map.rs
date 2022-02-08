@@ -420,8 +420,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     ///
     /// [`Some`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.Some
     /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
-    ///
-    /// Moka
     #[inline]
     pub(crate) fn insert_with_or_modify<F, G>(
         &self,
@@ -470,6 +468,27 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
             on_insert,
             on_modify,
             with_old_entry,
+        );
+
+        if result.is_none() {
+            self.len.fetch_add(1, Ordering::Relaxed);
+        }
+
+        result
+    }
+
+    #[inline]
+    pub(crate) fn insert_if_not_present(&self, key: K, value: V) -> Option<V>
+    where
+        V: Clone,
+    {
+        let hash = bucket::hash(&self.build_hasher, &key);
+
+        let result = self.bucket_array_ref(hash).insert_if_not_present_and(
+            key,
+            hash,
+            || value,
+            |_, v| v.clone(),
         );
 
         if result.is_none() {
@@ -580,6 +599,27 @@ mod tests {
         assert_eq!(map.len(), 1);
 
         assert_eq!(map.remove("foo"), Some(5));
+        assert!(map.is_empty());
+        assert_eq!(map.len(), 0);
+    }
+
+    #[test]
+    fn insert_if_not_present() {
+        let map =
+            HashMap::with_num_segments_capacity_and_hasher(1, 0, DefaultHashBuilder::default());
+
+        assert_eq!(map.insert_if_not_present("foo", 5), None);
+        assert_eq!(map.get("foo"), Some(5));
+
+        assert_eq!(map.insert_if_not_present("foo", 6), Some(5));
+        assert_eq!(map.get("foo"), Some(5));
+
+        assert_eq!(map.remove("foo"), Some(5));
+
+        assert_eq!(map.insert_if_not_present("foo", 7), None);
+        assert_eq!(map.get("foo"), Some(7));
+
+        assert_eq!(map.remove("foo"), Some(7));
         assert!(map.is_empty());
         assert_eq!(map.len(), 0);
     }

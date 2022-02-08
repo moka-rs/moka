@@ -69,13 +69,14 @@ impl<K, V> Drop for BucketArray<K, V> {
 }
 
 impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
-    pub(crate) fn get<Q: ?Sized + Eq>(
+    pub(crate) fn get<Q>(
         &self,
         guard: &'g Guard,
         hash: u64,
         key: &Q,
     ) -> Result<Shared<'g, Bucket<K, V>>, RelocatedError>
     where
+        Q: Eq + ?Sized,
         K: Borrow<Q>,
     {
         let loop_result = self.probe_loop(guard, hash, |_, _, this_bucket_ptr| {
@@ -108,7 +109,7 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
         }
     }
 
-    pub(crate) fn remove_if<Q: ?Sized + Eq, F: FnMut(&K, &V) -> bool>(
+    pub(crate) fn remove_if<Q, F>(
         &self,
         guard: &'g Guard,
         hash: u64,
@@ -116,7 +117,9 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
         mut condition: F,
     ) -> Result<Shared<'g, Bucket<K, V>>, F>
     where
+        Q: Eq + ?Sized,
         K: Borrow<Q>,
+        F: FnMut(&K, &V) -> bool,
     {
         let loop_result = self.probe_loop(guard, hash, |_, this_bucket, this_bucket_ptr| {
             let this_bucket_ref = if let Some(this_bucket_ref) = unsafe { this_bucket_ptr.as_ref() }
@@ -160,15 +163,68 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
         }
     }
 
+    pub(crate) fn insert_if_not_present<F>(
+        &self,
+        guard: &'g Guard,
+        hash: u64,
+        state: InsertOrModifyState<K, V, F>,
+    ) -> Result<Shared<'g, Bucket<K, V>>, InsertOrModifyState<K, V, F>>
+    where
+        F: FnOnce() -> V,
+    {
+        let mut maybe_state = Some(state);
+
+        let loop_result = self.probe_loop(guard, hash, |_, this_bucket, this_bucket_ptr| {
+            let state = maybe_state.take().unwrap();
+
+            let new_bucket = {
+                if let Some(this_bucket_ref) = unsafe { this_bucket_ptr.as_ref() } {
+                    let this_key = &this_bucket_ref.key;
+
+                    if this_key.borrow() != state.key() {
+                        maybe_state = Some(state);
+
+                        return ProbeLoopAction::Continue;
+                    }
+
+                    if this_bucket_ptr.tag() & TOMBSTONE_TAG == 0 {
+                        return ProbeLoopAction::Return(this_bucket_ptr);
+                    }
+                }
+
+                state.into_insert_bucket()
+            };
+
+            if let Err(CompareAndSetError { new, .. }) = this_bucket.compare_and_set_weak(
+                this_bucket_ptr,
+                new_bucket,
+                (Ordering::Release, Ordering::Relaxed),
+                guard,
+            ) {
+                maybe_state = Some(InsertOrModifyState::from_bucket_value(new, None));
+
+                ProbeLoopAction::Reload
+            } else {
+                ProbeLoopAction::Return(this_bucket_ptr)
+            }
+        });
+
+        loop_result.returned().ok_or_else(|| maybe_state.unwrap())
+    }
+
     // https://rust-lang.github.io/rust-clippy/master/index.html#type_complexity
     #[allow(clippy::type_complexity)]
-    pub(crate) fn insert_or_modify<F: FnOnce() -> V, G: FnMut(&K, &V) -> V>(
+    pub(crate) fn insert_or_modify<F, G>(
         &self,
         guard: &'g Guard,
         hash: u64,
         state: InsertOrModifyState<K, V, F>,
         mut modifier: G,
-    ) -> Result<Shared<'g, Bucket<K, V>>, (InsertOrModifyState<K, V, F>, G)> {
+    ) -> Result<Shared<'g, Bucket<K, V>>, (InsertOrModifyState<K, V, F>, G)>
+    where
+        F: FnOnce() -> V,
+        G: FnMut(&K, &V) -> V,
+    {
         let mut maybe_state = Some(state);
 
         let loop_result = self.probe_loop(guard, hash, |_, this_bucket, this_bucket_ptr| {
@@ -265,15 +321,10 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
 }
 
 impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
-    fn probe_loop<
+    fn probe_loop<F, T>(&self, guard: &'g Guard, hash: u64, mut f: F) -> ProbeLoopResult<T>
+    where
         F: FnMut(usize, &Atomic<Bucket<K, V>>, Shared<'g, Bucket<K, V>>) -> ProbeLoopAction<T>,
-        T,
-    >(
-        &self,
-        guard: &'g Guard,
-        hash: u64,
-        mut f: F,
-    ) -> ProbeLoopResult<T> {
+    {
         let offset = hash as usize & (self.buckets.len() - 1);
 
         for i in
@@ -299,7 +350,7 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
         ProbeLoopResult::LoopEnded
     }
 
-    pub(crate) fn rehash<H: BuildHasher>(
+    pub(crate) fn rehash<H>(
         &self,
         guard: &'g Guard,
         build_hasher: &H,
@@ -307,6 +358,7 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
     ) -> &'g BucketArray<K, V>
     where
         K: Hash + Eq,
+        H: BuildHasher,
     {
         let next_array = self.next_array(guard, rehash_op);
 
@@ -515,7 +567,11 @@ impl<V, F: FnOnce() -> V> ValueOrFunction<V, F> {
     }
 }
 
-pub(crate) fn hash<K: ?Sized + Hash, H: BuildHasher>(build_hasher: &H, key: &K) -> u64 {
+pub(crate) fn hash<K, H>(build_hasher: &H, key: &K) -> u64
+where
+    K: ?Sized + Hash,
+    H: BuildHasher,
+{
     let mut hasher = build_hasher.build_hasher();
     key.hash(&mut hasher);
 
