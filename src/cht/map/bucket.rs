@@ -729,9 +729,12 @@ pub(crate) fn is_borrowed<K, V>(bucket_ptr: Shared<'_, Bucket<K, V>>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    use std::collections::hash_map::RandomState;
+    use super::{
+        defer_destroy_bucket, defer_destroy_tombstone, hash, is_tombstone, Bucket, BucketArray,
+        InsertOrModifyState, InsertionResult, RelocatedError,
+    };
+    use crossbeam_epoch::{Guard, Shared};
+    use std::{collections::hash_map::RandomState, sync::atomic::Ordering};
 
     #[test]
     fn get_insert_remove() {
@@ -755,7 +758,6 @@ mod tests {
         assert_eq!(buckets.get(guard, h2, k2), Ok(Shared::null()));
         assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
 
-        //let b1 = Owned::new(Bucket::new(k1, v1)).into_shared(guard);
         assert!(matches!(
             insert(&buckets, guard, k1, h1, || v1),
             Ok(InsertionResult::Inserted)
@@ -765,7 +767,6 @@ mod tests {
         assert_eq!(buckets.get(guard, h2, k2), Ok(Shared::null()));
         assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
 
-        // let b2 = Owned::new(Bucket::new(k2, v2)).into_shared(guard);
         assert!(matches!(
             insert(&buckets, guard, k2, h2, || v2),
             Ok(InsertionResult::Inserted)
@@ -775,7 +776,6 @@ mod tests {
         assert_eq!(into_value(buckets.get(guard, h2, k2)), Ok(Some(v2)));
         assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
 
-        // let b3 = Owned::new(Bucket::new(k3, v3)).into_shared(guard);
         assert!(matches!(
             insert(&buckets, guard, k3, h3, || v3),
             Ok(InsertionResult::Inserted)
