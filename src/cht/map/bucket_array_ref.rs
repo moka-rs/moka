@@ -131,12 +131,14 @@ where
         key: K,
         hash: u64,
         on_insert: F,
-        with_previous_entry: G,
+        with_existing_entry: G,
     ) -> Option<T>
     where
         F: FnOnce() -> V,
         G: FnOnce(&K, &V) -> T,
     {
+        use bucket::InsertionResult;
+
         let guard = &crossbeam_epoch::pin();
         let current_ref = self.get(guard);
         let mut bucket_array_ref = current_ref;
@@ -158,23 +160,26 @@ where
             }
 
             match bucket_array_ref.insert_if_not_present(guard, hash, state) {
-                Ok(previous_bucket_ptr) => {
-                    if let Some(previous_bucket_ref) = unsafe { previous_bucket_ptr.as_ref() } {
-                        if previous_bucket_ptr.tag() & bucket::TOMBSTONE_TAG != 0 {
-                            self.len.fetch_add(1, Ordering::Relaxed);
-                            result = None;
-                        } else {
-                            let Bucket {
-                                key,
-                                maybe_value: value,
-                            } = previous_bucket_ref;
-                            result = Some(with_previous_entry(key, unsafe { &*value.as_ptr() }));
-                        }
-                    } else {
-                        self.len.fetch_add(1, Ordering::Relaxed);
-                        result = None;
-                    }
-
+                Ok(InsertionResult::AlreadyPresent(current_bucket_ptr)) => {
+                    let current_bucket_ref = unsafe { current_bucket_ptr.as_ref() }.unwrap();
+                    assert!(!bucket::is_tombstone(current_bucket_ptr));
+                    let Bucket {
+                        key,
+                        maybe_value: value,
+                    } = current_bucket_ref;
+                    result = Some(with_existing_entry(key, unsafe { &*value.as_ptr() }));
+                    break;
+                }
+                Ok(InsertionResult::Inserted) => {
+                    self.len.fetch_add(1, Ordering::Relaxed);
+                    result = None;
+                    break;
+                }
+                Ok(InsertionResult::ReplacedTombstone(previous_bucket_ptr)) => {
+                    assert!(bucket::is_tombstone(previous_bucket_ptr));
+                    self.len.fetch_add(1, Ordering::Relaxed);
+                    unsafe { bucket::defer_destroy_bucket(guard, previous_bucket_ptr) };
+                    result = None;
                     break;
                 }
                 Err(s) => {
@@ -226,7 +231,7 @@ where
             match bucket_array_ref.insert_or_modify(guard, hash, state, on_modify) {
                 Ok(previous_bucket_ptr) => {
                     if let Some(previous_bucket_ref) = unsafe { previous_bucket_ptr.as_ref() } {
-                        if previous_bucket_ptr.tag() & bucket::TOMBSTONE_TAG != 0 {
+                        if bucket::is_tombstone(previous_bucket_ptr) {
                             self.len.fetch_add(1, Ordering::Relaxed);
                             result = None;
                         } else {
