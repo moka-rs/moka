@@ -37,6 +37,8 @@
         "RUSTFLAGS",
         "rustfmt",
         "semver",
+        "SIGABRT",
+        "SIGILL",
         "smallvec",
         "structs",
         "tagptr",

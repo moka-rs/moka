@@ -727,99 +727,115 @@ pub(crate) fn is_borrowed<K, V>(bucket_ptr: Shared<'_, Bucket<K, V>>) -> bool {
     bucket_ptr.tag() & BORROWED_TAG != 0
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-//     use std::collections::hash_map::RandomState;
+    use std::collections::hash_map::RandomState;
 
-//     #[test]
-//     fn get_insert_remove() {
-//         let build_hasher = RandomState::new();
-//         let buckets = BucketArray::with_length(0, 16);
-//         let guard = unsafe { &crossbeam_epoch::unprotected() };
+    #[test]
+    fn get_insert_remove() {
+        let build_hasher = RandomState::new();
+        let buckets = BucketArray::with_length(0, 16);
+        let guard = unsafe { crossbeam_epoch::unprotected() };
 
-//         let k1 = "foo";
-//         let h1 = hash(&build_hasher, k1);
-//         let v1 = 5;
+        let k1 = "foo";
+        let h1 = hash(&build_hasher, k1);
+        let v1 = 5;
 
-//         let k2 = "bar";
-//         let h2 = hash(&build_hasher, k2);
-//         let v2 = 10;
+        let k2 = "bar";
+        let h2 = hash(&build_hasher, k2);
+        let v2 = 10;
 
-//         let k3 = "baz";
-//         let h3 = hash(&build_hasher, k3);
-//         let v3 = 15;
+        let k3 = "baz";
+        let h3 = hash(&build_hasher, k3);
+        let v3 = 15;
 
-//         assert_eq!(buckets.get(guard, h1, k1), Ok(Shared::null()));
-//         assert_eq!(buckets.get(guard, h2, k2), Ok(Shared::null()));
-//         assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
+        assert_eq!(buckets.get(guard, h1, k1), Ok(Shared::null()));
+        assert_eq!(buckets.get(guard, h2, k2), Ok(Shared::null()));
+        assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
 
-//         let b1 = Owned::new(Bucket::new(k1, v1)).into_shared(guard);
-//         assert!(is_ok_null(
-//             buckets.insert(guard, h1, unsafe { b1.into_owned() })
-//         ));
+        //let b1 = Owned::new(Bucket::new(k1, v1)).into_shared(guard);
+        assert!(matches!(
+            insert(&buckets, guard, k1, h1, || v1),
+            Ok(InsertionResult::Inserted)
+        ));
 
-//         assert_eq!(buckets.get(guard, h1, k1), Ok(b1));
-//         assert_eq!(buckets.get(guard, h2, k2), Ok(Shared::null()));
-//         assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
+        assert_eq!(into_value(buckets.get(guard, h1, k1)), Ok(Some(v1)));
+        assert_eq!(buckets.get(guard, h2, k2), Ok(Shared::null()));
+        assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
 
-//         let b2 = Owned::new(Bucket::new(k2, v2)).into_shared(guard);
-//         assert!(is_ok_null(
-//             buckets.insert(guard, h2, unsafe { b2.into_owned() })
-//         ));
+        // let b2 = Owned::new(Bucket::new(k2, v2)).into_shared(guard);
+        assert!(matches!(
+            insert(&buckets, guard, k2, h2, || v2),
+            Ok(InsertionResult::Inserted)
+        ));
 
-//         assert_eq!(buckets.get(guard, h1, k1), Ok(b1));
-//         assert_eq!(buckets.get(guard, h2, k2), Ok(b2));
-//         assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
+        assert_eq!(into_value(buckets.get(guard, h1, k1)), Ok(Some(v1)));
+        assert_eq!(into_value(buckets.get(guard, h2, k2)), Ok(Some(v2)));
+        assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
 
-//         let b3 = Owned::new(Bucket::new(k3, v3)).into_shared(guard);
-//         assert!(is_ok_null(
-//             buckets.insert(guard, h3, unsafe { b3.into_owned() })
-//         ));
+        // let b3 = Owned::new(Bucket::new(k3, v3)).into_shared(guard);
+        assert!(matches!(
+            insert(&buckets, guard, k3, h3, || v3),
+            Ok(InsertionResult::Inserted)
+        ));
 
-//         assert_eq!(buckets.get(guard, h1, k1), Ok(b1));
-//         assert_eq!(buckets.get(guard, h2, k2), Ok(b2));
-//         assert_eq!(buckets.get(guard, h3, k3), Ok(b3));
+        assert_eq!(into_value(buckets.get(guard, h1, k1)), Ok(Some(v1)));
+        assert_eq!(into_value(buckets.get(guard, h2, k2)), Ok(Some(v2)));
+        assert_eq!(into_value(buckets.get(guard, h3, k3)), Ok(Some(v3)));
 
-//         assert_eq!(
-//             buckets.remove_if(guard, h1, k1, |_, _| true).ok().unwrap(),
-//             b1.with_tag(TOMBSTONE_TAG)
-//         );
-//         unsafe { defer_destroy_tombstone(guard, b1.with_tag(TOMBSTONE_TAG)) };
-//         assert_eq!(
-//             buckets.remove_if(guard, h2, k2, |_, _| true).ok().unwrap(),
-//             b2.with_tag(TOMBSTONE_TAG)
-//         );
-//         unsafe { defer_destroy_tombstone(guard, b2.with_tag(TOMBSTONE_TAG)) };
-//         assert_eq!(
-//             buckets.remove_if(guard, h3, k3, |_, _| true).ok().unwrap(),
-//             b3.with_tag(TOMBSTONE_TAG)
-//         );
-//         unsafe { defer_destroy_tombstone(guard, b3.with_tag(TOMBSTONE_TAG)) };
+        let b1 = buckets.remove_if(guard, h1, k1, |_, _| true).ok().unwrap();
+        assert!(is_tombstone(b1));
+        unsafe { defer_destroy_tombstone(guard, b1) };
 
-//         assert_eq!(buckets.get(guard, h1, k1), Ok(Shared::null()));
-//         assert_eq!(buckets.get(guard, h2, k2), Ok(Shared::null()));
-//         assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
+        let b2 = buckets.remove_if(guard, h2, k2, |_, _| true).ok().unwrap();
+        assert!(is_tombstone(b2));
+        unsafe { defer_destroy_tombstone(guard, b2) };
 
-//         for this_bucket in buckets.buckets.iter() {
-//             let this_bucket_ptr = this_bucket.swap(Shared::null(), Ordering::Relaxed, guard);
+        let b3 = buckets.remove_if(guard, h3, k3, |_, _| true).ok().unwrap();
+        assert!(is_tombstone(b3));
+        unsafe { defer_destroy_tombstone(guard, b3) };
 
-//             if this_bucket_ptr.is_null() {
-//                 continue;
-//             }
+        assert_eq!(buckets.get(guard, h1, k1), Ok(Shared::null()));
+        assert_eq!(buckets.get(guard, h2, k2), Ok(Shared::null()));
+        assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
 
-//             unsafe {
-//                 defer_destroy_bucket(guard, this_bucket_ptr);
-//             }
-//         }
-//     }
+        for this_bucket in buckets.buckets.iter() {
+            let this_bucket_ptr = this_bucket.swap(Shared::null(), Ordering::Relaxed, guard);
 
-//     fn is_ok_null<'g, K, V, E>(maybe_bucket_ptr: Result<Shared<'g, Bucket<K, V>>, E>) -> bool {
-//         if let Ok(bucket_ptr) = maybe_bucket_ptr {
-//             bucket_ptr.is_null()
-//         } else {
-//             false
-//         }
-//     }
-// }
+            if this_bucket_ptr.is_null() {
+                continue;
+            }
+
+            unsafe {
+                defer_destroy_bucket(guard, this_bucket_ptr);
+            }
+        }
+    }
+
+    fn insert<'g, K, V, F>(
+        buckets: &BucketArray<K, V>,
+        guard: &'g Guard,
+        key: K,
+        hash: u64,
+        value_init: F,
+    ) -> Result<InsertionResult<'g, K, V>, InsertOrModifyState<K, V, F>>
+    where
+        K: Eq,
+        F: FnOnce() -> V,
+    {
+        let state = InsertOrModifyState::New(key, value_init);
+        buckets.insert_if_not_present(guard, hash, state)
+    }
+
+    fn into_value<K, V>(
+        maybe_bucket_ptr: Result<Shared<'_, Bucket<K, V>>, RelocatedError>,
+    ) -> Result<Option<V>, RelocatedError>
+    where
+        V: Clone,
+    {
+        maybe_bucket_ptr
+            .map(|p| unsafe { p.as_ref() }.map(|b| unsafe { &*b.maybe_value.as_ptr() }.clone()))
+    }
+}
