@@ -584,7 +584,16 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(kv) = self.base.remove_entry(key) {
+        let hash = self.base.hash(key);
+        self.invalidate_with_hash(key, hash);
+    }
+
+    pub(crate) fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64)
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        if let Some(kv) = self.base.remove_entry(key, hash) {
             let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
             Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to remove");

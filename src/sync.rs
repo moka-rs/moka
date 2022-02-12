@@ -112,6 +112,10 @@ impl<K> KeyHashDate<K> {
         &self.key
     }
 
+    pub(crate) fn hash(&self) -> u64 {
+        self.hash
+    }
+
     pub(crate) fn entry_info(&self) -> &EntryInfo {
         &self.entry_info
     }
