@@ -144,7 +144,7 @@ where
             self.record_read_op(op).expect("Failed to record a get op");
         };
 
-        match self.inner.get_key_value(key) {
+        match self.inner.get_key_value(key, hash) {
             None => {
                 record(ReadOp::Miss(hash));
                 None
@@ -173,12 +173,12 @@ where
     }
 
     #[inline]
-    pub(crate) fn remove_entry<Q>(&self, key: &Q) -> Option<KvEntry<K, V>>
+    pub(crate) fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<KvEntry<K, V>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.inner.remove_entry(key)
+        self.inner.remove_entry(key, hash)
     }
 
     #[inline]
@@ -274,6 +274,7 @@ where
         // largest serial number is the one made by the last call of the closures.
         self.inner.cache.insert_with_or_modify(
             Arc::clone(&key),
+            hash,
             // on_insert
             || {
                 let entry = self.new_value_entry(value.clone(), weight);
@@ -563,22 +564,22 @@ where
     }
 
     #[inline]
-    fn get_key_value<Q>(&self, key: &Q) -> Option<CacheEntry<K, V>>
+    fn get_key_value<Q>(&self, key: &Q, hash: u64) -> Option<CacheEntry<K, V>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.cache.get_key_value(key)
+        self.cache.get_key_value(key, hash)
     }
 
     #[inline]
-    fn remove_entry<Q>(&self, key: &Q) -> Option<KvEntry<K, V>>
+    fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<KvEntry<K, V>>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.cache
-            .remove_entry(key)
+            .remove_entry(key, hash)
             .map(|(key, entry)| KvEntry::new(key, entry))
     }
 
@@ -695,19 +696,20 @@ where
     K: Hash + Eq,
     S: BuildHasher,
 {
-    fn get_value_entry(&self, key: &Arc<K>) -> Option<TrioArc<ValueEntry<K, V>>> {
-        self.cache.get(key)
+    fn get_value_entry(&self, key: &Arc<K>, hash: u64) -> Option<TrioArc<ValueEntry<K, V>>> {
+        self.cache.get(key, hash)
     }
 
     fn remove_key_value_if<F>(
         &self,
         key: &Arc<K>,
+        hash: u64,
         condition: F,
     ) -> Option<TrioArc<ValueEntry<K, V>>>
     where
         F: FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool,
     {
-        self.cache.remove_if(key, condition)
+        self.cache.remove_if(key, hash, condition)
     }
 }
 
@@ -942,7 +944,7 @@ where
         if let Some(max) = self.max_capacity {
             if new_weight as u64 > max {
                 // The candidate is too big to fit in the cache. Reject it.
-                self.cache.remove(&Arc::clone(&kh.key));
+                self.cache.remove(&Arc::clone(&kh.key), kh.hash);
                 return;
             }
         }
@@ -959,9 +961,9 @@ where
             } => {
                 // Try to remove the victims from the cache (hash map).
                 for victim in victim_nodes {
-                    if let Some((_vic_key, vic_entry)) = self
-                        .cache
-                        .remove_entry(unsafe { &victim.as_ref().element.key })
+                    let element = unsafe { &victim.as_ref().element };
+                    if let Some((_vic_key, vic_entry)) =
+                        self.cache.remove_entry(element.key(), element.hash())
                     {
                         // And then remove the victim from the deques.
                         Self::handle_remove(deqs, vic_entry, counters);
@@ -980,7 +982,7 @@ where
             AdmissionResult::Rejected { skipped_nodes: s } => {
                 skipped_nodes = s;
                 // Remove the candidate from the cache (hash map).
-                self.cache.remove(&Arc::clone(&kh.key));
+                self.cache.remove(&Arc::clone(&kh.key), kh.hash);
             }
         };
 
@@ -1032,10 +1034,11 @@ where
             }
             if let Some(victim) = next_victim.take() {
                 next_victim = victim.next_node();
+                let element = &victim.element;
 
-                if let Some(vic_entry) = cache.get(&victim.element.key) {
+                if let Some(vic_entry) = cache.get(element.key(), element.hash()) {
                     victims.add_policy_weight(vic_entry.policy_weight());
-                    victims.add_frequency(freq, victim.element.hash);
+                    victims.add_frequency(freq, victim.element.hash());
                     victim_nodes.push(NonNull::from(victim));
                     retries = 0;
                 } else {
@@ -1167,19 +1170,19 @@ where
         let va = &self.valid_after();
         for _ in 0..batch_size {
             // Peek the front node of the deque and check if it is expired.
-            let key = deq.peek_front().and_then(|node| {
+            let key_hash = deq.peek_front().and_then(|node| {
                 if is_expired_entry_ao(tti, va, &*node, now) {
-                    Some(Arc::clone(node.element.key()))
+                    Some((Arc::clone(node.element.key()), node.element.hash()))
                 } else {
                     None
                 }
             });
 
-            if key.is_none() {
+            if key_hash.is_none() {
                 break;
             }
 
-            let key = key.as_ref().unwrap();
+            let (key, hash) = key_hash.as_ref().map(|(k, h)| (k, *h)).unwrap();
 
             // Remove the key from the map only when the entry is really
             // expired. This check is needed because it is possible that the entry in
@@ -1187,11 +1190,11 @@ where
             // above have not been updated yet.
             let maybe_entry = self
                 .cache
-                .remove_if(key, |_, v| is_expired_entry_ao(tti, va, v, now));
+                .remove_if(key, hash, |_, v| is_expired_entry_ao(tti, va, v, now));
 
             if let Some(entry) = maybe_entry {
                 Self::handle_remove_with_deques(deq_name, deq, write_order_deq, entry, counters);
-            } else if !self.try_skip_updated_entry(key, deq_name, deq, write_order_deq) {
+            } else if !self.try_skip_updated_entry(key, hash, deq_name, deq, write_order_deq) {
                 break;
             }
         }
@@ -1201,11 +1204,12 @@ where
     fn try_skip_updated_entry(
         &self,
         key: &K,
+        hash: u64,
         deq_name: &str,
         deq: &mut Deque<KeyHashDate<K>>,
         write_order_deq: &mut Deque<KeyDate<K>>,
     ) -> bool {
-        if let Some(entry) = self.cache.get(key) {
+        if let Some(entry) = self.cache.get(key, hash) {
             if entry.last_accessed().is_none() {
                 // The key exists and the entry has been updated.
                 Deques::move_to_back_ao_in_deque(deq_name, deq, &entry);
@@ -1252,14 +1256,15 @@ where
             }
 
             let key = key.as_ref().unwrap();
+            let hash = self.hash(key);
 
             let maybe_entry = self
                 .cache
-                .remove_if(key, |_, v| is_expired_entry_wo(ttl, va, v, now));
+                .remove_if(key, hash, |_, v| is_expired_entry_wo(ttl, va, v, now));
 
             if let Some(entry) = maybe_entry {
                 Self::handle_remove(deqs, entry, counters);
-            } else if let Some(entry) = self.cache.get(key) {
+            } else if let Some(entry) = self.cache.get(key, hash) {
                 if entry.last_modified().is_none() {
                     deqs.move_to_back_ao(&entry);
                     deqs.move_to_back_wo(&entry);
@@ -1333,7 +1338,9 @@ where
         while len < batch_size {
             if let Some(kd) = iter.next() {
                 if let Some(ts) = kd.last_modified() {
-                    candidates.push(KeyDateLite::new(&kd.key, ts));
+                    let key = &kd.key;
+                    let hash = self.hash(key);
+                    candidates.push(KeyDateLite::new(key, hash, ts));
                     len += 1;
                 }
             } else {
@@ -1363,17 +1370,18 @@ where
                 break;
             }
 
-            let maybe_key_and_ts = deq.peek_front().map(|node| {
+            let maybe_key_hash_ts = deq.peek_front().map(|node| {
                 (
                     Arc::clone(node.element.key()),
+                    node.element.hash(),
                     node.element.entry_info().last_modified(),
                 )
             });
 
-            let (key, ts) = match maybe_key_and_ts {
-                Some((key, Some(ts))) => (key, ts),
-                Some((key, None)) => {
-                    if self.try_skip_updated_entry(&key, DEQ_NAME, deq, write_order_deq) {
+            let (key, hash, ts) = match maybe_key_hash_ts {
+                Some((key, hash, Some(ts))) => (key, hash, ts),
+                Some((key, hash, None)) => {
+                    if self.try_skip_updated_entry(&key, hash, DEQ_NAME, deq, write_order_deq) {
                         continue;
                     } else {
                         break;
@@ -1382,7 +1390,7 @@ where
                 None => break,
             };
 
-            let maybe_entry = self.cache.remove_if(&key, |_, v| {
+            let maybe_entry = self.cache.remove_if(&key, hash, |_, v| {
                 if let Some(lm) = v.last_modified() {
                     lm == ts
                 } else {
@@ -1394,7 +1402,7 @@ where
                 let weight = entry.policy_weight();
                 Self::handle_remove_with_deques(DEQ_NAME, deq, write_order_deq, entry, counters);
                 evicted = evicted.saturating_add(weight as u64);
-            } else if !self.try_skip_updated_entry(&key, DEQ_NAME, deq, write_order_deq) {
+            } else if !self.try_skip_updated_entry(&key, hash, DEQ_NAME, deq, write_order_deq) {
                 break;
             }
         }
