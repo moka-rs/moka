@@ -53,10 +53,7 @@ impl ThreadPoolRegistry {
                 // and insert a new pool.
                 let mut pools = REGISTRY.pools.write();
                 pools.entry(name).or_insert_with(|| {
-                    // Some platforms may return 0. In that case, use 1.
-                    // https://github.com/moka-rs/moka/pull/39#issuecomment-916888859
-                    // https://github.com/seanmonstar/num_cpus/issues/69
-                    let num_threads = num_cpus::get().max(1);
+                    let num_threads = crate::common::num_cpus();
                     let pool =
                         ScheduledThreadPool::with_name(name.thread_name_template(), num_threads);
                     let t_pool = ThreadPool {

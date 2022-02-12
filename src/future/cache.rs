@@ -3,6 +3,7 @@ use super::{
     CacheBuilder, ConcurrentCacheExt,
 };
 use crate::{
+    stats::CacheStats,
     sync::{
         base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
         housekeeper::InnerSync,
@@ -676,6 +677,10 @@ where
         self.base.invalidate_entries_if(Arc::new(predicate))
     }
 
+    pub fn stats(&self) -> CacheStats {
+        self.base.stats()
+    }
+
     /// Returns the `max_capacity` of this cache.
     pub fn max_capacity(&self) -> Option<usize> {
         self.base.max_capacity()
@@ -742,6 +747,7 @@ where
             return v;
         }
 
+        let start = self.base.now();
         match self
             .value_initializer
             .init_or_read(Arc::clone(&key), init)
@@ -752,6 +758,7 @@ where
                     .await;
                 self.value_initializer
                     .remove_waiter(&key, TypeId::of::<()>());
+                self.base.record_load_success(start.elapsed_nanos());
                 v
             }
             InitResult::ReadExisting(v) => v,
@@ -773,6 +780,7 @@ where
             return Ok(v);
         }
 
+        let start = self.base.now();
         match self
             .value_initializer
             .try_init_or_read(Arc::clone(&key), init)
@@ -784,10 +792,14 @@ where
                     .await;
                 self.value_initializer
                     .remove_waiter(&key, TypeId::of::<E>());
+                self.base.record_load_success(start.elapsed_nanos());
                 Ok(v)
             }
             InitResult::ReadExisting(v) => Ok(v),
-            InitResult::InitErr(e) => Err(e),
+            InitResult::InitErr(e) => {
+                self.base.record_load_failure(start.elapsed_nanos());
+                Err(e)
+            }
         }
     }
 

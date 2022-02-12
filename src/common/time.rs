@@ -5,7 +5,7 @@ pub(crate) type Clock = quanta::Clock;
 pub(crate) type Mock = quanta::Mock;
 
 /// a wrapper type over qunta::Instant to force checked additions and prevent
-/// unintentioal overflow. The type preserve the Copy semnatics for the wrapped
+/// unintentional overflow. The type preserve the Copy semantics for the wrapped
 #[derive(PartialEq, PartialOrd, Clone, Copy)]
 pub(crate) struct Instant(pub quanta::Instant);
 
@@ -22,6 +22,15 @@ impl Instant {
 
     pub(crate) fn now() -> Instant {
         Instant(quanta::Instant::now())
+    }
+
+    pub(crate) fn elapsed_nanos(&self) -> u64 {
+        use std::convert::TryInto;
+        quanta::Instant::now()
+            .duration_since(self.0)
+            .as_nanos()
+            .try_into()
+            .unwrap_or(u64::MAX)
     }
 }
 

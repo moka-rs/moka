@@ -1,5 +1,5 @@
 use super::{cache::Cache, CacheBuilder, ConcurrentCacheExt, Weigher};
-use crate::PredicateError;
+use crate::{stats::CacheStats, PredicateError};
 
 use std::{
     borrow::Borrow,
@@ -253,6 +253,10 @@ where
             segment.invalidate_entries_with_arc_fun(Arc::clone(&pred))?;
         }
         Ok(())
+    }
+
+    pub fn stats(&self) -> CacheStats {
+        todo!()
     }
 
     /// Returns the `max_capacity` of this cache.

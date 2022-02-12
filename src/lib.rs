@@ -153,13 +153,14 @@
 #[cfg(feature = "future")]
 pub mod future;
 
+pub mod stats;
 pub mod sync;
 pub mod unsync;
 
 pub(crate) mod cht;
 pub(crate) mod common;
 
-pub use common::error::PredicateError;
+pub use common::{error::PredicateError, notification::RemovalCause};
 
 #[cfg(feature = "unstable-debug-counters")]
 pub use sync::debug_counters::GlobalDebugCounters;

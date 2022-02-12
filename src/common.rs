@@ -4,6 +4,7 @@ pub(crate) mod builder_utils;
 pub(crate) mod deque;
 pub(crate) mod error;
 pub(crate) mod frequency_sketch;
+pub(crate) mod notification;
 pub(crate) mod thread_pool;
 pub(crate) mod unsafe_weak_pointer;
 
@@ -55,4 +56,11 @@ impl PartialEq<usize> for CacheRegion {
 // Ensures the value fits in a range of `128u32..=u32::MAX`.
 pub(crate) fn sketch_capacity(max_capacity: u64) -> u32 {
     max_capacity.try_into().unwrap_or(u32::MAX).max(128)
+}
+
+pub(crate) fn num_cpus() -> usize {
+    // Some platforms may return 0. In that case, use 1.
+    // https://github.com/moka-rs/moka/pull/39#issuecomment-916888859
+    // https://github.com/seanmonstar/num_cpus/issues/69
+    num_cpus::get().max(1)
 }

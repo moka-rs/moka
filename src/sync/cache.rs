@@ -4,7 +4,7 @@ use super::{
     value_initializer::ValueInitializer,
     CacheBuilder, ConcurrentCacheExt, PredicateId, Weigher, WriteOp,
 };
-use crate::{sync::value_initializer::InitResult, PredicateError};
+use crate::{stats::CacheStats, sync::value_initializer::InitResult, PredicateError};
 
 use crossbeam_channel::{Sender, TrySendError};
 use std::{
@@ -426,11 +426,13 @@ where
             return v;
         }
 
+        let start = self.base.now();
         match self.value_initializer.init_or_read(Arc::clone(&key), init) {
             InitResult::Initialized(v) => {
                 self.insert_with_hash(Arc::clone(&key), hash, v.clone());
                 self.value_initializer
                     .remove_waiter(&key, TypeId::of::<()>());
+                self.base.record_load_success(start.elapsed_nanos());
                 v
             }
             InitResult::ReadExisting(v) => v,
@@ -545,6 +547,7 @@ where
             return Ok(v);
         }
 
+        let start = self.base.now();
         match self
             .value_initializer
             .try_init_or_read(Arc::clone(&key), init)
@@ -553,10 +556,14 @@ where
                 self.insert_with_hash(Arc::clone(&key), hash, v.clone());
                 self.value_initializer
                     .remove_waiter(&key, TypeId::of::<E>());
+                self.base.record_load_success(start.elapsed_nanos());
                 Ok(v)
             }
             InitResult::ReadExisting(v) => Ok(v),
-            InitResult::InitErr(e) => Err(e),
+            InitResult::InitErr(e) => {
+                self.base.record_load_failure(start.elapsed_nanos());
+                Err(e)
+            }
         }
     }
 
@@ -654,6 +661,10 @@ where
         F: Fn(&K, &V) -> bool + Send + Sync + 'static,
     {
         self.base.invalidate_entries_if(predicate)
+    }
+
+    pub fn stats(&self) -> CacheStats {
+        self.base.stats()
     }
 
     /// Returns the `max_capacity` of this cache.

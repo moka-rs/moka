@@ -15,6 +15,7 @@ pub(crate) mod entry_info;
 pub(crate) mod housekeeper;
 mod invalidator;
 mod segment;
+pub(crate) mod stats_counter;
 mod value_initializer;
 
 #[cfg(feature = "unstable-debug-counters")]
@@ -23,6 +24,7 @@ pub(crate) mod debug_counters;
 pub use builder::CacheBuilder;
 pub use cache::Cache;
 pub use segment::SegmentedCache;
+pub use stats_counter::{SaturatingStatsCounter, StatsCounter};
 
 use self::entry_info::EntryInfo;
 

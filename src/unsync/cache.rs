@@ -1,10 +1,13 @@
 use super::{deques::Deques, AccessTime, CacheBuilder, KeyDate, KeyHashDate, ValueEntry, Weigher};
-use crate::common::{
-    self,
-    deque::{DeqNode, Deque},
-    frequency_sketch::FrequencySketch,
-    time::{CheckedTimeOps, Clock, Instant},
-    CacheRegion,
+use crate::{
+    common::{
+        self,
+        deque::{DeqNode, Deque},
+        frequency_sketch::FrequencySketch,
+        time::{CheckedTimeOps, Clock, Instant},
+        CacheRegion,
+    },
+    stats::CacheStats,
 };
 
 use smallvec::SmallVec;
@@ -357,6 +360,10 @@ where
             }
         });
         self.saturating_sub_from_total_weight(invalidated);
+    }
+
+    pub fn stats(&self) -> CacheStats {
+        todo!()
     }
 
     /// Returns the `max_capacity` of this cache.

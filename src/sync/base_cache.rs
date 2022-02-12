@@ -10,6 +10,7 @@ use super::{
 #[cfg(feature = "unstable-debug-counters")]
 use super::debug_counters::CacheDebugStats;
 
+use super::stats_counter::{SaturatingStatsCounter, StatsCounter};
 use crate::{
     common::{
         self,
@@ -19,8 +20,10 @@ use crate::{
         time::{CheckedTimeOps, Clock, Instant},
         CacheRegion,
     },
+    stats::CacheStats,
     PredicateError,
 };
+
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};
@@ -146,6 +149,7 @@ where
 
         match self.inner.get_key_value(key, hash) {
             None => {
+                self.inner.record_misses(1);
                 record(ReadOp::Miss(hash));
                 None
             }
@@ -160,11 +164,13 @@ where
                 {
                     // Expired or invalidated entry. Record this access as a cache miss
                     // rather than a hit.
+                    self.inner.record_misses(1);
                     record(ReadOp::Miss(hash));
                     None
                 } else {
                     // Valid entry.
                     let v = entry.value.clone();
+                    self.inner.record_hits(1);
                     record(ReadOp::Hit(hash, entry, now));
                     Some(v)
                 }
@@ -206,6 +212,22 @@ where
     ) -> Result<PredicateId, PredicateError> {
         let now = self.inner.current_time_from_expiration_clock();
         self.inner.register_invalidation_predicate(predicate, now)
+    }
+
+    pub(crate) fn stats(&self) -> CacheStats {
+        self.inner.stats()
+    }
+
+    pub(crate) fn now(&self) -> Instant {
+        self.inner.current_time_from_expiration_clock()
+    }
+
+    pub(crate) fn record_load_success(&self, load_time_nanos: u64) {
+        self.inner.record_load_success(load_time_nanos);
+    }
+
+    pub(crate) fn record_load_failure(&self, load_time_nanos: u64) {
+        self.inner.record_load_failure(load_time_nanos);
     }
 
     pub(crate) fn max_capacity(&self) -> Option<usize> {
@@ -490,6 +512,7 @@ pub(crate) struct Inner<K, V, S> {
     weigher: Option<Weigher<K, V>>,
     invalidator_enabled: bool,
     invalidator: RwLock<Option<Invalidator<K, V, S>>>,
+    stats_counter: Option<Box<dyn StatsCounter + Send + Sync>>,
     has_expiration_clock: AtomicBool,
     expiration_clock: RwLock<Option<Clock>>,
 }
@@ -543,6 +566,7 @@ where
             invalidator_enabled,
             // When enabled, this field will be set later via the set_invalidator method.
             invalidator: RwLock::new(None),
+            stats_counter: Some(Box::new(SaturatingStatsCounter::default())),
             has_expiration_clock: AtomicBool::new(false),
             expiration_clock: RwLock::new(None),
         }
@@ -581,6 +605,38 @@ where
         self.cache
             .remove_entry(key, hash)
             .map(|(key, entry)| KvEntry::new(key, entry))
+    }
+
+    fn stats(&self) -> CacheStats {
+        if let Some(counter) = &self.stats_counter {
+            counter.snapshot()
+        } else {
+            Default::default()
+        }
+    }
+
+    fn record_hits(&self, count: u32) {
+        if let Some(counter) = &self.stats_counter {
+            counter.record_hits(count);
+        }
+    }
+
+    fn record_misses(&self, count: u32) {
+        if let Some(counter) = &self.stats_counter {
+            counter.record_misses(count);
+        }
+    }
+
+    fn record_load_success(&self, load_time_nanos: u64) {
+        if let Some(counter) = &self.stats_counter {
+            counter.record_load_success(load_time_nanos);
+        }
+    }
+
+    fn record_load_failure(&self, load_time_nanos: u64) {
+        if let Some(counter) = &self.stats_counter {
+            counter.record_load_failure(load_time_nanos);
+        }
     }
 
     fn max_capacity(&self) -> Option<usize> {
