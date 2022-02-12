@@ -1034,11 +1034,11 @@ where
             }
             if let Some(victim) = next_victim.take() {
                 next_victim = victim.next_node();
-                let element = &victim.element;
+                let vic_elem = &victim.element;
 
-                if let Some(vic_entry) = cache.get(element.key(), element.hash()) {
+                if let Some(vic_entry) = cache.get(vic_elem.key(), vic_elem.hash()) {
                     victims.add_policy_weight(vic_entry.policy_weight());
-                    victims.add_frequency(freq, victim.element.hash());
+                    victims.add_frequency(freq, vic_elem.hash());
                     victim_nodes.push(NonNull::from(victim));
                     retries = 0;
                 } else {
