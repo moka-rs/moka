@@ -195,7 +195,7 @@ Here is a similar program to the previous example, but using asynchronous cache 
 // [dependencies]
 // moka = { version = "0.7", features = ["future"] }
 // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
-// futures = "0.3"
+// futures-util = "0.3"
 
 // Use the asynchronous cache.
 use moka::future::Cache;
@@ -240,7 +240,7 @@ async fn main() {
         .collect();
 
     // Wait for all tasks to complete.
-    futures::future::join_all(tasks).await;
+    futures_util::future::join_all(tasks).await;
 
     // Verify the result.
     for key in 0..(NUM_TASKS * NUM_KEYS_PER_TASK) {

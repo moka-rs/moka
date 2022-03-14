@@ -61,7 +61,7 @@ use std::{
 /// // [dependencies]
 /// // moka = { version = "0.7", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
-/// // futures = "0.3"
+/// // futures-util = "0.3"
 ///
 /// use moka::future::Cache;
 ///
@@ -146,7 +146,7 @@ use std::{
 /// // [dependencies]
 /// // moka = { version = "0.7", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
-/// // futures = "0.3"
+/// // futures-util = "0.3"
 ///
 /// use std::convert::TryInto;
 /// use moka::future::Cache;
@@ -208,7 +208,7 @@ use std::{
 /// // [dependencies]
 /// // moka = { version = "0.7", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
-/// // futures = "0.3"
+/// // futures-util = "0.3"
 ///
 /// use moka::future::Cache;
 /// use std::time::Duration;
@@ -395,7 +395,7 @@ where
     /// //
     /// // [dependencies]
     /// // moka = { version = "0.7", features = ["future"] }
-    /// // futures = "0.3"
+    /// // futures-util = "0.3"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
     /// use std::sync::Arc;
@@ -486,7 +486,7 @@ where
     /// //
     /// // [dependencies]
     /// // moka = { version = "0.7", features = ["future"] }
-    /// // futures = "0.3"
+    /// // futures-util = "0.3"
     /// // reqwest = "0.11"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
