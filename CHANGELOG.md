@@ -1,5 +1,8 @@
 # Moka &mdash; Change Log
 
+## Version 0.8.0
+
+
 ## Version 0.7.2
 
 The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
