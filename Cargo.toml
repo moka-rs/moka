@@ -21,6 +21,9 @@ default = ["atomic64"]
 # Enable this feature to use `moka::future::Cache`.
 future = ["async-io", "async-lock", "futures-util"]
 
+# Enable this feature to use `moka::dash::Cache`.
+dash = ["dashmap"]
+
 # This feature is enabled by default. Disable it when the target platform does not
 # support `std::sync::atomic::AtomicU64`. (e.g. `armv5te-unknown-linux-musleabi`
 # or `mips-unknown-linux-musl`)
@@ -47,7 +50,10 @@ thiserror = "1.0"
 triomphe = "0.1"
 uuid = { version = "0.8", features = ["v4"] }
 
-# Optional dependencies
+# Optional dependencies (dashmap)
+dashmap = { version = "5.2", optional = true }
+
+# Optional dependencies (future)
 async-io = { version = "1.4", optional = true }
 async-lock = { version = "2.4", optional = true }
 futures-util = { version = "0.3", optional = true }
@@ -68,8 +74,8 @@ skeptic = "0.13"
 
 # https://docs.rs/about/metadata
 [package.metadata.docs.rs]
-# Build the doc with "future" feature enabled.
-features = ["future"]
+# Build the doc with some features enabled.
+features = ["future", "dash"]
 
 # ----------------------------------
 # RUSTSEC, etc.

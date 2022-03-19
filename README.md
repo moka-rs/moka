@@ -393,6 +393,7 @@ This crate's minimum supported Rust versions (MSRV) are the followings:
 | no feature |                     | Rust 1.51.0 |
 | `atomic64` |       yes           | Rust 1.51.0 |
 | `future`   |                     | Rust 1.51.0 |
+| `dash`     |                     | Rust 1.51.0 |
 
 If only the default features are enabled, MSRV will be updated conservatively. When
 using other features, like `future`, MSRV might be updated more frequently, up to the
@@ -470,8 +471,8 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
 - [ ] API stabilization. (Smaller core cache API, shorter names for frequently
       used methods)
     - e.g.
-    - `get_or_insert_with(K, F)` → `get(K, F)`
-    - `get_or_try_insert_with(K, F)` → `try_get(K, F)`
+    - `get_or_insert_with(K, F)` → `get_with(K, F)`
+    - `get_or_try_insert_with(K, F)` → `try_get_with(K, F)`
     - `get(&Q)` → `get_if_present(&Q)`
     - `blocking_insert(K, V)` → `blocking().insert(K, V)`
     - `time_to_live()` → `config().time_to_live()`

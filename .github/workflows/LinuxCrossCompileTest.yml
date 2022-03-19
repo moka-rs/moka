@@ -72,3 +72,10 @@ jobs:
           use-cross: true
           command: test
           args: --release --features future --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
+
+      - name: Run tests (dash feature)
+        uses: actions-rs/cargo@v1
+        with:
+          use-cross: true
+          command: test
+          args: --release --features dash --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}

@@ -9,7 +9,7 @@ jobs:
           command: |
             docker run --security-opt seccomp=unconfined -v "${PWD}:/volume" xd009642/tarpaulin \
               cargo tarpaulin -v \
-                --features future \
+                --features 'future, dash' \
                 --ciserver circle-ci \
                 --coveralls ${COVERALLS_TOKEN} \
                 --timeout 600 \
