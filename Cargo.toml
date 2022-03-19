@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.7.2"
+version = "0.8.0"
 edition = "2018"
 rust-version = "1.51"
 
@@ -53,8 +53,7 @@ async-lock = { version = "2.4", optional = true }
 futures-util = { version = "0.3", optional = true }
 
 [dev-dependencies]
-actix-rt2 = { package = "actix-rt", version = "2", default-features = false }
-actix-rt1 = { package = "actix-rt", version = "1", default-features = false }
+actix-rt = { version = "2", default-features = false }
 async-std = { version = "1", default-features = false, features = ["attributes"] }
 getrandom = "0.2"
 reqwest = "0.11"
