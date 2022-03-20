@@ -21,7 +21,9 @@ default = ["atomic64"]
 # Enable this feature to use `moka::future::Cache`.
 future = ["async-io", "async-lock", "futures-util"]
 
-# Enable this feature to use `moka::dash::Cache`.
+# Enable this feature to use **experimental** `moka::dash::Cache`.
+# Please note that the APIs for this feature will be frequently changed in next
+# few releases.
 dash = ["dashmap"]
 
 # This feature is enabled by default. Disable it when the target platform does not

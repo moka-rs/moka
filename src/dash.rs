@@ -1,5 +1,5 @@
-//! Provides a thread-safe, concurrent cache implementation built upon
-//! [`dashmap::DashMap`][dashmap].
+//! **Experimental**: Provides a thread-safe, concurrent cache implementation
+//! built upon [`dashmap::DashMap`][dashmap].
 //!
 //! To use this module, enable a crate feature called "dash".
 //!

@@ -13,7 +13,8 @@ use std::{
     time::Duration,
 };
 
-/// A thread-safe concurrent in-memory cache built upon [`dashmap::DashMap`][dashmap].
+/// **Experimental**: A thread-safe concurrent in-memory cache built upon
+/// [`dashmap::DashMap`][dashmap].
 ///
 /// Unlike `sync` and `future` caches of Moka, `dash` cache does not provide full
 /// concurrency of retrievals. This is because `DashMap` employs read-write locks on
@@ -26,7 +27,9 @@ use std::{
 /// replacement algorithm to determine which entries to evict when the capacity is
 /// exceeded.
 ///
-/// To use this cache, enable a crate feature called "dash".
+/// To use this cache, enable a crate feature called "dash". Please note that the APIs
+/// will _be changed very often_ in next few releases as this is yet an experimental
+/// feature.
 ///
 /// # Examples
 ///
