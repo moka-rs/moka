@@ -8,6 +8,7 @@ use crossbeam_channel::{Sender, TrySendError};
 use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
+    fmt,
     hash::{BuildHasher, Hash},
     sync::Arc,
     time::Duration,
@@ -20,7 +21,7 @@ use std::{
 /// concurrency of retrievals. This is because `DashMap` employs read-write locks on
 /// internal shards.
 ///
-/// On the other hand, `dash` cache provids iterator, which returns immutable
+/// On the other hand, `dash` cache provides iterator, which returns immutable
 /// references to the entries in a cache.
 ///
 /// `dash` cache performs a best-effort bounding of the map using an entry
@@ -247,6 +248,24 @@ where
 {
 }
 
+impl<K, V, S> fmt::Debug for Cache<K, V, S>
+where
+    K: Eq + Hash + fmt::Debug,
+    V: fmt::Debug,
+    S: BuildHasher + Clone,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut d_map = f.debug_map();
+
+        for r in self.iter() {
+            let (k, v) = r.pair();
+            d_map.entry(k, v);
+        }
+
+        d_map.finish()
+    }
+}
+
 impl<K, V> Cache<K, V, RandomState>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -361,6 +380,38 @@ where
         self.base.invalidate_all();
     }
 
+    /// Returns the `max_capacity` of this cache.
+    pub fn max_capacity(&self) -> Option<usize> {
+        self.base.max_capacity()
+    }
+
+    /// Returns the `time_to_live` of this cache.
+    pub fn time_to_live(&self) -> Option<Duration> {
+        self.base.time_to_live()
+    }
+
+    /// Returns the `time_to_idle` of this cache.
+    pub fn time_to_idle(&self) -> Option<Duration> {
+        self.base.time_to_idle()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn estimated_entry_count(&self) -> u64 {
+        self.base.estimated_entry_count()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn weighted_size(&self) -> u64 {
+        self.base.weighted_size()
+    }
+}
+
+impl<'a, K, V, S> Cache<K, V, S>
+where
+    K: 'a + Eq + Hash,
+    V: 'a,
+    S: BuildHasher + Clone,
+{
     /// Creates an iterator over a `moka::dash::Cache` yielding immutable references.
     ///
     /// **Locking behavior**: This iterator relies on the iterator of
@@ -389,31 +440,6 @@ where
     ///
     pub fn iter(&self) -> Iter<'_, K, V, S> {
         self.base.iter()
-    }
-
-    /// Returns the `max_capacity` of this cache.
-    pub fn max_capacity(&self) -> Option<usize> {
-        self.base.max_capacity()
-    }
-
-    /// Returns the `time_to_live` of this cache.
-    pub fn time_to_live(&self) -> Option<Duration> {
-        self.base.time_to_live()
-    }
-
-    /// Returns the `time_to_idle` of this cache.
-    pub fn time_to_idle(&self) -> Option<Duration> {
-        self.base.time_to_idle()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn estimated_entry_count(&self) -> u64 {
-        self.base.estimated_entry_count()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn weighted_size(&self) -> u64 {
-        self.base.weighted_size()
     }
 }
 
@@ -883,5 +909,20 @@ mod tests {
         std::mem::drop(write_lock);
 
         handles.into_iter().for_each(|h| h.join().expect("Failed"));
+    }
+
+    #[test]
+    fn test_debug_format() {
+        let cache = Cache::new(10);
+        cache.insert('a', "alice");
+        cache.insert('b', "bob");
+        cache.insert('c', "cindy");
+
+        let debug_str = format!("{:?}", cache);
+        assert!(debug_str.starts_with('{'));
+        assert!(debug_str.contains(r#"'a': "alice""#));
+        assert!(debug_str.contains(r#"'b': "bob""#));
+        assert!(debug_str.contains(r#"'c': "cindy""#));
+        assert!(debug_str.ends_with('}'));
     }
 }

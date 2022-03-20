@@ -185,10 +185,6 @@ where
         self.inner.set_valid_after(now);
     }
 
-    pub(crate) fn iter(&self) -> Iter<'_, K, V, S> {
-        self.inner.iter()
-    }
-
     pub(crate) fn max_capacity(&self) -> Option<usize> {
         self.inner.max_capacity()
     }
@@ -209,6 +205,17 @@ where
     #[cfg(test)]
     pub(crate) fn weighted_size(&self) -> u64 {
         self.inner.weighted_size()
+    }
+}
+
+impl<'a, K, V, S> BaseCache<K, V, S>
+where
+    K: 'a + Eq + Hash,
+    V: 'a,
+    S: BuildHasher + Clone,
+{
+    pub(crate) fn iter(&self) -> Iter<'_, K, V, S> {
+        self.inner.iter()
     }
 }
 
@@ -509,11 +516,6 @@ where
             .map(|(key, entry)| KvEntry::new(key, entry))
     }
 
-    fn iter(&self) -> Iter<'_, K, V, S> {
-        let map_iter = self.cache.iter();
-        Iter::new(map_iter)
-    }
-
     fn max_capacity(&self) -> Option<usize> {
         self.max_capacity.map(|n| n as usize)
     }
@@ -583,6 +585,18 @@ where
         } else {
             Instant::now()
         }
+    }
+}
+
+impl<'a, K, V, S> Inner<K, V, S>
+where
+    K: 'a + Eq + Hash,
+    V: 'a,
+    S: BuildHasher + Clone,
+{
+    fn iter(&self) -> Iter<'_, K, V, S> {
+        let map_iter = self.cache.iter();
+        Iter::new(map_iter)
     }
 }
 
