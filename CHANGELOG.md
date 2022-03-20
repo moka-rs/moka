@@ -2,6 +2,11 @@
 
 ## Version 0.8.0
 
+### Changed
+
+- Update the minimum depending version of crossbeam-channel from v0.5.2 to v0.5.4.
+  ([#100][gh-pull-0100])
+
 
 ## Version 0.7.2
 
@@ -239,6 +244,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0100]: https://github.com/moka-rs/moka/pull/100/
 [gh-pull-0086]: https://github.com/moka-rs/moka/pull/86/
 [gh-pull-0084]: https://github.com/moka-rs/moka/pull/84/
 [gh-pull-0083]: https://github.com/moka-rs/moka/pull/83/
