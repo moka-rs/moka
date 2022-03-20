@@ -21,6 +21,7 @@ jobs:
     strategy:
       matrix:
         rust:
+          - nightly
           - stable
           - beta
           - 1.51.0  # MSRV (for both no features and "future")
@@ -68,3 +69,6 @@ jobs:
         with:
           command: test
           args: --features dash
+      - name: Check minimal versions
+        if: matrix.toolchain == 'nightly'
+        run: cargo clean; cargo update -Z minimal-versions; cargo check
