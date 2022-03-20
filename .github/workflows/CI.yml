@@ -69,6 +69,7 @@ jobs:
         with:
           command: test
           args: --features dash
+
       - name: Check minimal versions
-        if: matrix.toolchain == 'nightly'
+        if: ${{ matrix.rust == 'nightly' }}
         run: cargo clean; cargo update -Z minimal-versions; cargo check
