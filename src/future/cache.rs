@@ -53,7 +53,6 @@ use std::{
 /// Here's an example of reading and updating a cache by using multiple asynchronous
 /// tasks with [Tokio][tokio-crate] runtime:
 ///
-/// [dashmap]: https://docs.rs/dashmap/*/dashmap/struct.DashMap.html
 /// [tokio-crate]: https://crates.io/crates/tokio
 ///
 ///```rust
