@@ -36,7 +36,7 @@ atomic64 = []
 unstable-debug-counters = ["future"]
 
 [dependencies]
-crossbeam-channel = "0.5.2"
+crossbeam-channel = "0.5.4"
 crossbeam-epoch = "0.8.2"
 crossbeam-utils = "0.8"
 num_cpus = "1.13"
@@ -81,6 +81,8 @@ features = ["future", "dash"]
 # RUSTSEC, etc.
 #
 # crossbeam-channel:
+# - Workaround a bug in upstream related to TLS access on AArch64 Linux:
+#   - https://github.com/crossbeam-rs/crossbeam/pull/802 (Patched >= 0.5.4)
 # - Addressed some stacked borrow violations found by Miri:
 #   - https://github.com/crossbeam-rs/crossbeam/blob/master/crossbeam-channel/CHANGELOG.md#version-052 (Patched >= 0.5.2)
 #
