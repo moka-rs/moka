@@ -2,6 +2,11 @@
 
 ## Version 0.8.0
 
+### Added
+
+- Add a synchronous cache `moka::dash::Cache`, which uses `dash::DashMap` as
+  the internal storage. ([#99][gh-pull-0099])
+
 ### Changed
 
 - Update the minimum depending version of crossbeam-channel from v0.5.2 to v0.5.4.
@@ -245,6 +250,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
 [gh-pull-0100]: https://github.com/moka-rs/moka/pull/100/
+[gh-pull-0099]: https://github.com/moka-rs/moka/pull/99/
 [gh-pull-0086]: https://github.com/moka-rs/moka/pull/86/
 [gh-pull-0084]: https://github.com/moka-rs/moka/pull/84/
 [gh-pull-0083]: https://github.com/moka-rs/moka/pull/83/
