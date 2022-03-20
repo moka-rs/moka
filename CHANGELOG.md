@@ -4,8 +4,14 @@
 
 ### Added
 
-- Add a synchronous cache `moka::dash::Cache`, which uses `dash::DashMap` as
-  the internal storage. ([#99][gh-pull-0099])
+#### Experimental Additions
+
+Please note that the following additions are highly experimental so their APIs will
+be frequently changed in next few releases.
+
+- Add a synchronous cache `moka::dash::Cache`, which uses `dashmap::DashMap` as the
+  internal storage. ([#99][gh-pull-0099])
+- Add iterator to `moka::dash::Cache`. ([#101][gh-pull-0101]) 
 
 ### Changed
 
@@ -249,6 +255,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0101]: https://github.com/moka-rs/moka/pull/101/
 [gh-pull-0100]: https://github.com/moka-rs/moka/pull/100/
 [gh-pull-0099]: https://github.com/moka-rs/moka/pull/99/
 [gh-pull-0086]: https://github.com/moka-rs/moka/pull/86/
