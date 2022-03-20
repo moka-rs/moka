@@ -44,7 +44,7 @@ use std::{
 ///
 /// - Inside an async context (`async fn` or `async` block), use
 ///   [`insert`](#method.insert), [`get_or_insert_with`](#method.get_or_insert_with)
-///   or [`invalidate`](#method.invalidate) method for updating the cache and `await`
+///   or [`invalidate`](#method.invalidate) methods for updating the cache and `await`
 ///   them.
 /// - Outside any async context, use [`blocking_insert`](#method.blocking_insert) or
 ///   [`blocking_invalidate`](#method.blocking_invalidate) methods. They will block

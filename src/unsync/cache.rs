@@ -23,10 +23,12 @@ type CacheStore<K, V, S> = std::collections::HashMap<Rc<K>, ValueEntry<K, V>, S>
 
 /// An in-memory cache that is _not_ thread-safe.
 ///
-/// `Cache` utilizes a hash table `std::collections::HashMap` from the standard
-/// library for the central key-value storage. `Cache` performs a best-effort
-/// bounding of the map using an entry replacement algorithm to determine which
-/// entries to evict when the capacity is exceeded.
+/// `Cache` utilizes a hash table [`std::collections::HashMap`][std-hashmap] from the
+/// standard library for the central key-value storage. `Cache` performs a
+/// best-effort bounding of the map using an entry replacement algorithm to determine
+/// which entries to evict when the capacity is exceeded.
+///
+/// [std-hashmap]: https://doc.rust-lang.org/std/collections/struct.HashMap.html
 ///
 /// # Characteristic difference between `unsync` and `sync`/`future` caches
 ///
@@ -41,7 +43,7 @@ type CacheStore<K, V, S> = std::collections::HashMap<Rc<K>, ValueEntry<K, V>, S>
 ///
 /// # Examples
 ///
-/// Cache entries are manually added using an insert method, and are stored in the
+/// Cache entries are manually added using the insert method, and are stored in the
 /// cache until either evicted or manually invalidated.
 ///
 /// Here's an example of reading and updating a cache by using the main thread:

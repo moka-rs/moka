@@ -1,4 +1,7 @@
-//! Provides a *not* thread-safe, blocking cache implementation.
+//! Provides a *not* thread-safe cache implementation built upon
+//! [`std::collections::HashMap`][std-hashmap].
+//!
+//! [std-hashmap]: https://doc.rust-lang.org/std/collections/struct.HashMap.html
 
 mod builder;
 mod cache;

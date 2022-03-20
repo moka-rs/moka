@@ -1,4 +1,5 @@
-//! Provides a thread-safe, asynchronous (futures aware) cache implementation.
+//! Provides a thread-safe, concurrent asynchronous (futures aware) cache
+//! implementation.
 //!
 //! To use this module, enable a crate feature called "future".
 
