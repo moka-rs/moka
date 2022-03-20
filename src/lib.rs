@@ -42,7 +42,7 @@
 //! - Thread-safe, synchronous caches:
 //!     - [`sync::Cache`][sync-cache-struct]
 //!     - [`sync::SegmentedCache`][sync-seg-cache-struct]
-//!     - [`dash::Cache`][dash-cache-struct] (Requires "dash" feature)
+//!     - [`dash::Cache`][dash-cache-struct] (Experimental, requires "dash" feature)
 //! - An asynchronous (futures aware) cache:
 //!     - [`future::Cache`][future-cache-struct] (Requires "future" feature)
 //! - A not thread-safe, blocking cache for single threaded applications:
