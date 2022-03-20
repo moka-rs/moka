@@ -1,6 +1,6 @@
 use super::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
-    CacheBuilder, ConcurrentCacheExt,
+    CacheBuilder, ConcurrentCacheExt, Iter,
 };
 use crate::sync::{housekeeper::InnerSync, Weigher, WriteOp};
 
@@ -15,11 +15,14 @@ use std::{
 
 /// A thread-safe concurrent in-memory cache built upon [`dashmap::DashMap`][dashmap].
 ///
-/// `Cache` supports full concurrency of retrievals and a high expected concurrency
-/// for updates.
+/// Unlike `sync` and `future` caches of Moka, `dash` cache does not provide full
+/// concurrency of retrievals. This is because `DashMap` employs read-write locks on
+/// internal shards.
 ///
-/// `Cache` utilizes a lock-free concurrent hash table as the central key-value
-/// storage. `Cache` performs a best-effort bounding of the map using an entry
+/// On the other hand, `dash` cache provids iterator, which returns immutable
+/// references to the entries in a cache.
+///
+/// `dash` cache performs a best-effort bounding of the map using an entry
 /// replacement algorithm to determine which entries to evict when the capacity is
 /// exceeded.
 ///
@@ -355,6 +358,36 @@ where
         self.base.invalidate_all();
     }
 
+    /// Creates an iterator over a `moka::dash::Cache` yielding immutable references.
+    ///
+    /// **Locking behavior**: This iterator relies on the iterator of
+    /// [`dashmap::DashMap`][dashmap-iter], which employs read-write locks. May
+    /// deadlock if the thread holding an iterator attempts to update the cache.
+    ///
+    /// [dashmap-iter]: https://docs.rs/dashmap/5.2.0/dashmap/struct.DashMap.html#method.iter
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use moka::dash::Cache;
+    ///
+    /// let cache = Cache::new(100);
+    /// cache.insert("Julia", 14);
+    ///
+    /// let mut iter = cache.iter();
+    /// let entry_ref = iter.next().unwrap();
+    /// assert_eq!(entry_ref.pair(), (&"Julia", &14));
+    /// assert_eq!(entry_ref.key(), &"Julia");
+    /// assert_eq!(entry_ref.value(), &14);
+    /// assert_eq!(*entry_ref, 14);
+    ///
+    /// assert!(iter.next().is_none());
+    /// ```
+    ///
+    pub fn iter(&self) -> Iter<'_, K, V, S> {
+        self.base.iter()
+    }
+
     /// Returns the `max_capacity` of this cache.
     pub fn max_capacity(&self) -> Option<usize> {
         self.base.max_capacity()
@@ -453,7 +486,7 @@ mod tests {
     use super::{Cache, ConcurrentCacheExt};
     use crate::common::time::Clock;
 
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
     #[test]
     fn basic_single_thread() {
@@ -736,5 +769,116 @@ mod tests {
         assert_eq!(cache.get_if_present(&"a"), None);
         assert_eq!(cache.get_if_present(&"b"), None);
         assert!(cache.is_table_empty());
+    }
+
+    #[test]
+    fn test_iter() {
+        const NUM_KEYS: usize = 50;
+
+        fn make_value(key: usize) -> String {
+            format!("val: {}", key)
+        }
+
+        let cache = Cache::builder()
+            .max_capacity(100)
+            .time_to_idle(Duration::from_secs(10))
+            .build();
+
+        for key in 0..NUM_KEYS {
+            cache.insert(key, make_value(key));
+        }
+
+        let mut key_set = std::collections::HashSet::new();
+
+        for entry in cache.iter() {
+            let (key, value) = entry.pair();
+            assert_eq!(value, &make_value(*key));
+
+            key_set.insert(*key);
+        }
+
+        // Ensure there are no missing or duplicate keys in the iteration.
+        assert_eq!(key_set.len(), NUM_KEYS);
+
+        // DO NOT REMOVE THE COMMENT FROM THIS BLOCK.
+        // This block demonstrates how you can write a code to get a deadlock.
+        // {
+        //     let mut iter = cache.iter();
+        //     let _ = iter.next();
+
+        //     for key in 0..NUM_KEYS {
+        //         cache.insert(key, make_value(key));
+        //         println!("{}", key);
+        //     }
+
+        //     let _ = iter.next();
+        // }
+    }
+
+    /// Runs 16 threads at the same time and ensures no deadlock occurs.
+    ///
+    /// - Eight of the threads will update key-values in the cache.
+    /// - Eight others will iterate the cache.
+    ///
+    #[test]
+    fn test_iter_multi_threads() {
+        const NUM_KEYS: usize = 1024;
+
+        fn make_value(key: usize) -> String {
+            format!("val: {}", key)
+        }
+
+        let cache = Cache::builder()
+            .max_capacity(2048)
+            .time_to_idle(Duration::from_secs(10))
+            .build();
+
+        // Initialize the cache.
+        for key in 0..NUM_KEYS {
+            cache.insert(key, make_value(key));
+        }
+
+        let rw_lock = Arc::new(std::sync::RwLock::<()>::default());
+        let write_lock = rw_lock.write().unwrap();
+
+        // https://rust-lang.github.io/rust-clippy/master/index.html#needless_collect
+        #[allow(clippy::needless_collect)]
+        let handles = (0..16usize)
+            .map(|n| {
+                let cache = cache.clone();
+                let rw_lock = Arc::clone(&rw_lock);
+
+                if n % 2 == 0 {
+                    // This thread will update the cache.
+                    std::thread::spawn(move || {
+                        let read_lock = rw_lock.read().unwrap();
+                        for key in 0..NUM_KEYS {
+                            // TODO: Update keys in a random order?
+                            cache.insert(key, make_value(key));
+                        }
+                        std::mem::drop(read_lock);
+                    })
+                } else {
+                    // This thread will iterate the cache.
+                    std::thread::spawn(move || {
+                        let read_lock = rw_lock.read().unwrap();
+                        let mut key_set = std::collections::HashSet::new();
+                        for entry in cache.iter() {
+                            let (key, value) = entry.pair();
+                            assert_eq!(value, &make_value(*key));
+                            key_set.insert(*key);
+                        }
+                        // Ensure there are no missing or duplicate keys in the iteration.
+                        assert_eq!(key_set.len(), NUM_KEYS);
+                        std::mem::drop(read_lock);
+                    })
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // Let these threads to run by releasing the write lock.
+        std::mem::drop(write_lock);
+
+        handles.into_iter().for_each(|h| h.join().expect("Failed"));
     }
 }

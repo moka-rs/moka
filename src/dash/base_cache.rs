@@ -1,3 +1,4 @@
+use super::Iter;
 use crate::{
     common::{
         self,
@@ -14,6 +15,7 @@ use crate::{
         AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, ReadOp, ValueEntry, Weigher, WriteOp,
     },
 };
+
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use crossbeam_utils::atomic::AtomicCell;
 use dashmap::mapref::one::Ref as DashMapRef;
@@ -181,6 +183,10 @@ where
     pub(crate) fn invalidate_all(&self) {
         let now = self.inner.current_time_from_expiration_clock();
         self.inner.set_valid_after(now);
+    }
+
+    pub(crate) fn iter(&self) -> Iter<'_, K, V, S> {
+        self.inner.iter()
     }
 
     pub(crate) fn max_capacity(&self) -> Option<usize> {
@@ -501,6 +507,11 @@ where
         self.cache
             .remove(key)
             .map(|(key, entry)| KvEntry::new(key, entry))
+    }
+
+    fn iter(&self) -> Iter<'_, K, V, S> {
+        let map_iter = self.cache.iter();
+        Iter::new(map_iter)
     }
 
     fn max_capacity(&self) -> Option<usize> {
