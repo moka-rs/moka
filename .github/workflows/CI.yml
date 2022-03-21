@@ -21,10 +21,10 @@ jobs:
     strategy:
       matrix:
         rust:
-          - nightly
           - stable
           - beta
-          - 1.51.0  # MSRV (for both no features and "future")
+          - 1.51.0  # MSRV
+          - nightly # For checking minimum version dependencies.
 
     steps:
       - name: Checkout Moka
@@ -45,6 +45,13 @@ jobs:
         with:
           command: clean
 
+      - name: Downgrade dependencies to minimal versions
+        uses: actions-rs/cargo@v1
+        if: ${{ matrix.rust == 'nightly' }}
+        with: 
+          command: update
+          args: -Z minimal-versions
+
       - name: Build (no features)
         uses: actions-rs/cargo@v1
         with:
@@ -58,18 +65,12 @@ jobs:
 
       - name: Run tests (future feature)
         uses: actions-rs/cargo@v1
-        if: ${{ matrix.rust != '1.45.2' }}
         with:
           command: test
           args: --features future
 
       - name: Run tests (dash feature)
         uses: actions-rs/cargo@v1
-        if: ${{ matrix.rust != '1.45.2' }}
         with:
           command: test
           args: --features dash
-
-      - name: Check minimal versions
-        if: ${{ matrix.rust == 'nightly' }}
-        run: cargo clean; cargo update -Z minimal-versions; cargo check
