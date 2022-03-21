@@ -615,6 +615,7 @@ fn default_num_segments() -> usize {
 #[cfg(test)]
 mod tests {
     use std::{
+        collections::BTreeMap,
         sync::{Arc, Barrier},
         thread::{spawn, JoinHandle},
     };
@@ -642,6 +643,8 @@ mod tests {
         assert_eq!(map.remove(key, hash), Some(5));
         assert!(map.is_empty());
         assert_eq!(map.len(), 0);
+
+        run_deferred();
     }
 
     #[test]
@@ -666,6 +669,80 @@ mod tests {
         assert_eq!(map.remove(key, hash), Some(7));
         assert!(map.is_empty());
         assert_eq!(map.len(), 0);
+
+        run_deferred();
+    }
+
+    #[cfg_attr(mips, ignore)]
+    #[test]
+    fn concurrent_insert_if_not_present() {
+        const NUM_THREADS: usize = 64;
+        const MAX_VALUE: usize = 512;
+
+        let hashmap = Arc::new(HashMap::with_capacity(0));
+        let barrier = Arc::new(Barrier::new(NUM_THREADS));
+
+        #[allow(clippy::needless_collect)]
+        let threads: Vec<_> = (0..NUM_THREADS)
+            .map(|thread_id| {
+                let hashmap = Arc::clone(&hashmap);
+                let barrier = Arc::clone(&barrier);
+
+                spawn(move || {
+                    barrier.wait();
+                    let mut success_count = 0usize;
+
+                    for key in 0..MAX_VALUE {
+                        let hash = hashmap.hash(&key);
+                        let result = hashmap.insert_if_not_present(key, hash, thread_id);
+                        if result.is_none() {
+                            success_count += 1;
+                        }
+                    }
+
+                    (thread_id, success_count)
+                })
+            })
+            .collect();
+
+        // Collect the results from the threads and insert into a BTreeMap with
+        // thread_id as key and success_count as value.
+        let results1 = threads
+            .into_iter()
+            .map(JoinHandle::join)
+            .collect::<Result<BTreeMap<_, _>, _>>()
+            .expect("Got an error from a thread");
+
+        assert_eq!(hashmap.len(), MAX_VALUE as usize);
+
+        // Verify that the sum of success insertion counts should be MAX_VALUE.
+        let sum_of_insertions: usize = results1
+            .iter()
+            .map(|(_thread_id, success_count)| success_count)
+            .sum();
+        assert_eq!(sum_of_insertions, MAX_VALUE);
+
+        // Get all entries from the cht HashMap and turn them into the same format
+        // (BTreeMap) to results1.
+
+        // Initialize results2.
+        let mut results2 = (0..NUM_THREADS)
+            .map(|thread_id| (thread_id, 0usize))
+            .collect::<BTreeMap<_, _>>();
+
+        // Get all entries from the cht MashMap.
+        for key in 0..MAX_VALUE {
+            let hash = hashmap.hash(&key);
+            if let Some(thread_id) = hashmap.get(&key, hash) {
+                let count = results2.get_mut(&thread_id).unwrap();
+                *count += 1;
+            }
+        }
+
+        // Verify that they are the same.
+        assert_eq!(results1, results2);
+
+        run_deferred();
     }
 
     #[test]
