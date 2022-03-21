@@ -200,7 +200,7 @@ where
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.inner.hash(key);
-        self.inner.select(hash).invalidate(key);
+        self.inner.select(hash).invalidate_with_hash(key, hash);
     }
 
     /// Discards all cached values.
@@ -458,7 +458,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::{ConcurrentCacheExt, SegmentedCache};
-    use crate::sync::CacheBuilder;
     use std::time::Duration;
 
     #[test]
@@ -657,8 +656,8 @@ mod tests {
 
         const SEGMENTS: usize = 4;
 
-        let mut cache = CacheBuilder::new(100)
-            .segments(SEGMENTS)
+        let mut cache = SegmentedCache::builder(SEGMENTS)
+            .max_capacity(100)
             .support_invalidation_closures()
             .build();
         cache.reconfigure_for_testing();

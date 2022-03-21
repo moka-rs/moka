@@ -584,7 +584,16 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        if let Some(kv) = self.base.remove_entry(key) {
+        let hash = self.base.hash(key);
+        self.invalidate_with_hash(key, hash);
+    }
+
+    pub(crate) fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64)
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        if let Some(kv) = self.base.remove_entry(key, hash) {
             let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
             Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to remove");
@@ -754,7 +763,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Cache, ConcurrentCacheExt};
-    use crate::{common::time::Clock, sync::CacheBuilder};
+    use crate::common::time::Clock;
 
     use std::{convert::Infallible, sync::Arc, time::Duration};
 
@@ -942,7 +951,8 @@ mod tests {
     fn invalidate_entries_if() -> Result<(), Box<dyn std::error::Error>> {
         use std::collections::HashSet;
 
-        let mut cache = CacheBuilder::new(100)
+        let mut cache = Cache::builder()
+            .max_capacity(100)
             .support_invalidation_closures()
             .build();
         cache.reconfigure_for_testing();
@@ -1009,7 +1019,8 @@ mod tests {
 
     #[test]
     fn time_to_live() {
-        let mut cache = CacheBuilder::new(100)
+        let mut cache = Cache::builder()
+            .max_capacity(100)
             .time_to_live(Duration::from_secs(10))
             .build();
 
@@ -1065,7 +1076,8 @@ mod tests {
 
     #[test]
     fn time_to_idle() {
-        let mut cache = CacheBuilder::new(100)
+        let mut cache = Cache::builder()
+            .max_capacity(100)
             .time_to_idle(Duration::from_secs(10))
             .build();
 

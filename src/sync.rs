@@ -112,7 +112,6 @@ impl<K> KeyHashDate<K> {
         &self.key
     }
 
-    #[cfg(feature = "dash")]
     pub(crate) fn hash(&self) -> u64 {
         self.hash
     }

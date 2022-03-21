@@ -1,6 +1,3 @@
-#[macro_use]
-pub(crate) mod tests;
-
 use std::{
     borrow::{Borrow, BorrowMut},
     hash::{Hash, Hasher},

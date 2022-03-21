@@ -27,11 +27,12 @@ use uuid::Uuid;
 pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 'static>;
 
 pub(crate) trait GetOrRemoveEntry<K, V> {
-    fn get_value_entry(&self, key: &Arc<K>) -> Option<TrioArc<ValueEntry<K, V>>>;
+    fn get_value_entry(&self, key: &Arc<K>, hash: u64) -> Option<TrioArc<ValueEntry<K, V>>>;
 
     fn remove_key_value_if<F>(
         &self,
         key: &Arc<K>,
+        hash: u64,
         condition: F,
     ) -> Option<TrioArc<ValueEntry<K, V>>>
     where
@@ -40,6 +41,7 @@ pub(crate) trait GetOrRemoveEntry<K, V> {
 
 pub(crate) struct KeyDateLite<K> {
     key: Arc<K>,
+    hash: u64,
     timestamp: Instant,
 }
 
@@ -47,15 +49,17 @@ impl<K> Clone for KeyDateLite<K> {
     fn clone(&self) -> Self {
         Self {
             key: Arc::clone(&self.key),
+            hash: self.hash,
             timestamp: self.timestamp,
         }
     }
 }
 
 impl<K> KeyDateLite<K> {
-    pub(crate) fn new(key: &Arc<K>, timestamp: Instant) -> Self {
+    pub(crate) fn new(key: &Arc<K>, hash: u64, timestamp: Instant) -> Self {
         Self {
             key: Arc::clone(key),
+            hash,
             timestamp,
         }
     }
@@ -399,9 +403,10 @@ where
 
         for candidate in &self.candidates {
             let key = &candidate.key;
+            let hash = candidate.hash;
             let ts = candidate.timestamp;
-            if Self::apply(&predicates, cache, key, ts) {
-                if let Some(entry) = Self::invalidate(cache, key, ts) {
+            if Self::apply(&predicates, cache, key, hash, ts) {
+                if let Some(entry) = Self::invalidate(cache, key, hash, ts) {
                     invalidated.push(KvEntry {
                         key: Arc::clone(key),
                         entry,
@@ -418,11 +423,17 @@ where
         }
     }
 
-    fn apply<C>(predicates: &[Predicate<K, V>], cache: &Arc<C>, key: &Arc<K>, ts: Instant) -> bool
+    fn apply<C>(
+        predicates: &[Predicate<K, V>],
+        cache: &Arc<C>,
+        key: &Arc<K>,
+        hash: u64,
+        ts: Instant,
+    ) -> bool
     where
         Arc<C>: GetOrRemoveEntry<K, V>,
     {
-        if let Some(entry) = cache.get_value_entry(key) {
+        if let Some(entry) = cache.get_value_entry(key, hash) {
             if let Some(lm) = entry.last_modified() {
                 if lm == ts {
                     return Invalidator::<_, _, S>::do_apply_predicates(
@@ -438,11 +449,16 @@ where
         false
     }
 
-    fn invalidate<C>(cache: &Arc<C>, key: &Arc<K>, ts: Instant) -> Option<TrioArc<ValueEntry<K, V>>>
+    fn invalidate<C>(
+        cache: &Arc<C>,
+        key: &Arc<K>,
+        hash: u64,
+        ts: Instant,
+    ) -> Option<TrioArc<ValueEntry<K, V>>>
     where
         Arc<C>: GetOrRemoveEntry<K, V>,
     {
-        cache.remove_key_value_if(key, |_, v| {
+        cache.remove_key_value_if(key, hash, |_, v| {
             if let Some(lm) = v.last_modified() {
                 lm == ts
             } else {

@@ -932,7 +932,7 @@ fn weigh<K, V>(weigher: &mut Option<Weigher<K, V>>, key: &K, value: &V) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::Cache;
-    use crate::{common::time::Clock, unsync::CacheBuilder};
+    use crate::common::time::Clock;
 
     use std::time::Duration;
 
@@ -1109,7 +1109,8 @@ mod tests {
 
     #[test]
     fn time_to_live() {
-        let mut cache = CacheBuilder::new(100)
+        let mut cache = Cache::builder()
+            .max_capacity(100)
             .time_to_live(Duration::from_secs(10))
             .build();
         cache.enable_frequency_sketch_for_testing();
@@ -1153,7 +1154,8 @@ mod tests {
 
     #[test]
     fn time_to_idle() {
-        let mut cache = CacheBuilder::new(100)
+        let mut cache = Cache::builder()
+            .max_capacity(100)
             .time_to_idle(Duration::from_secs(10))
             .build();
         cache.enable_frequency_sketch_for_testing();

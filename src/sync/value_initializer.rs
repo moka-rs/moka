@@ -146,8 +146,8 @@ where
 
     #[inline]
     pub(crate) fn remove_waiter(&self, key: &Arc<K>, type_id: TypeId) {
-        let key = Arc::clone(key);
-        self.waiters.remove(&(key, type_id));
+        let (cht_key, hash) = self.cht_key_hash(key, type_id);
+        self.waiters.remove(&cht_key, hash);
     }
 
     #[inline]
@@ -157,10 +157,15 @@ where
         type_id: TypeId,
         waiter: &Waiter<V>,
     ) -> Option<Waiter<V>> {
-        let key = Arc::clone(key);
+        let (cht_key, hash) = self.cht_key_hash(key, type_id);
         let waiter = TrioArc::clone(waiter);
+        self.waiters.insert_if_not_present(cht_key, hash, waiter)
+    }
 
-        self.waiters
-            .insert_with_or_modify((key, type_id), || waiter, |_, w| TrioArc::clone(w))
+    #[inline]
+    fn cht_key_hash(&self, key: &Arc<K>, type_id: TypeId) -> ((Arc<K>, TypeId), u64) {
+        let cht_key = (Arc::clone(key), type_id);
+        let hash = self.waiters.hash(&cht_key);
+        (cht_key, hash)
     }
 }
