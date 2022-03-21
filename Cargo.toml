@@ -72,7 +72,7 @@ tokio = { version = "1.16", features = ["rt-multi-thread", "macros", "sync", "ti
 trybuild = "1.0"
 
 [target.'cfg(skeptic)'.build-dependencies]
-skeptic = "0.13"
+skeptic = "0.13.5"
 
 # https://docs.rs/about/metadata
 [package.metadata.docs.rs]
