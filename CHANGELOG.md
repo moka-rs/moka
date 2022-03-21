@@ -15,8 +15,14 @@ be frequently changed in next few releases.
 
 ### Changed
 
-- Update the minimum depending version of crossbeam-channel from v0.5.2 to v0.5.4.
-  ([#100][gh-pull-0100])
+- Performance related:
+    - Improve performance on `get_or_insert_with`. ([#88][gh-pull-0088])
+    - Avoid to calculate the same hash twice in `get`, `insert`, `invalidate`,
+      etc. ([#90][gh-pull-0090])
+- Update the minimum versions of dependencies:
+    - crossbeam-channel from v0.5.2 to v0.5.4. ([#100][gh-pull-0100])
+    - scheduled-thread-pool to v0.2.5. ([#103][gh-pull-0103]) 
+    - skeptic to v0.13.5. ([#104][gh-pull-0104])
 
 
 ## Version 0.7.2
@@ -255,9 +261,13 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0104]: https://github.com/moka-rs/moka/pull/104/
+[gh-pull-0103]: https://github.com/moka-rs/moka/pull/103/
 [gh-pull-0101]: https://github.com/moka-rs/moka/pull/101/
 [gh-pull-0100]: https://github.com/moka-rs/moka/pull/100/
 [gh-pull-0099]: https://github.com/moka-rs/moka/pull/99/
+[gh-pull-0090]: https://github.com/moka-rs/moka/pull/90/
+[gh-pull-0088]: https://github.com/moka-rs/moka/pull/88/
 [gh-pull-0086]: https://github.com/moka-rs/moka/pull/86/
 [gh-pull-0084]: https://github.com/moka-rs/moka/pull/84/
 [gh-pull-0083]: https://github.com/moka-rs/moka/pull/83/
