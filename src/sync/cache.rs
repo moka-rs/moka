@@ -763,7 +763,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Cache, ConcurrentCacheExt};
-    use crate::{common::time::Clock, sync::CacheBuilder};
+    use crate::common::time::Clock;
 
     use std::{convert::Infallible, sync::Arc, time::Duration};
 
@@ -951,7 +951,8 @@ mod tests {
     fn invalidate_entries_if() -> Result<(), Box<dyn std::error::Error>> {
         use std::collections::HashSet;
 
-        let mut cache = CacheBuilder::new(100)
+        let mut cache = Cache::builder()
+            .max_capacity(100)
             .support_invalidation_closures()
             .build();
         cache.reconfigure_for_testing();
@@ -1018,7 +1019,8 @@ mod tests {
 
     #[test]
     fn time_to_live() {
-        let mut cache = CacheBuilder::new(100)
+        let mut cache = Cache::builder()
+            .max_capacity(100)
             .time_to_live(Duration::from_secs(10))
             .build();
 
@@ -1074,7 +1076,8 @@ mod tests {
 
     #[test]
     fn time_to_idle() {
-        let mut cache = CacheBuilder::new(100)
+        let mut cache = Cache::builder()
+            .max_capacity(100)
             .time_to_idle(Duration::from_secs(10))
             .build();
 
