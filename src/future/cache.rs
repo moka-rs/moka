@@ -44,7 +44,7 @@ use std::{
 ///
 /// - Inside an async context (`async fn` or `async` block), use
 ///   [`insert`](#method.insert), [`get_or_insert_with`](#method.get_or_insert_with)
-///   or [`invalidate`](#method.invalidate) method for updating the cache and `await`
+///   or [`invalidate`](#method.invalidate) methods for updating the cache and `await`
 ///   them.
 /// - Outside any async context, use [`blocking_insert`](#method.blocking_insert) or
 ///   [`blocking_invalidate`](#method.blocking_invalidate) methods. They will block
@@ -59,9 +59,9 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.7", features = ["future"] }
+/// // moka = { version = "0.8", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
-/// // futures = "0.3"
+/// // futures-util = "0.3"
 ///
 /// use moka::future::Cache;
 ///
@@ -144,9 +144,9 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.7", features = ["future"] }
+/// // moka = { version = "0.8", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
-/// // futures = "0.3"
+/// // futures-util = "0.3"
 ///
 /// use std::convert::TryInto;
 /// use moka::future::Cache;
@@ -206,9 +206,9 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.7", features = ["future"] }
+/// // moka = { version = "0.8", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
-/// // futures = "0.3"
+/// // futures-util = "0.3"
 ///
 /// use moka::future::Cache;
 /// use std::time::Duration;
@@ -394,8 +394,8 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.7", features = ["future"] }
-    /// // futures = "0.3"
+    /// // moka = { version = "0.8", features = ["future"] }
+    /// // futures-util = "0.3"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
     /// use std::sync::Arc;
@@ -485,8 +485,8 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.7", features = ["future"] }
-    /// // futures = "0.3"
+    /// // moka = { version = "0.8", features = ["future"] }
+    /// // futures-util = "0.3"
     /// // reqwest = "0.11"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;

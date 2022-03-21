@@ -16,7 +16,7 @@ use std::{
     time::Duration,
 };
 
-/// A thread-safe concurrent in-memory cache.
+/// A thread-safe concurrent synchronous in-memory cache.
 ///
 /// `Cache` supports full concurrency of retrievals and a high expected concurrency
 /// for updates.
@@ -29,8 +29,8 @@ use std::{
 /// # Examples
 ///
 /// Cache entries are manually added using [`insert`](#method.insert) or
-/// [`get_or_insert_with`](#method.get_or_insert_with) method, and are stored in the
-/// cache until either evicted or manually invalidated.
+/// [`get_or_insert_with`](#method.get_or_insert_with) methods, and are stored in
+/// the cache until either evicted or manually invalidated.
 ///
 /// Here's an example of reading and updating a cache by using multiple threads:
 ///

@@ -1,4 +1,4 @@
-//! Provides thread-safe, blocking cache implementations.
+//! Provides thread-safe, concurrent cache implementations.
 
 use crate::common::{deque::DeqNode, time::Instant};
 
@@ -10,7 +10,7 @@ use triomphe::Arc as TrioArc;
 pub(crate) mod base_cache;
 mod builder;
 mod cache;
-mod deques;
+pub(crate) mod deques;
 pub(crate) mod entry_info;
 pub(crate) mod housekeeper;
 mod invalidator;
@@ -197,7 +197,7 @@ pub(crate) struct ValueEntry<K, V> {
 }
 
 impl<K, V> ValueEntry<K, V> {
-    fn new(value: V, entry_info: TrioArc<EntryInfo>) -> Self {
+    pub(crate) fn new(value: V, entry_info: TrioArc<EntryInfo>) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
         self::debug_counters::InternalGlobalDebugCounters::value_entry_created();
 
@@ -211,7 +211,7 @@ impl<K, V> ValueEntry<K, V> {
         }
     }
 
-    fn new_from(value: V, entry_info: TrioArc<EntryInfo>, other: &Self) -> Self {
+    pub(crate) fn new_from(value: V, entry_info: TrioArc<EntryInfo>, other: &Self) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
         self::debug_counters::InternalGlobalDebugCounters::value_entry_created();
 

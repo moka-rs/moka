@@ -1,5 +1,5 @@
 {
-    "rust-analyzer.cargo.features": ["future", "unstable-debug-counters"],
+    "rust-analyzer.cargo.features": ["future", "dash", "unstable-debug-counters"],
     "rust-analyzer.server.extraEnv": {
         "CARGO_TARGET_DIR": "target/ra"
     },
@@ -13,6 +13,7 @@
         "clippy",
         "compat",
         "cpus",
+        "dashmap",
         "deqs",
         "Deque",
         "Deques",
@@ -22,6 +23,7 @@
         "getrandom",
         "Hasher",
         "Kawano",
+        "mapref",
         "Moka",
         "mpsc",
         "MSRV",

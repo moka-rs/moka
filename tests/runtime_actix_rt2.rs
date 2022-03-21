@@ -1,6 +1,6 @@
 #![cfg(features = "future")]
 
-use actix_rt2::{Arbiter, System};
+use actix_rt::{Arbiter, System};
 use moka::future::Cache;
 
 fn main() {

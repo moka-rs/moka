@@ -84,14 +84,14 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-moka = "0.7"
+moka = "0.8"
 ```
 
 To use the asynchronous cache, enable a crate feature called "future".
 
 ```toml
 [dependencies]
-moka = { version = "0.7", features = ["future"] }
+moka = { version = "0.8", features = ["future"] }
 ```
 
 
@@ -193,9 +193,9 @@ Here is a similar program to the previous example, but using asynchronous cache 
 // Cargo.toml
 //
 // [dependencies]
-// moka = { version = "0.7", features = ["future"] }
+// moka = { version = "0.8", features = ["future"] }
 // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
-// futures = "0.3"
+// futures-util = "0.3"
 
 // Use the asynchronous cache.
 use moka::future::Cache;
@@ -240,7 +240,7 @@ async fn main() {
         .collect();
 
     // Wait for all tasks to complete.
-    futures::future::join_all(tasks).await;
+    futures_util::future::join_all(tasks).await;
 
     // Verify the result.
     for key in 0..(NUM_TASKS * NUM_KEYS_PER_TASK) {
@@ -393,6 +393,7 @@ This crate's minimum supported Rust versions (MSRV) are the followings:
 | no feature |                     | Rust 1.51.0 |
 | `atomic64` |       yes           | Rust 1.51.0 |
 | `future`   |                     | Rust 1.51.0 |
+| `dash`     |                     | Rust 1.51.0 |
 
 If only the default features are enabled, MSRV will be updated conservatively. When
 using other features, like `future`, MSRV might be updated more frequently, up to the
@@ -435,9 +436,9 @@ to the dependency declaration.
 
 ```toml:Cargo.toml
 [dependencies]
-moka = { version = "0.7", default-feautures = false }
+moka = { version = "0.8", default-feautures = false }
 # Or
-moka = { version = "0.7", default-feautures = false, features = ["future"] }
+moka = { version = "0.8", default-feautures = false, features = ["future"] }
 ```
 
 This will make Moka to switch to a fall-back implementation, so it will compile.
@@ -470,8 +471,8 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
 - [ ] API stabilization. (Smaller core cache API, shorter names for frequently
       used methods)
     - e.g.
-    - `get_or_insert_with(K, F)` → `get(K, F)`
-    - `get_or_try_insert_with(K, F)` → `try_get(K, F)`
+    - `get_or_insert_with(K, F)` → `get_with(K, F)`
+    - `get_or_try_insert_with(K, F)` → `try_get_with(K, F)`
     - `get(&Q)` → `get_if_present(&Q)`
     - `blocking_insert(K, V)` → `blocking().insert(K, V)`
     - `time_to_live()` → `config().time_to_live()`

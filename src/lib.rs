@@ -40,17 +40,20 @@
 //! See the following document:
 //!
 //! - Thread-safe, synchronous caches:
-//!     - [`sync::Cache`][sync-cache-struct] and
-//!       [`sync::SegmentedCache`][sync-seg-cache-struct].
+//!     - [`sync::Cache`][sync-cache-struct]
+//!     - [`sync::SegmentedCache`][sync-seg-cache-struct]
+//!     - [`dash::Cache`][dash-cache-struct] (Experimental, requires "dash" feature)
 //! - An asynchronous (futures aware) cache:
-//!     - [`future::Cache`][future-cache-struct].
+//!     - [`future::Cache`][future-cache-struct] (Requires "future" feature)
 //! - A not thread-safe, blocking cache for single threaded applications:
-//!     - [`unsync::Cache`][unsync-cache-struct].
+//!     - [`unsync::Cache`][unsync-cache-struct]
 //!
+//! [dash-cache-struct]: ./dash/struct.Cache.html
 //! [future-cache-struct]: ./future/struct.Cache.html
 //! [sync-cache-struct]: ./sync/struct.Cache.html
 //! [sync-seg-cache-struct]: ./sync/struct.SegmentedCache.html
 //! [unsync-cache-struct]: ./unsync/struct.Cache.html
+//! [dashmap]: https://docs.rs/dashmap/*/dashmap/struct.DashMap.html
 //!
 //! # Minimum Supported Rust Versions
 //!
@@ -61,6 +64,7 @@
 //! | no feature |                     | Rust 1.51.0 |
 //! | `atomic64` |       yes           | Rust 1.51.0 |
 //! | `future`   |                     | Rust 1.51.0 |
+//! | `dash`     |                     | Rust 1.51.0 |
 //!
 //! If only the default features are enabled, MSRV will be updated conservatively.
 //! When using other features, like `future`, MSRV might be updated more frequently,
@@ -149,6 +153,9 @@
 //! timer wheel paper, try to change the URL from `https:` to `http:`.
 //!
 //! [timer-wheel]: http://www.cs.columbia.edu/~nahum/w6998/papers/ton97-timing-wheels.pdf
+
+#[cfg(feature = "dash")]
+pub mod dash;
 
 #[cfg(feature = "future")]
 pub mod future;

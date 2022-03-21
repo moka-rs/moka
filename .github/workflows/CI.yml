@@ -21,6 +21,7 @@ jobs:
     strategy:
       matrix:
         rust:
+          - nightly
           - stable
           - beta
           - 1.51.0  # MSRV (for both no features and "future")
@@ -49,15 +50,26 @@ jobs:
         with:
           command: build
 
-      - name: Run tests (future)
+      - name: Run tests (release, no features)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --release
+
+      - name: Run tests (future feature)
         uses: actions-rs/cargo@v1
         if: ${{ matrix.rust != '1.45.2' }}
         with:
           command: test
           args: --features future
 
-      - name: Run tests (release, no features)
+      - name: Run tests (dash feature)
         uses: actions-rs/cargo@v1
+        if: ${{ matrix.rust != '1.45.2' }}
         with:
           command: test
-          args: --release
+          args: --features dash
+
+      - name: Check minimal versions
+        if: ${{ matrix.rust == 'nightly' }}
+        run: cargo clean; cargo update -Z minimal-versions; cargo check
