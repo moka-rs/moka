@@ -2,7 +2,10 @@ use super::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
     CacheBuilder, ConcurrentCacheExt, Iter,
 };
-use crate::sync::{housekeeper::InnerSync, Weigher, WriteOp};
+use crate::{
+    sync::{housekeeper::InnerSync, Weigher, WriteOp},
+    Policy,
+};
 
 use crossbeam_channel::{Sender, TrySendError};
 use std::{
@@ -380,19 +383,12 @@ where
         self.base.invalidate_all();
     }
 
-    /// Returns the `max_capacity` of this cache.
-    pub fn max_capacity(&self) -> Option<usize> {
-        self.base.max_capacity()
-    }
-
-    /// Returns the `time_to_live` of this cache.
-    pub fn time_to_live(&self) -> Option<Duration> {
-        self.base.time_to_live()
-    }
-
-    /// Returns the `time_to_idle` of this cache.
-    pub fn time_to_idle(&self) -> Option<Duration> {
-        self.base.time_to_idle()
+    /// Returns a read-only cache policy of this cache.
+    ///
+    /// At this time, cache policy cannot be modified after cache creation.
+    /// A future version may support to modify it.
+    pub fn policy(&self) -> Policy {
+        self.base.policy()
     }
 
     #[cfg(test)]

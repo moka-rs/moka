@@ -99,7 +99,7 @@ moka = { version = "0.8", features = ["future"] }
 
 The thread-safe, synchronous caches are defined in the `sync` module.
 
-Cache entries are manually added using `insert` or `get_or_insert_with` method, and
+Cache entries are manually added using `insert` or `get_with` method, and
 are stored in the cache until either evicted or manually invalidated.
 
 Here's an example of reading and updating a cache by using multiple threads:
@@ -162,9 +162,9 @@ fn main() {
 
 If you want to atomically initialize and insert a value when the key is not present,
 you might want to check [the document][doc-sync-cache] for other insertion methods
-`get_or_insert_with` and `get_or_try_insert_with`.
+`get_with` and `try_get_with`.
 
-[doc-sync-cache]: https://docs.rs/moka/*/moka/sync/struct.Cache.html#method.get_or_insert_with
+[doc-sync-cache]: https://docs.rs/moka/*/moka/sync/struct.Cache.html#method.get_with
 
 
 ## Example: Asynchronous Cache
@@ -255,9 +255,9 @@ async fn main() {
 
 If you want to atomically initialize and insert a value when the key is not present,
 you might want to check [the document][doc-future-cache] for other insertion methods
-`get_or_insert_with` and `get_or_try_insert_with`.
+`get_with` and `try_get_with`.
 
-[doc-future-cache]: https://docs.rs/moka/*/moka/future/struct.Cache.html#method.get_or_insert_with
+[doc-future-cache]: https://docs.rs/moka/*/moka/future/struct.Cache.html#method.get_with
 
 
 ## Avoiding to clone the value at `get`
@@ -473,7 +473,6 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
     - e.g.
     - `get_or_insert_with(K, F)` → `get_with(K, F)`
     - `get_or_try_insert_with(K, F)` → `try_get_with(K, F)`
-    - `get(&Q)` → `get_if_present(&Q)`
     - `blocking_insert(K, V)` → `blocking().insert(K, V)`
     - `time_to_live()` → `config().time_to_live()`
 - [ ] Cache statistics. (Hit rate, etc.)

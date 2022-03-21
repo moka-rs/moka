@@ -214,8 +214,8 @@ where
                             // Retry from the beginning.
                             continue;
                         }
-                        // Somebody else (a future containing `get_or_insert_with`/
-                        // `get_or_try_insert_with`) has been aborted.
+                        // Somebody else (a future containing `get_with`/`try_get_with`)
+                        // has been aborted.
                         WaiterValue::EnclosingFutureAborted => {
                             retries += 1;
                             panic_if_retry_exhausted_for_aborting(retries, MAX_RETRIES);
@@ -273,8 +273,8 @@ fn panic_if_retry_exhausted_for_aborting(retries: usize, max: usize) {
     if retries >= max {
         panic!(
             "Too many retries. Tried to read the return value from the `init` future \
-    but failed {} times. Maybe the future containing `get_or_insert_with`/\
-    `get_or_try_insert_with` kept being aborted?",
+    but failed {} times. Maybe the future containing `get_with`/`try_get_with` \
+    kept being aborted?",
             retries
         );
     }
