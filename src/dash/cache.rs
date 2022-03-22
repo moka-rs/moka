@@ -341,7 +341,7 @@ where
 
     /// Deprecated, replaced with [`get`](#method.get)
     #[doc(hidden)]
-    #[deprecated(since = "0.8.0", note = "Replaced with `get_with`")]
+    #[deprecated(since = "0.8.0", note = "Replaced with `get`")]
     pub fn get_if_present<Q>(&self, key: &Q) -> Option<V>
     where
         Arc<K>: Borrow<Q>,
