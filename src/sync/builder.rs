@@ -305,11 +305,12 @@ mod tests {
     fn build_cache() {
         // Cache<char, String>
         let cache = CacheBuilder::new(100).build();
+        let policy = cache.policy();
 
-        assert_eq!(cache.max_capacity(), Some(100));
-        assert_eq!(cache.time_to_live(), None);
-        assert_eq!(cache.time_to_idle(), None);
-        assert_eq!(cache.num_segments(), 1);
+        assert_eq!(policy.max_capacity(), Some(100));
+        assert_eq!(policy.time_to_live(), None);
+        assert_eq!(policy.time_to_idle(), None);
+        assert_eq!(policy.num_segments(), 1);
 
         cache.insert('a', "Alice");
         assert_eq!(cache.get(&'a'), Some("Alice"));
@@ -318,11 +319,12 @@ mod tests {
             .time_to_live(Duration::from_secs(45 * 60))
             .time_to_idle(Duration::from_secs(15 * 60))
             .build();
+        let config = cache.policy();
 
-        assert_eq!(cache.max_capacity(), Some(100));
-        assert_eq!(cache.time_to_live(), Some(Duration::from_secs(45 * 60)));
-        assert_eq!(cache.time_to_idle(), Some(Duration::from_secs(15 * 60)));
-        assert_eq!(cache.num_segments(), 1);
+        assert_eq!(config.max_capacity(), Some(100));
+        assert_eq!(config.time_to_live(), Some(Duration::from_secs(45 * 60)));
+        assert_eq!(config.time_to_idle(), Some(Duration::from_secs(15 * 60)));
+        assert_eq!(config.num_segments(), 1);
 
         cache.insert('a', "Alice");
         assert_eq!(cache.get(&'a'), Some("Alice"));
@@ -332,11 +334,12 @@ mod tests {
     fn build_segmented_cache() {
         // SegmentCache<char, String>
         let cache = CacheBuilder::new(100).segments(16).build();
+        let policy = cache.policy();
 
-        assert_eq!(cache.max_capacity(), Some(100));
-        assert_eq!(cache.time_to_live(), None);
-        assert_eq!(cache.time_to_idle(), None);
-        assert_eq!(cache.num_segments(), 16_usize.next_power_of_two());
+        assert_eq!(policy.max_capacity(), Some(100));
+        assert_eq!(policy.time_to_live(), None);
+        assert_eq!(policy.time_to_idle(), None);
+        assert_eq!(policy.num_segments(), 16_usize.next_power_of_two());
 
         cache.insert('b', "Bob");
         assert_eq!(cache.get(&'b'), Some("Bob"));
@@ -346,11 +349,12 @@ mod tests {
             .time_to_live(Duration::from_secs(45 * 60))
             .time_to_idle(Duration::from_secs(15 * 60))
             .build();
+        let policy = cache.policy();
 
-        assert_eq!(cache.max_capacity(), Some(100));
-        assert_eq!(cache.time_to_live(), Some(Duration::from_secs(45 * 60)));
-        assert_eq!(cache.time_to_idle(), Some(Duration::from_secs(15 * 60)));
-        assert_eq!(cache.num_segments(), 16_usize.next_power_of_two());
+        assert_eq!(policy.max_capacity(), Some(100));
+        assert_eq!(policy.time_to_live(), Some(Duration::from_secs(45 * 60)));
+        assert_eq!(policy.time_to_idle(), Some(Duration::from_secs(15 * 60)));
+        assert_eq!(policy.num_segments(), 16_usize.next_power_of_two());
 
         cache.insert('b', "Bob");
         assert_eq!(cache.get(&'b'), Some("Bob"));

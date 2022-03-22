@@ -193,10 +193,11 @@ mod tests {
     async fn build_cache() {
         // Cache<char, String>
         let mut cache = CacheBuilder::new(100).build();
+        let policy = cache.policy();
 
-        assert_eq!(cache.max_capacity(), Some(100));
-        assert_eq!(cache.time_to_live(), None);
-        assert_eq!(cache.time_to_idle(), None);
+        assert_eq!(policy.max_capacity(), Some(100));
+        assert_eq!(policy.time_to_live(), None);
+        assert_eq!(policy.time_to_idle(), None);
 
         cache.insert('a', "Alice");
         assert_eq!(cache.get(&'a'), Some(&"Alice"));
@@ -205,10 +206,11 @@ mod tests {
             .time_to_live(Duration::from_secs(45 * 60))
             .time_to_idle(Duration::from_secs(15 * 60))
             .build();
+        let policy = cache.policy();
 
-        assert_eq!(cache.max_capacity(), Some(100));
-        assert_eq!(cache.time_to_live(), Some(Duration::from_secs(45 * 60)));
-        assert_eq!(cache.time_to_idle(), Some(Duration::from_secs(15 * 60)));
+        assert_eq!(policy.max_capacity(), Some(100));
+        assert_eq!(policy.time_to_live(), Some(Duration::from_secs(45 * 60)));
+        assert_eq!(policy.time_to_idle(), Some(Duration::from_secs(15 * 60)));
 
         cache.insert('a', "Alice");
         assert_eq!(cache.get(&'a'), Some(&"Alice"));

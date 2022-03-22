@@ -2,27 +2,44 @@
 
 ## Version 0.8.0
 
+As a part of stabilizing the cache API, the following cache methods have been renamed:
+
+- `get_or_insert_with(K, F)` → `get_with(K, F)`
+- `get_or_try_insert_with(K, F)` → `try_get_with(K, F)`
+
+Old methods are still available but marked as deprecated. They will be removed in a
+future version.
+
+Also `policy` method was added to all caches and `blocking` method was added to
+`future::Cache`. They return a `Policy` struct or `BlockingOp` struct
+respectively. Some uncommon cache methods were moved to these structs, and old
+methods were removed without deprecating.
+
+Please see [#105][gh-pull-0105] for the complete list of the renamed and moved methods.
+
+### Changed
+
+- API stabilization. (Smaller core cache API, shorter names for common methods)
+  ([#105][gh-pull-0105])
+- Performance related:
+    - Improve performance of `get_with` and `try_get_with`. ([#88][gh-pull-0088])
+    - Avoid to calculate the same hash twice in `get`, `get_with`, `insert`,
+      `invalidate`, etc. ([#90][gh-pull-0090])
+- Update the minimum versions of dependencies:
+    - crossbeam-channel to v0.5.4. ([#100][gh-pull-0100])
+    - scheduled-thread-pool to v0.2.5. ([#103][gh-pull-0103])
+    - (dev-dependency) skeptic to v0.13.5. ([#104][gh-pull-0104])
+
 ### Added
 
 #### Experimental Additions
 
-Please note that the following additions are highly experimental so their APIs will
-be frequently changed in next few releases.
-
 - Add a synchronous cache `moka::dash::Cache`, which uses `dashmap::DashMap` as the
   internal storage. ([#99][gh-pull-0099])
-- Add iterator to `moka::dash::Cache`. ([#101][gh-pull-0101]) 
+- Add iterator to `moka::dash::Cache`. ([#101][gh-pull-0101])
 
-### Changed
-
-- Performance related:
-    - Improve performance on `get_or_insert_with`. ([#88][gh-pull-0088])
-    - Avoid to calculate the same hash twice in `get`, `insert`, `invalidate`,
-      etc. ([#90][gh-pull-0090])
-- Update the minimum versions of dependencies:
-    - crossbeam-channel from v0.5.2 to v0.5.4. ([#100][gh-pull-0100])
-    - scheduled-thread-pool to v0.2.5. ([#103][gh-pull-0103]) 
-    - skeptic to v0.13.5. ([#104][gh-pull-0104])
+Please note that the above additions are highly experimental and their APIs will
+be frequently changed in next few releases.
 
 
 ## Version 0.7.2
@@ -261,6 +278,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0105]: https://github.com/moka-rs/moka/pull/105/
 [gh-pull-0104]: https://github.com/moka-rs/moka/pull/104/
 [gh-pull-0103]: https://github.com/moka-rs/moka/pull/103/
 [gh-pull-0101]: https://github.com/moka-rs/moka/pull/101/

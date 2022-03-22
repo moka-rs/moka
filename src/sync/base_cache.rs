@@ -19,7 +19,7 @@ use crate::{
         time::{CheckedTimeOps, Clock, Instant},
         CacheRegion,
     },
-    PredicateError,
+    Policy, PredicateError,
 };
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use crossbeam_utils::atomic::AtomicCell;
@@ -208,16 +208,8 @@ where
         self.inner.register_invalidation_predicate(predicate, now)
     }
 
-    pub(crate) fn max_capacity(&self) -> Option<usize> {
-        self.inner.max_capacity()
-    }
-
-    pub(crate) fn time_to_live(&self) -> Option<Duration> {
-        self.inner.time_to_live()
-    }
-
-    pub(crate) fn time_to_idle(&self) -> Option<Duration> {
-        self.inner.time_to_idle()
+    pub(crate) fn policy(&self) -> Policy {
+        self.inner.policy()
     }
 
     #[cfg(feature = "unstable-debug-counters")]
@@ -583,8 +575,8 @@ where
             .map(|(key, entry)| KvEntry::new(key, entry))
     }
 
-    fn max_capacity(&self) -> Option<usize> {
-        self.max_capacity.map(|n| n as usize)
+    fn policy(&self) -> Policy {
+        Policy::new(self.max_capacity, 1, self.time_to_live, self.time_to_idle)
     }
 
     #[inline]

@@ -1,10 +1,13 @@
 use super::{deques::Deques, AccessTime, CacheBuilder, KeyDate, KeyHashDate, ValueEntry, Weigher};
-use crate::common::{
-    self,
-    deque::{DeqNode, Deque},
-    frequency_sketch::FrequencySketch,
-    time::{CheckedTimeOps, Clock, Instant},
-    CacheRegion,
+use crate::{
+    common::{
+        self,
+        deque::{DeqNode, Deque},
+        frequency_sketch::FrequencySketch,
+        time::{CheckedTimeOps, Clock, Instant},
+        CacheRegion,
+    },
+    Policy,
 };
 
 use smallvec::SmallVec;
@@ -361,19 +364,12 @@ where
         self.saturating_sub_from_total_weight(invalidated);
     }
 
-    /// Returns the `max_capacity` of this cache.
-    pub fn max_capacity(&self) -> Option<usize> {
-        self.max_capacity.map(|n| n as usize)
-    }
-
-    /// Returns the `time_to_live` of this cache.
-    pub fn time_to_live(&self) -> Option<Duration> {
-        self.time_to_live
-    }
-
-    /// Returns the `time_to_idle` of this cache.
-    pub fn time_to_idle(&self) -> Option<Duration> {
-        self.time_to_idle
+    /// Returns a read-only cache policy of this cache.
+    ///
+    /// At this time, cache policy cannot be modified after cache creation.
+    /// A future version may support to modify it.
+    pub fn policy(&self) -> Policy {
+        Policy::new(self.max_capacity, 1, self.time_to_live, self.time_to_idle)
     }
 }
 

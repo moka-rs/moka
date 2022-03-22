@@ -14,6 +14,7 @@ use crate::{
         housekeeper::{Housekeeper, InnerSync, SyncPace},
         AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, ReadOp, ValueEntry, Weigher, WriteOp,
     },
+    Policy,
 };
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
@@ -185,16 +186,8 @@ where
         self.inner.set_valid_after(now);
     }
 
-    pub(crate) fn max_capacity(&self) -> Option<usize> {
-        self.inner.max_capacity()
-    }
-
-    pub(crate) fn time_to_live(&self) -> Option<Duration> {
-        self.inner.time_to_live()
-    }
-
-    pub(crate) fn time_to_idle(&self) -> Option<Duration> {
-        self.inner.time_to_idle()
+    pub(crate) fn policy(&self) -> Policy {
+        self.inner.policy()
     }
 
     #[cfg(test)]
@@ -516,8 +509,8 @@ where
             .map(|(key, entry)| KvEntry::new(key, entry))
     }
 
-    fn max_capacity(&self) -> Option<usize> {
-        self.max_capacity.map(|n| n as usize)
+    fn policy(&self) -> Policy {
+        Policy::new(self.max_capacity, 1, self.time_to_live, self.time_to_idle)
     }
 
     #[inline]

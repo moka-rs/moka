@@ -33,7 +33,7 @@ use std::{
 /// cache.insert(0, "zero");
 ///
 /// // This get() will extend the entry life for another 5 minutes.
-/// cache.get_if_present(&0);
+/// cache.get(&0);
 ///
 /// // Even though we keep calling get(), the entry will expire
 /// // after 30 minutes (TTL) from the insert().
@@ -202,25 +202,27 @@ mod tests {
     fn build_cache() {
         // Cache<char, String>
         let cache = CacheBuilder::new(100).build();
+        let policy = cache.policy();
 
-        assert_eq!(cache.max_capacity(), Some(100));
-        assert_eq!(cache.time_to_live(), None);
-        assert_eq!(cache.time_to_idle(), None);
+        assert_eq!(policy.max_capacity(), Some(100));
+        assert_eq!(policy.time_to_live(), None);
+        assert_eq!(policy.time_to_idle(), None);
 
         cache.insert('a', "Alice");
-        assert_eq!(cache.get_if_present(&'a'), Some("Alice"));
+        assert_eq!(cache.get(&'a'), Some("Alice"));
 
         let cache = CacheBuilder::new(100)
             .time_to_live(Duration::from_secs(45 * 60))
             .time_to_idle(Duration::from_secs(15 * 60))
             .build();
+        let policy = cache.policy();
 
-        assert_eq!(cache.max_capacity(), Some(100));
-        assert_eq!(cache.time_to_live(), Some(Duration::from_secs(45 * 60)));
-        assert_eq!(cache.time_to_idle(), Some(Duration::from_secs(15 * 60)));
+        assert_eq!(policy.max_capacity(), Some(100));
+        assert_eq!(policy.time_to_live(), Some(Duration::from_secs(45 * 60)));
+        assert_eq!(policy.time_to_idle(), Some(Duration::from_secs(15 * 60)));
 
         cache.insert('a', "Alice");
-        assert_eq!(cache.get_if_present(&'a'), Some("Alice"));
+        assert_eq!(cache.get(&'a'), Some("Alice"));
     }
 
     #[test]

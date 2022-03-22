@@ -8,7 +8,7 @@ use crate::{
         housekeeper::InnerSync,
         PredicateId, Weigher, WriteOp,
     },
-    PredicateError,
+    Policy, PredicateError,
 };
 
 #[cfg(feature = "unstable-debug-counters")]
@@ -43,7 +43,7 @@ use std::{
 /// cache until either evicted or manually invalidated:
 ///
 /// - Inside an async context (`async fn` or `async` block), use
-///   [`insert`](#method.insert), [`get_or_insert_with`](#method.get_or_insert_with)
+///   [`insert`](#method.insert), [`get_with`](#method.get_with)
 ///   or [`invalidate`](#method.invalidate) methods for updating the cache and `await`
 ///   them.
 /// - Outside any async context, use [`blocking_insert`](#method.blocking_insert) or
@@ -120,8 +120,8 @@ use std::{
 ///
 /// If you want to atomically initialize and insert a value when the key is not
 /// present, you might want to check other insertion methods
-/// [`get_or_insert_with`](#method.get_or_insert_with) and
-/// [`get_or_try_insert_with`](#method.get_or_try_insert_with).
+/// [`get_with`](#method.get_with) and
+/// [`try_get_with`](#method.try_get_with).
 ///
 /// # Avoiding to clone the value at `get`
 ///
@@ -380,6 +380,22 @@ where
         self.base.get_with_hash(key, self.base.hash(key))
     }
 
+    /// Deprecated, replaced with [`get_with`](#method.get_with)
+    #[deprecated(since = "0.8.0", note = "Replaced with `get_with`")]
+    pub async fn get_or_insert_with(&self, key: K, init: impl Future<Output = V>) -> V {
+        self.get_with(key, init).await
+    }
+
+    /// Deprecated, replaced with [`try_get_with`](#method.try_get_with)
+    #[deprecated(since = "0.8.0", note = "Replaced with `try_get_with`")]
+    pub async fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
+    where
+        F: Future<Output = Result<V, E>>,
+        E: Send + Sync + 'static,
+    {
+        self.try_get_with(key, init).await
+    }
+
     /// Ensures the value of the key exists by inserting the output of the init
     /// future if not exist, and returns a _clone_ of the value.
     ///
@@ -413,10 +429,10 @@ where
     ///                 println!("Task {} started.", task_id);
     ///
     ///                 // Insert and get the value for key1. Although all four async tasks
-    ///                 // will call `get_or_insert_with` at the same time, the `init` async
+    ///                 // will call `get_with` at the same time, the `init` async
     ///                 // block must be resolved only once.
     ///                 let value = my_cache
-    ///                     .get_or_insert_with("key1", async move {
+    ///                     .get_with("key1", async move {
     ///                         println!("Task {} inserting a value.", task_id);
     ///                         Arc::new(vec![0u8; TEN_MIB])
     ///                     })
@@ -461,10 +477,7 @@ where
     /// 0, 1 and 2 above), this method will restart and resolve one of the remaining
     /// `init` futures.
     ///
-    pub async fn get_or_insert_with<F>(&self, key: K, init: F) -> V
-    where
-        F: Future<Output = V>,
-    {
+    pub async fn get_with(&self, key: K, init: impl Future<Output = V>) -> V {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         self.get_or_insert_with_hash_and_fun(key, hash, init).await
@@ -509,10 +522,10 @@ where
     ///                 println!("Task {} started.", task_id);
     ///
     ///                 // Try to insert and get the value for key1. Although
-    ///                 // all four async tasks will call `get_or_try_insert_with`
+    ///                 // all four async tasks will call `try_get_with`
     ///                 // at the same time, get_html() must be called only once.
     ///                 let value = my_cache
-    ///                     .get_or_try_insert_with(
+    ///                     .try_get_with(
     ///                         "key1",
     ///                         get_html(task_id, "https://www.rust-lang.org"),
     ///                     ).await;
@@ -560,7 +573,7 @@ where
     /// 0, 1 and 3 above), this method will restart and resolve one of the remaining
     /// `init` futures.
     ///
-    pub async fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
+    pub async fn try_get_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
@@ -580,11 +593,7 @@ where
         self.insert_with_hash(key, hash, value).await
     }
 
-    /// Blocking [insert](#method.insert) to call outside of asynchronous contexts.
-    ///
-    /// This method is intended for use cases where you are inserting from
-    /// synchronous code.
-    pub fn blocking_insert(&self, key: K, value: V) {
+    fn do_blocking_insert(&self, key: K, value: V) {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         let op = self.base.do_insert_with_hash(key, hash, value);
@@ -611,12 +620,7 @@ where
         }
     }
 
-    /// Blocking [invalidate](#method.invalidate) to call outside of asynchronous
-    /// contexts.
-    ///
-    /// This method is intended for use cases where you are invalidating from
-    /// synchronous code.
-    pub fn blocking_invalidate<Q>(&self, key: &Q)
+    fn do_blocking_invalidate<Q>(&self, key: &Q)
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -676,26 +680,19 @@ where
         self.base.invalidate_entries_if(Arc::new(predicate))
     }
 
-    /// Returns the `max_capacity` of this cache.
-    pub fn max_capacity(&self) -> Option<usize> {
-        self.base.max_capacity()
+    /// Returns a `BlockingOp` for this cache. It provides blocking
+    /// [insert](#method.insert) and [invalidate](#method.invalidate) methods, which
+    /// can be called outside of asynchronous contexts.
+    pub fn blocking(&self) -> BlockingOp<'_, K, V, S> {
+        BlockingOp(self)
     }
 
-    /// Returns the `time_to_live` of this cache.
-    pub fn time_to_live(&self) -> Option<Duration> {
-        self.base.time_to_live()
-    }
-
-    /// Returns the `time_to_idle` of this cache.
-    pub fn time_to_idle(&self) -> Option<Duration> {
-        self.base.time_to_idle()
-    }
-
-    /// Returns the number of internal segments of this cache.
+    /// Returns a read-only cache policy of this cache.
     ///
-    /// `Cache` always returns `1`.
-    pub fn num_segments(&self) -> usize {
-        1
+    /// At this time, cache policy cannot be modified after cache creation.
+    /// A future version may support to modify it.
+    pub fn policy(&self) -> Policy {
+        self.base.policy()
     }
 
     #[cfg(feature = "unstable-debug-counters")]
@@ -872,6 +869,37 @@ where
     }
 }
 
+pub struct BlockingOp<'a, K, V, S>(&'a Cache<K, V, S>);
+
+impl<'a, K, V, S> BlockingOp<'a, K, V, S>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    /// Blocking [insert](./struct.Cache.html#method.insert) to call outside of
+    /// asynchronous contexts.
+    ///
+    /// This method is intended for use cases where you are inserting from
+    /// synchronous code.
+    pub fn insert(&self, key: K, value: V) {
+        self.0.do_blocking_insert(key, value)
+    }
+
+    /// Blocking [invalidate](./struct.Cache.html#method.invalidate) to call outside
+    /// of asynchronous contexts.
+    ///
+    /// This method is intended for use cases where you are invalidating from
+    /// synchronous code.
+    pub fn invalidate<Q>(&self, key: &Q)
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.0.do_blocking_invalidate(key)
+    }
+}
+
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
@@ -936,14 +964,14 @@ mod tests {
         // Make the cache exterior immutable.
         let cache = cache;
 
-        cache.blocking_insert("a", "alice");
-        cache.blocking_insert("b", "bob");
+        cache.blocking().insert("a", "alice");
+        cache.blocking().insert("b", "bob");
         assert_eq!(cache.get(&"a"), Some("alice"));
         assert_eq!(cache.get(&"b"), Some("bob"));
         cache.sync();
         // counts: a -> 1, b -> 1
 
-        cache.blocking_insert("c", "cindy");
+        cache.blocking().insert("c", "cindy");
         assert_eq!(cache.get(&"c"), Some("cindy"));
         // counts: a -> 1, b -> 1, c -> 1
         cache.sync();
@@ -954,24 +982,24 @@ mod tests {
         // counts: a -> 2, b -> 2, c -> 1
 
         // "d" should not be admitted because its frequency is too low.
-        cache.blocking_insert("d", "david"); //   count: d -> 0
+        cache.blocking().insert("d", "david"); //   count: d -> 0
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 1
 
-        cache.blocking_insert("d", "david");
+        cache.blocking().insert("d", "david");
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher than c's.
-        cache.blocking_insert("d", "dennis");
+        cache.blocking().insert("d", "dennis");
         cache.sync();
         assert_eq!(cache.get(&"a"), Some("alice"));
         assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.get(&"c"), None);
         assert_eq!(cache.get(&"d"), Some("dennis"));
 
-        cache.blocking_invalidate(&"b");
+        cache.blocking().invalidate(&"b");
         assert_eq!(cache.get(&"b"), None);
     }
 
@@ -1065,10 +1093,10 @@ mod tests {
                 let cache = cache.clone();
                 if id == 0 {
                     tokio::spawn(async move {
-                        cache.blocking_insert(10, format!("{}-100", id));
+                        cache.blocking().insert(10, format!("{}-100", id));
                         cache.get(&10);
-                        cache.blocking_insert(20, format!("{}-200", id));
-                        cache.blocking_invalidate(&10);
+                        cache.blocking().insert(20, format!("{}-200", id));
+                        cache.blocking().invalidate(&10);
                     })
                 } else {
                     tokio::spawn(async move {
@@ -1289,21 +1317,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_or_insert_with() {
+    async fn get_with() {
         let cache = Cache::new(100);
         const KEY: u32 = 0;
 
         // This test will run five async tasks:
         //
-        // Task1 will be the first task to call `get_or_insert_with` for a key, so
+        // Task1 will be the first task to call `get_with` for a key, so
         // its async block will be evaluated and then a &str value "task1" will be
         // inserted to the cache.
         let task1 = {
             let cache1 = cache.clone();
             async move {
-                // Call `get_or_insert_with` immediately.
+                // Call `get_with` immediately.
                 let v = cache1
-                    .get_or_insert_with(KEY, async {
+                    .get_with(KEY, async {
                         // Wait for 300 ms and return a &str value.
                         Timer::after(Duration::from_millis(300)).await;
                         "task1"
@@ -1313,22 +1341,20 @@ mod tests {
             }
         };
 
-        // Task2 will be the second task to call `get_or_insert_with` for the same
+        // Task2 will be the second task to call `get_with` for the same
         // key, so its async block will not be evaluated. Once task1's async block
         // finishes, it will get the value inserted by task1's async block.
         let task2 = {
             let cache2 = cache.clone();
             async move {
-                // Wait for 100 ms before calling `get_or_insert_with`.
+                // Wait for 100 ms before calling `get_with`.
                 Timer::after(Duration::from_millis(100)).await;
-                let v = cache2
-                    .get_or_insert_with(KEY, async { unreachable!() })
-                    .await;
+                let v = cache2.get_with(KEY, async { unreachable!() }).await;
                 assert_eq!(v, "task1");
             }
         };
 
-        // Task3 will be the third task to call `get_or_insert_with` for the same
+        // Task3 will be the third task to call `get_with` for the same
         // key. By the time it calls, task1's async block should have finished
         // already and the value should be already inserted to the cache. So its
         // async block will not be evaluated and will get the value insert by task1's
@@ -1336,11 +1362,9 @@ mod tests {
         let task3 = {
             let cache3 = cache.clone();
             async move {
-                // Wait for 400 ms before calling `get_or_insert_with`.
+                // Wait for 400 ms before calling `get_with`.
                 Timer::after(Duration::from_millis(400)).await;
-                let v = cache3
-                    .get_or_insert_with(KEY, async { unreachable!() })
-                    .await;
+                let v = cache3.get_with(KEY, async { unreachable!() }).await;
                 assert_eq!(v, "task1");
             }
         };
@@ -1373,7 +1397,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_or_try_insert_with() {
+    async fn try_get_with() {
         use std::sync::Arc;
 
         // Note that MyError does not implement std::error::Error trait
@@ -1388,15 +1412,15 @@ mod tests {
 
         // This test will run eight async tasks:
         //
-        // Task1 will be the first task to call `get_or_insert_with` for a key, so
+        // Task1 will be the first task to call `get_with` for a key, so
         // its async block will be evaluated and then an error will be returned.
         // Nothing will be inserted to the cache.
         let task1 = {
             let cache1 = cache.clone();
             async move {
-                // Call `get_or_try_insert_with` immediately.
+                // Call `try_get_with` immediately.
                 let v = cache1
-                    .get_or_try_insert_with(KEY, async {
+                    .try_get_with(KEY, async {
                         // Wait for 300 ms and return an error.
                         Timer::after(Duration::from_millis(300)).await;
                         Err(MyError("task1 error".into()))
@@ -1406,23 +1430,21 @@ mod tests {
             }
         };
 
-        // Task2 will be the second task to call `get_or_insert_with` for the same
+        // Task2 will be the second task to call `get_with` for the same
         // key, so its async block will not be evaluated. Once task1's async block
         // finishes, it will get the same error value returned by task1's async
         // block.
         let task2 = {
             let cache2 = cache.clone();
             async move {
-                // Wait for 100 ms before calling `get_or_try_insert_with`.
+                // Wait for 100 ms before calling `try_get_with`.
                 Timer::after(Duration::from_millis(100)).await;
-                let v: MyResult<_> = cache2
-                    .get_or_try_insert_with(KEY, async { unreachable!() })
-                    .await;
+                let v: MyResult<_> = cache2.try_get_with(KEY, async { unreachable!() }).await;
                 assert!(v.is_err());
             }
         };
 
-        // Task3 will be the third task to call `get_or_insert_with` for the same
+        // Task3 will be the third task to call `get_with` for the same
         // key. By the time it calls, task1's async block should have finished
         // already, but the key still does not exist in the cache. So its async block
         // will be evaluated and then an okay &str value will be returned. That value
@@ -1430,10 +1452,10 @@ mod tests {
         let task3 = {
             let cache3 = cache.clone();
             async move {
-                // Wait for 400 ms before calling `get_or_try_insert_with`.
+                // Wait for 400 ms before calling `try_get_with`.
                 Timer::after(Duration::from_millis(400)).await;
                 let v: MyResult<_> = cache3
-                    .get_or_try_insert_with(KEY, async {
+                    .try_get_with(KEY, async {
                         // Wait for 300 ms and return an Ok(&str) value.
                         Timer::after(Duration::from_millis(300)).await;
                         Ok("task3")
@@ -1443,22 +1465,20 @@ mod tests {
             }
         };
 
-        // Task4 will be the fourth task to call `get_or_insert_with` for the same
+        // Task4 will be the fourth task to call `get_with` for the same
         // key. So its async block will not be evaluated. Once task3's async block
         // finishes, it will get the same okay &str value.
         let task4 = {
             let cache4 = cache.clone();
             async move {
-                // Wait for 500 ms before calling `get_or_try_insert_with`.
+                // Wait for 500 ms before calling `try_get_with`.
                 Timer::after(Duration::from_millis(500)).await;
-                let v: MyResult<_> = cache4
-                    .get_or_try_insert_with(KEY, async { unreachable!() })
-                    .await;
+                let v: MyResult<_> = cache4.try_get_with(KEY, async { unreachable!() }).await;
                 assert_eq!(v.unwrap(), "task3");
             }
         };
 
-        // Task5 will be the fifth task to call `get_or_insert_with` for the same
+        // Task5 will be the fifth task to call `get_with` for the same
         // key. So its async block will not be evaluated. By the time it calls,
         // task3's async block should have finished already, so its async block will
         // not be evaluated and will get the value insert by task3's async block
@@ -1466,11 +1486,9 @@ mod tests {
         let task5 = {
             let cache5 = cache.clone();
             async move {
-                // Wait for 800 ms before calling `get_or_try_insert_with`.
+                // Wait for 800 ms before calling `try_get_with`.
                 Timer::after(Duration::from_millis(800)).await;
-                let v: MyResult<_> = cache5
-                    .get_or_try_insert_with(KEY, async { unreachable!() })
-                    .await;
+                let v: MyResult<_> = cache5.try_get_with(KEY, async { unreachable!() }).await;
                 assert_eq!(v.unwrap(), "task3");
             }
         };
@@ -1516,7 +1534,7 @@ mod tests {
 
     #[tokio::test]
     // https://github.com/moka-rs/moka/issues/43
-    async fn handle_panic_in_get_or_insert_with() {
+    async fn handle_panic_in_get_with() {
         use tokio::time::{sleep, Duration};
 
         let cache = Cache::new(16);
@@ -1526,21 +1544,21 @@ mod tests {
             let semaphore_ref = semaphore.clone();
             tokio::task::spawn(async move {
                 let _ = cache_ref
-                    .get_or_insert_with(1, async move {
+                    .get_with(1, async move {
                         semaphore_ref.add_permits(1);
                         sleep(Duration::from_millis(50)).await;
-                        panic!("Panic during get_or_try_insert_with");
+                        panic!("Panic during try_get_with");
                     })
                     .await;
             });
         }
         let _ = semaphore.acquire().await.expect("semaphore acquire failed");
-        assert_eq!(cache.get_or_insert_with(1, async { 5 }).await, 5);
+        assert_eq!(cache.get_with(1, async { 5 }).await, 5);
     }
 
     #[tokio::test]
     // https://github.com/moka-rs/moka/issues/43
-    async fn handle_panic_in_get_or_try_insert_with() {
+    async fn handle_panic_in_try_get_with() {
         use tokio::time::{sleep, Duration};
 
         let cache = Cache::new(16);
@@ -1550,24 +1568,24 @@ mod tests {
             let semaphore_ref = semaphore.clone();
             tokio::task::spawn(async move {
                 let _ = cache_ref
-                    .get_or_try_insert_with(1, async move {
+                    .try_get_with(1, async move {
                         semaphore_ref.add_permits(1);
                         sleep(Duration::from_millis(50)).await;
-                        panic!("Panic during get_or_try_insert_with");
+                        panic!("Panic during try_get_with");
                     })
                     .await as Result<_, Arc<Infallible>>;
             });
         }
         let _ = semaphore.acquire().await.expect("semaphore acquire failed");
         assert_eq!(
-            cache.get_or_try_insert_with(1, async { Ok(5) }).await as Result<_, Arc<Infallible>>,
+            cache.try_get_with(1, async { Ok(5) }).await as Result<_, Arc<Infallible>>,
             Ok(5)
         );
     }
 
     #[tokio::test]
     // https://github.com/moka-rs/moka/issues/59
-    async fn abort_get_or_insert_with() {
+    async fn abort_get_with() {
         use tokio::time::{sleep, Duration};
 
         let cache = Cache::new(16);
@@ -1580,7 +1598,7 @@ mod tests {
 
             handle = tokio::task::spawn(async move {
                 let _ = cache_ref
-                    .get_or_insert_with(1, async move {
+                    .get_with(1, async move {
                         semaphore_ref.add_permits(1);
                         sleep(Duration::from_millis(50)).await;
                         unreachable!();
@@ -1592,12 +1610,12 @@ mod tests {
         let _ = semaphore.acquire().await.expect("semaphore acquire failed");
         handle.abort();
 
-        assert_eq!(cache.get_or_insert_with(1, async { 5 }).await, 5);
+        assert_eq!(cache.get_with(1, async { 5 }).await, 5);
     }
 
     #[tokio::test]
     // https://github.com/moka-rs/moka/issues/59
-    async fn abort_get_or_try_insert_with() {
+    async fn abort_try_get_with() {
         use tokio::time::{sleep, Duration};
 
         let cache = Cache::new(16);
@@ -1610,7 +1628,7 @@ mod tests {
 
             handle = tokio::task::spawn(async move {
                 let _ = cache_ref
-                    .get_or_try_insert_with(1, async move {
+                    .try_get_with(1, async move {
                         semaphore_ref.add_permits(1);
                         sleep(Duration::from_millis(50)).await;
                         unreachable!();
@@ -1623,7 +1641,7 @@ mod tests {
         handle.abort();
 
         assert_eq!(
-            cache.get_or_try_insert_with(1, async { Ok(5) }).await as Result<_, Arc<Infallible>>,
+            cache.try_get_with(1, async { Ok(5) }).await as Result<_, Arc<Infallible>>,
             Ok(5)
         );
     }
