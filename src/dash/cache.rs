@@ -21,19 +21,20 @@ use std::{
 /// [`dashmap::DashMap`][dashmap].
 ///
 /// Unlike `sync` and `future` caches of Moka, `dash` cache does not provide full
-/// concurrency of retrievals. This is because `DashMap` employs read-write locks on
-/// internal shards.
+/// concurrency of retrievals and updates. This is because `dash` cache uses
+/// `DashMap` as the central key-value storage, which employs read-write locks on
+/// internal shards. Other caches use a lock-free concurrent hash table.
 ///
 /// On the other hand, `dash` cache provides iterator, which returns immutable
-/// references to the entries in a cache.
+/// references to the entries in a cache. Other caches do not provide iterator.
 ///
 /// `dash` cache performs a best-effort bounding of the map using an entry
 /// replacement algorithm to determine which entries to evict when the capacity is
 /// exceeded.
 ///
-/// To use this cache, enable a crate feature called "dash". Please note that the APIs
-/// will _be changed very often_ in next few releases as this is yet an experimental
-/// feature.
+/// To use this cache, enable a crate feature called "dash" in your Cargo.toml.
+/// Please note that the API of `dash` cache will _be changed very often_ in next few
+/// releases as this is yet an experimental component.
 ///
 /// # Examples
 ///
@@ -71,7 +72,7 @@ use std::{
 ///             for key in start..end {
 ///                 my_cache.insert(key, value(key));
 ///                 // get() returns Option<String>, a clone of the stored value.
-///                 assert_eq!(my_cache.get_if_present(&key), Some(value(key)));
+///                 assert_eq!(my_cache.get(&key), Some(value(key)));
 ///             }
 ///
 ///             // Invalidate every 4 element of the inserted entries.
@@ -88,21 +89,21 @@ use std::{
 /// // Verify the result.
 /// for key in 0..(NUM_THREADS * NUM_KEYS_PER_THREAD) {
 ///     if key % 4 == 0 {
-///         assert_eq!(cache.get_if_present(&key), None);
+///         assert_eq!(cache.get(&key), None);
 ///     } else {
-///         assert_eq!(cache.get_if_present(&key), Some(value(key)));
+///         assert_eq!(cache.get(&key), Some(value(key)));
 ///     }
 /// }
 /// ```
 ///
-/// # Avoiding to clone the value at `get_if_present`
+/// # Avoiding to clone the value at `get`
 ///
-/// The return type of `get_if_present` method is `Option<V>` instead of `Option<&V>`.
-/// Every time `get_if_present` is called for an existing key, it creates a clone of
-/// the stored value `V` and returns it. This is because the `Cache` allows
-/// concurrent updates from threads so a value stored in the cache can be dropped or
-/// replaced at any time by any other thread. `get` cannot return a reference `&V` as
-/// it is impossible to guarantee the value outlives the reference.
+/// The return type of `get` method is `Option<V>` instead of `Option<&V>`. Every
+/// time `get` is called for an existing key, it creates a clone of the stored value
+/// `V` and returns it. This is because the `Cache` allows concurrent updates from
+/// threads so a value stored in the cache can be dropped or replaced at any time by
+/// any other thread. `get` cannot return a reference `&V` as it is impossible to
+/// guarantee the value outlives the reference.
 ///
 /// If you want to store values that will be expensive to clone, wrap them by
 /// `std::sync::Arc` before storing in a cache. [`Arc`][rustdoc-std-arc] is a
@@ -330,12 +331,23 @@ where
     /// on the borrowed form _must_ match those for the key type.
     ///
     /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
-    pub fn get_if_present<Q>(&self, key: &Q) -> Option<V>
+    pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.base.get_with_hash(key, self.base.hash(key))
+    }
+
+    /// Deprecated, replaced with [`get`](#method.get)
+    #[doc(hidden)]
+    #[deprecated(since = "0.8.0", note = "Replaced with `get_with`")]
+    pub fn get_if_present<Q>(&self, key: &Q) -> Option<V>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.get(key)
     }
 
     /// Inserts a key-value pair into the cache.
@@ -523,41 +535,41 @@ mod tests {
 
         cache.insert("a", "alice");
         cache.insert("b", "bob");
-        assert_eq!(cache.get_if_present(&"a"), Some("alice"));
-        assert_eq!(cache.get_if_present(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         cache.sync();
         // counts: a -> 1, b -> 1
 
         cache.insert("c", "cindy");
-        assert_eq!(cache.get_if_present(&"c"), Some("cindy"));
+        assert_eq!(cache.get(&"c"), Some("cindy"));
         // counts: a -> 1, b -> 1, c -> 1
         cache.sync();
 
-        assert_eq!(cache.get_if_present(&"a"), Some("alice"));
-        assert_eq!(cache.get_if_present(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         cache.sync();
         // counts: a -> 2, b -> 2, c -> 1
 
         // "d" should not be admitted because its frequency is too low.
         cache.insert("d", "david"); //   count: d -> 0
         cache.sync();
-        assert_eq!(cache.get_if_present(&"d"), None); //   d -> 1
+        assert_eq!(cache.get(&"d"), None); //   d -> 1
 
         cache.insert("d", "david");
         cache.sync();
-        assert_eq!(cache.get_if_present(&"d"), None); //   d -> 2
+        assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher than c's.
         cache.insert("d", "dennis");
         cache.sync();
-        assert_eq!(cache.get_if_present(&"a"), Some("alice"));
-        assert_eq!(cache.get_if_present(&"b"), Some("bob"));
-        assert_eq!(cache.get_if_present(&"c"), None);
-        assert_eq!(cache.get_if_present(&"d"), Some("dennis"));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"c"), None);
+        assert_eq!(cache.get(&"d"), Some("dennis"));
 
         cache.invalidate(&"b");
-        assert_eq!(cache.get_if_present(&"b"), None);
+        assert_eq!(cache.get(&"b"), None);
     }
 
     #[test]
@@ -579,18 +591,18 @@ mod tests {
 
         cache.insert("a", alice);
         cache.insert("b", bob);
-        assert_eq!(cache.get_if_present(&"a"), Some(alice));
-        assert_eq!(cache.get_if_present(&"b"), Some(bob));
+        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"b"), Some(bob));
         cache.sync();
         // order (LRU -> MRU) and counts: a -> 1, b -> 1
 
         cache.insert("c", cindy);
-        assert_eq!(cache.get_if_present(&"c"), Some(cindy));
+        assert_eq!(cache.get(&"c"), Some(cindy));
         // order and counts: a -> 1, b -> 1, c -> 1
         cache.sync();
 
-        assert_eq!(cache.get_if_present(&"a"), Some(alice));
-        assert_eq!(cache.get_if_present(&"b"), Some(bob));
+        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"b"), Some(bob));
         cache.sync();
         // order and counts: c -> 1, a -> 2, b -> 2
 
@@ -599,41 +611,41 @@ mod tests {
         // of "a" and "c".
         cache.insert("d", david); //   count: d -> 0
         cache.sync();
-        assert_eq!(cache.get_if_present(&"d"), None); //   d -> 1
+        assert_eq!(cache.get(&"d"), None); //   d -> 1
 
         cache.insert("d", david);
         cache.sync();
-        assert_eq!(cache.get_if_present(&"d"), None); //   d -> 2
+        assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         cache.insert("d", david);
         cache.sync();
-        assert_eq!(cache.get_if_present(&"d"), None); //   d -> 3
+        assert_eq!(cache.get(&"d"), None); //   d -> 3
 
         cache.insert("d", david);
         cache.sync();
-        assert_eq!(cache.get_if_present(&"d"), None); //   d -> 4
+        assert_eq!(cache.get(&"d"), None); //   d -> 4
 
         // Finally "d" should be admitted by evicting "c" and "a".
         cache.insert("d", dennis);
         cache.sync();
-        assert_eq!(cache.get_if_present(&"a"), None);
-        assert_eq!(cache.get_if_present(&"b"), Some(bob));
-        assert_eq!(cache.get_if_present(&"c"), None);
-        assert_eq!(cache.get_if_present(&"d"), Some(dennis));
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), Some(bob));
+        assert_eq!(cache.get(&"c"), None);
+        assert_eq!(cache.get(&"d"), Some(dennis));
 
         // Update "b" with "bill" (w: 15 -> 20). This should evict "d" (w: 15).
         cache.insert("b", bill);
         cache.sync();
-        assert_eq!(cache.get_if_present(&"b"), Some(bill));
-        assert_eq!(cache.get_if_present(&"d"), None);
+        assert_eq!(cache.get(&"b"), Some(bill));
+        assert_eq!(cache.get(&"d"), None);
 
         // Re-add "a" (w: 10) and update "b" with "bob" (w: 20 -> 15).
         cache.insert("a", alice);
         cache.insert("b", bob);
         cache.sync();
-        assert_eq!(cache.get_if_present(&"a"), Some(alice));
-        assert_eq!(cache.get_if_present(&"b"), Some(bob));
-        assert_eq!(cache.get_if_present(&"d"), None);
+        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"b"), Some(bob));
+        assert_eq!(cache.get(&"d"), None);
 
         // Verify the sizes.
         assert_eq!(cache.estimated_entry_count(), 2);
@@ -652,7 +664,7 @@ mod tests {
                 let cache = cache.clone();
                 std::thread::spawn(move || {
                     cache.insert(10, format!("{}-100", id));
-                    cache.get_if_present(&10);
+                    cache.get(&10);
                     cache.insert(20, format!("{}-200", id));
                     cache.invalidate(&10);
                 })
@@ -661,8 +673,8 @@ mod tests {
 
         handles.into_iter().for_each(|h| h.join().expect("Failed"));
 
-        assert!(cache.get_if_present(&10).is_none());
-        assert!(cache.get_if_present(&20).is_some());
+        assert!(cache.get(&10).is_none());
+        assert!(cache.get(&20).is_some());
     }
 
     #[test]
@@ -676,9 +688,9 @@ mod tests {
         cache.insert("a", "alice");
         cache.insert("b", "bob");
         cache.insert("c", "cindy");
-        assert_eq!(cache.get_if_present(&"a"), Some("alice"));
-        assert_eq!(cache.get_if_present(&"b"), Some("bob"));
-        assert_eq!(cache.get_if_present(&"c"), Some("cindy"));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"c"), Some("cindy"));
         cache.sync();
 
         cache.invalidate_all();
@@ -687,10 +699,10 @@ mod tests {
         cache.insert("d", "david");
         cache.sync();
 
-        assert!(cache.get_if_present(&"a").is_none());
-        assert!(cache.get_if_present(&"b").is_none());
-        assert!(cache.get_if_present(&"c").is_none());
-        assert_eq!(cache.get_if_present(&"d"), Some("david"));
+        assert!(cache.get(&"a").is_none());
+        assert!(cache.get(&"b").is_none());
+        assert!(cache.get(&"c").is_none());
+        assert_eq!(cache.get(&"d"), Some("david"));
     }
 
     #[test]
@@ -714,12 +726,12 @@ mod tests {
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
         cache.sync();
 
-        cache.get_if_present(&"a");
+        cache.get(&"a");
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
         cache.sync();
 
-        assert_eq!(cache.get_if_present(&"a"), None);
+        assert_eq!(cache.get(&"a"), None);
         assert!(cache.is_table_empty());
 
         cache.insert("b", "bob");
@@ -730,7 +742,7 @@ mod tests {
         mock.increment(Duration::from_secs(5)); // 15 secs.
         cache.sync();
 
-        assert_eq!(cache.get_if_present(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.estimated_entry_count(), 1);
 
         cache.insert("b", "bill");
@@ -739,14 +751,14 @@ mod tests {
         mock.increment(Duration::from_secs(5)); // 20 secs
         cache.sync();
 
-        assert_eq!(cache.get_if_present(&"b"), Some("bill"));
+        assert_eq!(cache.get(&"b"), Some("bill"));
         assert_eq!(cache.estimated_entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 25 secs
         cache.sync();
 
-        assert_eq!(cache.get_if_present(&"a"), None);
-        assert_eq!(cache.get_if_present(&"b"), None);
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), None);
         assert!(cache.is_table_empty());
     }
 
@@ -771,7 +783,7 @@ mod tests {
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
         cache.sync();
 
-        assert_eq!(cache.get_if_present(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"a"), Some("alice"));
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
         cache.sync();
@@ -784,15 +796,15 @@ mod tests {
         mock.increment(Duration::from_secs(5)); // 15 secs.
         cache.sync();
 
-        assert_eq!(cache.get_if_present(&"a"), None);
-        assert_eq!(cache.get_if_present(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.estimated_entry_count(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
         cache.sync();
 
-        assert_eq!(cache.get_if_present(&"a"), None);
-        assert_eq!(cache.get_if_present(&"b"), None);
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), None);
         assert!(cache.is_table_empty());
     }
 

@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(policy.time_to_idle(), None);
 
         cache.insert('a', "Alice");
-        assert_eq!(cache.get_if_present(&'a'), Some("Alice"));
+        assert_eq!(cache.get(&'a'), Some("Alice"));
 
         let cache = CacheBuilder::new(100)
             .time_to_live(Duration::from_secs(45 * 60))
@@ -222,7 +222,7 @@ mod tests {
         assert_eq!(policy.time_to_idle(), Some(Duration::from_secs(15 * 60)));
 
         cache.insert('a', "Alice");
-        assert_eq!(cache.get_if_present(&'a'), Some("Alice"));
+        assert_eq!(cache.get(&'a'), Some("Alice"));
     }
 
     #[test]
