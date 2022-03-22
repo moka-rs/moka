@@ -593,11 +593,7 @@ where
         self.insert_with_hash(key, hash, value).await
     }
 
-    /// Blocking [insert](#method.insert) to call outside of asynchronous contexts.
-    ///
-    /// This method is intended for use cases where you are inserting from
-    /// synchronous code.
-    pub fn blocking_insert(&self, key: K, value: V) {
+    fn do_blocking_insert(&self, key: K, value: V) {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         let op = self.base.do_insert_with_hash(key, hash, value);
@@ -624,12 +620,7 @@ where
         }
     }
 
-    /// Blocking [invalidate](#method.invalidate) to call outside of asynchronous
-    /// contexts.
-    ///
-    /// This method is intended for use cases where you are invalidating from
-    /// synchronous code.
-    pub fn blocking_invalidate<Q>(&self, key: &Q)
+    fn do_blocking_invalidate<Q>(&self, key: &Q)
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -687,6 +678,12 @@ where
         F: Fn(&K, &V) -> bool + Send + Sync + 'static,
     {
         self.base.invalidate_entries_if(Arc::new(predicate))
+    }
+
+    /// Returns a `BlockingOp` for this cache. It provides blocking
+    /// [insert]() and [invalidate]() methods, which can be called outside
+    pub fn blocking(&self) -> BlockingOp<'_, K, V, S> {
+        BlockingOp(self)
     }
 
     /// Returns a read-only cache policy of this cache.
@@ -871,6 +868,37 @@ where
     }
 }
 
+pub struct BlockingOp<'a, K, V, S>(&'a Cache<K, V, S>);
+
+impl<'a, K, V, S> BlockingOp<'a, K, V, S>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    /// Blocking [insert](../struct.Cache.html#method.insert) to call outside of
+    /// asynchronous contexts.
+    ///
+    /// This method is intended for use cases where you are inserting from
+    /// synchronous code.
+    pub fn insert(&self, key: K, value: V) {
+        self.0.do_blocking_insert(key, value)
+    }
+
+    /// Blocking [invalidate](../struct.Cache.html#method.invalidate) to call outside
+    /// of asynchronous contexts.
+    ///
+    /// This method is intended for use cases where you are invalidating from
+    /// synchronous code.
+    pub fn invalidate<Q>(&self, key: &Q)
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.0.do_blocking_invalidate(key)
+    }
+}
+
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
@@ -935,14 +963,14 @@ mod tests {
         // Make the cache exterior immutable.
         let cache = cache;
 
-        cache.blocking_insert("a", "alice");
-        cache.blocking_insert("b", "bob");
+        cache.blocking().insert("a", "alice");
+        cache.blocking().insert("b", "bob");
         assert_eq!(cache.get(&"a"), Some("alice"));
         assert_eq!(cache.get(&"b"), Some("bob"));
         cache.sync();
         // counts: a -> 1, b -> 1
 
-        cache.blocking_insert("c", "cindy");
+        cache.blocking().insert("c", "cindy");
         assert_eq!(cache.get(&"c"), Some("cindy"));
         // counts: a -> 1, b -> 1, c -> 1
         cache.sync();
@@ -953,24 +981,24 @@ mod tests {
         // counts: a -> 2, b -> 2, c -> 1
 
         // "d" should not be admitted because its frequency is too low.
-        cache.blocking_insert("d", "david"); //   count: d -> 0
+        cache.blocking().insert("d", "david"); //   count: d -> 0
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 1
 
-        cache.blocking_insert("d", "david");
+        cache.blocking().insert("d", "david");
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher than c's.
-        cache.blocking_insert("d", "dennis");
+        cache.blocking().insert("d", "dennis");
         cache.sync();
         assert_eq!(cache.get(&"a"), Some("alice"));
         assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.get(&"c"), None);
         assert_eq!(cache.get(&"d"), Some("dennis"));
 
-        cache.blocking_invalidate(&"b");
+        cache.blocking().invalidate(&"b");
         assert_eq!(cache.get(&"b"), None);
     }
 
@@ -1064,10 +1092,10 @@ mod tests {
                 let cache = cache.clone();
                 if id == 0 {
                     tokio::spawn(async move {
-                        cache.blocking_insert(10, format!("{}-100", id));
+                        cache.blocking().insert(10, format!("{}-100", id));
                         cache.get(&10);
-                        cache.blocking_insert(20, format!("{}-200", id));
-                        cache.blocking_invalidate(&10);
+                        cache.blocking().insert(20, format!("{}-200", id));
+                        cache.blocking().invalidate(&10);
                     })
                 } else {
                     tokio::spawn(async move {
