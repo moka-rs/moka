@@ -33,7 +33,7 @@ use std::{
 /// cache.insert(0, "zero");
 ///
 /// // This get() will extend the entry life for another 5 minutes.
-/// cache.get_if_present(&0);
+/// cache.get(&0);
 ///
 /// // Even though we keep calling get(), the entry will expire
 /// // after 30 minutes (TTL) from the insert().

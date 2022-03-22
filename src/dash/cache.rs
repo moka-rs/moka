@@ -20,10 +20,10 @@ use std::{
 /// **Experimental**: A thread-safe concurrent in-memory cache built upon
 /// [`dashmap::DashMap`][dashmap].
 ///
-/// Unlike `sync` and `future` caches of Moka, `dash` cache does not provide full
-/// concurrency of retrievals and updates. This is because `dash` cache uses
-/// `DashMap` as the central key-value storage, which employs read-write locks on
-/// internal shards. Other caches use a lock-free concurrent hash table.
+/// The `dash::Cache` uses `DashMap` as the central key-value storage, while other
+/// `sync` and `future` caches are using a lock-free concurrent hash table.
+/// Since `DashMap` employs read-write locks on internal shards, it will have lower
+/// concurrency on retrievals and updates than other caches.
 ///
 /// On the other hand, `dash` cache provides iterator, which returns immutable
 /// references to the entries in a cache. Other caches do not provide iterator.
@@ -181,7 +181,7 @@ use std::{
 /// cache.insert(0, "zero");
 ///
 /// // This get() will extend the entry life for another 5 minutes.
-/// cache.get_if_present(&0);
+/// cache.get(&0);
 ///
 /// // Even though we keep calling get(), the entry will expire
 /// // after 30 minutes (TTL) from the insert().
@@ -286,8 +286,8 @@ where
         Self::with_everything(Some(max_capacity), None, build_hasher, None, None, None)
     }
 
-    /// Returns a [`CacheBuilder`][builder-struct], which can builds a `Cache` or
-    /// `SegmentedCache` with various configuration knobs.
+    /// Returns a [`CacheBuilder`][builder-struct], which can builds a `Cache` with
+    /// various configuration knobs.
     ///
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn builder() -> CacheBuilder<K, V, Cache<K, V, RandomState>> {
