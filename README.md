@@ -468,13 +468,13 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
 - [x] `async` optimized caches. (`v0.2.0`)
 - [x] Size-aware eviction. (`v0.7.0` via
       [#24](https://github.com/moka-rs/moka/pull/24))
-- [ ] API stabilization. (Smaller core cache API, shorter names for frequently
-      used methods)
+- [X] API stabilization. (Smaller core cache API, shorter names for frequently
+      used methods) (`v0.8.0` via [#105](https://github.com/moka-rs/moka/pull/105))
     - e.g.
     - `get_or_insert_with(K, F)` → `get_with(K, F)`
     - `get_or_try_insert_with(K, F)` → `try_get_with(K, F)`
     - `blocking_insert(K, V)` → `blocking().insert(K, V)`
-    - `time_to_live()` → `config().time_to_live()`
+    - `time_to_live()` → `policy().time_to_live()`
 - [ ] Cache statistics. (Hit rate, etc.)
 - [ ] Notifications on eviction, etc.
 - [ ] Upgrade TinyLFU to Window-TinyLFU. ([details][tiny-lfu])
