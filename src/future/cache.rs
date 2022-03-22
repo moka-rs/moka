@@ -681,7 +681,8 @@ where
     }
 
     /// Returns a `BlockingOp` for this cache. It provides blocking
-    /// [insert]() and [invalidate]() methods, which can be called outside
+    /// [insert](#method.insert) and [invalidate](#method.invalidate) methods, which
+    /// can be called outside of asynchronous contexts.
     pub fn blocking(&self) -> BlockingOp<'_, K, V, S> {
         BlockingOp(self)
     }
@@ -876,7 +877,7 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    /// Blocking [insert](../struct.Cache.html#method.insert) to call outside of
+    /// Blocking [insert](./struct.Cache.html#method.insert) to call outside of
     /// asynchronous contexts.
     ///
     /// This method is intended for use cases where you are inserting from
@@ -885,7 +886,7 @@ where
         self.0.do_blocking_insert(key, value)
     }
 
-    /// Blocking [invalidate](../struct.Cache.html#method.invalidate) to call outside
+    /// Blocking [invalidate](./struct.Cache.html#method.invalidate) to call outside
     /// of asynchronous contexts.
     ///
     /// This method is intended for use cases where you are invalidating from
