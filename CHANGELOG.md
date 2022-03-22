@@ -15,12 +15,12 @@ Also `policy` method was added to all caches and `blocking` method was added to
 respectively. Some uncommon cache methods were moved to these structs, and old
 methods were removed without deprecating.
 
-Please see [#105](gh-pull-0105) for the complete list of the renamed and moved methods.
+Please see [#105][gh-pull-0105] for the complete list of the renamed and moved methods.
 
 ### Changed
 
 - API stabilization. (Smaller core cache API, shorter names for common methods)
-  ([#105](gh-pull-0105))
+  ([#105][gh-pull-0105])
 - Performance related:
     - Improve performance of `get_with` and `try_get_with`. ([#88][gh-pull-0088])
     - Avoid to calculate the same hash twice in `get`, `get_with`, `insert`,
