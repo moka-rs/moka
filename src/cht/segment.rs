@@ -263,25 +263,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
         self.get_key_value_and(key, hash, |_, v| v.clone())
     }
 
-    /// Returns a clone of the the key-value pair corresponding to the supplied
-    /// key.
-    ///
-    /// The supplied key may be any borrowed form of the map's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for the key
-    /// type.
-    ///
-    /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
-    /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
-    #[inline]
-    pub(crate) fn get_key_value<Q>(&self, key: &Q, hash: u64) -> Option<(K, V)>
-    where
-        Q: Hash + Eq + ?Sized,
-        K: Borrow<Q> + Clone,
-        V: Clone,
-    {
-        self.get_key_value_and(key, hash, |k, v| (k.clone(), v.clone()))
-    }
-
     /// Returns the result of invoking a function with a reference to the
     /// key-value pair corresponding to the supplied key.
     ///
@@ -298,8 +279,32 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
         K: Borrow<Q>,
         F: FnOnce(&K, &V) -> T,
     {
+        self.get_key_value_and_then(key, hash, |k, v| Some(with_entry(k, v)))
+    }
+
+    /// Returns the result of invoking a function with a reference to the
+    /// key-value pair corresponding to the supplied key.
+    ///
+    /// The supplied key may be any borrowed form of the map's key type, but
+    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for the key
+    /// type.
+    ///
+    /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
+    /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
+    #[inline]
+    pub(crate) fn get_key_value_and_then<Q, F, T>(
+        &self,
+        key: &Q,
+        hash: u64,
+        with_entry: F,
+    ) -> Option<T>
+    where
+        Q: Hash + Eq + ?Sized,
+        K: Borrow<Q>,
+        F: FnOnce(&K, &V) -> Option<T>,
+    {
         self.bucket_array_ref(hash)
-            .get_key_value_and(key, hash, with_entry)
+            .get_key_value_and_then(key, hash, with_entry)
     }
 
     /// Inserts a key-value pair into the map, returning the result of invoking
@@ -631,7 +636,7 @@ mod tests {
         assert!(map.is_empty());
         assert_eq!(map.len(), 0);
 
-        let key = "foo";
+        let key = "key1";
         let hash = map.hash(key);
 
         assert_eq!(map.insert_entry_and(key, hash, 5, |_, v| *v), None);
@@ -652,7 +657,7 @@ mod tests {
         let map =
             HashMap::with_num_segments_capacity_and_hasher(1, 0, DefaultHashBuilder::default());
 
-        let key = "foo";
+        let key = "key1";
         let hash = map.hash(key);
 
         assert_eq!(map.insert_if_not_present(key, hash, 5), None);
@@ -1099,7 +1104,7 @@ mod tests {
     fn insert_with_or_modify() {
         let map = HashMap::with_capacity(0);
 
-        let key = "foo";
+        let key = "key1";
         let hash = map.hash(&key);
 
         assert_eq!(
