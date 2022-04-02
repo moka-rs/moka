@@ -1218,10 +1218,15 @@ mod tests {
             ensure_sketch_len(pot16, pot16, "pot16");
             // due to ceiling to next_power_of_two
             ensure_sketch_len(pot16 + 1, pot(17), "pot16 + 1");
-            // due to ceiling to next_power_of_two
-            ensure_sketch_len(pot30 - 1, pot30, "pot30- 1");
-            ensure_sketch_len(pot30, pot30, "pot30");
-            ensure_sketch_len(u64::MAX, pot30, "u64::MAX");
+
+            // The following tests will allocate large memory (~8GiB).
+            // Skip when running on Circle CI.
+            if !cfg!(circleci) {
+                // due to ceiling to next_power_of_two
+                ensure_sketch_len(pot30 - 1, pot30, "pot30- 1");
+                ensure_sketch_len(pot30, pot30, "pot30");
+                ensure_sketch_len(u64::MAX, pot30, "u64::MAX");
+            }
         };
     }
 }
