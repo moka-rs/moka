@@ -1,13 +1,16 @@
 version: 2
 jobs:
   rust/coverage:
-    machine: true
+    machine:
+      image: ubuntu-2004:current
     steps:
       - checkout
       - run:
           name: Run cargo tarpaulin (Allowing a failure)
           command: |
-            docker run --security-opt seccomp=unconfined -v "${PWD}:/volume" xd009642/tarpaulin \
+            docker run --security-opt seccomp=unconfined -v "${PWD}:/volume" \
+              --env RUSTFLAGS='--cfg circleci' \
+              xd009642/tarpaulin \
               cargo tarpaulin -v \
                 --features 'future, dash' \
                 --ciserver circle-ci \
