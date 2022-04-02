@@ -9,6 +9,7 @@
         "ahash",
         "armv",
         "benmanes",
+        "circleci",
         "CLFU",
         "clippy",
         "compat",

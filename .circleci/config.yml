@@ -8,11 +8,12 @@ jobs:
           name: Run cargo tarpaulin (Allowing a failure)
           command: |
             docker run --security-opt seccomp=unconfined -v "${PWD}:/volume" xd009642/tarpaulin \
-              cargo tarpaulin -v \
-                --features 'future, dash' \
-                --ciserver circle-ci \
-                --coveralls ${COVERALLS_TOKEN} \
-                --timeout 600 \
+              RUSTFLAGS='--cfg circleci' \
+                cargo tarpaulin -v \
+                  --features 'future, dash' \
+                  --ciserver circle-ci \
+                  --coveralls ${COVERALLS_TOKEN} \
+                  --timeout 600 \
             || true
 
 workflows:
