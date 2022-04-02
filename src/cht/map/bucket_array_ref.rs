@@ -19,7 +19,12 @@ where
     K: Hash + Eq,
     S: BuildHasher,
 {
-    pub(crate) fn get_key_value_and_then<Q, F, T>(&self, key: &Q, hash: u64, with_entry: F) -> Option<T>
+    pub(crate) fn get_key_value_and_then<Q, F, T>(
+        &self,
+        key: &Q,
+        hash: u64,
+        with_entry: F,
+    ) -> Option<T>
     where
         Q: Hash + Eq + ?Sized,
         K: Borrow<Q>,
