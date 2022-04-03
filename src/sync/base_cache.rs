@@ -135,7 +135,7 @@ where
         self.inner.hash(key)
     }
 
-    pub(crate) fn contains_key<Q>(&self, key: &Q, hash: u64) -> bool
+    pub(crate) fn contains_key_with_hash<Q>(&self, key: &Q, hash: u64) -> bool
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,

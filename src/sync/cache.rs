@@ -314,7 +314,7 @@ where
     /// Returns `true` if the cache contains a value for the key.
     ///
     /// Unlike the `get` method, this method is not considered a cache read operation,
-    /// so it does not updates the historic popularity estimator or reset the idle
+    /// so it does not update the historic popularity estimator or reset the idle
     /// timer for the key.
     ///
     /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
@@ -324,7 +324,15 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        self.base.contains_key(key, self.base.hash(key))
+        self.base.contains_key_with_hash(key, self.base.hash(key))
+    }
+
+    pub(crate) fn contains_key_with_hash<Q>(&self, key: &Q, hash: u64) -> bool
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.base.contains_key_with_hash(key, hash)
     }
 
     /// Returns a _clone_ of the value corresponding to the key.
@@ -879,7 +887,7 @@ mod tests {
         assert!(cache.contains_key(&"a"));
         assert_eq!(cache.get(&"a"), Some(alice));
         assert_eq!(cache.get(&"b"), Some(bob));
-        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
         cache.sync();
         // order and counts: c -> 1, a -> 2, b -> 2
 
@@ -992,7 +1000,6 @@ mod tests {
         cache.sync();
 
         cache.insert("d", "david");
-        assert!(cache.contains_key(&"d"));
         cache.sync();
 
         assert!(cache.get(&"a").is_none());

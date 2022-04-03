@@ -121,6 +121,25 @@ where
         self.inner.hash(key)
     }
 
+    pub(crate) fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        match self.inner.get(key) {
+            None => false,
+            Some(entry) => {
+                let i = &self.inner;
+                let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
+                let now = i.current_time_from_expiration_clock();
+                let entry = &*entry;
+
+                !is_expired_entry_wo(ttl, va, entry, now)
+                    && !is_expired_entry_ao(tti, va, entry, now)
+            }
+        }
+    }
+
     pub(crate) fn get_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<V>
     where
         Arc<K>: Borrow<Q>,
