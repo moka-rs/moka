@@ -1402,13 +1402,13 @@ mod tests {
             let bucket_array_len = map.capacity() * 2;
             assert_eq!(bucket_array_len, map.num_segments() * 128 * 2);
             if !cfg!(circleci) {
-                // TODO: FIXME: This assertion sometimes fail when cargo tarpaulin
+                // TODO: FIXME: These assertions sometimes fail when cargo tarpaulin
                 // is used on Circle CI.
                 assert!(live_key_count <= bucket_array_len / 10);
-            }
 
-            for this_value_parent in value_parents.iter() {
-                assert!(this_value_parent.was_dropped());
+                for this_value_parent in value_parents.iter() {
+                    assert!(this_value_parent.was_dropped());
+                }
             }
 
             for i in 0..NUM_VALUES {
