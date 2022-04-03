@@ -1,5 +1,13 @@
 # Moka &mdash; Change Log
 
+## Version 0.8.1
+
+### Added
+
+- Add `contains_key` method to check if a key is present without resetting the idle
+  timer or updating the historic popularity estimator. ([#107][gh-issue-0107])
+
+
 ## Version 0.8.0
 
 As a part of stabilizing the cache API, the following cache methods have been renamed:
@@ -272,6 +280,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 
 [resolving-error-on-32bit]: https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
 
+[gh-issue-0107]: https://github.com/moka-rs/moka/issues/107/
 [gh-issue-0072]: https://github.com/moka-rs/moka/issues/72/
 [gh-issue-0059]: https://github.com/moka-rs/moka/issues/59/
 [gh-issue-0043]: https://github.com/moka-rs/moka/issues/43/
