@@ -23,7 +23,7 @@ Also `policy` method was added to all caches and `blocking` method was added to
 respectively. Some uncommon cache methods were moved to these structs, and old
 methods were removed without deprecating.
 
-Please see [#105][gh-pull-0105] for the complete list of the renamed and moved methods.
+Please see [#105][gh-pull-0105] for the complete list of the affected methods.
 
 ### Changed
 
