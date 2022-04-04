@@ -321,6 +321,22 @@ where
         }
     }
 
+    /// Returns `true` if the cache contains a value for the key.
+    ///
+    /// Unlike the `get` method, this method is not considered a cache read operation,
+    /// so it does not update the historic popularity estimator or reset the idle
+    /// timer for the key.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
+    /// on the borrowed form _must_ match those for the key type.
+    pub fn contains_key<Q>(&self, key: &Q) -> bool
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.base.contains_key(key)
+    }
+
     /// Returns a _clone_ of the value corresponding to the key.
     ///
     /// If you want to store values that will be expensive to clone, wrap them by
@@ -536,17 +552,22 @@ mod tests {
         cache.insert("a", "alice");
         cache.insert("b", "bob");
         assert_eq!(cache.get(&"a"), Some("alice"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
         assert_eq!(cache.get(&"b"), Some("bob"));
         cache.sync();
         // counts: a -> 1, b -> 1
 
         cache.insert("c", "cindy");
         assert_eq!(cache.get(&"c"), Some("cindy"));
+        assert!(cache.contains_key(&"c"));
         // counts: a -> 1, b -> 1, c -> 1
         cache.sync();
 
+        assert!(cache.contains_key(&"a"));
         assert_eq!(cache.get(&"a"), Some("alice"));
         assert_eq!(cache.get(&"b"), Some("bob"));
+        assert!(cache.contains_key(&"b"));
         cache.sync();
         // counts: a -> 2, b -> 2, c -> 1
 
@@ -554,9 +575,11 @@ mod tests {
         cache.insert("d", "david"); //   count: d -> 0
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 1
+        assert!(!cache.contains_key(&"d"));
 
         cache.insert("d", "david");
         cache.sync();
+        assert!(!cache.contains_key(&"d"));
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
@@ -567,9 +590,14 @@ mod tests {
         assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.get(&"c"), None);
         assert_eq!(cache.get(&"d"), Some("dennis"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert!(!cache.contains_key(&"c"));
+        assert!(cache.contains_key(&"d"));
 
         cache.invalidate(&"b");
         assert_eq!(cache.get(&"b"), None);
+        assert!(!cache.contains_key(&"b"));
     }
 
     #[test]
@@ -592,17 +620,22 @@ mod tests {
         cache.insert("a", alice);
         cache.insert("b", bob);
         assert_eq!(cache.get(&"a"), Some(alice));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
         assert_eq!(cache.get(&"b"), Some(bob));
         cache.sync();
         // order (LRU -> MRU) and counts: a -> 1, b -> 1
 
         cache.insert("c", cindy);
         assert_eq!(cache.get(&"c"), Some(cindy));
+        assert!(cache.contains_key(&"c"));
         // order and counts: a -> 1, b -> 1, c -> 1
         cache.sync();
 
+        assert!(cache.contains_key(&"a"));
         assert_eq!(cache.get(&"a"), Some(alice));
         assert_eq!(cache.get(&"b"), Some(bob));
+        assert!(cache.contains_key(&"b"));
         cache.sync();
         // order and counts: c -> 1, a -> 2, b -> 2
 
@@ -612,17 +645,21 @@ mod tests {
         cache.insert("d", david); //   count: d -> 0
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 1
+        assert!(!cache.contains_key(&"d"));
 
         cache.insert("d", david);
         cache.sync();
+        assert!(!cache.contains_key(&"d"));
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         cache.insert("d", david);
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 3
+        assert!(!cache.contains_key(&"d"));
 
         cache.insert("d", david);
         cache.sync();
+        assert!(!cache.contains_key(&"d"));
         assert_eq!(cache.get(&"d"), None); //   d -> 4
 
         // Finally "d" should be admitted by evicting "c" and "a".
@@ -632,12 +669,18 @@ mod tests {
         assert_eq!(cache.get(&"b"), Some(bob));
         assert_eq!(cache.get(&"c"), None);
         assert_eq!(cache.get(&"d"), Some(dennis));
+        assert!(!cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert!(!cache.contains_key(&"c"));
+        assert!(cache.contains_key(&"d"));
 
         // Update "b" with "bill" (w: 15 -> 20). This should evict "d" (w: 15).
         cache.insert("b", bill);
         cache.sync();
         assert_eq!(cache.get(&"b"), Some(bill));
         assert_eq!(cache.get(&"d"), None);
+        assert!(cache.contains_key(&"b"));
+        assert!(!cache.contains_key(&"d"));
 
         // Re-add "a" (w: 10) and update "b" with "bob" (w: 20 -> 15).
         cache.insert("a", alice);
@@ -646,6 +689,9 @@ mod tests {
         assert_eq!(cache.get(&"a"), Some(alice));
         assert_eq!(cache.get(&"b"), Some(bob));
         assert_eq!(cache.get(&"d"), None);
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert!(!cache.contains_key(&"d"));
 
         // Verify the sizes.
         assert_eq!(cache.estimated_entry_count(), 2);
@@ -675,6 +721,8 @@ mod tests {
 
         assert!(cache.get(&10).is_none());
         assert!(cache.get(&20).is_some());
+        assert!(!cache.contains_key(&10));
+        assert!(cache.contains_key(&20));
     }
 
     #[test]
@@ -691,6 +739,9 @@ mod tests {
         assert_eq!(cache.get(&"a"), Some("alice"));
         assert_eq!(cache.get(&"b"), Some("bob"));
         assert_eq!(cache.get(&"c"), Some("cindy"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert!(cache.contains_key(&"c"));
         cache.sync();
 
         cache.invalidate_all();
@@ -703,6 +754,10 @@ mod tests {
         assert!(cache.get(&"b").is_none());
         assert!(cache.get(&"c").is_none());
         assert_eq!(cache.get(&"d"), Some("david"));
+        assert!(!cache.contains_key(&"a"));
+        assert!(!cache.contains_key(&"b"));
+        assert!(!cache.contains_key(&"c"));
+        assert!(cache.contains_key(&"d"));
     }
 
     #[test]
@@ -726,12 +781,14 @@ mod tests {
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
         cache.sync();
 
-        cache.get(&"a");
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert!(cache.contains_key(&"a"));
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
+        assert!(!cache.contains_key(&"a"));
         assert!(cache.is_table_empty());
 
         cache.insert("b", "bob");
@@ -743,6 +800,7 @@ mod tests {
         cache.sync();
 
         assert_eq!(cache.get(&"b"), Some("bob"));
+        assert!(cache.contains_key(&"b"));
         assert_eq!(cache.estimated_entry_count(), 1);
 
         cache.insert("b", "bill");
@@ -752,6 +810,7 @@ mod tests {
         cache.sync();
 
         assert_eq!(cache.get(&"b"), Some("bill"));
+        assert!(cache.contains_key(&"b"));
         assert_eq!(cache.estimated_entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 25 secs
@@ -759,6 +818,8 @@ mod tests {
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
+        assert!(!cache.contains_key(&"a"));
+        assert!(!cache.contains_key(&"b"));
         assert!(cache.is_table_empty());
     }
 
@@ -793,11 +854,23 @@ mod tests {
 
         assert_eq!(cache.estimated_entry_count(), 2);
 
-        mock.increment(Duration::from_secs(5)); // 15 secs.
+        mock.increment(Duration::from_secs(2)); // 12 secs.
+        cache.sync();
+
+        // contains_key does not reset the idle timer for the key.
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        cache.sync();
+
+        assert_eq!(cache.estimated_entry_count(), 2);
+
+        mock.increment(Duration::from_secs(3)); // 15 secs.
         cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), Some("bob"));
+        assert!(!cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
         assert_eq!(cache.estimated_entry_count(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
@@ -805,6 +878,8 @@ mod tests {
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
+        assert!(!cache.contains_key(&"a"));
+        assert!(!cache.contains_key(&"b"));
         assert!(cache.is_table_empty());
     }
 

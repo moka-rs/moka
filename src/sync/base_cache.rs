@@ -135,40 +135,58 @@ where
         self.inner.hash(key)
     }
 
+    pub(crate) fn contains_key_with_hash<Q>(&self, key: &Q, hash: u64) -> bool
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.inner
+            .get_key_value_and(key, hash, |k, entry| {
+                let i = &self.inner;
+                let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
+                let now = i.current_time_from_expiration_clock();
+
+                !is_expired_entry_wo(ttl, va, entry, now)
+                    && !is_expired_entry_ao(tti, va, entry, now)
+                    && !i.is_invalidated_entry(k, entry)
+            })
+            .unwrap_or_default() // `false` is the default for `bool` type.
+    }
+
     pub(crate) fn get_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<V>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
+        // Define a closure to record a read op.
         let record = |op| {
             self.record_read_op(op).expect("Failed to record a get op");
         };
 
-        match self.inner.get_key_value(key, hash) {
-            None => {
-                record(ReadOp::Miss(hash));
-                None
-            }
-            Some((arc_key, entry)) => {
-                let i = &self.inner;
-                let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
-                let now = i.current_time_from_expiration_clock();
+        let maybe_entry = self.inner.get_key_value_and_then(key, hash, |k, entry| {
+            let i = &self.inner;
+            let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
+            let now = i.current_time_from_expiration_clock();
 
-                if is_expired_entry_wo(ttl, va, &entry, now)
-                    || is_expired_entry_ao(tti, va, &entry, now)
-                    || self.inner.is_invalidated_entry(&arc_key, &entry)
-                {
-                    // Expired or invalidated entry. Record this access as a cache miss
-                    // rather than a hit.
-                    record(ReadOp::Miss(hash));
-                    None
-                } else {
-                    // Valid entry.
-                    let v = entry.value.clone();
-                    record(ReadOp::Hit(hash, entry, now));
-                    Some(v)
-                }
+            if is_expired_entry_wo(ttl, va, entry, now)
+                || is_expired_entry_ao(tti, va, entry, now)
+                || i.is_invalidated_entry(k, entry)
+            {
+                // Expired or invalidated entry.
+                None
+            } else {
+                // Valid entry.
+                Some((TrioArc::clone(entry), now))
             }
+        });
+
+        if let Some((entry, now)) = maybe_entry {
+            let v = entry.value.clone();
+            record(ReadOp::Hit(hash, entry, now));
+            Some(v)
+        } else {
+            record(ReadOp::Miss(hash));
+            None
         }
     }
 
@@ -463,8 +481,6 @@ enum AdmissionResult<K> {
 
 type CacheStore<K, V, S> = crate::cht::SegmentedHashMap<Arc<K>, TrioArc<ValueEntry<K, V>>, S>;
 
-type CacheEntry<K, V> = (Arc<K>, TrioArc<ValueEntry<K, V>>);
-
 pub(crate) struct Inner<K, V, S> {
     max_capacity: Option<u64>,
     entry_count: AtomicCell<u64>,
@@ -556,12 +572,23 @@ where
     }
 
     #[inline]
-    fn get_key_value<Q>(&self, key: &Q, hash: u64) -> Option<CacheEntry<K, V>>
+    fn get_key_value_and<Q, F, T>(&self, key: &Q, hash: u64, with_entry: F) -> Option<T>
     where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
+        F: FnOnce(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> T,
     {
-        self.cache.get_key_value(key, hash)
+        self.cache.get_key_value_and(key, hash, with_entry)
+    }
+
+    #[inline]
+    fn get_key_value_and_then<Q, F, T>(&self, key: &Q, hash: u64, with_entry: F) -> Option<T>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+        F: FnOnce(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> Option<T>,
+    {
+        self.cache.get_key_value_and_then(key, hash, with_entry)
     }
 
     #[inline]

@@ -19,11 +19,16 @@ where
     K: Hash + Eq,
     S: BuildHasher,
 {
-    pub(crate) fn get_key_value_and<Q, F, T>(&self, key: &Q, hash: u64, with_entry: F) -> Option<T>
+    pub(crate) fn get_key_value_and_then<Q, F, T>(
+        &self,
+        key: &Q,
+        hash: u64,
+        with_entry: F,
+    ) -> Option<T>
     where
         Q: Hash + Eq + ?Sized,
         K: Borrow<Q>,
-        F: FnOnce(&K, &V) -> T,
+        F: FnOnce(&K, &V) -> Option<T>,
     {
         let guard = &crossbeam_epoch::pin();
         let current_ref = self.get(guard);
@@ -40,13 +45,11 @@ where
                     key,
                     maybe_value: value,
                 })) => {
-                    result = Some(with_entry(key, unsafe { &*value.as_ptr() }));
-
+                    result = with_entry(key, unsafe { &*value.as_ptr() });
                     break;
                 }
                 Ok(None) => {
                     result = None;
-
                     break;
                 }
                 Err(_) => {
