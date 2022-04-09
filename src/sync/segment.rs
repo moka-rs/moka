@@ -366,6 +366,21 @@ where
     // }
 }
 
+impl<'a, K, V, S> IntoIterator for &'a SegmentedCache<K, V, S>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    type Item = (Arc<K>, V);
+
+    type IntoIter = Iter<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 impl<K, V, S> ConcurrentCacheExt<K, V> for SegmentedCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -834,6 +849,36 @@ mod tests {
         assert_eq!(cache.invalidation_predicate_count(), 0);
 
         Ok(())
+    }
+
+    #[test]
+    fn test_iter() {
+        const NUM_KEYS: usize = 50;
+
+        fn make_value(key: usize) -> String {
+            format!("val: {}", key)
+        }
+
+        // let cache = SegmentedCache::builder(5)
+        let cache = SegmentedCache::builder(4)
+            .max_capacity(100)
+            .time_to_idle(Duration::from_secs(10))
+            .build();
+
+        for key in 0..NUM_KEYS {
+            cache.insert(key, make_value(key));
+        }
+
+        let mut key_set = std::collections::HashSet::new();
+
+        for (key, value) in &cache {
+            assert_eq!(value, make_value(*key));
+
+            key_set.insert(*key);
+        }
+
+        // Ensure there are no missing or duplicate keys in the iteration.
+        assert_eq!(key_set.len(), NUM_KEYS);
     }
 
     #[test]
