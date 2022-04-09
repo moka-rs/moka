@@ -1,4 +1,8 @@
-use super::{cache::Cache, CacheBuilder, ConcurrentCacheExt, Weigher};
+use super::{
+    cache::Cache,
+    iter::{Iter, ScanningGet},
+    CacheBuilder, ConcurrentCacheExt, Weigher,
+};
 use crate::{Policy, PredicateError};
 
 use std::{
@@ -285,6 +289,42 @@ where
             segment.invalidate_entries_with_arc_fun(Arc::clone(&pred))?;
         }
         Ok(())
+    }
+
+    /// Creates an iterator visiting all key-value pairs in arbitrary order. The
+    /// iterator element type is `(Arc<K>, V)`, where `V` is a clone of a stored
+    /// value.
+    ///
+    /// # Guarantees
+    ///
+    /// **TODO**
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use moka::sync::SegmentedCache;
+    ///
+    /// let cache = SegmentedCache::new(100, 4);
+    /// cache.insert("Julia", 14);
+    ///
+    /// let mut iter = cache.iter();
+    /// let (k, v) = iter.next().unwrap(); // (Arc<K>, V)
+    /// assert_eq!(*k, "Julia");
+    /// assert_eq!(v, 14);
+    ///
+    /// assert!(iter.next().is_none());
+    /// ```
+    ///
+    pub fn iter(&self) -> Iter<'_, K, V> {
+        let num_cht_segments = self.inner.segments[0].num_cht_segments();
+        let segments = self
+            .inner
+            .segments
+            .iter()
+            .map(|c| c as &dyn ScanningGet<_, _>)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        Iter::with_multiple_cache_segments(segments, num_cht_segments)
     }
 
     /// Returns a read-only cache policy of this cache.

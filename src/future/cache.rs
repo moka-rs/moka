@@ -729,8 +729,10 @@ where
     /// }
     /// ```
     ///
-    pub fn iter(&self) -> Iter<'_, K, V, S> {
-        self.base.iter()
+    pub fn iter(&self) -> Iter<'_, K, V> {
+        use crate::sync::iter::ScanningGet;
+
+        Iter::with_single_cache_segment(&self.base, self.base.num_cht_segments())
     }
 
     /// Returns a `BlockingOp` for this cache. It provides blocking
@@ -775,7 +777,9 @@ where
     }
 }
 
+//
 // private methods
+//
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,

@@ -3,7 +3,7 @@ use super::{
     entry_info::EntryInfo,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
-    iter::Iter,
+    iter::ScanningGet,
     AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, PredicateId, ReadOp, ValueEntry, Weigher,
     WriteOp,
 };
@@ -191,30 +191,6 @@ where
         }
     }
 
-    pub(crate) fn get_for_iter(&self, key: &Arc<K>) -> Option<V> {
-        let hash = self.hash(key);
-        self.inner.get_key_value_and_then(key, hash, |k, entry| {
-            let i = &self.inner;
-            let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
-            let now = i.current_time_from_expiration_clock();
-
-            if is_expired_entry_wo(ttl, va, entry, now)
-                || is_expired_entry_ao(tti, va, entry, now)
-                || i.is_invalidated_entry(k, entry)
-            {
-                // Expired or invalidated entry.
-                None
-            } else {
-                // Valid entry.
-                Some(entry.value.clone())
-            }
-        })
-    }
-
-    pub(crate) fn keys(&self, cht_segment: usize) -> Option<Vec<Weak<K>>> {
-        self.inner.keys(cht_segment)
-    }
-
     #[inline]
     pub(crate) fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<KvEntry<K, V>>
     where
@@ -251,11 +227,6 @@ where
         self.inner.register_invalidation_predicate(predicate, now)
     }
 
-    pub(crate) fn iter(&self) -> Iter<'_, K, V, S> {
-        let num_cht_segments = self.inner.num_cht_segments();
-        Iter::with_single_cache_segment(&self, num_cht_segments)
-    }
-
     pub(crate) fn policy(&self) -> Policy {
         self.inner.policy()
     }
@@ -273,6 +244,44 @@ where
     #[cfg(test)]
     pub(crate) fn weighted_size(&self) -> u64 {
         self.inner.weighted_size()
+    }
+}
+
+//
+// Iterator support
+//
+impl<K, V, S> ScanningGet<K, V> for BaseCache<K, V, S>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    fn num_cht_segments(&self) -> usize {
+        self.inner.num_cht_segments()
+    }
+
+    fn scanning_get(&self, key: &Arc<K>) -> Option<V> {
+        let hash = self.hash(key);
+        self.inner.get_key_value_and_then(key, hash, |k, entry| {
+            let i = &self.inner;
+            let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
+            let now = i.current_time_from_expiration_clock();
+
+            if is_expired_entry_wo(ttl, va, entry, now)
+                || is_expired_entry_ao(tti, va, entry, now)
+                || i.is_invalidated_entry(k, entry)
+            {
+                // Expired or invalidated entry.
+                None
+            } else {
+                // Valid entry.
+                Some(entry.value.clone())
+            }
+        })
+    }
+
+    fn keys(&self, cht_segment: usize) -> Option<Vec<Weak<K>>> {
+        self.inner.keys(cht_segment)
     }
 }
 

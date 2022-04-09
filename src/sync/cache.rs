@@ -1,6 +1,7 @@
 use super::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
     housekeeper::InnerSync,
+    iter::{Iter, ScanningGet},
     value_initializer::ValueInitializer,
     CacheBuilder, ConcurrentCacheExt, PredicateId, Weigher, WriteOp,
 };
@@ -12,7 +13,7 @@ use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hash},
-    sync::Arc,
+    sync::{Arc, Weak},
     time::Duration,
 };
 
@@ -696,6 +697,34 @@ where
         self.base.invalidate_entries_if(predicate)
     }
 
+    /// Creates an iterator visiting all key-value pairs in arbitrary order. The
+    /// iterator element type is `(Arc<K>, V)`, where `V` is a clone of a stored
+    /// value.
+    ///
+    /// # Guarantees
+    ///
+    /// **TODO**
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use moka::sync::Cache;
+    ///
+    /// let cache = Cache::new(100);
+    /// cache.insert("Julia", 14);
+    ///
+    /// let mut iter = cache.iter();
+    /// let (k, v) = iter.next().unwrap(); // (Arc<K>, V)
+    /// assert_eq!(*k, "Julia");
+    /// assert_eq!(v, 14);
+    ///
+    /// assert!(iter.next().is_none());
+    /// ```
+    ///
+    pub fn iter(&self) -> Iter<'_, K, V> {
+        Iter::with_single_cache_segment(&self.base, self.num_cht_segments())
+    }
+
     /// Returns a read-only cache policy of this cache.
     ///
     /// At this time, cache policy cannot be modified after cache creation.
@@ -726,7 +755,31 @@ where
     }
 }
 
+//
+// Iterator support
+//
+impl<K, V, S> ScanningGet<K, V> for Cache<K, V, S>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    fn num_cht_segments(&self) -> usize {
+        self.base.num_cht_segments()
+    }
+
+    fn scanning_get(&self, key: &Arc<K>) -> Option<V> {
+        self.base.scanning_get(key)
+    }
+
+    fn keys(&self, cht_segment: usize) -> Option<Vec<Weak<K>>> {
+        self.base.keys(cht_segment)
+    }
+}
+
+//
 // private methods
+//
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
