@@ -436,13 +436,21 @@ where
     V: 'a,
     S: BuildHasher + Clone,
 {
-    /// Creates an iterator over a `moka::dash::Cache` yielding immutable references.
+    /// Creates an iterator visiting all key-value pairs in arbitrary order. The
+    /// iterator element type is [`EntryRef<'a, K, V, S>`][moka-entry-ref].
     ///
-    /// **Locking behavior**: This iterator relies on the iterator of
-    /// [`dashmap::DashMap`][dashmap-iter], which employs read-write locks. May
-    /// deadlock if the thread holding an iterator attempts to update the cache.
+    /// # Guarantees
     ///
-    /// [dashmap-iter]: https://docs.rs/dashmap/5.2.0/dashmap/struct.DashMap.html#method.iter
+    /// **TODO**
+    ///
+    /// # Locking behavior
+    ///
+    /// This iterator relies on the iterator of [`dashmap::DashMap`][dashmap-iter],
+    /// which employs read-write locks. May deadlock if the thread holding an
+    /// iterator attempts to update the cache.
+    ///
+    /// [moka-entry-ref]: ./struct.EntryRef.html
+    /// [dashmap-iter]: <https://docs.rs/dashmap/*/dashmap/struct.DashMap.html#method.iter>
     ///
     /// # Examples
     ///

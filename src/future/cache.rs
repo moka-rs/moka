@@ -6,6 +6,7 @@ use crate::{
     sync::{
         base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
         housekeeper::InnerSync,
+        iter::Iter,
         PredicateId, Weigher, WriteOp,
     },
     Policy, PredicateError,
@@ -694,6 +695,42 @@ where
         F: Fn(&K, &V) -> bool + Send + Sync + 'static,
     {
         self.base.invalidate_entries_if(Arc::new(predicate))
+    }
+
+    /// Creates an iterator visiting all key-value pairs in arbitrary order. The
+    /// iterator element type is `(Arc<K>, V)`, where `V` is a clone of a stored
+    /// value.
+    ///
+    /// # Guarantees
+    ///
+    /// **TODO**
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.8", features = ["future"] }
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    /// use moka::future::Cache;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let cache = Cache::new(100);
+    ///     cache.insert("Julia", 14).await;
+    ///
+    ///     let mut iter = cache.iter();
+    ///     let (k, v) = iter.next().unwrap(); // (Arc<K>, V)
+    ///     assert_eq!(*k, "Julia");
+    ///     assert_eq!(v, 14);
+    ///
+    ///     assert!(iter.next().is_none());
+    /// }
+    /// ```
+    ///
+    pub fn iter(&self) -> Iter<'_, K, V, S> {
+        self.base.iter()
     }
 
     /// Returns a `BlockingOp` for this cache. It provides blocking

@@ -3,6 +3,7 @@ use super::{
     entry_info::EntryInfo,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
+    iter::Iter,
     AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, PredicateId, ReadOp, ValueEntry, Weigher,
     WriteOp,
 };
@@ -33,7 +34,7 @@ use std::{
     rc::Rc,
     sync::{
         atomic::{AtomicBool, AtomicU8, Ordering},
-        Arc,
+        Arc, Weak,
     },
     time::Duration,
 };
@@ -190,6 +191,30 @@ where
         }
     }
 
+    pub(crate) fn get_for_iter(&self, key: &Arc<K>) -> Option<V> {
+        let hash = self.hash(key);
+        self.inner.get_key_value_and_then(key, hash, |k, entry| {
+            let i = &self.inner;
+            let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
+            let now = i.current_time_from_expiration_clock();
+
+            if is_expired_entry_wo(ttl, va, entry, now)
+                || is_expired_entry_ao(tti, va, entry, now)
+                || i.is_invalidated_entry(k, entry)
+            {
+                // Expired or invalidated entry.
+                None
+            } else {
+                // Valid entry.
+                Some(entry.value.clone())
+            }
+        })
+    }
+
+    pub(crate) fn keys(&self, cht_segment: usize) -> Option<Vec<Weak<K>>> {
+        self.inner.keys(cht_segment)
+    }
+
     #[inline]
     pub(crate) fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<KvEntry<K, V>>
     where
@@ -224,6 +249,11 @@ where
     ) -> Result<PredicateId, PredicateError> {
         let now = self.inner.current_time_from_expiration_clock();
         self.inner.register_invalidation_predicate(predicate, now)
+    }
+
+    pub(crate) fn iter(&self) -> Iter<'_, K, V, S> {
+        let num_cht_segments = self.inner.num_cht_segments();
+        Iter::with_single_cache_segment(&self, num_cht_segments)
     }
 
     pub(crate) fn policy(&self) -> Policy {
@@ -600,6 +630,14 @@ where
         self.cache
             .remove_entry(key, hash)
             .map(|(key, entry)| KvEntry::new(key, entry))
+    }
+
+    fn keys(&self, cht_segment: usize) -> Option<Vec<Weak<K>>> {
+        self.cache.keys(cht_segment, Arc::downgrade)
+    }
+
+    fn num_cht_segments(&self) -> usize {
+        self.cache.actual_num_segments()
     }
 
     fn policy(&self) -> Policy {

@@ -334,6 +334,33 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
 
         loop_result.returned().flatten()
     }
+
+    pub(crate) fn keys<F, T>(
+        &self,
+        guard: &'g Guard,
+        with_key: &mut F,
+    ) -> Result<Vec<T>, RelocatedError>
+    where
+        F: FnMut(&K) -> T,
+    {
+        let mut keys = Vec::new();
+
+        for bucket in self.buckets.iter() {
+            let bucket_ptr = bucket.load_consume(guard);
+
+            if is_sentinel(bucket_ptr) {
+                return Err(RelocatedError);
+            }
+
+            if let Some(bucket_ref) = unsafe { bucket_ptr.as_ref() } {
+                if !is_tombstone(bucket_ptr) {
+                    keys.push(with_key(&bucket_ref.key));
+                }
+            }
+        }
+
+        Ok(keys)
+    }
 }
 
 impl<'g, K: 'g, V: 'g> BucketArray<K, V> {

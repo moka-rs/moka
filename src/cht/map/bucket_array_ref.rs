@@ -266,6 +266,34 @@ where
 
         result
     }
+
+    pub(crate) fn keys<F, T>(&self, mut with_key: F) -> Vec<T>
+    where
+        F: FnMut(&K) -> T,
+    {
+        let guard = &crossbeam_epoch::pin();
+        let current_ref = self.get(guard);
+        let mut bucket_array_ref = current_ref;
+
+        let result;
+
+        loop {
+            match bucket_array_ref.keys(guard, &mut with_key) {
+                Ok(keys) => {
+                    result = keys;
+                    break;
+                }
+                Err(_) => {
+                    bucket_array_ref =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
+                }
+            }
+        }
+
+        self.swing(guard, current_ref, bucket_array_ref);
+
+        result
+    }
 }
 
 impl<'a, 'g, K, V, S> BucketArrayRef<'a, K, V, S> {

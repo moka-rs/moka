@@ -14,6 +14,7 @@ pub(crate) mod deques;
 pub(crate) mod entry_info;
 pub(crate) mod housekeeper;
 mod invalidator;
+pub(crate) mod iter;
 mod segment;
 mod value_initializer;
 
@@ -22,6 +23,7 @@ pub(crate) mod debug_counters;
 
 pub use builder::CacheBuilder;
 pub use cache::Cache;
+pub use iter::Iter;
 pub use segment::SegmentedCache;
 
 use self::entry_info::EntryInfo;
