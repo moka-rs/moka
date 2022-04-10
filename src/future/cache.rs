@@ -700,10 +700,13 @@ where
     /// Creates an iterator visiting all key-value pairs in arbitrary order. The
     /// iterator element type is `(Arc<K>, V)`, where `V` is a clone of a stored
     /// value.
-    ///
+    /// 
     /// Iterators do not block concurrent reads and writes on the cache. An entry can
     /// be inserted to, invalidated or evicted from a cache while iterators are alive
     /// on the same cache.
+    ///
+    /// Unlike the `get` method, visiting entries via an iterator do not update the
+    /// historic popularity estimator or reset idle timers for keys.
     ///
     /// # Guarantees
     ///

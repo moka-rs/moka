@@ -299,6 +299,9 @@ where
     /// be inserted to, invalidated or evicted from a cache while iterators are alive
     /// on the same cache.
     ///
+    /// Unlike the `get` method, visiting entries via an iterator do not update the
+    /// historic popularity estimator or reset idle timers for keys.
+    ///
     /// # Guarantees
     ///
     /// In order to allow concurrent access to the cache, iterator's `next` method

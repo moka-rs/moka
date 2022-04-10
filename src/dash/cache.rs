@@ -25,9 +25,6 @@ use std::{
 /// Since `DashMap` employs read-write locks on internal shards, it will have lower
 /// concurrency on retrievals and updates than other caches.
 ///
-/// On the other hand, `dash` cache provides iterator, which returns immutable
-/// references to the entries in a cache. Other caches do not provide iterator.
-///
 /// `dash` cache performs a best-effort bounding of the map using an entry
 /// replacement algorithm to determine which entries to evict when the capacity is
 /// exceeded.
@@ -438,6 +435,9 @@ where
 {
     /// Creates an iterator visiting all key-value pairs in arbitrary order. The
     /// iterator element type is [`EntryRef<'a, K, V, S>`][moka-entry-ref].
+    ///
+    /// Unlike the `get` method, visiting entries via an iterator do not update the
+    /// historic popularity estimator or reset idle timers for keys.
     ///
     /// # Guarantees
     ///

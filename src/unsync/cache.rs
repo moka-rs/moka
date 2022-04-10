@@ -402,6 +402,9 @@ where
     /// Creates an iterator visiting all key-value pairs in arbitrary order. The
     /// iterator element type is `(&K, &V)`.
     ///
+    /// Unlike the `get` method, visiting entries via an iterator do not update the
+    /// historic popularity estimator or reset idle timers for keys.
+    ///
     /// # Examples
     ///
     /// ```rust
