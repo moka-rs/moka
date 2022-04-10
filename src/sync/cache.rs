@@ -1211,10 +1211,12 @@ mod tests {
         assert!(cache.contains_key(&"a"));
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
-        cache.sync();
-
         assert_eq!(cache.get(&"a"), None);
         assert!(!cache.contains_key(&"a"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
         assert!(cache.is_table_empty());
 
         cache.insert("b", "bob");
@@ -1240,12 +1242,15 @@ mod tests {
         assert_eq!(cache.estimated_entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 25 secs
-        cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
         assert!(cache.is_table_empty());
     }
 
@@ -1291,21 +1296,25 @@ mod tests {
         assert_eq!(cache.estimated_entry_count(), 2);
 
         mock.increment(Duration::from_secs(3)); // 15 secs.
-        cache.sync();
-
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), Some("bob"));
         assert!(!cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 1);
+
+        cache.sync();
         assert_eq!(cache.estimated_entry_count(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
-        cache.sync();
-
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
         assert!(cache.is_table_empty());
     }
 

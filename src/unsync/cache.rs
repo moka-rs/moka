@@ -1236,6 +1236,7 @@ mod tests {
 
         assert_eq!(cache.get(&"a"), None);
         assert!(!cache.contains_key(&"a"));
+        assert_eq!(cache.iter().count(), 0);
         assert!(cache.cache.is_empty());
 
         cache.insert("b", "bob");
@@ -1262,6 +1263,7 @@ mod tests {
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
+        assert_eq!(cache.iter().count(), 0);
         assert!(cache.cache.is_empty());
     }
 
@@ -1302,6 +1304,7 @@ mod tests {
         assert_eq!(cache.get(&"b"), Some(&"bob"));
         assert!(!cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
+        assert_eq!(cache.iter().count(), 1);
         assert_eq!(cache.cache.len(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
@@ -1310,6 +1313,7 @@ mod tests {
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
+        assert_eq!(cache.iter().count(), 0);
         assert!(cache.cache.is_empty());
     }
 
