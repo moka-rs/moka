@@ -1,6 +1,6 @@
 use super::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
-    CacheBuilder, ConcurrentCacheExt, Iter,
+    CacheBuilder, ConcurrentCacheExt, EntryRef, Iter,
 };
 use crate::{
     sync::{housekeeper::InnerSync, Weigher, WriteOp},
@@ -486,6 +486,21 @@ where
     }
 }
 
+impl<'a, K, V, S> IntoIterator for &'a Cache<K, V, S>
+where
+    K: 'a + Eq + Hash,
+    V: 'a,
+    S: BuildHasher + Clone,
+{
+    type Item = EntryRef<'a, K, V, S>;
+
+    type IntoIter = Iter<'a, K, V, S>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 // private methods
 impl<K, V, S> Cache<K, V, S>
 where
@@ -910,7 +925,7 @@ mod tests {
 
         let mut key_set = std::collections::HashSet::new();
 
-        for entry in cache.iter() {
+        for entry in &cache {
             let (key, value) = entry.pair();
             assert_eq!(value, &make_value(*key));
 
@@ -986,7 +1001,7 @@ mod tests {
                     std::thread::spawn(move || {
                         let read_lock = rw_lock.read().unwrap();
                         let mut key_set = HashSet::new();
-                        for entry in cache.iter() {
+                        for entry in &cache {
                             let (key, value) = entry.pair();
                             assert_eq!(value, &make_value(*key));
                             key_set.insert(*key);
