@@ -6,6 +6,7 @@ use crate::{
     sync::{
         base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
         housekeeper::InnerSync,
+        iter::Iter,
         PredicateId, Weigher, WriteOp,
     },
     Policy, PredicateError,
@@ -696,6 +697,67 @@ where
         self.base.invalidate_entries_if(Arc::new(predicate))
     }
 
+    /// Creates an iterator visiting all key-value pairs in arbitrary order. The
+    /// iterator element type is `(Arc<K>, V)`, where `V` is a clone of a stored
+    /// value.
+    ///
+    /// Iterators do not block concurrent reads and writes on the cache. An entry can
+    /// be inserted to, invalidated or evicted from a cache while iterators are alive
+    /// on the same cache.
+    ///
+    /// Unlike the `get` method, visiting entries via an iterator do not update the
+    /// historic popularity estimator or reset idle timers for keys.
+    ///
+    /// # Guarantees
+    ///
+    /// In order to allow concurrent access to the cache, iterator's `next` method
+    /// does _not_ guarantee the following:
+    ///
+    /// - It does not guarantee to return a key-value pair (an entry) if its key has
+    ///   been inserted to the cache _after_ the iterator was created.
+    ///   - Such an entry may or may not be returned depending on key's hash and
+    ///     timing.
+    ///
+    /// and the `next` method guarantees the followings:
+    ///
+    /// - It guarantees not to return the same entry more than once.
+    /// - It guarantees not to return an entry if it has been removed from the cache
+    ///   after the iterator was created.
+    ///     - Note: An entry can be removed by following reasons:
+    ///         - Manually invalidated.
+    ///         - Expired (e.g. time-to-live).
+    ///         - Evicted as the cache capacity exceeded.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.8.2", features = ["future"] }
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    /// use moka::future::Cache;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let cache = Cache::new(100);
+    ///     cache.insert("Julia", 14).await;
+    ///
+    ///     let mut iter = cache.iter();
+    ///     let (k, v) = iter.next().unwrap(); // (Arc<K>, V)
+    ///     assert_eq!(*k, "Julia");
+    ///     assert_eq!(v, 14);
+    ///
+    ///     assert!(iter.next().is_none());
+    /// }
+    /// ```
+    ///
+    pub fn iter(&self) -> Iter<'_, K, V> {
+        use crate::sync::iter::ScanningGet;
+
+        Iter::with_single_cache_segment(&self.base, self.base.num_cht_segments())
+    }
+
     /// Returns a `BlockingOp` for this cache. It provides blocking
     /// [insert](#method.insert) and [invalidate](#method.invalidate) methods, which
     /// can be called outside of asynchronous contexts.
@@ -727,6 +789,21 @@ where
     }
 }
 
+impl<'a, K, V, S> IntoIterator for &'a Cache<K, V, S>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    type Item = (Arc<K>, V);
+
+    type IntoIter = Iter<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -738,7 +815,9 @@ where
     }
 }
 
+//
 // private methods
+//
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -1131,10 +1210,10 @@ mod tests {
 
     #[tokio::test]
     async fn basic_multi_async_tasks() {
-        let num_threads = 4;
+        let num_tasks = 4;
         let cache = Cache::new(100);
 
-        let tasks = (0..num_threads)
+        let tasks = (0..num_tasks)
             .map(|id| {
                 let cache = cache.clone();
                 if id == 0 {
@@ -1306,10 +1385,12 @@ mod tests {
         assert!(cache.contains_key(&"a"));
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
-        cache.sync();
-
         assert_eq!(cache.get(&"a"), None);
         assert!(!cache.contains_key(&"a"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
         assert!(cache.is_table_empty());
 
         cache.insert("b", "bob").await;
@@ -1335,12 +1416,15 @@ mod tests {
         assert_eq!(cache.estimated_entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 25 secs
-        cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
         assert!(cache.is_table_empty());
     }
 
@@ -1386,22 +1470,128 @@ mod tests {
         assert_eq!(cache.estimated_entry_count(), 2);
 
         mock.increment(Duration::from_secs(3)); // 15 secs.
-        cache.sync();
-
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), Some("bob"));
         assert!(!cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 1);
+
+        cache.sync();
         assert_eq!(cache.estimated_entry_count(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
-        cache.sync();
-
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
         assert!(cache.is_table_empty());
+    }
+
+    #[tokio::test]
+    async fn test_iter() {
+        const NUM_KEYS: usize = 50;
+
+        fn make_value(key: usize) -> String {
+            format!("val: {}", key)
+        }
+
+        let cache = Cache::builder()
+            .max_capacity(100)
+            .time_to_idle(Duration::from_secs(10))
+            .build();
+
+        for key in 0..NUM_KEYS {
+            cache.insert(key, make_value(key)).await;
+        }
+
+        let mut key_set = std::collections::HashSet::new();
+
+        for (key, value) in &cache {
+            assert_eq!(value, make_value(*key));
+
+            key_set.insert(*key);
+        }
+
+        // Ensure there are no missing or duplicate keys in the iteration.
+        assert_eq!(key_set.len(), NUM_KEYS);
+    }
+
+    /// Runs 16 async tasks at the same time and ensures no deadlock occurs.
+    ///
+    /// - Eight of the task will update key-values in the cache.
+    /// - Eight others will iterate the cache.
+    ///
+    #[tokio::test]
+    async fn test_iter_multi_async_tasks() {
+        use std::collections::HashSet;
+
+        const NUM_KEYS: usize = 1024;
+        const NUM_TASKS: usize = 16;
+
+        fn make_value(key: usize) -> String {
+            format!("val: {}", key)
+        }
+
+        let cache = Cache::builder()
+            .max_capacity(2048)
+            .time_to_idle(Duration::from_secs(10))
+            .build();
+
+        // Initialize the cache.
+        for key in 0..NUM_KEYS {
+            cache.insert(key, make_value(key)).await;
+        }
+
+        let rw_lock = Arc::new(tokio::sync::RwLock::<()>::default());
+        let write_lock = rw_lock.write().await;
+
+        let tasks = (0..NUM_TASKS)
+            .map(|n| {
+                let cache = cache.clone();
+                let rw_lock = Arc::clone(&rw_lock);
+
+                if n % 2 == 0 {
+                    // This thread will update the cache.
+                    tokio::spawn(async move {
+                        let read_lock = rw_lock.read().await;
+                        for key in 0..NUM_KEYS {
+                            // TODO: Update keys in a random order?
+                            cache.insert(key, make_value(key)).await;
+                        }
+                        std::mem::drop(read_lock);
+                    })
+                } else {
+                    // This thread will iterate the cache.
+                    tokio::spawn(async move {
+                        let read_lock = rw_lock.read().await;
+                        let mut key_set = HashSet::new();
+                        // let mut key_count = 0usize;
+                        for (key, value) in &cache {
+                            assert_eq!(value, make_value(*key));
+                            key_set.insert(*key);
+                            // key_count += 1;
+                        }
+                        // Ensure there are no missing or duplicate keys in the iteration.
+                        assert_eq!(key_set.len(), NUM_KEYS);
+                        std::mem::drop(read_lock);
+                    })
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // Let these threads to run by releasing the write lock.
+        std::mem::drop(write_lock);
+
+        let _ = futures_util::future::join_all(tasks).await;
+
+        // Ensure there are no missing or duplicate keys in the iteration.
+        let key_set = cache.iter().map(|(k, _v)| *k).collect::<HashSet<_>>();
+        assert_eq!(key_set.len(), NUM_KEYS);
     }
 
     #[tokio::test]

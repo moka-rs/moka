@@ -1,4 +1,6 @@
-use super::{deques::Deques, AccessTime, CacheBuilder, KeyDate, KeyHashDate, ValueEntry, Weigher};
+use super::{
+    deques::Deques, AccessTime, CacheBuilder, Iter, KeyDate, KeyHashDate, ValueEntry, Weigher,
+};
 use crate::{
     common::{
         self,
@@ -270,8 +272,6 @@ where
     ///
     /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
     /// on the borrowed form _must_ match those for the key type.
-    ///
-    /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
     pub fn get<Q>(&mut self, key: &Q) -> Option<&V>
     where
         Rc<K>: Borrow<Q>,
@@ -301,6 +301,12 @@ where
                 }
             }
         }
+    }
+
+    pub(crate) fn is_expired_entry(&self, entry: &ValueEntry<K, V>) -> bool {
+        let now = self.current_time_from_expiration_clock();
+        Self::is_expired_entry_wo(&self.time_to_live, entry, now)
+            || Self::is_expired_entry_ao(&self.time_to_idle, entry, now)
     }
 
     /// Inserts a key-value pair into the cache.
@@ -391,6 +397,32 @@ where
             }
         });
         self.saturating_sub_from_total_weight(invalidated);
+    }
+
+    /// Creates an iterator visiting all key-value pairs in arbitrary order. The
+    /// iterator element type is `(&K, &V)`.
+    ///
+    /// Unlike the `get` method, visiting entries via an iterator do not update the
+    /// historic popularity estimator or reset idle timers for keys.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use moka::unsync::Cache;
+    ///
+    /// let mut cache = Cache::new(100);
+    /// cache.insert("Julia", 14);
+    ///
+    /// let mut iter = cache.iter();
+    /// let (k, v) = iter.next().unwrap(); // (&K, &V)
+    /// assert_eq!(k, &"Julia");
+    /// assert_eq!(v, &14);
+    ///
+    /// assert!(iter.next().is_none());
+    /// ```
+    ///
+    pub fn iter(&self) -> Iter<'_, K, V, S> {
+        Iter::new(self, self.cache.iter())
     }
 
     /// Returns a read-only cache policy of this cache.
@@ -1204,6 +1236,7 @@ mod tests {
 
         assert_eq!(cache.get(&"a"), None);
         assert!(!cache.contains_key(&"a"));
+        assert_eq!(cache.iter().count(), 0);
         assert!(cache.cache.is_empty());
 
         cache.insert("b", "bob");
@@ -1230,6 +1263,7 @@ mod tests {
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
+        assert_eq!(cache.iter().count(), 0);
         assert!(cache.cache.is_empty());
     }
 
@@ -1270,6 +1304,7 @@ mod tests {
         assert_eq!(cache.get(&"b"), Some(&"bob"));
         assert!(!cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
+        assert_eq!(cache.iter().count(), 1);
         assert_eq!(cache.cache.len(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
@@ -1278,6 +1313,7 @@ mod tests {
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
+        assert_eq!(cache.iter().count(), 0);
         assert!(cache.cache.is_empty());
     }
 

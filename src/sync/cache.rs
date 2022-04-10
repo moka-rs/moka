@@ -1,6 +1,7 @@
 use super::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
     housekeeper::InnerSync,
+    iter::{Iter, ScanningGet},
     value_initializer::ValueInitializer,
     CacheBuilder, ConcurrentCacheExt, PredicateId, Weigher, WriteOp,
 };
@@ -696,6 +697,57 @@ where
         self.base.invalidate_entries_if(predicate)
     }
 
+    /// Creates an iterator visiting all key-value pairs in arbitrary order. The
+    /// iterator element type is `(Arc<K>, V)`, where `V` is a clone of a stored
+    /// value.
+    ///
+    /// Iterators do not block concurrent reads and writes on the cache. An entry can
+    /// be inserted to, invalidated or evicted from a cache while iterators are alive
+    /// on the same cache.
+    ///
+    /// Unlike the `get` method, visiting entries via an iterator do not update the
+    /// historic popularity estimator or reset idle timers for keys.
+    ///
+    /// # Guarantees
+    ///
+    /// In order to allow concurrent access to the cache, iterator's `next` method
+    /// does _not_ guarantee the following:
+    ///
+    /// - It does not guarantee to return a key-value pair (an entry) if its key has
+    ///   been inserted to the cache _after_ the iterator was created.
+    ///   - Such an entry may or may not be returned depending on key's hash and
+    ///     timing.
+    ///
+    /// and the `next` method guarantees the followings:
+    ///
+    /// - It guarantees not to return the same entry more than once.
+    /// - It guarantees not to return an entry if it has been removed from the cache
+    ///   after the iterator was created.
+    ///     - Note: An entry can be removed by following reasons:
+    ///         - Manually invalidated.
+    ///         - Expired (e.g. time-to-live).
+    ///         - Evicted as the cache capacity exceeded.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use moka::sync::Cache;
+    ///
+    /// let cache = Cache::new(100);
+    /// cache.insert("Julia", 14);
+    ///
+    /// let mut iter = cache.iter();
+    /// let (k, v) = iter.next().unwrap(); // (Arc<K>, V)
+    /// assert_eq!(*k, "Julia");
+    /// assert_eq!(v, 14);
+    ///
+    /// assert!(iter.next().is_none());
+    /// ```
+    ///
+    pub fn iter(&self) -> Iter<'_, K, V> {
+        Iter::with_single_cache_segment(&self.base, self.num_cht_segments())
+    }
+
     /// Returns a read-only cache policy of this cache.
     ///
     /// At this time, cache policy cannot be modified after cache creation.
@@ -715,6 +767,21 @@ where
     }
 }
 
+impl<'a, K, V, S> IntoIterator for &'a Cache<K, V, S>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    type Item = (Arc<K>, V);
+
+    type IntoIter = Iter<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
 impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -726,7 +793,31 @@ where
     }
 }
 
+//
+// Iterator support
+//
+impl<K, V, S> ScanningGet<K, V> for Cache<K, V, S>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    fn num_cht_segments(&self) -> usize {
+        self.base.num_cht_segments()
+    }
+
+    fn scanning_get(&self, key: &Arc<K>) -> Option<V> {
+        self.base.scanning_get(key)
+    }
+
+    fn keys(&self, cht_segment: usize) -> Option<Vec<Arc<K>>> {
+        self.base.keys(cht_segment)
+    }
+}
+
+//
 // private methods
+//
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -1120,10 +1211,12 @@ mod tests {
         assert!(cache.contains_key(&"a"));
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
-        cache.sync();
-
         assert_eq!(cache.get(&"a"), None);
         assert!(!cache.contains_key(&"a"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
         assert!(cache.is_table_empty());
 
         cache.insert("b", "bob");
@@ -1149,12 +1242,15 @@ mod tests {
         assert_eq!(cache.estimated_entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 25 secs
-        cache.sync();
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
         assert!(cache.is_table_empty());
     }
 
@@ -1200,22 +1296,128 @@ mod tests {
         assert_eq!(cache.estimated_entry_count(), 2);
 
         mock.increment(Duration::from_secs(3)); // 15 secs.
-        cache.sync();
-
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), Some("bob"));
         assert!(!cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 1);
+
+        cache.sync();
         assert_eq!(cache.estimated_entry_count(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
-        cache.sync();
-
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
         assert!(cache.is_table_empty());
+    }
+
+    #[test]
+    fn test_iter() {
+        const NUM_KEYS: usize = 50;
+
+        fn make_value(key: usize) -> String {
+            format!("val: {}", key)
+        }
+
+        let cache = Cache::builder()
+            .max_capacity(100)
+            .time_to_idle(Duration::from_secs(10))
+            .build();
+
+        for key in 0..NUM_KEYS {
+            cache.insert(key, make_value(key));
+        }
+
+        let mut key_set = std::collections::HashSet::new();
+
+        for (key, value) in &cache {
+            assert_eq!(value, make_value(*key));
+
+            key_set.insert(*key);
+        }
+
+        // Ensure there are no missing or duplicate keys in the iteration.
+        assert_eq!(key_set.len(), NUM_KEYS);
+    }
+
+    /// Runs 16 threads at the same time and ensures no deadlock occurs.
+    ///
+    /// - Eight of the threads will update key-values in the cache.
+    /// - Eight others will iterate the cache.
+    ///
+    #[test]
+    fn test_iter_multi_threads() {
+        use std::collections::HashSet;
+
+        const NUM_KEYS: usize = 1024;
+        const NUM_THREADS: usize = 16;
+
+        fn make_value(key: usize) -> String {
+            format!("val: {}", key)
+        }
+
+        let cache = Cache::builder()
+            .max_capacity(2048)
+            .time_to_idle(Duration::from_secs(10))
+            .build();
+
+        // Initialize the cache.
+        for key in 0..NUM_KEYS {
+            cache.insert(key, make_value(key));
+        }
+
+        let rw_lock = Arc::new(std::sync::RwLock::<()>::default());
+        let write_lock = rw_lock.write().unwrap();
+
+        // https://rust-lang.github.io/rust-clippy/master/index.html#needless_collect
+        #[allow(clippy::needless_collect)]
+        let handles = (0..NUM_THREADS)
+            .map(|n| {
+                let cache = cache.clone();
+                let rw_lock = Arc::clone(&rw_lock);
+
+                if n % 2 == 0 {
+                    // This thread will update the cache.
+                    std::thread::spawn(move || {
+                        let read_lock = rw_lock.read().unwrap();
+                        for key in 0..NUM_KEYS {
+                            // TODO: Update keys in a random order?
+                            cache.insert(key, make_value(key));
+                        }
+                        std::mem::drop(read_lock);
+                    })
+                } else {
+                    // This thread will iterate the cache.
+                    std::thread::spawn(move || {
+                        let read_lock = rw_lock.read().unwrap();
+                        let mut key_set = HashSet::new();
+                        for (key, value) in &cache {
+                            assert_eq!(value, make_value(*key));
+                            key_set.insert(*key);
+                        }
+                        // Ensure there are no missing or duplicate keys in the iteration.
+                        assert_eq!(key_set.len(), NUM_KEYS);
+                        std::mem::drop(read_lock);
+                    })
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // Let these threads to run by releasing the write lock.
+        std::mem::drop(write_lock);
+
+        handles.into_iter().for_each(|h| h.join().expect("Failed"));
+
+        // Ensure there are no missing or duplicate keys in the iteration.
+        let key_set = cache.iter().map(|(k, _v)| *k).collect::<HashSet<_>>();
+        assert_eq!(key_set.len(), NUM_KEYS);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use super::{
     base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
-    CacheBuilder, ConcurrentCacheExt, Iter,
+    CacheBuilder, ConcurrentCacheExt, EntryRef, Iter,
 };
 use crate::{
     sync::{housekeeper::InnerSync, Weigher, WriteOp},
@@ -24,9 +24,6 @@ use std::{
 /// `sync` and `future` caches are using a lock-free concurrent hash table.
 /// Since `DashMap` employs read-write locks on internal shards, it will have lower
 /// concurrency on retrievals and updates than other caches.
-///
-/// On the other hand, `dash` cache provides iterator, which returns immutable
-/// references to the entries in a cache. Other caches do not provide iterator.
 ///
 /// `dash` cache performs a best-effort bounding of the map using an entry
 /// replacement algorithm to determine which entries to evict when the capacity is
@@ -436,13 +433,24 @@ where
     V: 'a,
     S: BuildHasher + Clone,
 {
-    /// Creates an iterator over a `moka::dash::Cache` yielding immutable references.
+    /// Creates an iterator visiting all key-value pairs in arbitrary order. The
+    /// iterator element type is [`EntryRef<'a, K, V, S>`][moka-entry-ref].
     ///
-    /// **Locking behavior**: This iterator relies on the iterator of
-    /// [`dashmap::DashMap`][dashmap-iter], which employs read-write locks. May
-    /// deadlock if the thread holding an iterator attempts to update the cache.
+    /// Unlike the `get` method, visiting entries via an iterator do not update the
+    /// historic popularity estimator or reset idle timers for keys.
     ///
-    /// [dashmap-iter]: https://docs.rs/dashmap/5.2.0/dashmap/struct.DashMap.html#method.iter
+    /// # Guarantees
+    ///
+    /// **TODO**
+    ///
+    /// # Locking behavior
+    ///
+    /// This iterator relies on the iterator of [`dashmap::DashMap`][dashmap-iter],
+    /// which employs read-write locks. May deadlock if the thread holding an
+    /// iterator attempts to update the cache.
+    ///
+    /// [moka-entry-ref]: ./struct.EntryRef.html
+    /// [dashmap-iter]: <https://docs.rs/dashmap/*/dashmap/struct.DashMap.html#method.iter>
     ///
     /// # Examples
     ///
@@ -475,6 +483,21 @@ where
 {
     fn sync(&self) {
         self.base.inner.sync(MAX_SYNC_REPEATS);
+    }
+}
+
+impl<'a, K, V, S> IntoIterator for &'a Cache<K, V, S>
+where
+    K: 'a + Eq + Hash,
+    V: 'a,
+    S: BuildHasher + Clone,
+{
+    type Item = EntryRef<'a, K, V, S>;
+
+    type IntoIter = Iter<'a, K, V, S>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
     }
 }
 
@@ -902,7 +925,7 @@ mod tests {
 
         let mut key_set = std::collections::HashSet::new();
 
-        for entry in cache.iter() {
+        for entry in &cache {
             let (key, value) = entry.pair();
             assert_eq!(value, &make_value(*key));
 
@@ -934,7 +957,10 @@ mod tests {
     ///
     #[test]
     fn test_iter_multi_threads() {
+        use std::collections::HashSet;
+
         const NUM_KEYS: usize = 1024;
+        const NUM_THREADS: usize = 16;
 
         fn make_value(key: usize) -> String {
             format!("val: {}", key)
@@ -955,7 +981,7 @@ mod tests {
 
         // https://rust-lang.github.io/rust-clippy/master/index.html#needless_collect
         #[allow(clippy::needless_collect)]
-        let handles = (0..16usize)
+        let handles = (0..NUM_THREADS)
             .map(|n| {
                 let cache = cache.clone();
                 let rw_lock = Arc::clone(&rw_lock);
@@ -974,8 +1000,8 @@ mod tests {
                     // This thread will iterate the cache.
                     std::thread::spawn(move || {
                         let read_lock = rw_lock.read().unwrap();
-                        let mut key_set = std::collections::HashSet::new();
-                        for entry in cache.iter() {
+                        let mut key_set = HashSet::new();
+                        for entry in &cache {
                             let (key, value) = entry.pair();
                             assert_eq!(value, &make_value(*key));
                             key_set.insert(*key);
@@ -992,6 +1018,10 @@ mod tests {
         std::mem::drop(write_lock);
 
         handles.into_iter().for_each(|h| h.join().expect("Failed"));
+
+        // Ensure there are no missing or duplicate keys in the iteration.
+        let key_set = cache.iter().map(|ent| *ent.key()).collect::<HashSet<_>>();
+        assert_eq!(key_set.len(), NUM_KEYS);
     }
 
     #[test]

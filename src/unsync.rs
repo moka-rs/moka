@@ -6,12 +6,14 @@
 mod builder;
 mod cache;
 mod deques;
+mod iter;
 
 use std::{ptr::NonNull, rc::Rc};
 use tagptr::TagNonNull;
 
 pub use builder::CacheBuilder;
 pub use cache::Cache;
+pub use iter::Iter;
 
 use crate::common::{deque::DeqNode, time::Instant};
 

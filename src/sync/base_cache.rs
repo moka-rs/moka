@@ -3,6 +3,7 @@ use super::{
     entry_info::EntryInfo,
     housekeeper::{Housekeeper, InnerSync, SyncPace},
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
+    iter::ScanningGet,
     AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, PredicateId, ReadOp, ValueEntry, Weigher,
     WriteOp,
 };
@@ -243,6 +244,44 @@ where
     #[cfg(test)]
     pub(crate) fn weighted_size(&self) -> u64 {
         self.inner.weighted_size()
+    }
+}
+
+//
+// Iterator support
+//
+impl<K, V, S> ScanningGet<K, V> for BaseCache<K, V, S>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    fn num_cht_segments(&self) -> usize {
+        self.inner.num_cht_segments()
+    }
+
+    fn scanning_get(&self, key: &Arc<K>) -> Option<V> {
+        let hash = self.hash(key);
+        self.inner.get_key_value_and_then(key, hash, |k, entry| {
+            let i = &self.inner;
+            let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
+            let now = i.current_time_from_expiration_clock();
+
+            if is_expired_entry_wo(ttl, va, entry, now)
+                || is_expired_entry_ao(tti, va, entry, now)
+                || i.is_invalidated_entry(k, entry)
+            {
+                // Expired or invalidated entry.
+                None
+            } else {
+                // Valid entry.
+                Some(entry.value.clone())
+            }
+        })
+    }
+
+    fn keys(&self, cht_segment: usize) -> Option<Vec<Arc<K>>> {
+        self.inner.keys(cht_segment)
     }
 }
 
@@ -600,6 +639,19 @@ where
         self.cache
             .remove_entry(key, hash)
             .map(|(key, entry)| KvEntry::new(key, entry))
+    }
+
+    fn keys(&self, cht_segment: usize) -> Option<Vec<Arc<K>>> {
+        // Do `Arc::clone` instead of `Arc::downgrade`. Updating existing entry
+        // in the cht with a new value replaces the key in the cht even though the
+        // old and new keys are equal. If we return `Weak<K>`, it will not be
+        // upgraded later to `Arc<K> as the key may have been replaced with a new
+        // key that equals to the old key.
+        self.cache.keys(cht_segment, Arc::clone)
+    }
+
+    fn num_cht_segments(&self) -> usize {
+        self.cache.actual_num_segments()
     }
 
     fn policy(&self) -> Policy {

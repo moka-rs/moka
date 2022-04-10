@@ -530,6 +530,28 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
         result
     }
 
+    pub(crate) fn keys<F, T>(&self, segment: usize, with_key: F) -> Option<Vec<T>>
+    where
+        F: FnMut(&K) -> T,
+    {
+        if segment >= self.segments.len() {
+            return None;
+        }
+
+        let Segment {
+            ref bucket_array,
+            ref len,
+        } = self.segments[segment];
+
+        let bucket_array_ref = BucketArrayRef {
+            bucket_array,
+            build_hasher: &self.build_hasher,
+            len,
+        };
+
+        Some(bucket_array_ref.keys(with_key))
+    }
+
     #[inline]
     pub(crate) fn hash<Q>(&self, key: &Q) -> u64
     where
@@ -537,6 +559,10 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
         K: Borrow<Q>,
     {
         bucket::hash(&self.build_hasher, key)
+    }
+
+    pub(crate) fn actual_num_segments(&self) -> usize {
+        self.segments.len()
     }
 }
 
@@ -1606,6 +1632,51 @@ mod tests {
 
         for i in (0..NUM_VALUES).filter(|i| i % 2 != 0) {
             assert_eq!(map.get(&i, map.hash(&i)), Some(i));
+        }
+
+        run_deferred();
+    }
+
+    #[test]
+    fn keys_in_single_segment() {
+        let map =
+            HashMap::with_num_segments_capacity_and_hasher(1, 0, DefaultHashBuilder::default());
+
+        assert!(map.is_empty());
+        assert_eq!(map.len(), 0);
+
+        const NUM_KEYS: usize = 200;
+
+        for i in 0..NUM_KEYS {
+            let key = Arc::new(i);
+            let hash = map.hash(&key);
+            assert_eq!(map.insert_entry_and(key, hash, i, |_, v| *v), None);
+        }
+
+        assert!(!map.is_empty());
+        assert_eq!(map.len(), NUM_KEYS);
+
+        let mut keys = map.keys(0, |k| Arc::clone(k)).unwrap();
+        assert_eq!(keys.len(), NUM_KEYS);
+        keys.sort_unstable();
+
+        for (i, key) in keys.into_iter().enumerate() {
+            assert_eq!(i, *key);
+        }
+
+        for i in (0..NUM_KEYS).step_by(2) {
+            assert_eq!(map.remove(&i, map.hash(&i)), Some(i));
+        }
+
+        assert!(!map.is_empty());
+        assert_eq!(map.len(), NUM_KEYS / 2);
+
+        let mut keys = map.keys(0, |k| Arc::clone(k)).unwrap();
+        assert_eq!(keys.len(), NUM_KEYS / 2);
+        keys.sort_unstable();
+
+        for (i, key) in keys.into_iter().enumerate() {
+            assert_eq!(i, *key / 2);
         }
 
         run_deferred();
