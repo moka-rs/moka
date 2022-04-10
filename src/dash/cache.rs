@@ -942,7 +942,10 @@ mod tests {
     ///
     #[test]
     fn test_iter_multi_threads() {
+        use std::collections::HashSet;
+
         const NUM_KEYS: usize = 1024;
+        const NUM_THREADS: usize = 16;
 
         fn make_value(key: usize) -> String {
             format!("val: {}", key)
@@ -963,7 +966,7 @@ mod tests {
 
         // https://rust-lang.github.io/rust-clippy/master/index.html#needless_collect
         #[allow(clippy::needless_collect)]
-        let handles = (0..16usize)
+        let handles = (0..NUM_THREADS)
             .map(|n| {
                 let cache = cache.clone();
                 let rw_lock = Arc::clone(&rw_lock);
@@ -982,7 +985,7 @@ mod tests {
                     // This thread will iterate the cache.
                     std::thread::spawn(move || {
                         let read_lock = rw_lock.read().unwrap();
-                        let mut key_set = std::collections::HashSet::new();
+                        let mut key_set = HashSet::new();
                         for entry in cache.iter() {
                             let (key, value) = entry.pair();
                             assert_eq!(value, &make_value(*key));
@@ -1000,6 +1003,10 @@ mod tests {
         std::mem::drop(write_lock);
 
         handles.into_iter().for_each(|h| h.join().expect("Failed"));
+
+        // Ensure there are no missing or duplicate keys in the iteration.
+        let key_set = cache.iter().map(|ent| *ent.key()).collect::<HashSet<_>>();
+        assert_eq!(key_set.len(), NUM_KEYS);
     }
 
     #[test]

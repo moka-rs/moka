@@ -34,7 +34,7 @@ use std::{
     rc::Rc,
     sync::{
         atomic::{AtomicBool, AtomicU8, Ordering},
-        Arc, Weak,
+        Arc,
     },
     time::Duration,
 };
@@ -280,7 +280,7 @@ where
         })
     }
 
-    fn keys(&self, cht_segment: usize) -> Option<Vec<Weak<K>>> {
+    fn keys(&self, cht_segment: usize) -> Option<Vec<Arc<K>>> {
         self.inner.keys(cht_segment)
     }
 }
@@ -641,8 +641,13 @@ where
             .map(|(key, entry)| KvEntry::new(key, entry))
     }
 
-    fn keys(&self, cht_segment: usize) -> Option<Vec<Weak<K>>> {
-        self.cache.keys(cht_segment, Arc::downgrade)
+    fn keys(&self, cht_segment: usize) -> Option<Vec<Arc<K>>> {
+        // Do `Arc::clone` instead of `Arc::downgrade`. Updating existing entry
+        // in the cht with a new value replaces the key in the cht even though the
+        // old and new keys are equal. If we return `Weak<K>`, it will not be
+        // upgraded later to `Arc<K> as the key may have been replaced with a new
+        // key that equals to the old key.
+        self.cache.keys(cht_segment, Arc::clone)
     }
 
     fn num_cht_segments(&self) -> usize {

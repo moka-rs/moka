@@ -1,7 +1,4 @@
-use std::{
-    hash::Hash,
-    sync::{Arc, Weak},
-};
+use std::{hash::Hash, sync::Arc};
 
 // This trait is implemented by `sync::BaseCache` and `sync::Cache`.
 pub(crate) trait ScanningGet<K, V> {
@@ -16,11 +13,11 @@ pub(crate) trait ScanningGet<K, V> {
     fn scanning_get(&self, key: &Arc<K>) -> Option<V>;
 
     /// Returns a vec of keys in a specified segment of the concurrent hash table.
-    fn keys(&self, cht_segment: usize) -> Option<Vec<Weak<K>>>;
+    fn keys(&self, cht_segment: usize) -> Option<Vec<Arc<K>>>;
 }
 
 pub struct Iter<'i, K, V> {
-    keys: Option<Vec<Weak<K>>>,
+    keys: Option<Vec<Arc<K>>>,
     cache_segments: Box<[&'i dyn ScanningGet<K, V>]>,
     num_cht_segments: usize,
     cache_seg_index: usize,
@@ -92,14 +89,14 @@ where
 
     fn next_key(&mut self) -> Option<Arc<K>> {
         while let Some(keys) = self.current_keys() {
-            if let key @ Some(_) = keys.pop().and_then(|k| k.upgrade()) {
+            if let key @ Some(_) = keys.pop() {
                 return key;
             }
         }
         None
     }
 
-    fn current_keys(&mut self) -> Option<&mut Vec<Weak<K>>> {
+    fn current_keys(&mut self) -> Option<&mut Vec<Arc<K>>> {
         // If keys is none or some but empty, try to get next keys.
         while self.keys.as_ref().map_or(true, Vec::is_empty) {
             // Adjust indices.

@@ -536,7 +536,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{ConcurrentCacheExt, SegmentedCache};
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
     #[test]
     fn basic_single_thread() {
@@ -878,6 +878,79 @@ mod tests {
         }
 
         // Ensure there are no missing or duplicate keys in the iteration.
+        assert_eq!(key_set.len(), NUM_KEYS);
+    }
+
+    /// Runs 16 threads at the same time and ensures no deadlock occurs.
+    ///
+    /// - Eight of the threads will update key-values in the cache.
+    /// - Eight others will iterate the cache.
+    ///
+    #[test]
+    fn test_iter_multi_threads() {
+        use std::collections::HashSet;
+
+        const NUM_KEYS: usize = 1024;
+        const NUM_THREADS: usize = 16;
+
+        fn make_value(key: usize) -> String {
+            format!("val: {}", key)
+        }
+
+        let cache = SegmentedCache::builder(4)
+            .max_capacity(2048)
+            .time_to_idle(Duration::from_secs(10))
+            .build();
+
+        // Initialize the cache.
+        for key in 0..NUM_KEYS {
+            cache.insert(key, make_value(key));
+        }
+
+        let rw_lock = Arc::new(std::sync::RwLock::<()>::default());
+        let write_lock = rw_lock.write().unwrap();
+
+        // https://rust-lang.github.io/rust-clippy/master/index.html#needless_collect
+        #[allow(clippy::needless_collect)]
+        let handles = (0..NUM_THREADS)
+            .map(|n| {
+                let cache = cache.clone();
+                let rw_lock = Arc::clone(&rw_lock);
+
+                if n % 2 == 0 {
+                    // This thread will update the cache.
+                    std::thread::spawn(move || {
+                        let read_lock = rw_lock.read().unwrap();
+                        for key in 0..NUM_KEYS {
+                            // TODO: Update keys in a random order?
+                            cache.insert(key, make_value(key));
+                        }
+                        std::mem::drop(read_lock);
+                    })
+                } else {
+                    // This thread will iterate the cache.
+                    std::thread::spawn(move || {
+                        let read_lock = rw_lock.read().unwrap();
+                        let mut key_set = HashSet::new();
+                        for (key, value) in &cache {
+                            assert_eq!(value, make_value(*key));
+                            key_set.insert(*key);
+                        }
+                        // Ensure there are no missing or duplicate keys in the iteration.
+                        assert_eq!(key_set.len(), NUM_KEYS);
+                        std::mem::drop(read_lock);
+                    })
+                }
+            })
+            .collect::<Vec<_>>();
+
+        // Let these threads to run by releasing the write lock.
+        std::mem::drop(write_lock);
+
+        handles.into_iter().for_each(|h| h.join().expect("Failed"));
+
+        // Ensure there are no missing or duplicate keys in the iteration.
+        let key_set = cache.iter().map(|(k, _v)| *k).collect::<HashSet<_>>();
         assert_eq!(key_set.len(), NUM_KEYS);
     }
 
