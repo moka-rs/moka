@@ -295,9 +295,29 @@ where
     /// iterator element type is `(Arc<K>, V)`, where `V` is a clone of a stored
     /// value.
     ///
+    /// Iterators do not block concurrent reads and writes on the cache. An entry can
+    /// be inserted to, invalidated or evicted from a cache while iterators are alive
+    /// on the same cache.
+    ///
     /// # Guarantees
     ///
-    /// **TODO**
+    /// In order to allow concurrent access to the cache, iterator's `next` method
+    /// does _not_ guarantee the following:
+    ///
+    /// - It does not guarantee to return a key-value pair (an entry) if its key has
+    ///   been inserted to the cache _after_ the iterator was created.
+    ///   - Such an entry may or may not be returned depending on key's hash and
+    ///     timing.
+    ///
+    /// and the `next` method guarantees the followings:
+    ///
+    /// - It guarantees not to return the same entry more than once.
+    /// - It guarantees not to return an entry if it has been removed from the cache
+    ///   after the iterator was created.
+    ///     - Note: An entry can be removed by following reasons:
+    ///         - Manually invalidated.
+    ///         - Expired (e.g. time-to-live).
+    ///         - Evicted as the cache capacity exceeded.
     ///
     /// # Examples
     ///
