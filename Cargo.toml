@@ -49,8 +49,11 @@ scheduled-thread-pool = "0.2.5"
 smallvec = "1.8"
 tagptr = "0.2"
 thiserror = "1.0"
-triomphe = "0.1"
 uuid = { version = "0.8", features = ["v4"] }
+
+# Opt-out serde and stable_deref_trait features
+# https://github.com/Manishearth/triomphe/pull/5
+triomphe = { version = "0.1", default-features = false }
 
 # Optional dependencies (dashmap)
 dashmap = { version = "5.2", optional = true }
