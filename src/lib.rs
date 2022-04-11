@@ -1,5 +1,6 @@
 #![warn(clippy::all)]
 #![warn(rust_2018_idioms)]
+#![deny(rustdoc::broken_intra_doc_links)]
 
 //! Moka is a fast, concurrent cache library for Rust. Moka is inspired by
 //! the [Caffeine][caffeine-git] library for Java.

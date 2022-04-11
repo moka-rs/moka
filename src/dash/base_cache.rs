@@ -1,4 +1,4 @@
-use super::Iter;
+use super::{iter::DashMapIter, Iter};
 use crate::{
     common::{
         self,
@@ -227,7 +227,18 @@ where
     S: BuildHasher + Clone,
 {
     pub(crate) fn iter(&self) -> Iter<'_, K, V, S> {
-        self.inner.iter()
+        Iter::new(self, self.inner.iter())
+    }
+}
+
+impl<K, V, S> BaseCache<K, V, S> {
+    pub(crate) fn is_expired_entry(&self, entry: &TrioArc<ValueEntry<K, V>>) -> bool {
+        let i = &self.inner;
+        let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
+        let now = i.current_time_from_expiration_clock();
+        let entry = &*entry;
+
+        is_expired_entry_wo(ttl, va, entry, now) || is_expired_entry_ao(tti, va, entry, now)
     }
 }
 
@@ -527,7 +538,10 @@ where
             .remove(key)
             .map(|(key, entry)| KvEntry::new(key, entry))
     }
+}
 
+// functions/methods used by BaseCache
+impl<K, V, S> Inner<K, V, S> {
     fn policy(&self) -> Policy {
         Policy::new(self.max_capacity, 1, self.time_to_live, self.time_to_idle)
     }
@@ -606,9 +620,8 @@ where
     V: 'a,
     S: BuildHasher + Clone,
 {
-    fn iter(&self) -> Iter<'_, K, V, S> {
-        let map_iter = self.cache.iter();
-        Iter::new(map_iter)
+    fn iter(&self) -> DashMapIter<'_, K, V, S> {
+        self.cache.iter()
     }
 }
 
