@@ -12,6 +12,11 @@
 - Implement `IntoIterator` to the all caches (including experimental `dash::Cache`)
   ([#114][gh-pull-0114])
 
+### Fixed
+
+- Fix the `dash::Cache` iterator not to return expired entries.
+  ([#116][gh-pull-0116])
+
 
 ## Version 0.8.1
 
@@ -300,6 +305,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0116]: https://github.com/moka-rs/moka/pull/116/
 [gh-pull-0114]: https://github.com/moka-rs/moka/pull/114/
 [gh-pull-0105]: https://github.com/moka-rs/moka/pull/105/
 [gh-pull-0104]: https://github.com/moka-rs/moka/pull/104/
