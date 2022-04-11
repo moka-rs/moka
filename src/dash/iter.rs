@@ -1,4 +1,4 @@
-use super::mapref::EntryRef;
+use super::{base_cache::BaseCache, mapref::EntryRef};
 use crate::sync::ValueEntry;
 
 use std::{
@@ -7,13 +7,17 @@ use std::{
 };
 use triomphe::Arc as TrioArc;
 
-type DashMapIter<'a, K, V, S> = dashmap::iter::Iter<'a, Arc<K>, TrioArc<ValueEntry<K, V>>, S>;
+pub(crate) type DashMapIter<'a, K, V, S> =
+    dashmap::iter::Iter<'a, Arc<K>, TrioArc<ValueEntry<K, V>>, S>;
 
-pub struct Iter<'a, K, V, S>(DashMapIter<'a, K, V, S>);
+pub struct Iter<'a, K, V, S> {
+    cache: &'a BaseCache<K, V, S>,
+    map_iter: DashMapIter<'a, K, V, S>,
+}
 
 impl<'a, K, V, S> Iter<'a, K, V, S> {
-    pub(crate) fn new(map_iter: DashMapIter<'a, K, V, S>) -> Self {
-        Self(map_iter)
+    pub(crate) fn new(cache: &'a BaseCache<K, V, S>, map_iter: DashMapIter<'a, K, V, S>) -> Self {
+        Self { cache, map_iter }
     }
 }
 
@@ -25,7 +29,13 @@ where
     type Item = EntryRef<'a, K, V, S>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|map_ref| EntryRef::new(map_ref))
+        for map_ref in &mut self.map_iter {
+            if !self.cache.is_expired_entry(map_ref.value()) {
+                return Some(EntryRef::new(map_ref));
+            }
+        }
+
+        None
     }
 }
 
