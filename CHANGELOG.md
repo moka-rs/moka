@@ -16,6 +16,8 @@
 
 - Fix the `dash::Cache` iterator not to return expired entries.
   ([#116][gh-pull-0116])
+- Prevent "index out of bounds" error when `sync::SegmentedCache` was created with
+  a non-power-of-two segments. ([#117][gh-pull-0117])
 
 
 ## Version 0.8.1
@@ -305,6 +307,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0117]: https://github.com/moka-rs/moka/pull/117/
 [gh-pull-0116]: https://github.com/moka-rs/moka/pull/116/
 [gh-pull-0114]: https://github.com/moka-rs/moka/pull/114/
 [gh-pull-0105]: https://github.com/moka-rs/moka/pull/105/

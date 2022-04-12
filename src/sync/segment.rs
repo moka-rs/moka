@@ -507,7 +507,7 @@ where
         let seg_init_capacity = initial_capacity.map(|cap| cap / actual_num_segments);
         // NOTE: We cannot initialize the segments as `vec![cache; actual_num_segments]`
         // because Cache::clone() does not clone its inner but shares the same inner.
-        let segments = (0..num_segments)
+        let segments = (0..actual_num_segments)
             .map(|_| {
                 Cache::with_everything(
                     seg_max_capacity,
@@ -618,6 +618,25 @@ mod tests {
         cache.invalidate(&"b");
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"b"));
+    }
+
+    #[test]
+    fn non_power_of_two_segments() {
+        let mut cache = SegmentedCache::new(100, 5);
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cindy");
+
+        assert_eq!(cache.iter().count(), 3);
+        cache.sync();
+        assert_eq!(cache.iter().count(), 3);
     }
 
     #[test]
