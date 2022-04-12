@@ -462,6 +462,12 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
     --no-default-features --features future
 ```
 
+**Generating the Doc**
+
+```console
+$ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' \
+    doc --no-deps --features 'future, dash'                           
+```
 
 ## Road Map
 

@@ -2,6 +2,7 @@
 #![warn(rust_2018_idioms)]
 // Temporary disable this lint as the MSRV (1.51) require an older lint name:
 // #![deny(rustdoc::broken_intra_doc_links)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 //! Moka is a fast, concurrent cache library for Rust. Moka is inspired by
 //! the [Caffeine][caffeine-git] library for Java.
@@ -157,9 +158,11 @@
 //! [timer-wheel]: http://www.cs.columbia.edu/~nahum/w6998/papers/ton97-timing-wheels.pdf
 
 #[cfg(feature = "dash")]
+#[cfg_attr(docsrs, doc(cfg(feature = "dash")))]
 pub mod dash;
 
 #[cfg(feature = "future")]
+#[cfg_attr(docsrs, doc(cfg(feature = "future")))]
 pub mod future;
 
 pub mod sync;
@@ -173,6 +176,7 @@ pub use common::error::PredicateError;
 pub use policy::Policy;
 
 #[cfg(feature = "unstable-debug-counters")]
+#[cfg_attr(docsrs, doc(cfg(feature = "unstable-debug-counters")))]
 pub use sync::debug_counters::GlobalDebugCounters;
 
 #[cfg(test)]

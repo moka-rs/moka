@@ -81,6 +81,7 @@ skeptic = "0.13.5"
 [package.metadata.docs.rs]
 # Build the doc with some features enabled.
 features = ["future", "dash"]
+rustdoc-args = ["--cfg", "docsrs"]
 
 # ----------------------------------
 # RUSTSEC, etc.
