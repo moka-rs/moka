@@ -774,6 +774,7 @@ where
     }
 
     #[cfg(feature = "unstable-debug-counters")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "unstable-debug-counters")))]
     pub fn debug_stats(&self) -> CacheDebugStats {
         self.base.debug_stats()
     }
