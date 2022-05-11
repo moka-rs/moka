@@ -45,12 +45,19 @@ jobs:
         with:
           command: clean
 
-      - name: Downgrade dependencies to minimal versions
+      - name: Downgrade dependencies to minimal versions (Nightly only)
         uses: actions-rs/cargo@v1
         if: ${{ matrix.rust == 'nightly' }}
-        with: 
+        with:
           command: update
           args: -Z minimal-versions
+
+      - name: Pin some dependencies to specific versions (MSRV only)
+        if: ${{ matrix.rust == '1.51.0' }}
+        # Avoid hashbrown >= v0.12, which requires Rust 2021 edition.
+        run: |
+          cargo update -p dashmap --precise 5.2.0
+          cargo update -p hashbrown --precise 0.11.2
 
       - name: Build (no features)
         uses: actions-rs/cargo@v1
