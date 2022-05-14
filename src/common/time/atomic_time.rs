@@ -1,6 +1,6 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use super::Instant;
 
-use super::time::Instant;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) struct AtomicInstant {
     instant: AtomicU64,

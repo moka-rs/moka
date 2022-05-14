@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.8.2"
+version = "0.8.3"
 edition = "2018"
 rust-version = "1.51"
 
@@ -16,7 +16,7 @@ exclude = [".circleci", ".devcontainer", ".github", ".gitpod.yml", ".vscode"]
 build = "build.rs"
 
 [features]
-default = ["atomic64"]
+default = ["atomic64", "quanta"]
 
 # Enable this feature to use `moka::future::Cache`.
 future = ["async-io", "async-lock", "futures-util"]
@@ -44,7 +44,6 @@ crossbeam-utils = "0.8"
 num_cpus = "1.13"
 once_cell = "1.7"
 parking_lot = "0.12"
-quanta = "0.9.3"
 scheduled-thread-pool = "0.2.5"
 smallvec = "1.8"
 tagptr = "0.2"
@@ -54,6 +53,9 @@ uuid = { version = "0.8", features = ["v4"] }
 # Opt-out serde and stable_deref_trait features
 # https://github.com/Manishearth/triomphe/pull/5
 triomphe = { version = "0.1", default-features = false }
+
+# Optional dependencies (quanta, enabled by default)
+quanta = { version = "0.9.3", optional = true }
 
 # Optional dependencies (dashmap)
 dashmap = { version = "5.2", optional = true }

@@ -1,5 +1,16 @@
 # Moka &mdash; Change Log
 
+## Version 0.8.3
+
+### Changed
+
+- Make [Quanta crate][quanta-crate] optional (but enabled by default)
+  ([#121][gh-pull-0121])
+    - Quanta v0.9.3 or older may not work correctly on some x86_64 machines where
+      the Time Stamp Counter (TSC) is not synched across the processor cores.
+      ([#119][gh-issue-0119])
+
+
 ## Version 0.8.2
 
 ### Added
@@ -297,9 +308,11 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 <!-- Links -->
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
+[quanta-crate]: https://crates.io/crates/quanta
 
 [resolving-error-on-32bit]: https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
 
+[gh-issue-0119]: https://github.com/moka-rs/moka/issues/119/
 [gh-issue-0107]: https://github.com/moka-rs/moka/issues/107/
 [gh-issue-0072]: https://github.com/moka-rs/moka/issues/72/
 [gh-issue-0059]: https://github.com/moka-rs/moka/issues/59/
@@ -307,6 +320,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0121]: https://github.com/moka-rs/moka/pull/121/
 [gh-pull-0117]: https://github.com/moka-rs/moka/pull/117/
 [gh-pull-0116]: https://github.com/moka-rs/moka/pull/116/
 [gh-pull-0114]: https://github.com/moka-rs/moka/pull/114/
