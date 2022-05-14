@@ -1,0 +1,84 @@
+name: CI (Quanta disabled)
+
+on:
+  push:
+    paths-ignore:
+    - '.devcontainer/**'
+    - '.gitpod.yml'
+    - '.vscode/**'
+  pull_request:
+    paths-ignore:
+    - '.devcontainer/**'
+    - '.gitpod.yml'
+    - '.vscode/**'
+  schedule:
+    # Run against the last commit on the default branch on Friday at 8pm (UTC?)
+    - cron:  '0 20 * * 5'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - beta
+          - 1.51.0  # MSRV
+          - nightly # For checking minimum version dependencies.
+
+    steps:
+      - name: Checkout Moka
+        uses: actions/checkout@v2
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ matrix.rust }}
+          override: true
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v1
+
+      - name: cargo clean
+        uses: actions-rs/cargo@v1
+        with:
+          command: clean
+
+      - name: Downgrade dependencies to minimal versions (Nightly only)
+        uses: actions-rs/cargo@v1
+        if: ${{ matrix.rust == 'nightly' }}
+        with:
+          command: update
+          args: -Z minimal-versions
+
+      - name: Pin some dependencies to specific versions (MSRV only)
+        if: ${{ matrix.rust == '1.51.0' }}
+        # Avoid hashbrown >= v0.12, which requires Rust 2021 edition.
+        run: |
+          cargo update -p dashmap --precise 5.2.0
+          cargo update -p hashbrown --precise 0.11.2
+
+      - name: Build (no quanta feature)
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --no-default-features --features atomic64
+
+      - name: Run tests (release, no quanta feature)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --release --no-default-features --features atomic64
+
+      - name: Run tests (future feature, but no quanta feature)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features --features 'future, atomic64'
+
+      - name: Run tests (dash feature, but no quanta feature)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features --features 'dash, atomic64'

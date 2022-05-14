@@ -392,6 +392,7 @@ This crate's minimum supported Rust versions (MSRV) are the followings:
 |:-----------|:-------------------:|:-----------:|
 | no feature |                     | Rust 1.51.0 |
 | `atomic64` |       yes           | Rust 1.51.0 |
+| `quanta`   |       yes           | Rust 1.51.0 |
 | `future`   |                     | Rust 1.51.0 |
 | `dash`     |                     | Rust 1.51.0 |
 

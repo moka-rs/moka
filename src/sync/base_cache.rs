@@ -14,10 +14,9 @@ use super::debug_counters::CacheDebugStats;
 use crate::{
     common::{
         self,
-        atomic_time::AtomicInstant,
         deque::{DeqNode, Deque},
         frequency_sketch::FrequencySketch,
-        time::{CheckedTimeOps, Clock, Instant},
+        time::{atomic_time::AtomicInstant, CheckedTimeOps, Clock, Instant},
         CacheRegion,
     },
     Policy, PredicateError,

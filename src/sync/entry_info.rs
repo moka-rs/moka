@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use super::AccessTime;
-use crate::common::{atomic_time::AtomicInstant, time::Instant};
+use crate::common::time::{atomic_time::AtomicInstant, Instant};
 
 pub(crate) struct EntryInfo {
     is_admitted: AtomicBool,
