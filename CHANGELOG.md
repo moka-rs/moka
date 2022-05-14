@@ -6,9 +6,9 @@
 
 - Make [Quanta crate][quanta-crate] optional (but enabled by default)
   ([#121][gh-pull-0121])
-    - Quanta v0.9.3 or older may not work correctly on some x86_64 machines where the
-      Time Stamp Counter (TSC) is not synched across the processor
-      cores. ([#119][gh-issue-0119])
+    - Quanta v0.9.3 or older may not work correctly on some x86_64 machines where
+      the Time Stamp Counter (TSC) is not synched across the processor cores.
+      ([#119][gh-issue-0119])
 
 
 ## Version 0.8.2
