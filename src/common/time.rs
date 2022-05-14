@@ -4,8 +4,14 @@ use std::time::Duration;
 // https://github.com/rust-lang/rust/issues/32976
 // #[cfg_attr(target_has_atomic = "64", path = "common/time_atomic64.rs")]
 
-#[cfg_attr(feature = "atomic64", path = "time/atomic_time.rs")]
-#[cfg_attr(not(feature = "atomic64"), path = "time/atomic_time_compat.rs")]
+#[cfg_attr(
+    all(feature = "atomic64", feature = "quanta"),
+    path = "time/atomic_time.rs"
+)]
+#[cfg_attr(
+    not(all(feature = "atomic64", feature = "quanta")),
+    path = "time/atomic_time_compat.rs"
+)]
 pub(crate) mod atomic_time;
 
 #[cfg_attr(feature = "quanta", path = "time/clock_quanta.rs")]

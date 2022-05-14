@@ -4,8 +4,8 @@
 
 ### Changed
 
-- Now [Quanta crate][quanta-crate] can be opted out by disabling the default features.
-  ([#999][gh-pull-???])
+- Make [Quanta crate][quanta-crate] optional (but enabled by default)
+  ([#121][gh-pull-0121])
     - Quanta v0.9.3 or older may not work correctly on some x86_64 machines where the
       Time Stamp Counter (TSC) is not synched across the processor
       cores. ([#119][gh-issue-0119])
@@ -320,6 +320,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0121]: https://github.com/moka-rs/moka/pull/121/
 [gh-pull-0117]: https://github.com/moka-rs/moka/pull/117/
 [gh-pull-0116]: https://github.com/moka-rs/moka/pull/116/
 [gh-pull-0114]: https://github.com/moka-rs/moka/pull/114/
