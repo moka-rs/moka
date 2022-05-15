@@ -95,7 +95,7 @@ routers. Here are some highlights:
 - [Hashing Algorithm](#hashing-algorithm)
 - [Minimum Supported Rust Versions](#minimum-supported-rust-versions)
 - Troubleshooting
-    - [Integer Overflow in Quanta Crate on Some x86_64 Machines](#integer-overflow-in-quanta-crate-on-some-x8664-machines)
+    - [Integer Overflow in Quanta Crate on Some x86_64 Machines](#integer-overflow-in-quanta-crate-on-some-x86_64-machines)
     - [Compile Errors on Some 32-bit Platforms](#compile-errors-on-some-32-bit-platforms)
 - [Developing Moka](#developing-moka)
 - [Road Map](#road-map)
