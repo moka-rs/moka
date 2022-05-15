@@ -78,6 +78,32 @@ routers. Here are some highlights:
 
 - [CHANGELOG.md](https://github.com/moka-rs/moka/blob/master/CHANGELOG.md)
 
+
+## Table of Contents
+
+- [Features](#features)
+- [Moka in Production](#moka-in-production)
+- [Change Log](#change-log)
+- [Usage](#usage)
+- Examples (Part 1)
+    - [Synchronous Cache](#example-synchronous-cache)
+    - [Asynchronous Cache](#example-asynchronous-cache)
+- [Avoiding to clone the value at `get`](#avoiding-to-clone-the-value-at-get)
+- Examples (Part 2)
+    - [Size Aware Eviction](#example-size-aware-eviction)
+    - [Expiration Policies](#example-expiration-policies)
+- [Hashing Algorithm](#hashing-algorithm)
+- [Minimum Supported Rust Versions](#minimum-supported-rust-versions)
+- Troubleshooting
+    - [Integer Overflow in Quanta Crate on Some x86_64 Machines](#integer-overflow-in-quanta-crate-on-some-x8664-machines)
+    - [Compile Errors on Some 32-bit Platforms](#compile-errors-on-some-32-bit-platforms)
+- [Developing Moka](#developing-moka)
+- [Road Map](#road-map)
+- [About the Name](#about-the-name)
+- [Credits](#credits)
+- [License](#license)
+
+
 ## Usage
 
 Add this to your `Cargo.toml`:
@@ -383,7 +409,6 @@ available on crates.io, such as the [aHash][ahash-crate] crate.
 [ahash-crate]: https://crates.io/crates/ahash
 
 
-
 ## Minimum Supported Rust Versions
 
 This crate's minimum supported Rust versions (MSRV) are the followings:
@@ -405,11 +430,48 @@ change.
 - tagptr 0.2.0 requires 1.51.
 - socket2 0.4.0 requires 1.46.
 - quanta requires 1.45.
-- moka-cht requires 1.41.
 -->
 
 
-## Resolving Compile Errors on Some 32-bit Platforms
+## Troubleshooting
+
+### Integer Overflow in Quanta Crate on Some x86_64 Machines
+
+Quanta crate has a known issue on some specific x86_64-based machines. It will cause
+intermittent panic due to integer overflow:
+
+-  metrics-rs/quanta &mdash; [Intermittent panic due to overflowing our source calibration denominator. #61](https://github.com/metrics-rs/quanta/issues/61)
+
+The overflows have been reported by a couple of users who use AMD-based Lenovo
+laptops or Circle CI. There is no fix available yet as of Quanta v0.9.3.
+
+When this issue occurs, you will get a stacktrace containing the following lines:
+
+```console
+... panicked at 'attempt to add with overflow', ...
+...
+quanta::Calibration::calibrate
+    at ... /quanta-0.9.3/src/lib.rs:226:13
+quanta::Clock::new::{{closure}}
+    at ... /quanta-0.9.3/src/lib.rs:307:17
+...
+```
+
+You can avoid the issue by disabling `qanta` feature, which is one of the default
+features of Moka. Edit your Cargo.toml to add `default-features = false` to the
+dependency declaration.
+
+```toml:Cargo.toml
+[dependencies]
+moka = { version = "0.8", default-feautures = false }
+# Or
+moka = { version = "0.8", default-feautures = false, features = ["future"] }
+```
+
+This will make Moka to opt out Quanta and switch to a fall-back implementation.
+
+
+### Compile Errors on Some 32-bit Platforms
 
 On some 32-bit target platforms including the followings, you may encounter compile
 errors:
@@ -467,7 +529,7 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
 
 ```console
 $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' \
-    doc --no-deps --features 'future, dash'                           
+    doc --no-deps --features 'future, dash'
 ```
 
 ## Road Map
