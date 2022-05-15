@@ -9,6 +9,8 @@
     - Quanta v0.9.3 or older may not work correctly on some x86_64 machines where
       the Time Stamp Counter (TSC) is not synched across the processor cores.
       ([#119][gh-issue-0119])
+    - You can avoid the issue by disabling the default features of Moka.
+      See [the relevant section][panic_in_quanta] of the README.
 
 
 ## Version 0.8.2
@@ -310,7 +312,9 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [caffeine-git]: https://github.com/ben-manes/caffeine
 [quanta-crate]: https://crates.io/crates/quanta
 
-[resolving-error-on-32bit]: https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
+[panic_in_quanta]: https://github.com/moka-rs/moka#integer-overflow-in-quanta-crate-on-some-x8664-machines
+
+[resolving-error-on-32bit]: https://github.com/moka-rs/moka#compile-errors-on-some-32-bit-platforms
 
 [gh-issue-0119]: https://github.com/moka-rs/moka/issues/119/
 [gh-issue-0107]: https://github.com/moka-rs/moka/issues/107/
