@@ -502,10 +502,12 @@ where
             .await
     }
 
-    pub async fn get_with_if<F>(&self, key: K, init: impl Future<Output = V>, replace_if: F) -> V
-    where
-        F: Fn(&V) -> bool + Send + Sync + 'static,
-    {
+    pub async fn get_with_if(
+        &self,
+        key: K,
+        init: impl Future<Output = V>,
+        replace_if: impl Fn(&V) -> bool,
+    ) -> V {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         self.get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if))
