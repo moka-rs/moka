@@ -413,7 +413,7 @@ where
         self.try_get_with(key, init).await
     }
 
-    /// Ensures the value of the key exists by inserting the output of the init
+    /// Ensures the value of the key exists by inserting the output of the `init`
     /// future if not exist, and returns a _clone_ of the value.
     ///
     /// This method prevents to resolve the init future multiple times on the same
@@ -502,11 +502,19 @@ where
             .await
     }
 
+    /// Works like [`get_with`](#method.get_with), but takes an additional
+    /// `replace_if` closure.
+    ///
+    /// This method will resolve the `init` feature and insert the output to the
+    /// cache when:
+    ///
+    /// - The key does not exist.
+    /// - Or, `replace_if` closure returns `true`.
     pub async fn get_with_if(
         &self,
         key: K,
         init: impl Future<Output = V>,
-        replace_if: impl Fn(&V) -> bool,
+        replace_if: impl FnMut(&V) -> bool,
     ) -> V {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
@@ -844,11 +852,15 @@ where
         key: Arc<K>,
         hash: u64,
         init: impl Future<Output = V>,
-        replace_if: Option<impl Fn(&V) -> bool>,
+        mut replace_if: Option<impl FnMut(&V) -> bool>,
     ) -> V {
-        match (self.base.get_with_hash(&key, hash), replace_if) {
+        match (self.base.get_with_hash(&key, hash), &mut replace_if) {
             (Some(v), None) => return v,
-            (Some(v), Some(cond)) if !cond(&v) => return v,
+            (Some(v), Some(cond)) => {
+                if !cond(&v) {
+                    return v;
+                };
+            }
             _ => (),
         }
 
@@ -1619,9 +1631,9 @@ mod tests {
 
         // This test will run five async tasks:
         //
-        // Task1 will be the first task to call `get_with` for a key, so
-        // its async block will be evaluated and then a &str value "task1" will be
-        // inserted to the cache.
+        // Task1 will be the first task to call `get_with` for a key, so its async
+        // block will be evaluated and then a &str value "task1" will be inserted to
+        // the cache.
         let task1 = {
             let cache1 = cache.clone();
             async move {
@@ -1637,9 +1649,9 @@ mod tests {
             }
         };
 
-        // Task2 will be the second task to call `get_with` for the same
-        // key, so its async block will not be evaluated. Once task1's async block
-        // finishes, it will get the value inserted by task1's async block.
+        // Task2 will be the second task to call `get_with` for the same key, so its
+        // async block will not be evaluated. Once task1's async block finishes, it
+        // will get the value inserted by task1's async block.
         let task2 = {
             let cache2 = cache.clone();
             async move {
@@ -1650,11 +1662,11 @@ mod tests {
             }
         };
 
-        // Task3 will be the third task to call `get_with` for the same
-        // key. By the time it calls, task1's async block should have finished
-        // already and the value should be already inserted to the cache. So its
-        // async block will not be evaluated and will get the value insert by task1's
-        // async block immediately.
+        // Task3 will be the third task to call `get_with` for the same key. By the
+        // time it calls, task1's async block should have finished already and the
+        // value should be already inserted to the cache. So its async block will not
+        // be evaluated and will get the value inserted by task1's async block
+        // immediately.
         let task3 = {
             let cache3 = cache.clone();
             async move {
@@ -1699,9 +1711,9 @@ mod tests {
 
         // This test will run seven async tasks:
         //
-        // Task1 will be the first task to call `get_with_if` for a key, so
-        // its async block will be evaluated and then a &str value "task1" will be
-        // inserted to the cache.
+        // Task1 will be the first task to call `get_with_if` for a key, so its async
+        // block will be evaluated and then a &str value "task1" will be inserted to
+        // the cache.
         let task1 = {
             let cache1 = cache.clone();
             async move {
@@ -1721,9 +1733,9 @@ mod tests {
             }
         };
 
-        // Task2 will be the second task to call `get_with_if` for the same
-        // key, so its async block will not be evaluated. Once task1's async block
-        // finishes, it will get the value inserted by task1's async block.
+        // Task2 will be the second task to call `get_with_if` for the same key, so
+        // its async block will not be evaluated. Once task1's async block finishes,
+        // it will get the value inserted by task1's async block.
         let task2 = {
             let cache2 = cache.clone();
             async move {
@@ -1736,16 +1748,16 @@ mod tests {
             }
         };
 
-        // Task3 will be the third task to call `get_with_if` for the same
-        // key. By the time it calls, task1's async block should have finished
-        // already and the value should be already inserted to the cache.
-        // Also task3's `replace_if` closure returns `false`. So its async block
-        // will not be evaluated and will get the value insert by task1's async
-        // block immediately.
+        // Task3 will be the third task to call `get_with_if` for the same key. By
+        // the time it calls, task1's async block should have finished already and
+        // the value should be already inserted to the cache. Also task3's
+        // `replace_if` closure returns `false`. So its async block will not be
+        // evaluated and will get the value inserted by task1's async block
+        // immediately.
         let task3 = {
             let cache3 = cache.clone();
             async move {
-                // Wait for 400 ms before calling `get_with_if`.
+                // Wait for 350 ms before calling `get_with_if`.
                 Timer::after(Duration::from_millis(350)).await;
                 let v = cache3
                     .get_with_if(KEY, async { unreachable!() }, |v| {
@@ -1757,10 +1769,10 @@ mod tests {
             }
         };
 
-        // Task4 will be the fourth task to call `get_with_if` for the same
-        // key. The value should have been already inserted to the cache by task1.
-        // However task4's `replace_if` closure returns `true`. So its async block
-        // will be evaluated to replace the current value.
+        // Task4 will be the fourth task to call `get_with_if` for the same key. The
+        // value should have been already inserted to the cache by task1. However
+        // task4's `replace_if` closure returns `true`. So its async block will be
+        // evaluated to replace the current value.
         let task4 = {
             let cache4 = cache.clone();
             async move {
@@ -1831,9 +1843,9 @@ mod tests {
 
         // This test will run eight async tasks:
         //
-        // Task1 will be the first task to call `get_with` for a key, so
-        // its async block will be evaluated and then an error will be returned.
-        // Nothing will be inserted to the cache.
+        // Task1 will be the first task to call `get_with` for a key, so its async
+        // block will be evaluated and then an error will be returned. Nothing will
+        // be inserted to the cache.
         let task1 = {
             let cache1 = cache.clone();
             async move {
@@ -1849,10 +1861,9 @@ mod tests {
             }
         };
 
-        // Task2 will be the second task to call `get_with` for the same
-        // key, so its async block will not be evaluated. Once task1's async block
-        // finishes, it will get the same error value returned by task1's async
-        // block.
+        // Task2 will be the second task to call `get_with` for the same key, so its
+        // async block will not be evaluated. Once task1's async block finishes, it
+        // will get the same error value returned by task1's async block.
         let task2 = {
             let cache2 = cache.clone();
             async move {
@@ -1863,11 +1874,11 @@ mod tests {
             }
         };
 
-        // Task3 will be the third task to call `get_with` for the same
-        // key. By the time it calls, task1's async block should have finished
-        // already, but the key still does not exist in the cache. So its async block
-        // will be evaluated and then an okay &str value will be returned. That value
-        // will be inserted to the cache.
+        // Task3 will be the third task to call `get_with` for the same key. By the
+        // time it calls, task1's async block should have finished already, but the
+        // key still does not exist in the cache. So its async block will be
+        // evaluated and then an okay &str value will be returned. That value will be
+        // inserted to the cache.
         let task3 = {
             let cache3 = cache.clone();
             async move {
@@ -1884,9 +1895,9 @@ mod tests {
             }
         };
 
-        // Task4 will be the fourth task to call `get_with` for the same
-        // key. So its async block will not be evaluated. Once task3's async block
-        // finishes, it will get the same okay &str value.
+        // Task4 will be the fourth task to call `get_with` for the same key. So its
+        // async block will not be evaluated. Once task3's async block finishes, it
+        // will get the same okay &str value.
         let task4 = {
             let cache4 = cache.clone();
             async move {
@@ -1897,10 +1908,10 @@ mod tests {
             }
         };
 
-        // Task5 will be the fifth task to call `get_with` for the same
-        // key. So its async block will not be evaluated. By the time it calls,
-        // task3's async block should have finished already, so its async block will
-        // not be evaluated and will get the value insert by task3's async block
+        // Task5 will be the fifth task to call `get_with` for the same key. So its
+        // async block will not be evaluated. By the time it calls, task3's async
+        // block should have finished already, so its async block will not be
+        // evaluated and will get the value insert by task3's async block
         // immediately.
         let task5 = {
             let cache5 = cache.clone();

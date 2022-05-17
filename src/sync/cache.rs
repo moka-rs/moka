@@ -378,12 +378,12 @@ where
         self.try_get_with(key, init)
     }
 
-    /// Ensures the value of the key exists by inserting the result of the init
-    /// function if not exist, and returns a _clone_ of the value.
+    /// Ensures the value of the key exists by inserting the output of the `init`
+    /// closure if not exist, and returns a _clone_ of the value.
     ///
-    /// This method prevents to evaluate the init closure multiple times on the same
-    /// key even if the method is concurrently called by many threads; only one of
-    /// the calls evaluates its closure, and other calls wait for that closure to
+    /// This method prevents to evaluate the `init` closure multiple times on the
+    /// same key even if the method is concurrently called by many threads; only one
+    /// of the calls evaluates its closure, and other calls wait for that closure to
     /// complete.
     ///
     /// # Example
@@ -458,11 +458,19 @@ where
         self.get_or_insert_with_hash_and_fun(key, hash, init, replace_if)
     }
 
+    /// Works like [`get_with`](#method.get_with), but takes an additional
+    /// `replace_if` closure.
+    ///
+    /// This method will evaluate the `init` closure and insert the output to the
+    /// cache when:
+    ///
+    /// - The key does not exist.
+    /// - Or, `replace_if` closure returns `true`.
     pub fn get_with_if(
         &self,
         key: K,
         init: impl FnOnce() -> V,
-        replace_if: impl Fn(&V) -> bool,
+        replace_if: impl FnMut(&V) -> bool,
     ) -> V {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
@@ -474,11 +482,15 @@ where
         key: Arc<K>,
         hash: u64,
         init: impl FnOnce() -> V,
-        replace_if: Option<impl Fn(&V) -> bool>,
+        mut replace_if: Option<impl FnMut(&V) -> bool>,
     ) -> V {
-        match (self.base.get_with_hash(&key, hash), replace_if) {
+        match (self.base.get_with_hash(&key, hash), &mut replace_if) {
             (Some(v), None) => return v,
-            (Some(v), Some(cond)) if !cond(&v) => return v,
+            (Some(v), Some(cond)) => {
+                if !cond(&v) {
+                    return v;
+                }
+            }
             _ => (),
         }
 
@@ -1444,9 +1456,9 @@ mod tests {
 
         // This test will run five threads:
         //
-        // Thread1 will be the first thread to call `get_with` for a key, so
-        // its init closure will be evaluated and then a &str value "thread1" will be
-        // inserted to the cache.
+        // Thread1 will be the first thread to call `get_with` for a key, so its init
+        // closure will be evaluated and then a &str value "thread1" will be inserted
+        // to the cache.
         let thread1 = {
             let cache1 = cache.clone();
             spawn(move || {
@@ -1460,8 +1472,8 @@ mod tests {
             })
         };
 
-        // Thread2 will be the second thread to call `get_with` for the same
-        // key, so its init closure will not be evaluated. Once thread1's init closure
+        // Thread2 will be the second thread to call `get_with` for the same key, so
+        // its init closure will not be evaluated. Once thread1's init closure
         // finishes, it will get the value inserted by thread1's init closure.
         let thread2 = {
             let cache2 = cache.clone();
@@ -1473,11 +1485,11 @@ mod tests {
             })
         };
 
-        // Thread3 will be the third thread to call `get_with` for the same
-        // key. By the time it calls, thread1's init closure should have finished
-        // already and the value should be already inserted to the cache. So its
-        // init closure will not be evaluated and will get the value insert by thread1's
-        // init closure immediately.
+        // Thread3 will be the third thread to call `get_with` for the same key. By
+        // the time it calls, thread1's init closure should have finished already and
+        // the value should be already inserted to the cache. So its init closure
+        // will not be evaluated and will get the value insert by thread1's init
+        // closure immediately.
         let thread3 = {
             let cache3 = cache.clone();
             spawn(move || {
@@ -1488,8 +1500,8 @@ mod tests {
             })
         };
 
-        // Thread4 will call `get` for the same key. It will call when thread1's async
-        // block is still running, so it will get none for the key.
+        // Thread4 will call `get` for the same key. It will call when thread1's init
+        // closure is still running, so it will get none for the key.
         let thread4 = {
             let cache4 = cache.clone();
             spawn(move || {
@@ -1500,8 +1512,8 @@ mod tests {
             })
         };
 
-        // Thread5 will call `get` for the same key. It will call after thread1's async
-        // block finished, so it will get the value insert by thread1's init closure.
+        // Thread5 will call `get` for the same key. It will call after thread1's init
+        // closure finished, so it will get the value insert by thread1's init closure.
         let thread5 = {
             let cache5 = cache.clone();
             spawn(move || {
@@ -1526,8 +1538,8 @@ mod tests {
 
         // This test will run seven threads:
         //
-        // Thread1 will be the first thread to call `get_with_if` for a key, so
-        // its init closure will be evaluated and then a &str value "thread1" will be
+        // Thread1 will be the first thread to call `get_with_if` for a key, so its
+        // init closure will be evaluated and then a &str value "thread1" will be
         // inserted to the cache.
         let thread1 = {
             let cache1 = cache.clone();
@@ -1546,8 +1558,8 @@ mod tests {
             })
         };
 
-        // Thread2 will be the second thread to call `get_with_if` for the same
-        // key, so its init closure will not be evaluated. Once thread1's init closure
+        // Thread2 will be the second thread to call `get_with_if` for the same key,
+        // so its init closure will not be evaluated. Once thread1's init closure
         // finishes, it will get the value inserted by thread1's init closure.
         let thread2 = {
             let cache2 = cache.clone();
@@ -1561,9 +1573,10 @@ mod tests {
 
         // Thread3 will be the third thread to call `get_with_if` for the same
         // key. By the time it calls, thread1's init closure should have finished
-        // already and the value should be already inserted to the cache. So its
-        // init closure will not be evaluated and will get the value insert by thread1's
-        // init closure immediately.
+        // already and the value should be already inserted to the cache. Also
+        // thread3's `replace_if` closure returns `false`. So its init closure will
+        // not be evaluated and will get the value inserted by thread1's init closure
+        // immediately.
         let thread3 = {
             let cache3 = cache.clone();
             spawn(move || {
@@ -1581,11 +1594,10 @@ mod tests {
             })
         };
 
-        // Thread4 will be the third thread to call `get_with_if` for the same
-        // key. By the time it calls, thread1's init closure should have finished
-        // already and the value should be already inserted to the cache. So its
-        // init closure will not be evaluated and will get the value insert by thread1's
-        // init closure immediately.
+        // Thread4 will be the fourth thread to call `get_with_if` for the same
+        // key. The value should have been already inserted to the cache by
+        // thread1. However thread4's `replace_if` closure returns `true`. So its
+        // init closure will be evaluated to replace the current value.
         let thread4 = {
             let cache4 = cache.clone();
             spawn(move || {
@@ -1603,8 +1615,8 @@ mod tests {
             })
         };
 
-        // Thread5 will call `get` for the same key. It will call when thread1's async
-        // block is still running, so it will get none for the key.
+        // Thread5 will call `get` for the same key. It will call when thread1's init
+        // closure is still running, so it will get none for the key.
         let thread5 = {
             let cache5 = cache.clone();
             spawn(move || {
@@ -1615,24 +1627,24 @@ mod tests {
             })
         };
 
-        // Thread6 will call `get` for the same key. It will call when thread1's async
-        // block is still running, so it will get none for the key.
+        // Thread6 will call `get` for the same key. It will call when thread1's init
+        // closure is still running, so it will get none for the key.
         let thread6 = {
             let cache6 = cache.clone();
             spawn(move || {
-                // Wait for 200 ms before calling `get`.
+                // Wait for 350 ms before calling `get`.
                 sleep(Duration::from_millis(350));
                 let maybe_v = cache6.get(&KEY);
                 assert_eq!(maybe_v, Some("thread1"));
             })
         };
 
-        // Thread7 will call `get` for the same key. It will call after thread1's async
-        // block finished, so it will get the value insert by thread1's init closure.
+        // Thread7 will call `get` for the same key. It will call after thread1's init
+        // closure finished, so it will get the value insert by thread1's init closure.
         let thread7 = {
             let cache7 = cache.clone();
             spawn(move || {
-                // Wait for 400 ms before calling `get`.
+                // Wait for 450 ms before calling `get`.
                 sleep(Duration::from_millis(450));
                 let maybe_v = cache7.get(&KEY);
                 assert_eq!(maybe_v, Some("thread4"));
@@ -1653,8 +1665,8 @@ mod tests {
             thread::{sleep, spawn},
         };
 
-        // Note that MyError does not implement std::error::Error trait
-        // like anyhow::Error.
+        // Note that MyError does not implement std::error::Error trait like
+        // anyhow::Error.
         #[derive(Debug)]
         pub struct MyError(String);
 
@@ -1663,11 +1675,11 @@ mod tests {
         let cache = Cache::new(100);
         const KEY: u32 = 0;
 
-        // This test will run eight async threads:
+        // This test will run eight threads:
         //
-        // Thread1 will be the first thread to call `try_get_with` for a key, so
-        // its init closure will be evaluated and then an error will be returned.
-        // Nothing will be inserted to the cache.
+        // Thread1 will be the first thread to call `try_get_with` for a key, so its
+        // init closure will be evaluated and then an error will be returned. Nothing
+        // will be inserted to the cache.
         let thread1 = {
             let cache1 = cache.clone();
             spawn(move || {
@@ -1681,10 +1693,10 @@ mod tests {
             })
         };
 
-        // Thread2 will be the second thread to call `try_get_with` for the same
-        // key, so its init closure will not be evaluated. Once thread1's init closure
-        // finishes, it will get the same error value returned by thread1's async
-        // block.
+        // Thread2 will be the second thread to call `try_get_with` for the same key,
+        // so its init closure will not be evaluated. Once thread1's init closure
+        // finishes, it will get the same error value returned by thread1's init
+        // closure.
         let thread2 = {
             let cache2 = cache.clone();
             spawn(move || {
@@ -1695,11 +1707,11 @@ mod tests {
             })
         };
 
-        // Thread3 will be the third thread to call `get_with` for the same
-        // key. By the time it calls, thread1's init closure should have finished
-        // already, but the key still does not exist in the cache. So its init closure
-        // will be evaluated and then an okay &str value will be returned. That value
-        // will be inserted to the cache.
+        // Thread3 will be the third thread to call `get_with` for the same key. By
+        // the time it calls, thread1's init closure should have finished already,
+        // but the key still does not exist in the cache. So its init closure will be
+        // evaluated and then an okay &str value will be returned. That value will be
+        // inserted to the cache.
         let thread3 = {
             let cache3 = cache.clone();
             spawn(move || {
@@ -1715,8 +1727,8 @@ mod tests {
         };
 
         // thread4 will be the fourth thread to call `try_get_with` for the same
-        // key. So its init closure will not be evaluated. Once thread3's init closure
-        // finishes, it will get the same okay &str value.
+        // key. So its init closure will not be evaluated. Once thread3's init
+        // closure finishes, it will get the same okay &str value.
         let thread4 = {
             let cache4 = cache.clone();
             spawn(move || {
@@ -1729,9 +1741,9 @@ mod tests {
 
         // Thread5 will be the fifth thread to call `try_get_with` for the same
         // key. So its init closure will not be evaluated. By the time it calls,
-        // thread3's init closure should have finished already, so its init closure will
-        // not be evaluated and will get the value insert by thread3's init closure
-        // immediately.
+        // thread3's init closure should have finished already, so its init closure
+        // will not be evaluated and will get the value insert by thread3's init
+        // closure immediately.
         let thread5 = {
             let cache5 = cache.clone();
             spawn(move || {
@@ -1742,8 +1754,8 @@ mod tests {
             })
         };
 
-        // Thread6 will call `get` for the same key. It will call when thread1's async
-        // block is still running, so it will get none for the key.
+        // Thread6 will call `get` for the same key. It will call when thread1's init
+        // closure is still running, so it will get none for the key.
         let thread6 = {
             let cache6 = cache.clone();
             spawn(move || {
@@ -1754,8 +1766,8 @@ mod tests {
             })
         };
 
-        // Thread7 will call `get` for the same key. It will call after thread1's async
-        // block finished with an error. So it will get none for the key.
+        // Thread7 will call `get` for the same key. It will call after thread1's init
+        // closure finished with an error. So it will get none for the key.
         let thread7 = {
             let cache7 = cache.clone();
             spawn(move || {
@@ -1766,8 +1778,8 @@ mod tests {
             })
         };
 
-        // Thread8 will call `get` for the same key. It will call after thread3's async
-        // block finished, so it will get the value insert by thread3's init closure.
+        // Thread8 will call `get` for the same key. It will call after thread3's init
+        // closure finished, so it will get the value insert by thread3's init closure.
         let thread8 = {
             let cache8 = cache.clone();
             spawn(move || {

@@ -1,5 +1,15 @@
 # Moka &mdash; Change Log
 
+## Version 0.8.4
+
+### Added
+
+- Add `get_with_if` method to the following caches: ([#123][gh-issue-0123])
+    - `sync::Cache`
+    - `sync::SegmentedCache`
+    - `future::Cache`
+
+
 ## Version 0.8.3
 
 ### Changed
@@ -312,10 +322,10 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [caffeine-git]: https://github.com/ben-manes/caffeine
 [quanta-crate]: https://crates.io/crates/quanta
 
-[panic_in_quanta]: https://github.com/moka-rs/moka#integer-overflow-in-quanta-crate-on-some-x8664-machines
-
+[panic_in_quanta]: https://github.com/moka-rs/moka#integer-overflow-in-quanta-crate-on-some-x86_64-machines
 [resolving-error-on-32bit]: https://github.com/moka-rs/moka#compile-errors-on-some-32-bit-platforms
 
+[gh-issue-0123]: https://github.com/moka-rs/moka/issues/123/
 [gh-issue-0119]: https://github.com/moka-rs/moka/issues/119/
 [gh-issue-0107]: https://github.com/moka-rs/moka/issues/107/
 [gh-issue-0072]: https://github.com/moka-rs/moka/issues/72/
