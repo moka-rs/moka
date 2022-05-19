@@ -4,8 +4,8 @@
 
 ### Fixed
 
-- Fix the issue [#119][gh-issue-0119], which can occur on some x86_64 machines, by
-  upgrading Quanta crate to v0.10.0. ([#126][gh-pull-0126])
+- Fix the issue [#119][gh-issue-0119] by upgrading Quanta crate to v0.10.0.
+  ([#126][gh-pull-0126])
     - Quanta v0.9.3 or older may not work correctly on some x86_64 machines where
       the Time Stamp Counter (TSC) is not synched across the processor cores.
     - For more details about the issue, see [the relevant section][panic_in_quanta]
