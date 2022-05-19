@@ -39,7 +39,7 @@ unstable-debug-counters = ["future"]
 
 [dependencies]
 crossbeam-channel = "0.5.4"
-crossbeam-epoch = "0.9"
+crossbeam-epoch = "0.8.2"
 crossbeam-utils = "0.8"
 num_cpus = "1.13"
 once_cell = "1.7"

@@ -78,7 +78,10 @@ impl<T> Drop for Housekeeper<T> {
 }
 
 // functions/methods used by Cache
-impl<T: InnerSync> Housekeeper<T> where T: 'static {
+impl<T: InnerSync> Housekeeper<T>
+where
+    T: 'static,
+{
     pub(crate) fn new(inner: Weak<T>) -> Self {
         use crate::common::thread_pool::PoolName;
 
