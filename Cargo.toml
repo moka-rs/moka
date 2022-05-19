@@ -55,7 +55,7 @@ uuid = { version = "0.8", features = ["v4"] }
 triomphe = { version = "0.1", default-features = false }
 
 # Optional dependencies (quanta, enabled by default)
-quanta = { version = "0.9.3", optional = true }
+quanta = { version = "0.10.0", optional = true }
 
 # Optional dependencies (dashmap)
 dashmap = { version = "5.2", optional = true }
