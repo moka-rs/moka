@@ -1,6 +1,9 @@
 use super::Instant;
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::{
+    any::TypeId,
+    sync::atomic::{AtomicU64, Ordering},
+};
 
 pub(crate) struct AtomicInstant {
     instant: AtomicU64,
@@ -13,6 +16,9 @@ impl Default for AtomicInstant {
         }
     }
 }
+
+// TODO: Need a safe way to convert between `quanta::Instant` and `u64`.
+// quanta v0.10.0 no longer provides `quanta::Instant::as_u64` method.
 
 impl AtomicInstant {
     pub(crate) fn reset(&self) {
@@ -28,11 +34,20 @@ impl AtomicInstant {
         if ts == u64::MAX {
             None
         } else {
-            Some(unsafe { std::mem::transmute(ts) })
+            debug_assert_eq!(
+                TypeId::of::<super::clock::Instant>(),
+                TypeId::of::<quanta::Instant>()
+            );
+            Some(Instant(unsafe { std::mem::transmute(ts) }))
         }
     }
 
     pub(crate) fn set_instant(&self, instant: Instant) {
-        self.instant.store(instant.0.as_u64(), Ordering::Release);
+        debug_assert_eq!(
+            TypeId::of::<super::clock::Instant>(),
+            TypeId::of::<quanta::Instant>()
+        );
+        let ts = unsafe { std::mem::transmute(instant.0) };
+        self.instant.store(ts, Ordering::Release);
     }
 }

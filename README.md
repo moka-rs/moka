@@ -437,13 +437,14 @@ change.
 
 ### Integer Overflow in Quanta Crate on Some x86_64 Machines
 
-Quanta crate has a known issue on some specific x86_64-based machines. It will cause
-intermittent panic due to integer overflow:
+Quanta crate up to v0.9.3 has an issue on some specific x86_64-based machines. It
+will cause intermittent panic due to integer overflow:
 
--  metrics-rs/quanta &mdash; [Intermittent panic due to overflowing our source calibration denominator. #61](https://github.com/metrics-rs/quanta/issues/61)
+- metrics-rs/quanta &mdash; [Intermittent panic due to overflowing our source calibration denominator. #61](https://github.com/metrics-rs/quanta/issues/61)
+  (Fixed by Quanta v0.10.0)
 
 The overflows have been reported by a couple of users who use AMD-based Lenovo
-laptops or Circle CI. There is no fix available yet as of Quanta v0.9.3.
+laptops or Circle CI.
 
 When this issue occurs, you will get a stacktrace containing the following lines:
 
@@ -457,18 +458,10 @@ quanta::Clock::new::{{closure}}
 ...
 ```
 
-You can avoid the issue by disabling `qanta` feature, which is one of the default
-features of Moka. Edit your Cargo.toml to add `default-features = false` to the
-dependency declaration.
+This issue was fixed by Quanta v0.10.0.
 
-```toml:Cargo.toml
-[dependencies]
-moka = { version = "0.8", default-feautures = false }
-# Or
-moka = { version = "0.8", default-feautures = false, features = ["future"] }
-```
-
-This will make Moka to opt out Quanta and switch to a fall-back implementation.
+You can prevent the issue by upgrading Moka to v0.8.4 or newer, which depends on
+Quanta v0.10.0 or newer.
 
 
 ### Compile Errors on Some 32-bit Platforms
