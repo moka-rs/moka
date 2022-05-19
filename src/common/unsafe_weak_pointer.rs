@@ -3,39 +3,31 @@ use std::sync::{Arc, Weak};
 /// WARNING: Do not use this struct unless you are absolutely sure what you are
 /// doing. Using this struct is unsafe and may cause memory related crashes and/or
 /// security vulnerabilities.
-///
-/// This struct exists with the sole purpose of avoiding compile errors relevant to
-/// the thread pool usages. The thread pool requires that the generic parameters on
-/// the `Cache` and `Inner` structs to have trait bounds `Send`, `Sync` and
-/// `'static`. This will be unacceptable for many cache usages.
-///
-/// This struct avoids the trait bounds by transmuting a pointer between
-/// `std::sync::Weak<Inner<K, V, S>>` and `usize`.
-///
-/// If you know a better solution than this, we would love te hear it.
-pub(crate) struct UnsafeWeakPointer {
+pub(crate) struct UnsafeWeakPointer<T> {
     // This is a std::sync::Weak pointer to Inner<K, V, S>.
-    raw_ptr: usize,
+    raw_ptr: *mut T,
 }
 
-impl UnsafeWeakPointer {
-    pub(crate) fn from_weak_arc<T>(p: Weak<T>) -> Self {
+unsafe impl<T> Send for UnsafeWeakPointer<T> {}
+
+impl<T> UnsafeWeakPointer<T> {
+    pub(crate) fn from_weak_arc(p: Weak<T>) -> Self {
         Self {
-            raw_ptr: unsafe { std::mem::transmute(p) },
+            raw_ptr: p.into_raw() as *mut T,
         }
     }
 
-    pub(crate) unsafe fn as_weak_arc<T>(&self) -> Weak<T> {
-        std::mem::transmute(self.raw_ptr)
+    pub(crate) unsafe fn as_weak_arc(&self) -> Weak<T> {
+        Weak::from_raw(self.raw_ptr.cast())
     }
 
-    pub(crate) fn forget_arc<T>(p: Arc<T>) {
+    pub(crate) fn forget_arc(p: Arc<T>) {
         // Downgrade the Arc to Weak, then forget.
         let weak = Arc::downgrade(&p);
         std::mem::forget(weak);
     }
 
-    pub(crate) fn forget_weak_arc<T>(p: Weak<T>) {
+    pub(crate) fn forget_weak_arc(p: Weak<T>) {
         std::mem::forget(p);
     }
 }
@@ -46,7 +38,7 @@ impl UnsafeWeakPointer {
 ///
 /// When you want to drop the Weak pointer, ensure that you drop it only once for the
 /// same `raw_ptr` across clones.
-impl Clone for UnsafeWeakPointer {
+impl<T> Clone for UnsafeWeakPointer<T> {
     fn clone(&self) -> Self {
         Self {
             raw_ptr: self.raw_ptr,

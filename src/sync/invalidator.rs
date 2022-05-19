@@ -288,7 +288,7 @@ impl<K, V, S> Invalidator<K, V, S> {
 
 struct ScanContext<K, V, S> {
     predicates: Mutex<Vec<Predicate<K, V>>>,
-    cache: Mutex<UnsafeWeakPointer>,
+    cache: Mutex<UnsafeWeakPointer<Inner<K, V, S>>>,
     result: Mutex<Option<ScanResult<K, V>>>,
     is_running: AtomicBool,
     is_shutting_down: AtomicBool,
@@ -373,7 +373,7 @@ where
         let cache_lock = self.scan_context.cache.lock();
 
         // Restore the Weak pointer to Inner<K, V, S>.
-        let weak = unsafe { cache_lock.as_weak_arc::<Inner<K, V, S>>() };
+        let weak = unsafe { cache_lock.as_weak_arc() };
         if let Some(inner_cache) = weak.upgrade() {
             // TODO: Protect this call with catch_unwind().
             *self.scan_context.result.lock() = Some(self.do_execute(&inner_cache));

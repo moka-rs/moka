@@ -39,7 +39,7 @@ pub(crate) trait InnerSync {
 }
 
 pub(crate) struct Housekeeper<T> {
-    inner: Arc<Mutex<UnsafeWeakPointer>>,
+    inner: Arc<Mutex<UnsafeWeakPointer<T>>>,
     thread_pool: Arc<ThreadPool>,
     is_shutting_down: Arc<AtomicBool>,
     periodical_sync_job: Mutex<Option<JobHandle>>,
@@ -73,12 +73,15 @@ impl<T> Drop for Housekeeper<T> {
 
         // All sync jobs should have been finished by now. Clean other stuff up.
         ThreadPoolRegistry::release_pool(&self.thread_pool);
-        std::mem::drop(unsafe { self.inner.lock().as_weak_arc::<T>() });
+        std::mem::drop(unsafe { self.inner.lock().as_weak_arc() });
     }
 }
 
 // functions/methods used by Cache
-impl<T: InnerSync> Housekeeper<T> {
+impl<T: InnerSync> Housekeeper<T>
+where
+    T: 'static,
+{
     pub(crate) fn new(inner: Weak<T>) -> Self {
         use crate::common::thread_pool::PoolName;
 
@@ -107,7 +110,7 @@ impl<T: InnerSync> Housekeeper<T> {
 
     fn start_periodical_sync_job(
         thread_pool: &Arc<ThreadPool>,
-        unsafe_weak_ptr: Arc<Mutex<UnsafeWeakPointer>>,
+        unsafe_weak_ptr: Arc<Mutex<UnsafeWeakPointer<T>>>,
         is_shutting_down: Arc<AtomicBool>,
         periodical_sync_running: Arc<Mutex<()>>,
     ) -> JobHandle {
@@ -173,10 +176,10 @@ impl<T: InnerSync> Housekeeper<T> {
 
 // private functions/methods
 impl<T: InnerSync> Housekeeper<T> {
-    fn call_sync(unsafe_weak_ptr: &Arc<Mutex<UnsafeWeakPointer>>) -> Option<SyncPace> {
+    fn call_sync(unsafe_weak_ptr: &Arc<Mutex<UnsafeWeakPointer<T>>>) -> Option<SyncPace> {
         let lock = unsafe_weak_ptr.lock();
         // Restore the Weak pointer to Inner<K, V, S>.
-        let weak = unsafe { lock.as_weak_arc::<T>() };
+        let weak = unsafe { lock.as_weak_arc() };
         if let Some(inner) = weak.upgrade() {
             // TODO: Protect this call with catch_unwind().
             let sync_pace = inner.sync(MAX_SYNC_REPEATS);
