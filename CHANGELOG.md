@@ -2,6 +2,16 @@
 
 ## Version 0.8.4
 
+### Fixed
+
+- Fix the issue [#119][gh-issue-0119], which can occur on some x86_64 machines, by
+  upgrading Quanta crate to v0.10.0. ([#126][gh-pull-0126])
+    - Quanta v0.9.3 or older may not work correctly on some x86_64 machines where
+      the Time Stamp Counter (TSC) is not synched across the processor cores.
+    - For more details about the issue, see [the relevant section][panic_in_quanta]
+      of the README.
+
+
 ### Added
 
 - Add `get_with_if` method to the following caches: ([#123][gh-issue-0123])
@@ -19,8 +29,10 @@
     - Quanta v0.9.3 or older may not work correctly on some x86_64 machines where
       the Time Stamp Counter (TSC) is not synched across the processor cores.
       ([#119][gh-issue-0119])
-    - You can avoid the issue by disabling the default features of Moka.
-      See [the relevant section][panic_in_quanta] of the README.
+    - This issue was fixed by Quanta v0.10.0. You can upgrade Moka to v0.8.4 or newer
+      to prevent the issue.
+    - For more details about the issue, see [the relevant section][panic_in_quanta]
+      of the README.
 
 
 ## Version 0.8.2
@@ -334,6 +346,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0126]: https://github.com/moka-rs/moka/pull/126/
 [gh-pull-0121]: https://github.com/moka-rs/moka/pull/121/
 [gh-pull-0117]: https://github.com/moka-rs/moka/pull/117/
 [gh-pull-0116]: https://github.com/moka-rs/moka/pull/116/
