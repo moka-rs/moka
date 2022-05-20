@@ -1,23 +1,33 @@
-# Moka &mdash; Change Log
+# Moka Cache &mdash; Change Log
 
 ## Version 0.8.4
 
 ### Fixed
 
-- Fix the issue [#119][gh-issue-0119] by upgrading Quanta crate to v0.10.0.
-  ([#126][gh-pull-0126])
+- Fix the following issue by upgrading Quanta crate to v0.10.0 ([#126][gh-pull-0126]):
     - Quanta v0.9.3 or older may not work correctly on some x86_64 machines where
       the Time Stamp Counter (TSC) is not synched across the processor cores.
+      ([#119][gh-issue-0119])
     - For more details about the issue, see [the relevant section][panic_in_quanta]
       of the README.
 
-
 ### Added
 
-- Add `get_with_if` method to the following caches: ([#123][gh-issue-0123])
+- Add `get_with_if` method to the following caches ([#123][gh-issue-0123]):
     - `sync::Cache`
     - `sync::SegmentedCache`
     - `future::Cache`
+
+### Changed
+
+The following are internal changes to improve memory safety in unsafe Rust usages in
+Moka:
+
+- Remove pointer-to-integer transmute by converting `UnsafeWeakPointer` from `usize`
+  to `*mut T`. ([#127][gh-pull-0127])
+- Increase the num segments of the waiters hash table from 16 to 64
+  ([#129][gh-pull-0129]) to reduce the chance of the following issue occurring:
+    - Segfaults under heavy workloads on a many-core machine. ([#34][gh-issue-0034])
 
 
 ## Version 0.8.3
@@ -29,8 +39,8 @@
     - Quanta v0.9.3 or older may not work correctly on some x86_64 machines where
       the Time Stamp Counter (TSC) is not synched across the processor cores.
       ([#119][gh-issue-0119])
-    - This issue was fixed by Quanta v0.10.0. You can upgrade Moka to v0.8.4 or newer
-      to prevent the issue.
+    - This issue was fixed by Quanta v0.10.0. You can prevent the issue by upgrading
+      Moka to v0.8.4 or newer.
     - For more details about the issue, see [the relevant section][panic_in_quanta]
       of the README.
 
@@ -344,8 +354,11 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0059]: https://github.com/moka-rs/moka/issues/59/
 [gh-issue-0043]: https://github.com/moka-rs/moka/issues/43/
 [gh-issue-0038]: https://github.com/moka-rs/moka/issues/38/
+[gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0129]: https://github.com/moka-rs/moka/pull/129/
+[gh-pull-0127]: https://github.com/moka-rs/moka/pull/127/
 [gh-pull-0126]: https://github.com/moka-rs/moka/pull/126/
 [gh-pull-0121]: https://github.com/moka-rs/moka/pull/121/
 [gh-pull-0117]: https://github.com/moka-rs/moka/pull/117/

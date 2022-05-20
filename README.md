@@ -537,8 +537,8 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
     - `get_or_try_insert_with(K, F)` → `try_get_with(K, F)`
     - `blocking_insert(K, V)` → `blocking().insert(K, V)`
     - `time_to_live()` → `policy().time_to_live()`
-- [ ] Cache statistics. (Hit rate, etc.)
 - [ ] Notifications on eviction, etc.
+- [ ] Cache statistics. (Hit rate, etc.)
 - [ ] Upgrade TinyLFU to Window-TinyLFU. ([details][tiny-lfu])
 - [ ] The variable (per-entry) expiration, using a hierarchical timer wheel.
 
@@ -561,14 +561,19 @@ This name would imply the following facts and hopes:
 
 ## Credits
 
+### Caffeine
+
+Moka's architecture is heavily inspired by the [Caffeine][caffeine-git] library for
+Java. Thanks go to Ben Manes and all contributors of Caffeine.
+
+
 ### cht
 
 The source files of the concurrent hash table under `moka::cht` module were copied
 from the [cht crate v0.4.1][cht-v041] and modified by us. We did so for better
-integration.
+integration. cht v0.4.1 and earlier are licensed under the MIT license.
 
-The cht is authored by Gregory Meyer and its v0.4.1 and earlier versions are licensed
-under the MIT license.
+Thanks go to Gregory Meyer.
 
 [cht-v041]: https://github.com/Gregory-Meyer/cht/tree/v0.4.1
 
