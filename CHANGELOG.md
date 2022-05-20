@@ -20,8 +20,8 @@
 
 ### Changed
 
-The following are internal changes to improve memory safety in unsafe Rust usages in
-Moka:
+The followings are internal changes to improve memory safety in unsafe Rust usages
+in Moka:
 
 - Remove pointer-to-integer transmute by converting `UnsafeWeakPointer` from `usize`
   to `*mut T`. ([#127][gh-pull-0127])
