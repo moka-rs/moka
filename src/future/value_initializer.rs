@@ -7,6 +7,8 @@ use std::{
 };
 use triomphe::Arc as TrioArc;
 
+const WAITER_MAP_NUM_SEGMENTS: usize = 64;
+
 type ErrorObject = Arc<dyn Any + Send + Sync + 'static>;
 
 pub(crate) enum InitResult<V, E> {
@@ -102,7 +104,10 @@ where
 {
     pub(crate) fn with_hasher(hasher: S) -> Self {
         Self {
-            waiters: crate::cht::SegmentedHashMap::with_num_segments_and_hasher(16, hasher),
+            waiters: crate::cht::SegmentedHashMap::with_num_segments_and_hasher(
+                WAITER_MAP_NUM_SEGMENTS,
+                hasher,
+            ),
         }
     }
 

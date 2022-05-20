@@ -564,9 +564,9 @@ where
         let initial_capacity = initial_capacity
             .map(|cap| cap + WRITE_LOG_SIZE * 4)
             .unwrap_or_default();
-        let num_segments = 64;
+        const NUM_SEGMENTS: usize = 64;
         let cache = crate::cht::SegmentedHashMap::with_num_segments_capacity_and_hasher(
-            num_segments,
+            NUM_SEGMENTS,
             initial_capacity,
             build_hasher.clone(),
         );
