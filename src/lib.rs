@@ -182,17 +182,24 @@ pub use sync::debug_counters::GlobalDebugCounters;
 
 #[cfg(test)]
 mod tests {
-    // #[cfg(trybuild)]
-    // #[test]
-    // fn ui_trybuild() {
-    //     let t = trybuild::TestCases::new();
-    //     t.compile_fail("tests/ui/default/*.rs");
-    // }
+    #[cfg(trybuild)]
+    #[test]
+    fn trybuild_default() {
+        let t = trybuild::TestCases::new();
+        t.compile_fail("tests/compile_tests/default/clone/*.rs");
+    }
+
+    #[cfg(all(trybuild, feature = "dash"))]
+    #[test]
+    fn trybuild_dash() {
+        let t = trybuild::TestCases::new();
+        t.compile_fail("tests/compile_tests/dash/clone/*.rs");
+    }
 
     #[cfg(all(trybuild, feature = "future"))]
     #[test]
-    fn ui_trybuild_future() {
+    fn trybuild_future() {
         let t = trybuild::TestCases::new();
-        t.compile_fail("tests/ui/future/*.rs");
+        t.compile_fail("tests/compile_tests/future/clone/*.rs");
     }
 }

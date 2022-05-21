@@ -226,7 +226,6 @@ use std::{
 /// [build-with-hasher-method]: ./struct.CacheBuilder.html#method.build_with_hasher
 /// [ahash-crate]: https://crates.io/crates/ahash
 ///
-#[derive(Clone)]
 pub struct Cache<K, V, S = RandomState> {
     base: BaseCache<K, V, S>,
     value_initializer: Arc<ValueInitializer<K, V, S>>,
@@ -248,6 +247,20 @@ where
     V: Send + Sync,
     S: Sync,
 {
+}
+
+// NOTE: We cannot do `#[derive(Clone)]` because it will add `Clone` bound to `K`.
+impl<K, V, S> Clone for Cache<K, V, S> {
+    /// Makes a clone of this shared cache.
+    ///
+    /// This operation is cheap as it only creates thread-safe reference counted
+    /// pointers to the shared internal data structures.
+    fn clone(&self) -> Self {
+        Self {
+            base: self.base.clone(),
+            value_initializer: Arc::clone(&self.value_initializer),
+        }
+    }
 }
 
 impl<K, V> Cache<K, V, RandomState>
