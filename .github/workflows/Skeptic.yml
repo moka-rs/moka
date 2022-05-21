@@ -62,7 +62,7 @@ jobs:
         env:
           RUSTFLAGS: '--cfg skeptic'
 
-      - name: Run UI tests (future and dash features, trybuild)
+      - name: Run compile error tests (future and dash features, trybuild)
         uses: actions-rs/cargo@v1
         if: ${{ matrix.rust == 'stable' }}
         with:
