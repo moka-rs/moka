@@ -99,6 +99,7 @@ where
         let mut d_map = f.debug_map();
 
         match self.cache {
+            #[cfg(feature = "future")]
             CacheRef::Future(c) => {
                 for (k, v) in c.iter() {
                     d_map.entry(&k, &v);
