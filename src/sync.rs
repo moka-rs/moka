@@ -10,6 +10,7 @@ use triomphe::Arc as TrioArc;
 pub(crate) mod base_cache;
 mod builder;
 mod cache;
+pub(crate) mod debug_fmt;
 pub(crate) mod deques;
 pub(crate) mod entry_info;
 pub(crate) mod housekeeper;

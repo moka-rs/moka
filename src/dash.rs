@@ -8,6 +8,7 @@
 mod base_cache;
 mod builder;
 mod cache;
+mod debug_fmt;
 mod iter;
 mod mapref;
 

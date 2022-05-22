@@ -1,5 +1,6 @@
 use super::{
     cache::Cache,
+    debug_fmt::{CacheRef, DebugFmt},
     iter::{Iter, ScanningGet},
     CacheBuilder, ConcurrentCacheExt, Weigher,
 };
@@ -8,6 +9,7 @@ use crate::{Policy, PredicateError};
 use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
+    fmt,
     hash::{BuildHasher, Hash, Hasher},
     sync::Arc,
     time::Duration,
@@ -57,6 +59,12 @@ impl<K, V, S> Clone for SegmentedCache<K, V, S> {
     }
 }
 
+impl<K, V, S> fmt::Debug for SegmentedCache<K, V, S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.debug_fmt().default_fmt().fmt(f)
+    }
+}
+
 impl<K, V> SegmentedCache<K, V, RandomState>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -93,6 +101,39 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn builder(num_segments: usize) -> CacheBuilder<K, V, SegmentedCache<K, V, RandomState>> {
         CacheBuilder::default().segments(num_segments)
+    }
+}
+
+impl<K, V, S> SegmentedCache<K, V, S> {
+    /// Returns a read-only cache policy of this cache.
+    ///
+    /// At this time, cache policy cannot be modified after cache creation.
+    /// A future version may support to modify it.
+    pub fn policy(&self) -> Policy {
+        let mut policy = self.inner.segments[0].policy();
+        policy.set_max_capacity(self.inner.desired_capacity);
+        policy.set_num_segments(self.inner.segments.len());
+        policy
+    }
+
+    pub fn debug_fmt(&self) -> DebugFmt<'_, K, V, S> {
+        DebugFmt::new(CacheRef::SyncSeg(self))
+    }
+
+    pub fn entry_count(&self) -> u64 {
+        self.inner
+            .segments
+            .iter()
+            .map(|seg| seg.entry_count())
+            .sum()
+    }
+
+    pub fn weighted_size(&self) -> u64 {
+        self.inner
+            .segments
+            .iter()
+            .map(|seg| seg.weighted_size())
+            .sum()
     }
 }
 
@@ -370,35 +411,6 @@ where
             .collect::<Vec<_>>()
             .into_boxed_slice();
         Iter::with_multiple_cache_segments(segments, num_cht_segments)
-    }
-
-    /// Returns a read-only cache policy of this cache.
-    ///
-    /// At this time, cache policy cannot be modified after cache creation.
-    /// A future version may support to modify it.
-    pub fn policy(&self) -> Policy {
-        let mut policy = self.inner.segments[0].policy();
-        policy.set_max_capacity(self.inner.desired_capacity);
-        policy.set_num_segments(self.inner.segments.len());
-        policy
-    }
-
-    #[cfg(test)]
-    fn estimated_entry_count(&self) -> u64 {
-        self.inner
-            .segments
-            .iter()
-            .map(|seg| seg.estimated_entry_count())
-            .sum()
-    }
-
-    #[cfg(test)]
-    fn weighted_size(&self) -> u64 {
-        self.inner
-            .segments
-            .iter()
-            .map(|seg| seg.weighted_size())
-            .sum()
     }
 
     // /// This is used by unit tests to get consistent result.
@@ -758,7 +770,7 @@ mod tests {
         assert!(!cache.contains_key(&"d"));
 
         // Verify the sizes.
-        assert_eq!(cache.estimated_entry_count(), 2);
+        assert_eq!(cache.entry_count(), 2);
         assert_eq!(cache.weighted_size(), 25);
     }
 
@@ -888,7 +900,7 @@ mod tests {
         assert!(!cache.contains_key(&2));
         assert!(cache.contains_key(&3));
 
-        assert_eq!(cache.estimated_entry_count(), 2);
+        assert_eq!(cache.entry_count(), 2);
         assert_eq!(cache.invalidation_predicate_count(), 0);
 
         mock.increment(Duration::from_secs(5)); // 15 secs from the start.
@@ -909,7 +921,7 @@ mod tests {
         assert!(!cache.contains_key(&1));
         assert!(!cache.contains_key(&3));
 
-        assert_eq!(cache.estimated_entry_count(), 0);
+        assert_eq!(cache.entry_count(), 0);
         assert_eq!(cache.invalidation_predicate_count(), 0);
 
         Ok(())
@@ -1365,5 +1377,63 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+    }
+
+    #[test]
+    fn debug_formats() {
+        // TODO: Change the num_segments to 4 after fixing the admission/eviction
+        // policies to manage capacity using the sum of the capacities of every segment.
+        let mut cache = SegmentedCache::builder(1).max_capacity(10).build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert('a', "alice");
+        cache.insert('b', "bob");
+        cache.insert('c', "cindy");
+        cache.sync();
+
+        assert_eq!(
+            format!("{:?}", cache),
+            "SegmentedCache { max_capacity: Some(10), entry_count: 3, weighted_size: 3 }"
+        );
+
+        let debug_str = format!("{:?}", cache.debug_fmt().entries());
+        assert!(debug_str.starts_with('{'));
+        assert!(debug_str.contains(r#"'a': "alice""#));
+        assert!(debug_str.contains(r#"'b': "bob""#));
+        assert!(debug_str.contains(r#"'c': "cindy""#));
+        assert!(debug_str.ends_with('}'));
+
+        let weigher = |_k: &char, v: &(&str, u32)| v.1;
+
+        // TODO: Change the num_segments to 4 after fixing the admission/eviction
+        // policies to manage capacity using the sum of the capacities of every segment.
+        let mut cache = SegmentedCache::builder(1)
+            .max_capacity(50)
+            .weigher(weigher)
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert('a', ("alice", 10));
+        cache.insert('b', ("bob", 15));
+        cache.insert('c', ("cindy", 5));
+        cache.sync();
+
+        assert_eq!(
+            format!("{:?}", cache),
+            "SegmentedCache { max_capacity: Some(50), entry_count: 3, weighted_size: 30 }"
+        );
+
+        let debug_str = format!("{:?}", cache.debug_fmt().entries());
+        assert!(debug_str.starts_with('{'));
+        assert!(debug_str.contains(r#"'a': ("alice", 10)"#));
+        assert!(debug_str.contains(r#"'b': ("bob", 15)"#));
+        assert!(debug_str.contains(r#"'c': ("cindy", 5)"#));
+        assert!(debug_str.ends_with('}'));
     }
 }

@@ -5,6 +5,7 @@
 
 mod builder;
 mod cache;
+mod debug_fmt;
 mod deques;
 mod iter;
 

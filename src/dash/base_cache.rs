@@ -76,6 +76,20 @@ impl<K, V, S> Drop for BaseCache<K, V, S> {
     }
 }
 
+impl<K, V, S> BaseCache<K, V, S> {
+    pub(crate) fn policy(&self) -> Policy {
+        self.inner.policy()
+    }
+
+    pub(crate) fn entry_count(&self) -> u64 {
+        self.inner.entry_count()
+    }
+
+    pub(crate) fn weighted_size(&self) -> u64 {
+        self.inner.weighted_size()
+    }
+}
+
 impl<K, V, S> BaseCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -202,20 +216,6 @@ where
     pub(crate) fn invalidate_all(&self) {
         let now = self.inner.current_time_from_expiration_clock();
         self.inner.set_valid_after(now);
-    }
-
-    pub(crate) fn policy(&self) -> Policy {
-        self.inner.policy()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn estimated_entry_count(&self) -> u64 {
-        self.inner.estimated_entry_count()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn weighted_size(&self) -> u64 {
-        self.inner.weighted_size()
     }
 }
 
@@ -555,13 +555,11 @@ impl<K, V, S> Inner<K, V, S> {
         self.time_to_idle
     }
 
-    #[cfg(test)]
     #[inline]
-    fn estimated_entry_count(&self) -> u64 {
+    fn entry_count(&self) -> u64 {
         self.entry_count.load()
     }
 
-    #[cfg(test)]
     #[inline]
     pub(crate) fn weighted_size(&self) -> u64 {
         self.weighted_size.load()

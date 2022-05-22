@@ -1,5 +1,6 @@
 use super::{
-    deques::Deques, AccessTime, CacheBuilder, Iter, KeyDate, KeyHashDate, ValueEntry, Weigher,
+    debug_fmt::DebugFmt, deques::Deques, AccessTime, CacheBuilder, Iter, KeyDate, KeyHashDate,
+    ValueEntry, Weigher,
 };
 use crate::{
     common::{
@@ -16,6 +17,7 @@ use smallvec::SmallVec;
 use std::{
     borrow::Borrow,
     collections::{hash_map::RandomState, HashMap},
+    fmt,
     hash::{BuildHasher, Hash, Hasher},
     ptr::NonNull,
     rc::Rc,
@@ -178,6 +180,17 @@ pub struct Cache<K, V, S = RandomState> {
     expiration_clock: Option<Clock>,
 }
 
+impl<K, V, S> fmt::Debug for Cache<K, V, S>
+where
+    K: Eq + Hash + fmt::Debug,
+    V: fmt::Debug,
+    S: BuildHasher + Clone,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.debug_fmt().default_fmt().fmt(f)
+    }
+}
+
 impl<K, V> Cache<K, V, RandomState>
 where
     K: Hash + Eq,
@@ -205,6 +218,28 @@ where
 //
 // public
 //
+impl<K, V, S> Cache<K, V, S> {
+    /// Returns a read-only cache policy of this cache.
+    ///
+    /// At this time, cache policy cannot be modified after cache creation.
+    /// A future version may support to modify it.
+    pub fn policy(&self) -> Policy {
+        Policy::new(self.max_capacity, 1, self.time_to_live, self.time_to_idle)
+    }
+
+    pub fn debug_fmt(&self) -> DebugFmt<'_, K, V, S> {
+        DebugFmt::new(self)
+    }
+
+    pub fn entry_count(&self) -> u64 {
+        self.entry_count
+    }
+
+    pub fn weighted_size(&self) -> u64 {
+        self.weighted_size
+    }
+}
+
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq,
@@ -423,14 +458,6 @@ where
     ///
     pub fn iter(&self) -> Iter<'_, K, V, S> {
         Iter::new(self, self.cache.iter())
-    }
-
-    /// Returns a read-only cache policy of this cache.
-    ///
-    /// At this time, cache policy cannot be modified after cache creation.
-    /// A future version may support to modify it.
-    pub fn policy(&self) -> Policy {
-        Policy::new(self.max_capacity, 1, self.time_to_live, self.time_to_idle)
     }
 }
 
@@ -1124,8 +1151,8 @@ mod tests {
         assert!(!cache.contains_key(&"d"));
 
         // Verify the sizes.
-        assert_eq!(cache.entry_count, 2);
-        assert_eq!(cache.weighted_size, 25);
+        assert_eq!(cache.entry_count(), 2);
+        assert_eq!(cache.weighted_size(), 25);
     }
 
     #[test]
@@ -1361,5 +1388,46 @@ mod tests {
                 ensure_sketch_len(u64::MAX, pot30, "u64::MAX");
             }
         };
+    }
+
+    #[test]
+    fn test_debug_format() {
+        let mut cache = Cache::builder().max_capacity(10).build();
+
+        cache.insert('a', "alice");
+        cache.insert('b', "bob");
+        cache.insert('c', "cindy");
+
+        assert_eq!(
+            format!("{:?}", cache),
+            "Cache { max_capacity: Some(10), entry_count: 3, weighted_size: 3 }"
+        );
+
+        let debug_str = format!("{:?}", cache.debug_fmt().entries());
+        assert!(debug_str.starts_with('{'));
+        assert!(debug_str.contains(r#"'a': "alice""#));
+        assert!(debug_str.contains(r#"'b': "bob""#));
+        assert!(debug_str.contains(r#"'c': "cindy""#));
+        assert!(debug_str.ends_with('}'));
+
+        let weigher = |_k: &char, v: &(&str, u32)| v.1;
+
+        let mut cache = Cache::builder().max_capacity(50).weigher(weigher).build();
+
+        cache.insert('a', ("alice", 10));
+        cache.insert('b', ("bob", 15));
+        cache.insert('c', ("cindy", 5));
+
+        assert_eq!(
+            format!("{:?}", cache),
+            "Cache { max_capacity: Some(50), entry_count: 3, weighted_size: 30 }"
+        );
+
+        let debug_str = format!("{:?}", cache.debug_fmt().entries());
+        assert!(debug_str.starts_with('{'));
+        assert!(debug_str.contains(r#"'a': ("alice", 10)"#));
+        assert!(debug_str.contains(r#"'b': ("bob", 15)"#));
+        assert!(debug_str.contains(r#"'c': ("cindy", 5)"#));
+        assert!(debug_str.ends_with('}'));
     }
 }
