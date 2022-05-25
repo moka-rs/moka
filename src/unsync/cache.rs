@@ -16,6 +16,7 @@ use smallvec::SmallVec;
 use std::{
     borrow::Borrow,
     collections::{hash_map::RandomState, HashMap},
+    fmt,
     hash::{BuildHasher, Hash, Hasher},
     ptr::NonNull,
     rc::Rc,
@@ -176,6 +177,24 @@ pub struct Cache<K, V, S = RandomState> {
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     expiration_clock: Option<Clock>,
+}
+
+impl<K, V, S> fmt::Debug for Cache<K, V, S>
+where
+    K: fmt::Debug + Eq + Hash,
+    V: fmt::Debug,
+    // TODO: Remove these bounds from S.
+    S: BuildHasher + Clone,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut d_map = f.debug_map();
+
+        for (k, v) in self.iter() {
+            d_map.entry(&k, &v);
+        }
+
+        d_map.finish()
+    }
 }
 
 impl<K, V> Cache<K, V, RandomState>
@@ -1394,5 +1413,20 @@ mod tests {
                 ensure_sketch_len(u64::MAX, pot30, "u64::MAX");
             }
         };
+    }
+
+    #[test]
+    fn test_debug_format() {
+        let mut cache = Cache::new(10);
+        cache.insert('a', "alice");
+        cache.insert('b', "bob");
+        cache.insert('c', "cindy");
+
+        let debug_str = format!("{:?}", cache);
+        assert!(debug_str.starts_with('{'));
+        assert!(debug_str.contains(r#"'a': "alice""#));
+        assert!(debug_str.contains(r#"'b': "bob""#));
+        assert!(debug_str.contains(r#"'c': "cindy""#));
+        assert!(debug_str.ends_with('}'));
     }
 }

@@ -8,6 +8,7 @@ use crate::{Policy, PredicateError};
 use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
+    fmt,
     hash::{BuildHasher, Hash, Hasher},
     sync::Arc,
     time::Duration,
@@ -54,6 +55,24 @@ impl<K, V, S> Clone for SegmentedCache<K, V, S> {
         Self {
             inner: Arc::clone(&self.inner),
         }
+    }
+}
+
+impl<K, V, S> fmt::Debug for SegmentedCache<K, V, S>
+where
+    K: fmt::Debug + Eq + Hash + Send + Sync + 'static,
+    V: fmt::Debug + Clone + Send + Sync + 'static,
+    // TODO: Remove these bounds from S.
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut d_map = f.debug_map();
+
+        for (k, v) in self.iter() {
+            d_map.entry(&k, &v);
+        }
+
+        d_map.finish()
     }
 }
 
@@ -1406,5 +1425,20 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+    }
+
+    #[test]
+    fn test_debug_format() {
+        let cache = SegmentedCache::new(10, 4);
+        cache.insert('a', "alice");
+        cache.insert('b', "bob");
+        cache.insert('c', "cindy");
+
+        let debug_str = format!("{:?}", cache);
+        assert!(debug_str.starts_with('{'));
+        assert!(debug_str.contains(r#"'a': "alice""#));
+        assert!(debug_str.contains(r#"'b': "bob""#));
+        assert!(debug_str.contains(r#"'c': "cindy""#));
+        assert!(debug_str.ends_with('}'));
     }
 }
