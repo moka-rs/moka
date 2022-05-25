@@ -96,6 +96,76 @@ where
     }
 }
 
+impl<K, V, S> SegmentedCache<K, V, S> {
+    /// Returns a read-only cache policy of this cache.
+    ///
+    /// At this time, cache policy cannot be modified after cache creation.
+    /// A future version may support to modify it.
+    pub fn policy(&self) -> Policy {
+        let mut policy = self.inner.segments[0].policy();
+        policy.set_max_capacity(self.inner.desired_capacity);
+        policy.set_num_segments(self.inner.segments.len());
+        policy
+    }
+
+    /// Returns an approximate number of entries in this cache.
+    ///
+    /// The value returned is _an estimate_; the actual count may differ if there are
+    /// concurrent insertions or removals, or if some entries are pending removal due
+    /// to expiration. This inaccuracy can be mitigated by performing a `sync()`
+    /// first.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use moka::sync::SegmentedCache;
+    ///
+    /// let cache = SegmentedCache::new(10, 4);
+    /// cache.insert('n', "Netherland Dwarf");
+    /// cache.insert('l', "Lop Eared");
+    /// cache.insert('d', "Dutch");
+    ///
+    /// // Ensure an entry exists.
+    /// assert!(cache.contains_key(&'n'));
+    ///
+    /// // However, followings may print stale number zeros instead of threes.
+    /// println!("{}", cache.entry_count());   // -> 0
+    /// println!("{}", cache.weighted_size()); // -> 0
+    ///
+    /// // To mitigate the inaccuracy, bring `ConcurrentCacheExt` trait to
+    /// // the scope so we can use `sync` method.
+    /// use moka::sync::ConcurrentCacheExt;
+    /// // Call `sync` to run pending internal tasks.
+    /// cache.sync();
+    ///
+    /// // Followings will print the actual numbers.
+    /// println!("{}", cache.entry_count());   // -> 3
+    /// println!("{}", cache.weighted_size()); // -> 3
+    /// ```
+    ///
+    pub fn entry_count(&self) -> u64 {
+        self.inner
+            .segments
+            .iter()
+            .map(|seg| seg.entry_count())
+            .sum()
+    }
+
+    /// Returns an approximate total weighted size of entries in this cache.
+    ///
+    /// The value returned is _an estimate_; the actual size may differ if there are
+    /// concurrent insertions or removals, or if some entries are pending removal due
+    /// to expiration. This inaccuracy can be mitigated by performing a `sync()`
+    /// first. See [`entry_count`](#method.entry_count) for a sample code.
+    pub fn weighted_size(&self) -> u64 {
+        self.inner
+            .segments
+            .iter()
+            .map(|seg| seg.weighted_size())
+            .sum()
+    }
+}
+
 impl<K, V, S> SegmentedCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -370,35 +440,6 @@ where
             .collect::<Vec<_>>()
             .into_boxed_slice();
         Iter::with_multiple_cache_segments(segments, num_cht_segments)
-    }
-
-    /// Returns a read-only cache policy of this cache.
-    ///
-    /// At this time, cache policy cannot be modified after cache creation.
-    /// A future version may support to modify it.
-    pub fn policy(&self) -> Policy {
-        let mut policy = self.inner.segments[0].policy();
-        policy.set_max_capacity(self.inner.desired_capacity);
-        policy.set_num_segments(self.inner.segments.len());
-        policy
-    }
-
-    #[cfg(test)]
-    fn estimated_entry_count(&self) -> u64 {
-        self.inner
-            .segments
-            .iter()
-            .map(|seg| seg.estimated_entry_count())
-            .sum()
-    }
-
-    #[cfg(test)]
-    fn weighted_size(&self) -> u64 {
-        self.inner
-            .segments
-            .iter()
-            .map(|seg| seg.weighted_size())
-            .sum()
     }
 
     // /// This is used by unit tests to get consistent result.
@@ -758,7 +799,7 @@ mod tests {
         assert!(!cache.contains_key(&"d"));
 
         // Verify the sizes.
-        assert_eq!(cache.estimated_entry_count(), 2);
+        assert_eq!(cache.entry_count(), 2);
         assert_eq!(cache.weighted_size(), 25);
     }
 
@@ -888,7 +929,7 @@ mod tests {
         assert!(!cache.contains_key(&2));
         assert!(cache.contains_key(&3));
 
-        assert_eq!(cache.estimated_entry_count(), 2);
+        assert_eq!(cache.entry_count(), 2);
         assert_eq!(cache.invalidation_predicate_count(), 0);
 
         mock.increment(Duration::from_secs(5)); // 15 secs from the start.
@@ -909,7 +950,7 @@ mod tests {
         assert!(!cache.contains_key(&1));
         assert!(!cache.contains_key(&3));
 
-        assert_eq!(cache.estimated_entry_count(), 0);
+        assert_eq!(cache.entry_count(), 0);
         assert_eq!(cache.invalidation_predicate_count(), 0);
 
         Ok(())
