@@ -314,6 +314,79 @@ impl<K, V, S> Clone for Cache<K, V, S> {
     }
 }
 
+impl<K, V, S> Cache<K, V, S> {
+    /// Returns a read-only cache policy of this cache.
+    ///
+    /// At this time, cache policy cannot be modified after cache creation.
+    /// A future version may support to modify it.
+    pub fn policy(&self) -> Policy {
+        self.base.policy()
+    }
+
+    /// Returns an approximate number of entries in this cache.
+    ///
+    /// The value returned is _an estimate_; the actual count may differ if there are
+    /// concurrent insertions or removals, or if some entries are pending removal due
+    /// to expiration. This inaccuracy can be mitigated by performing a `sync()`
+    /// first.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.8", features = ["future"] }
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    /// use moka::future::Cache;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let cache = Cache::new(10);
+    ///     cache.insert('n', "Netherland Dwarf").await;
+    ///     cache.insert('l', "Lop Eared").await;
+    ///     cache.insert('d', "Dutch").await;
+    ///
+    ///     // Ensure an entry exists.
+    ///     assert!(cache.contains_key(&'n'));
+    ///
+    ///     // However, followings may print stale number zeros instead of threes.
+    ///     println!("{}", cache.entry_count());   // -> 0
+    ///     println!("{}", cache.weighted_size()); // -> 0
+    ///
+    ///     // To mitigate the inaccuracy, bring `ConcurrentCacheExt` trait to
+    ///     // the scope so we can use `sync` method.
+    ///     use moka::future::ConcurrentCacheExt;
+    ///     // Call `sync` to run pending internal tasks.
+    ///     cache.sync();
+    ///
+    ///     // Followings will print the actual numbers.
+    ///     println!("{}", cache.entry_count());   // -> 3
+    ///     println!("{}", cache.weighted_size()); // -> 3
+    /// }
+    /// ```
+    ///
+    pub fn entry_count(&self) -> u64 {
+        self.base.entry_count()
+    }
+
+    /// Returns an approximate total weighted size of entries in this cache.
+    ///
+    /// The value returned is _an estimate_; the actual size may differ if there are
+    /// concurrent insertions or removals, or if some entries are pending removal due
+    /// to expiration. This inaccuracy can be mitigated by performing a `sync()`
+    /// first. See [`entry_count`](#method.entry_count) for a sample code.
+    pub fn weighted_size(&self) -> u64 {
+        self.base.weighted_size()
+    }
+
+    #[cfg(feature = "unstable-debug-counters")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "unstable-debug-counters")))]
+    pub fn debug_stats(&self) -> CacheDebugStats {
+        self.base.debug_stats()
+    }
+}
+
 impl<K, V> Cache<K, V, RandomState>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -799,30 +872,6 @@ where
     pub fn blocking(&self) -> BlockingOp<'_, K, V, S> {
         BlockingOp(self)
     }
-
-    /// Returns a read-only cache policy of this cache.
-    ///
-    /// At this time, cache policy cannot be modified after cache creation.
-    /// A future version may support to modify it.
-    pub fn policy(&self) -> Policy {
-        self.base.policy()
-    }
-
-    #[cfg(feature = "unstable-debug-counters")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "unstable-debug-counters")))]
-    pub fn debug_stats(&self) -> CacheDebugStats {
-        self.base.debug_stats()
-    }
-
-    #[cfg(test)]
-    fn estimated_entry_count(&self) -> u64 {
-        self.base.estimated_entry_count()
-    }
-
-    #[cfg(test)]
-    fn weighted_size(&self) -> u64 {
-        self.base.weighted_size()
-    }
 }
 
 impl<'a, K, V, S> IntoIterator for &'a Cache<K, V, S>
@@ -991,7 +1040,7 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn is_table_empty(&self) -> bool {
-        self.estimated_entry_count() == 0
+        self.entry_count() == 0
     }
 
     fn invalidation_predicate_count(&self) -> usize {
@@ -1247,7 +1296,7 @@ mod tests {
         assert!(!cache.contains_key(&"d"));
 
         // Verify the sizes.
-        assert_eq!(cache.estimated_entry_count(), 2);
+        assert_eq!(cache.entry_count(), 2);
         assert_eq!(cache.weighted_size(), 25);
     }
 
@@ -1376,7 +1425,7 @@ mod tests {
         assert!(!cache.contains_key(&2));
         assert!(cache.contains_key(&3));
 
-        assert_eq!(cache.estimated_entry_count(), 2);
+        assert_eq!(cache.entry_count(), 2);
         assert_eq!(cache.invalidation_predicate_count(), 0);
 
         mock.increment(Duration::from_secs(5)); // 15 secs from the start.
@@ -1397,7 +1446,7 @@ mod tests {
         assert!(!cache.contains_key(&1));
         assert!(!cache.contains_key(&3));
 
-        assert_eq!(cache.estimated_entry_count(), 0);
+        assert_eq!(cache.entry_count(), 0);
         assert_eq!(cache.invalidation_predicate_count(), 0);
 
         Ok(())
@@ -1439,14 +1488,14 @@ mod tests {
         cache.insert("b", "bob").await;
         cache.sync();
 
-        assert_eq!(cache.estimated_entry_count(), 1);
+        assert_eq!(cache.entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 15 secs.
         cache.sync();
 
         assert_eq!(cache.get(&"b"), Some("bob"));
         assert!(cache.contains_key(&"b"));
-        assert_eq!(cache.estimated_entry_count(), 1);
+        assert_eq!(cache.entry_count(), 1);
 
         cache.insert("b", "bill").await;
         cache.sync();
@@ -1456,7 +1505,7 @@ mod tests {
 
         assert_eq!(cache.get(&"b"), Some("bill"));
         assert!(cache.contains_key(&"b"));
-        assert_eq!(cache.estimated_entry_count(), 1);
+        assert_eq!(cache.entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 25 secs
 
@@ -1500,7 +1549,7 @@ mod tests {
         cache.insert("b", "bob").await;
         cache.sync();
 
-        assert_eq!(cache.estimated_entry_count(), 2);
+        assert_eq!(cache.entry_count(), 2);
 
         mock.increment(Duration::from_secs(2)); // 12 secs.
         cache.sync();
@@ -1510,7 +1559,7 @@ mod tests {
         assert!(cache.contains_key(&"b"));
         cache.sync();
 
-        assert_eq!(cache.estimated_entry_count(), 2);
+        assert_eq!(cache.entry_count(), 2);
 
         mock.increment(Duration::from_secs(3)); // 15 secs.
         assert_eq!(cache.get(&"a"), None);
@@ -1521,7 +1570,7 @@ mod tests {
         assert_eq!(cache.iter().count(), 1);
 
         cache.sync();
-        assert_eq!(cache.estimated_entry_count(), 1);
+        assert_eq!(cache.entry_count(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
         assert_eq!(cache.get(&"a"), None);

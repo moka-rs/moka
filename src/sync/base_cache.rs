@@ -86,6 +86,25 @@ impl<K, V, S> Drop for BaseCache<K, V, S> {
     }
 }
 
+impl<K, V, S> BaseCache<K, V, S> {
+    pub(crate) fn policy(&self) -> Policy {
+        self.inner.policy()
+    }
+
+    pub(crate) fn entry_count(&self) -> u64 {
+        self.inner.entry_count()
+    }
+
+    pub(crate) fn weighted_size(&self) -> u64 {
+        self.inner.weighted_size()
+    }
+
+    #[cfg(feature = "unstable-debug-counters")]
+    pub fn debug_stats(&self) -> CacheDebugStats {
+        self.inner.debug_stats()
+    }
+}
+
 impl<K, V, S> BaseCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -224,25 +243,6 @@ where
     ) -> Result<PredicateId, PredicateError> {
         let now = self.inner.current_time_from_expiration_clock();
         self.inner.register_invalidation_predicate(predicate, now)
-    }
-
-    pub(crate) fn policy(&self) -> Policy {
-        self.inner.policy()
-    }
-
-    #[cfg(feature = "unstable-debug-counters")]
-    pub fn debug_stats(&self) -> CacheDebugStats {
-        self.inner.debug_stats()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn estimated_entry_count(&self) -> u64 {
-        self.inner.estimated_entry_count()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn weighted_size(&self) -> u64 {
-        self.inner.weighted_size()
     }
 }
 
@@ -541,6 +541,36 @@ pub(crate) struct Inner<K, V, S> {
 }
 
 // functions/methods used by BaseCache
+impl<K, V, S> Inner<K, V, S> {
+    fn policy(&self) -> Policy {
+        Policy::new(self.max_capacity, 1, self.time_to_live, self.time_to_idle)
+    }
+
+    #[inline]
+    fn entry_count(&self) -> u64 {
+        self.entry_count.load()
+    }
+
+    #[inline]
+    pub(crate) fn weighted_size(&self) -> u64 {
+        self.weighted_size.load()
+    }
+
+    #[cfg(feature = "unstable-debug-counters")]
+    pub fn debug_stats(&self) -> CacheDebugStats {
+        let ec = self.entry_count.load();
+        let ws = self.weighted_size.load();
+
+        CacheDebugStats::new(
+            ec,
+            ws,
+            (self.cache.capacity() * 2) as u64,
+            self.frequency_sketch.read().table_size(),
+        )
+    }
+}
+
+// functions/methods used by BaseCache
 impl<K, V, S> Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -653,10 +683,6 @@ where
         self.cache.actual_num_segments()
     }
 
-    fn policy(&self) -> Policy {
-        Policy::new(self.max_capacity, 1, self.time_to_live, self.time_to_idle)
-    }
-
     #[inline]
     fn time_to_live(&self) -> Option<Duration> {
         self.time_to_live
@@ -665,31 +691,6 @@ where
     #[inline]
     fn time_to_idle(&self) -> Option<Duration> {
         self.time_to_idle
-    }
-
-    #[cfg(feature = "unstable-debug-counters")]
-    pub fn debug_stats(&self) -> CacheDebugStats {
-        let ec = self.entry_count.load();
-        let ws = self.weighted_size.load();
-
-        CacheDebugStats::new(
-            ec,
-            ws,
-            (self.cache.capacity() * 2) as u64,
-            self.frequency_sketch.read().table_size(),
-        )
-    }
-
-    #[cfg(test)]
-    #[inline]
-    fn estimated_entry_count(&self) -> u64 {
-        self.entry_count.load()
-    }
-
-    #[cfg(test)]
-    #[inline]
-    pub(crate) fn weighted_size(&self) -> u64 {
-        self.weighted_size.load()
     }
 
     #[inline]

@@ -108,7 +108,7 @@ impl InternalGlobalDebugCounters {
 
 #[derive(Clone, Debug)]
 pub struct CacheDebugStats {
-    pub estimated_entry_count: u64,
+    pub entry_count: u64,
     pub weighted_size: u64,
     // bytes
     pub freq_sketch_size: u64,
@@ -118,13 +118,13 @@ pub struct CacheDebugStats {
 
 impl CacheDebugStats {
     pub(crate) fn new(
-        estimated_entry_count: u64,
+        entry_count: u64,
         weighted_size: u64,
         hashmap_capacity: u64,
         freq_sketch_size: u64,
     ) -> Self {
         Self {
-            estimated_entry_count,
+            entry_count,
             weighted_size,
             freq_sketch_size,
             hashmap_capacity,

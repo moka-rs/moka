@@ -205,6 +205,47 @@ where
 //
 // public
 //
+impl<K, V, S> Cache<K, V, S> {
+    /// Returns a read-only cache policy of this cache.
+    ///
+    /// At this time, cache policy cannot be modified after cache creation.
+    /// A future version may support to modify it.
+    pub fn policy(&self) -> Policy {
+        Policy::new(self.max_capacity, 1, self.time_to_live, self.time_to_idle)
+    }
+
+    /// Returns the number of entries in this cache.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use moka::unsync::Cache;
+    ///
+    /// let mut cache = Cache::new(10);
+    /// cache.insert('n', "Netherland Dwarf");
+    /// cache.insert('l', "Lop Eared");
+    /// cache.insert('d', "Dutch");
+    ///
+    /// // Ensure an entry exists.
+    /// assert!(cache.contains_key(&'n'));
+    ///
+    /// // Followings will print the actual numbers.
+    /// println!("{}", cache.entry_count());   // -> 3
+    /// println!("{}", cache.weighted_size()); // -> 3
+    /// ```
+    ///
+    pub fn entry_count(&self) -> u64 {
+        self.entry_count
+    }
+
+    /// Returns the total weighted size of entries in this cache.
+    ///
+    /// See [`entry_count`](#method.entry_count) for a sample code.
+    pub fn weighted_size(&self) -> u64 {
+        self.weighted_size
+    }
+}
+
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq,
@@ -423,14 +464,6 @@ where
     ///
     pub fn iter(&self) -> Iter<'_, K, V, S> {
         Iter::new(self, self.cache.iter())
-    }
-
-    /// Returns a read-only cache policy of this cache.
-    ///
-    /// At this time, cache policy cannot be modified after cache creation.
-    /// A future version may support to modify it.
-    pub fn policy(&self) -> Policy {
-        Policy::new(self.max_capacity, 1, self.time_to_live, self.time_to_idle)
     }
 }
 
@@ -1124,8 +1157,8 @@ mod tests {
         assert!(!cache.contains_key(&"d"));
 
         // Verify the sizes.
-        assert_eq!(cache.entry_count, 2);
-        assert_eq!(cache.weighted_size, 25);
+        assert_eq!(cache.entry_count(), 2);
+        assert_eq!(cache.weighted_size(), 25);
     }
 
     #[test]
