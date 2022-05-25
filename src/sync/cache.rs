@@ -12,6 +12,7 @@ use std::{
     any::TypeId,
     borrow::Borrow,
     collections::hash_map::RandomState,
+    fmt,
     hash::{BuildHasher, Hash},
     sync::Arc,
     time::Duration,
@@ -260,6 +261,24 @@ impl<K, V, S> Clone for Cache<K, V, S> {
             base: self.base.clone(),
             value_initializer: Arc::clone(&self.value_initializer),
         }
+    }
+}
+
+impl<K, V, S> fmt::Debug for Cache<K, V, S>
+where
+    K: fmt::Debug + Eq + Hash + Send + Sync + 'static,
+    V: fmt::Debug + Clone + Send + Sync + 'static,
+    // TODO: Remove these bounds from S.
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut d_map = f.debug_map();
+
+        for (k, v) in self.iter() {
+            d_map.entry(&k, &v);
+        }
+
+        d_map.finish()
     }
 }
 
@@ -1898,5 +1917,20 @@ mod tests {
             cache.try_get_with(1, || Ok(5)) as Result<_, Arc<Infallible>>,
             Ok(5)
         );
+    }
+
+    #[test]
+    fn test_debug_format() {
+        let cache = Cache::new(10);
+        cache.insert('a', "alice");
+        cache.insert('b', "bob");
+        cache.insert('c', "cindy");
+
+        let debug_str = format!("{:?}", cache);
+        assert!(debug_str.starts_with('{'));
+        assert!(debug_str.contains(r#"'a': "alice""#));
+        assert!(debug_str.contains(r#"'b': "bob""#));
+        assert!(debug_str.contains(r#"'c': "cindy""#));
+        assert!(debug_str.ends_with('}'));
     }
 }
