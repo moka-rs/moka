@@ -2,6 +2,7 @@
 /// [`Cache#invalidate_entries_if`][invalidate-if] method.
 ///
 /// [invalidate-if]: ./sync/struct.Cache.html#method.invalidate_entries_if
+#[cfg(any(feature="sync", feature="future"))]
 #[derive(thiserror::Error, Debug)]
 pub enum PredicateError {
     /// This cache does not have a necessary configuration enabled to support
