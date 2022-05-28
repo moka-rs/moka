@@ -24,6 +24,7 @@ use std::{
 ///
 /// [cache-struct]: ./struct.Cache.html
 ///
+#[cfg(feature="sync")]
 pub struct SegmentedCache<K, V, S = RandomState> {
     inner: Arc<Inner<K, V, S>>,
 }

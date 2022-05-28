@@ -165,14 +165,14 @@ pub mod dash;
 #[cfg(feature = "future")]
 #[cfg_attr(docsrs, doc(cfg(feature = "future")))]
 pub mod future;
-
+#[cfg(any(feature="sync", feature="future"))]
 pub mod sync;
 pub mod unsync;
-
+#[cfg(any(feature="sync", feature="future"))]
 pub(crate) mod cht;
 pub(crate) mod common;
 pub(crate) mod policy;
-
+#[cfg(any(feature="sync", feature="future"))]
 pub use common::error::PredicateError;
 pub use policy::Policy;
 
