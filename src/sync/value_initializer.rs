@@ -17,7 +17,7 @@ pub(crate) enum InitResult<V, E> {
     ReadExisting(V),
     InitErr(Arc<E>),
 }
-
+#[cfg(feature="sync")]
 pub(crate) struct ValueInitializer<K, V, S> {
     // TypeId is the type ID of the concrete error type of generic type E in
     // try_init_or_read(). We use the type ID as a part of the key to ensure that
