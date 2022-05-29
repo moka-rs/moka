@@ -7,7 +7,6 @@ mod builder;
 mod cache;
 mod value_initializer;
 
-pub use crate::sync_base::{iter::Iter, PredicateId};
 pub use {
     builder::CacheBuilder,
     cache::{BlockingOp, Cache},
