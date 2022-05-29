@@ -151,7 +151,7 @@ impl<K, V, S> Invalidator<K, V, S> {
         let mut preds = self.predicates.write();
 
         while tries < MAX_RETRY {
-            let id = Uuid::new_v4().to_hyphenated().to_string();
+            let id = Uuid::new_v4().as_hyphenated().to_string();
             if preds.contains_key(&id) {
                 tries += 1;
 
