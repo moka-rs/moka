@@ -29,6 +29,7 @@ impl Policy {
         self.max_capacity
     }
 
+    // #[cfg(feature = "sync")]
     pub(crate) fn set_max_capacity(&mut self, capacity: Option<u64>) {
         self.max_capacity = capacity;
     }
@@ -38,6 +39,7 @@ impl Policy {
         self.num_segments
     }
 
+    // #[cfg(feature = "sync")]
     pub(crate) fn set_num_segments(&mut self, num: usize) {
         self.num_segments = num;
     }

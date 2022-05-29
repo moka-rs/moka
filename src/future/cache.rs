@@ -3,17 +3,18 @@ use super::{
     CacheBuilder, ConcurrentCacheExt,
 };
 use crate::{
-    sync::{
-        base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
+    common::concurrent::{
+        constants::{MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
         housekeeper::InnerSync,
-        iter::Iter,
-        PredicateId, Weigher, WriteOp,
+        Weigher, WriteOp,
     },
+    sync::{Iter, PredicateId},
+    sync_base::base_cache::{BaseCache, HouseKeeperArc},
     Policy, PredicateError,
 };
 
 #[cfg(feature = "unstable-debug-counters")]
-use crate::sync::debug_counters::CacheDebugStats;
+use crate::common::concurrent::debug_counters::CacheDebugStats;
 
 use crossbeam_channel::{Sender, TrySendError};
 use std::{
@@ -880,7 +881,7 @@ where
     /// ```
     ///
     pub fn iter(&self) -> Iter<'_, K, V> {
-        use crate::sync::iter::ScanningGet;
+        use crate::sync_base::iter::ScanningGet;
 
         Iter::with_single_cache_segment(&self.base, self.base.num_cht_segments())
     }

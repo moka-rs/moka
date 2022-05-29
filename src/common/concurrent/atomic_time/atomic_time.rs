@@ -1,4 +1,4 @@
-use super::Instant;
+use crate::common::time::{clock::Instant as ClockInstant, Instant};
 
 use std::{
     any::TypeId,
@@ -35,19 +35,19 @@ impl AtomicInstant {
             None
         } else {
             debug_assert_eq!(
-                TypeId::of::<super::clock::Instant>(),
+                TypeId::of::<ClockInstant>(),
                 TypeId::of::<quanta::Instant>()
             );
-            Some(Instant(unsafe { std::mem::transmute(ts) }))
+            Some(Instant::new(unsafe { std::mem::transmute(ts) }))
         }
     }
 
     pub(crate) fn set_instant(&self, instant: Instant) {
         debug_assert_eq!(
-            TypeId::of::<super::clock::Instant>(),
+            TypeId::of::<ClockInstant>(),
             TypeId::of::<quanta::Instant>()
         );
-        let ts = unsafe { std::mem::transmute(instant.0) };
+        let ts = unsafe { std::mem::transmute(instant.inner_clock()) };
         self.instant.store(ts, Ordering::Release);
     }
 }

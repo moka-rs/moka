@@ -7,8 +7,10 @@ mod builder;
 mod cache;
 mod value_initializer;
 
-pub use builder::CacheBuilder;
-pub use cache::{BlockingOp, Cache};
+pub use {
+    builder::CacheBuilder,
+    cache::{BlockingOp, Cache},
+};
 
 /// Provides extra methods that will be useful for testing.
 pub trait ConcurrentCacheExt<K, V> {

@@ -1,9 +1,13 @@
 use super::{
-    base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
+    base_cache::{BaseCache, HouseKeeperArc},
     CacheBuilder, ConcurrentCacheExt, EntryRef, Iter,
 };
 use crate::{
-    sync::{housekeeper::InnerSync, Weigher, WriteOp},
+    common::concurrent::{
+        constants::{MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
+        housekeeper::InnerSync,
+        Weigher, WriteOp,
+    },
     Policy,
 };
 

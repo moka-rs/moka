@@ -1,8 +1,8 @@
-use super::base_cache::{
+use super::constants::{
     MAX_SYNC_REPEATS, PERIODICAL_SYNC_FAST_PACE_NANOS, PERIODICAL_SYNC_INITIAL_DELAY_MILLIS,
     PERIODICAL_SYNC_NORMAL_PACE_MILLIS,
 };
-use crate::common::{
+use super::{
     thread_pool::{ThreadPool, ThreadPoolRegistry},
     unsafe_weak_pointer::UnsafeWeakPointer,
 };
@@ -83,7 +83,7 @@ where
     T: 'static,
 {
     pub(crate) fn new(inner: Weak<T>) -> Self {
-        use crate::common::thread_pool::PoolName;
+        use super::thread_pool::PoolName;
 
         let thread_pool = ThreadPoolRegistry::acquire_pool(PoolName::Housekeeper);
         let inner_ptr = Arc::new(Mutex::new(UnsafeWeakPointer::from_weak_arc(inner)));
