@@ -58,5 +58,8 @@
     ],
     "files.watcherExclude": {
         "**/target": true
-    }
+    },
+    "cSpell.enableFiletypes": [
+        "toml"
+    ]
 }

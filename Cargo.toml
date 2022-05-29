@@ -38,7 +38,7 @@ atomic64 = []
 
 # This unstable feature adds `GlobalDebugCounters::current` function, which returns
 # counters of internal object construction and destruction. It will have some
-# performance impacts and is intended for debugging perpose.
+# performance impacts and is intended for debugging purpose.
 unstable-debug-counters = ["future"]
 
 [dependencies]
@@ -56,10 +56,14 @@ tagptr = "0.2"
 triomphe = { version = "0.1", default-features = false }
 
 # Optional dependencies (enabled by default)
-crossbeam-epoch = { version = "0.8.2", optional = true }
 quanta = { version = "0.10.0", optional = true }
 thiserror = { version = "1.0", optional = true }
-uuid = { version = "0.8", features = ["v4"], optional = true }
+uuid = { version = "1.1", features = ["v4"], optional = true }
+
+# Although v0.8.2 is not the current version (v0.9.x), we will keep using it until
+# we perform enough tests to get conformable with memory safety.
+# See: https://github.com/moka-rs/moka/issues/34
+crossbeam-epoch = { version = "0.8.2", optional = true }
 
 # Optional dependencies (dashmap)
 dashmap = { version = "5.2", optional = true }
