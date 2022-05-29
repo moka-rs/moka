@@ -6,6 +6,9 @@ use std::{
     sync::atomic::{self, AtomicUsize, Ordering},
 };
 
+#[cfg(feature = "unstable-debug-counters")]
+use crate::common::concurrent::debug_counters;
+
 use crossbeam_epoch::{Atomic, CompareAndSetError, Guard, Owned, Shared};
 
 pub(crate) const BUCKET_ARRAY_DEFAULT_LENGTH: usize = 128;
@@ -37,7 +40,7 @@ impl<K, V> BucketArray<K, V> {
 
         #[cfg(feature = "unstable-debug-counters")]
         {
-            use crate::sync::debug_counters::InternalGlobalDebugCounters as Counters;
+            use debug_counters::InternalGlobalDebugCounters as Counters;
 
             let size = (buckets.len() * std::mem::size_of::<Atomic<Bucket<K, V>>>()) as u64;
             Counters::bucket_array_created(size);
@@ -61,7 +64,7 @@ impl<K, V> BucketArray<K, V> {
 #[cfg(feature = "unstable-debug-counters")]
 impl<K, V> Drop for BucketArray<K, V> {
     fn drop(&mut self) {
-        use crate::sync::debug_counters::InternalGlobalDebugCounters as Counters;
+        use debug_counters::InternalGlobalDebugCounters as Counters;
 
         let size = (self.buckets.len() * std::mem::size_of::<Atomic<Bucket<K, V>>>()) as u64;
         Counters::bucket_array_dropped(size);
@@ -508,7 +511,7 @@ pub(crate) struct Bucket<K, V> {
 impl<K, V> Bucket<K, V> {
     pub(crate) fn new(key: K, value: V) -> Bucket<K, V> {
         #[cfg(feature = "unstable-debug-counters")]
-        crate::sync::debug_counters::InternalGlobalDebugCounters::bucket_created();
+        debug_counters::InternalGlobalDebugCounters::bucket_created();
 
         Self {
             key,
@@ -520,7 +523,7 @@ impl<K, V> Bucket<K, V> {
 #[cfg(feature = "unstable-debug-counters")]
 impl<K, V> Drop for Bucket<K, V> {
     fn drop(&mut self) {
-        crate::sync::debug_counters::InternalGlobalDebugCounters::bucket_dropped();
+        debug_counters::InternalGlobalDebugCounters::bucket_dropped();
     }
 }
 

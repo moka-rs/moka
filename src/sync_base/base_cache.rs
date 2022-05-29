@@ -1,22 +1,30 @@
 use super::{
-    deques::Deques,
-    entry_info::EntryInfo,
-    housekeeper::{Housekeeper, InnerSync, SyncPace},
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
     iter::ScanningGet,
-    AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, PredicateId, ReadOp, ValueEntry, Weigher,
-    WriteOp,
+    PredicateId,
 };
 
 #[cfg(feature = "unstable-debug-counters")]
-use super::debug_counters::CacheDebugStats;
+use common::concurrent::debug_counters::CacheDebugStats;
 
 use crate::{
     common::{
         self,
+        concurrent::{
+            atomic_time::AtomicInstant,
+            constants::{
+                READ_LOG_FLUSH_POINT, READ_LOG_SIZE, WRITE_LOG_FLUSH_POINT,
+                WRITE_LOG_LOW_WATER_MARK, WRITE_LOG_SIZE,
+            },
+            deques::Deques,
+            entry_info::EntryInfo,
+            housekeeper::{Housekeeper, InnerSync, SyncPace},
+            AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, ReadOp, ValueEntry, Weigher,
+            WriteOp,
+        },
         deque::{DeqNode, Deque},
         frequency_sketch::FrequencySketch,
-        time::{atomic_time::AtomicInstant, CheckedTimeOps, Clock, Instant},
+        time::{CheckedTimeOps, Clock, Instant},
         CacheRegion,
     },
     Policy, PredicateError,
@@ -38,22 +46,6 @@ use std::{
     time::Duration,
 };
 use triomphe::Arc as TrioArc;
-
-pub(crate) const MAX_SYNC_REPEATS: usize = 4;
-
-const READ_LOG_FLUSH_POINT: usize = 512;
-const READ_LOG_SIZE: usize = READ_LOG_FLUSH_POINT * (MAX_SYNC_REPEATS + 2);
-
-const WRITE_LOG_FLUSH_POINT: usize = 512;
-const WRITE_LOG_LOW_WATER_MARK: usize = WRITE_LOG_FLUSH_POINT / 2;
-// const WRITE_LOG_HIGH_WATER_MARK: usize = WRITE_LOG_FLUSH_POINT * (MAX_SYNC_REPEATS - 1);
-const WRITE_LOG_SIZE: usize = WRITE_LOG_FLUSH_POINT * (MAX_SYNC_REPEATS + 2);
-
-pub(crate) const WRITE_RETRY_INTERVAL_MICROS: u64 = 50;
-
-pub(crate) const PERIODICAL_SYNC_INITIAL_DELAY_MILLIS: u64 = 500;
-pub(crate) const PERIODICAL_SYNC_NORMAL_PACE_MILLIS: u64 = 300;
-pub(crate) const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;
 
 pub(crate) type HouseKeeperArc<K, V, S> = Arc<Housekeeper<Inner<K, V, S>>>;
 
@@ -1409,7 +1401,7 @@ where
         while len < batch_size {
             if let Some(kd) = iter.next() {
                 if let Some(ts) = kd.last_modified() {
-                    let key = &kd.key;
+                    let key = kd.key();
                     let hash = self.hash(key);
                     candidates.push(KeyDateLite::new(key, hash, ts));
                     len += 1;

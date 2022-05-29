@@ -1,11 +1,14 @@
 #![allow(unused)]
 
-use super::{base_cache::Inner, AccessTime, KvEntry, PredicateId, PredicateIdStr, ValueEntry};
+use super::{base_cache::Inner, PredicateId, PredicateIdStr};
 use crate::{
     common::{
-        thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
+        concurrent::{
+            thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
+            unsafe_weak_pointer::UnsafeWeakPointer,
+            AccessTime, KvEntry, ValueEntry,
+        },
         time::Instant,
-        unsafe_weak_pointer::UnsafeWeakPointer,
     },
     PredicateError,
 };

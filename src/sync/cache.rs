@@ -1,11 +1,20 @@
 use super::{
-    base_cache::{BaseCache, HouseKeeperArc, MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
-    housekeeper::InnerSync,
-    iter::{Iter, ScanningGet},
     value_initializer::{InitResult, ValueInitializer},
-    CacheBuilder, ConcurrentCacheExt, PredicateId, Weigher, WriteOp,
+    CacheBuilder, ConcurrentCacheExt,
 };
-use crate::{Policy, PredicateError};
+use crate::{
+    common::concurrent::{
+        constants::{MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
+        housekeeper::InnerSync,
+        Weigher, WriteOp,
+    },
+    sync_base::{
+        base_cache::{BaseCache, HouseKeeperArc},
+        iter::{Iter, ScanningGet},
+        PredicateId,
+    },
+    Policy, PredicateError,
+};
 
 use crossbeam_channel::{Sender, TrySendError};
 use std::{

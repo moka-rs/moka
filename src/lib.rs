@@ -158,6 +158,13 @@
 //!
 //! [timer-wheel]: http://www.cs.columbia.edu/~nahum/w6998/papers/ton97-timing-wheels.pdf
 
+pub(crate) mod common;
+pub(crate) mod policy;
+pub mod unsync;
+
+// #[cfg(any(feature = "sync", feature = "future"))]
+pub(crate) mod cht;
+
 #[cfg(feature = "dash")]
 #[cfg_attr(docsrs, doc(cfg(feature = "dash")))]
 pub mod dash;
@@ -166,19 +173,20 @@ pub mod dash;
 #[cfg_attr(docsrs, doc(cfg(feature = "future")))]
 pub mod future;
 
+// #[cfg(feature = "sync")]
 pub mod sync;
-pub mod unsync;
 
-pub(crate) mod cht;
-pub(crate) mod common;
-pub(crate) mod policy;
+// #[cfg(any(feature = "sync", feature = "future"))]
+pub mod sync_base;
 
+// #[cfg(any(feature = "sync", feature = "future"))]
 pub use common::error::PredicateError;
+
 pub use policy::Policy;
 
 #[cfg(feature = "unstable-debug-counters")]
 #[cfg_attr(docsrs, doc(cfg(feature = "unstable-debug-counters")))]
-pub use sync::debug_counters::GlobalDebugCounters;
+pub use common::concurrent::debug_counters::GlobalDebugCounters;
 
 #[cfg(test)]
 mod tests {
