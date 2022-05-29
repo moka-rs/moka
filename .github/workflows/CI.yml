@@ -59,25 +59,32 @@ jobs:
           cargo update -p dashmap --precise 5.2.0
           cargo update -p hashbrown --precise 0.11.2
 
-      - name: Build (no features)
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-
-      - name: Run tests (release, no features)
+      - name: Run tests (debug, sync feature)
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --release
+          args: --features sync
 
-      - name: Run tests (future feature)
+      - name: Run tests (release, sync feature)
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --features future
+          args: --release --features sync
 
-      - name: Run tests (dash feature)
+      - name: Run tests (future feature, but no sync feature)
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --features dash
+          args: --no-default-features --features 'future, atomic64, quanta'
+
+      - name: Run tests (future and sync features)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --features 'future, sync'
+
+      - name: Run tests (dash feature, but no sync feature)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features --features 'dash, atomic64, quanta'

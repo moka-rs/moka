@@ -1,6 +1,6 @@
 use super::{
     value_initializer::{InitResult, ValueInitializer},
-    CacheBuilder, ConcurrentCacheExt,
+    CacheBuilder, ConcurrentCacheExt, Iter, PredicateId,
 };
 use crate::{
     common::concurrent::{
@@ -8,7 +8,6 @@ use crate::{
         housekeeper::InnerSync,
         Weigher, WriteOp,
     },
-    sync::{Iter, PredicateId},
     sync_base::base_cache::{BaseCache, HouseKeeperArc},
     Policy, PredicateError,
 };
@@ -881,9 +880,10 @@ where
     /// ```
     ///
     pub fn iter(&self) -> Iter<'_, K, V> {
-        use crate::sync_base::iter::ScanningGet;
+        use crate::sync_base::iter::{Iter as InnerIter, ScanningGet};
 
-        Iter::with_single_cache_segment(&self.base, self.base.num_cht_segments())
+        let inner = InnerIter::with_single_cache_segment(&self.base, self.base.num_cht_segments());
+        Iter::new(inner)
     }
 
     /// Returns a `BlockingOp` for this cache. It provides blocking
