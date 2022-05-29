@@ -2,16 +2,22 @@ use super::{iter::DashMapIter, Iter};
 use crate::{
     common::{
         self,
+        concurrent::{
+            atomic_time::AtomicInstant,
+            constants::{
+                READ_LOG_FLUSH_POINT, READ_LOG_SIZE, WRITE_LOG_FLUSH_POINT,
+                WRITE_LOG_LOW_WATER_MARK, WRITE_LOG_SIZE,
+            },
+            deques::Deques,
+            entry_info::EntryInfo,
+            housekeeper::{Housekeeper, InnerSync, SyncPace},
+            AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, ReadOp, ValueEntry, Weigher,
+            WriteOp,
+        },
         deque::{DeqNode, Deque},
         frequency_sketch::FrequencySketch,
-        time::{atomic_time::AtomicInstant, CheckedTimeOps, Clock, Instant},
+        time::{CheckedTimeOps, Clock, Instant},
         CacheRegion,
-    },
-    sync::{
-        deques::Deques,
-        entry_info::EntryInfo,
-        housekeeper::{Housekeeper, InnerSync, SyncPace},
-        AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, ReadOp, ValueEntry, Weigher, WriteOp,
     },
     Policy,
 };
@@ -33,17 +39,6 @@ use std::{
     time::Duration,
 };
 use triomphe::Arc as TrioArc;
-
-pub(crate) const MAX_SYNC_REPEATS: usize = 4;
-
-const READ_LOG_FLUSH_POINT: usize = 512;
-const READ_LOG_SIZE: usize = READ_LOG_FLUSH_POINT * (MAX_SYNC_REPEATS + 2);
-
-const WRITE_LOG_FLUSH_POINT: usize = 512;
-const WRITE_LOG_LOW_WATER_MARK: usize = WRITE_LOG_FLUSH_POINT / 2;
-const WRITE_LOG_SIZE: usize = WRITE_LOG_FLUSH_POINT * (MAX_SYNC_REPEATS + 2);
-
-pub(crate) const WRITE_RETRY_INTERVAL_MICROS: u64 = 50;
 
 pub(crate) type HouseKeeperArc<K, V, S> = Arc<Housekeeper<Inner<K, V, S>>>;
 

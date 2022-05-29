@@ -1,12 +1,15 @@
 use std::convert::TryInto;
 
+// #[cfg(any(feature = "sync", feature = "future", feature = "dash"))]
+pub(crate) mod concurrent;
+
+// #[cfg(any(feature = "sync", feature = "future"))]
+pub(crate) mod error;
+
 pub(crate) mod builder_utils;
 pub(crate) mod deque;
-pub(crate) mod error;
 pub(crate) mod frequency_sketch;
-pub(crate) mod thread_pool;
 pub(crate) mod time;
-pub(crate) mod unsafe_weak_pointer;
 
 // Note: `CacheRegion` cannot have more than four enum variants. This is because
 // `crate::{sync,unsync}::DeqNodes` uses a `tagptr::TagNonNull<DeqNode<T>, 2>`

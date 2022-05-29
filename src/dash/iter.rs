@@ -1,5 +1,5 @@
 use super::{base_cache::BaseCache, mapref::EntryRef};
-use crate::sync::ValueEntry;
+use crate::common::concurrent::ValueEntry;
 
 use std::{
     hash::{BuildHasher, Hash},

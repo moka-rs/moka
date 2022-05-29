@@ -1,4 +1,4 @@
-use crate::sync::ValueEntry;
+use crate::common::concurrent::ValueEntry;
 
 use std::{
     hash::{BuildHasher, Hash},

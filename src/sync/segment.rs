@@ -1,9 +1,9 @@
-use super::{
-    cache::Cache,
-    iter::{Iter, ScanningGet},
-    CacheBuilder, ConcurrentCacheExt, Weigher,
+use super::{cache::Cache, CacheBuilder, ConcurrentCacheExt};
+use crate::{
+    common::concurrent::Weigher,
+    sync_base::iter::{Iter, ScanningGet},
+    Policy, PredicateError,
 };
-use crate::{Policy, PredicateError};
 
 use std::{
     borrow::Borrow,
