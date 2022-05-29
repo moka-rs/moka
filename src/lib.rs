@@ -177,7 +177,7 @@ pub mod future;
 pub mod sync;
 
 // #[cfg(any(feature = "sync", feature = "future"))]
-pub mod sync_base;
+pub(crate) mod sync_base;
 
 // #[cfg(any(feature = "sync", feature = "future"))]
 pub use common::error::PredicateError;

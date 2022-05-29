@@ -1,11 +1,7 @@
 use super::{
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
     iter::ScanningGet,
-    PredicateId,
 };
-
-#[cfg(feature = "unstable-debug-counters")]
-use common::concurrent::debug_counters::CacheDebugStats;
 
 use crate::{
     common::{
@@ -27,8 +23,13 @@ use crate::{
         time::{CheckedTimeOps, Clock, Instant},
         CacheRegion,
     },
+    sync::PredicateId,
     Policy, PredicateError,
 };
+
+#[cfg(feature = "unstable-debug-counters")]
+use common::concurrent::debug_counters::CacheDebugStats;
+
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use crossbeam_utils::atomic::AtomicCell;
 use parking_lot::{Mutex, RwLock};

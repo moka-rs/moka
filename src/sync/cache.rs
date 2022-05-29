@@ -1,6 +1,6 @@
 use super::{
     value_initializer::{InitResult, ValueInitializer},
-    CacheBuilder, ConcurrentCacheExt,
+    CacheBuilder, ConcurrentCacheExt, Iter, PredicateId,
 };
 use crate::{
     common::concurrent::{
@@ -10,8 +10,7 @@ use crate::{
     },
     sync_base::{
         base_cache::{BaseCache, HouseKeeperArc},
-        iter::{Iter, ScanningGet},
-        PredicateId,
+        iter::ScanningGet,
     },
     Policy, PredicateError,
 };

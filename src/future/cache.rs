@@ -1,6 +1,6 @@
 use super::{
     value_initializer::{InitResult, ValueInitializer},
-    CacheBuilder, ConcurrentCacheExt,
+    CacheBuilder, ConcurrentCacheExt, Iter, PredicateId,
 };
 use crate::{
     common::concurrent::{
@@ -8,11 +8,7 @@ use crate::{
         housekeeper::InnerSync,
         Weigher, WriteOp,
     },
-    sync_base::{
-        base_cache::{BaseCache, HouseKeeperArc},
-        iter::Iter,
-        PredicateId,
-    },
+    sync_base::base_cache::{BaseCache, HouseKeeperArc},
     Policy, PredicateError,
 };
 
