@@ -236,7 +236,6 @@ use std::{
 /// [build-with-hasher-method]: ./struct.CacheBuilder.html#method.build_with_hasher
 /// [ahash-crate]: https://crates.io/crates/ahash
 ///
-#[cfg(feature="sync")]
 pub struct Cache<K, V, S = RandomState> {
     base: BaseCache<K, V, S>,
     value_initializer: Arc<ValueInitializer<K, V, S>>,

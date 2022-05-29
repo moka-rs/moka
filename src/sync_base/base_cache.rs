@@ -1,6 +1,7 @@
 use super::{
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
     iter::ScanningGet,
+    PredicateId,
 };
 
 use crate::{
@@ -23,7 +24,6 @@ use crate::{
         time::{CheckedTimeOps, Clock, Instant},
         CacheRegion,
     },
-    sync::PredicateId,
     Policy, PredicateError,
 };
 

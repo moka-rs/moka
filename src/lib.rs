@@ -162,7 +162,7 @@ pub(crate) mod common;
 pub(crate) mod policy;
 pub mod unsync;
 
-// #[cfg(any(feature = "sync", feature = "future"))]
+#[cfg(any(feature = "sync", feature = "future"))]
 pub(crate) mod cht;
 
 #[cfg(feature = "dash")]
@@ -173,13 +173,14 @@ pub mod dash;
 #[cfg_attr(docsrs, doc(cfg(feature = "future")))]
 pub mod future;
 
-// #[cfg(feature = "sync")]
+#[cfg(feature = "sync")]
+#[cfg_attr(docsrs, doc(cfg(feature = "sync")))]
 pub mod sync;
 
-// #[cfg(any(feature = "sync", feature = "future"))]
+#[cfg(any(feature = "sync", feature = "future"))]
 pub(crate) mod sync_base;
 
-// #[cfg(any(feature = "sync", feature = "future"))]
+#[cfg(any(feature = "sync", feature = "future"))]
 pub use common::error::PredicateError;
 
 pub use policy::Policy;
