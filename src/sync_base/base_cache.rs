@@ -1,6 +1,7 @@
 use super::{
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
     iter::ScanningGet,
+    removal_notifier::RemovalNotifier,
     PredicateId,
 };
 
@@ -24,6 +25,7 @@ use crate::{
         time::{CheckedTimeOps, Clock, Instant},
         CacheRegion,
     },
+    notification::{EvictionListener, RemovalCause},
     Policy, PredicateError,
 };
 
@@ -92,6 +94,23 @@ impl<K, V, S> BaseCache<K, V, S> {
         self.inner.weighted_size()
     }
 
+    #[inline]
+    pub(crate) fn is_removal_notifier_enabled(&self) -> bool {
+        self.inner.is_removal_notifier_enabled()
+    }
+
+    pub(crate) fn notify_single_removal(
+        &self,
+        key: &Arc<K>,
+        entry: &TrioArc<ValueEntry<K, V>>,
+        cause: RemovalCause,
+    ) where
+        K: Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+    {
+        self.inner.notify_single_removal(key, entry, cause)
+    }
+
     #[cfg(feature = "unstable-debug-counters")]
     pub fn debug_stats(&self) -> CacheDebugStats {
         self.inner.debug_stats()
@@ -104,11 +123,14 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
+    // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        eviction_listener: Option<EvictionListener<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -120,6 +142,7 @@ where
             initial_capacity,
             build_hasher,
             weigher,
+            eviction_listener,
             r_rcv,
             w_rcv,
             time_to_live,
@@ -527,6 +550,7 @@ pub(crate) struct Inner<K, V, S> {
     time_to_idle: Option<Duration>,
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
+    removal_notifier: Option<RemovalNotifier<K, V>>,
     invalidator_enabled: bool,
     invalidator: RwLock<Option<Invalidator<K, V, S>>>,
     has_expiration_clock: AtomicBool,
@@ -545,8 +569,13 @@ impl<K, V, S> Inner<K, V, S> {
     }
 
     #[inline]
-    pub(crate) fn weighted_size(&self) -> u64 {
+    fn weighted_size(&self) -> u64 {
         self.weighted_size.load()
+    }
+
+    #[inline]
+    fn is_removal_notifier_enabled(&self) -> bool {
+        self.removal_notifier.is_some()
     }
 
     #[cfg(feature = "unstable-debug-counters")]
@@ -578,6 +607,7 @@ where
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        eviction_listener: Option<EvictionListener<K, V>>,
         read_op_ch: Receiver<ReadOp<K, V>>,
         write_op_ch: Receiver<WriteOp<K, V>>,
         time_to_live: Option<Duration>,
@@ -593,6 +623,7 @@ where
             initial_capacity,
             build_hasher.clone(),
         );
+        let removal_notifier = eviction_listener.map(RemovalNotifier::new);
 
         Self {
             max_capacity: max_capacity.map(|n| n as u64),
@@ -609,6 +640,7 @@ where
             time_to_idle,
             valid_after: Default::default(),
             weigher,
+            removal_notifier,
             invalidator_enabled,
             // When enabled, this field will be set later via the set_invalidator method.
             invalidator: RwLock::new(None),
@@ -798,7 +830,7 @@ mod batch_size {
 impl<K, V, S> InnerSync for Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
@@ -856,6 +888,10 @@ where
                 weights_to_evict,
                 &mut counters,
             );
+        }
+
+        if let Some(notifier) = &self.removal_notifier {
+            notifier.submit_task();
         }
 
         debug_assert_eq!(self.entry_count.load(), current_ec);
@@ -950,7 +986,10 @@ where
         }
     }
 
-    fn apply_writes(&self, deqs: &mut Deques<K>, count: usize, counters: &mut EvictionCounters) {
+    fn apply_writes(&self, deqs: &mut Deques<K>, count: usize, counters: &mut EvictionCounters)
+    where
+        V: Clone,
+    {
         use WriteOp::*;
         let freq = self.frequency_sketch.read();
         let ch = &self.write_op_ch;
@@ -985,7 +1024,9 @@ where
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
         counters: &mut EvictionCounters,
-    ) {
+    ) where
+        V: Clone,
+    {
         entry.set_last_accessed(timestamp);
         entry.set_last_modified(timestamp);
 
@@ -1008,7 +1049,10 @@ where
         if let Some(max) = self.max_capacity {
             if new_weight as u64 > max {
                 // The candidate is too big to fit in the cache. Reject it.
-                self.cache.remove(&Arc::clone(&kh.key), kh.hash);
+                let removed = self.cache.remove(&Arc::clone(&kh.key), kh.hash);
+                if let Some(entry) = removed {
+                    self.notify_single_removal(&kh.key, &entry, RemovalCause::Size);
+                }
                 return;
             }
         }
@@ -1026,9 +1070,12 @@ where
                 // Try to remove the victims from the cache (hash map).
                 for victim in victim_nodes {
                     let element = unsafe { &victim.as_ref().element };
-                    if let Some((_vic_key, vic_entry)) =
+                    if let Some((vic_key, vic_entry)) =
                         self.cache.remove_entry(element.key(), element.hash())
                     {
+                        if self.removal_notifier.is_some() {
+                            self.notify_single_removal(&vic_key, &vic_entry, RemovalCause::Size);
+                        }
                         // And then remove the victim from the deques.
                         Self::handle_remove(deqs, vic_entry, counters);
                     } else {
@@ -1047,6 +1094,9 @@ where
                 skipped_nodes = s;
                 // Remove the candidate from the cache (hash map).
                 self.cache.remove(&Arc::clone(&kh.key), kh.hash);
+                if self.removal_notifier.is_some() {
+                    self.notify_single_removal(&kh.key, &entry, RemovalCause::Size);
+                }
             }
         };
 
@@ -1251,7 +1301,7 @@ where
             // Remove the key from the map only when the entry is really
             // expired. This check is needed because it is possible that the entry in
             // the map has been updated or deleted but its deque node we checked
-            // above have not been updated yet.
+            // above has not been updated yet.
             let maybe_entry = self
                 .cache
                 .remove_if(key, hash, |_, v| is_expired_entry_ao(tti, va, v, now));
@@ -1473,6 +1523,29 @@ where
     }
 }
 
+impl<K, V, S> Inner<K, V, S>
+where
+    K: Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+{
+    fn notify_single_removal(
+        &self,
+        key: &Arc<K>,
+        entry: &TrioArc<ValueEntry<K, V>>,
+        cause: RemovalCause,
+    ) {
+        if let Some(notifier) = &self.removal_notifier {
+            notifier.add_single_notification(key, entry.value.clone(), cause)
+        }
+    }
+
+    // fn notify_multiple_removals(&self, entries: Vec<RemovedEntry<K, V>>) {
+    //     if let Some(notifier) = &self.removal_notifier {
+    //         notifier.add_multiple_notifications(entries)
+    //     }
+    // }
+}
+
 //
 // for testing
 //
@@ -1570,6 +1643,7 @@ mod tests {
                 Some(max_capacity),
                 None,
                 RandomState::default(),
+                None,
                 None,
                 None,
                 None,

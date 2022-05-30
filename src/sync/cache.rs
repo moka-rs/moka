@@ -8,6 +8,7 @@ use crate::{
         housekeeper::InnerSync,
         Weigher, WriteOp,
     },
+    notification::{EvictionListener, RemovalCause},
     sync::{Iter, PredicateId},
     sync_base::{
         base_cache::{BaseCache, HouseKeeperArc},
@@ -370,6 +371,7 @@ where
             None,
             None,
             None,
+            None,
             false,
         )
     }
@@ -389,11 +391,14 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
+    // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_everything(
         max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        eviction_listener: Option<EvictionListener<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -404,6 +409,7 @@ where
                 initial_capacity,
                 build_hasher.clone(),
                 weigher,
+                eviction_listener,
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
@@ -762,6 +768,10 @@ where
         Q: Hash + Eq + ?Sized,
     {
         if let Some(kv) = self.base.remove_entry(key, hash) {
+            if self.base.is_removal_notifier_enabled() {
+                self.base
+                    .notify_single_removal(&kv.key, &kv.entry, RemovalCause::Explicit);
+            }
             let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
             Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to remove");
@@ -894,7 +904,7 @@ where
 impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn sync(&self) {
@@ -988,8 +998,10 @@ where
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
+    use parking_lot::Mutex;
+
     use super::{Cache, ConcurrentCacheExt};
-    use crate::common::time::Clock;
+    use crate::{common::time::Clock, notification::RemovalCause};
 
     use std::{convert::Infallible, sync::Arc, time::Duration};
 
@@ -1926,6 +1938,59 @@ mod tests {
             cache.try_get_with(1, || Ok(5)) as Result<_, Arc<Infallible>>,
             Ok(5)
         );
+    }
+
+    #[test]
+    fn test_removal_notifications() {
+        let notifications = Arc::new(Mutex::new(Vec::new()));
+
+        let n1 = Arc::clone(&notifications);
+        let listener = move |k, v, cause| n1.lock().push((k, v, cause));
+
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .eviction_listener(listener)
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert('a', "alice");
+        cache.invalidate(&'a'); // Notification 0 for 'a' (explicit)
+        cache.sync();
+        assert_eq!(cache.entry_count(), 0);
+
+        cache.insert('b', "bob");
+        cache.insert('c', "cathy");
+        cache.insert('d', "david");
+        cache.sync();
+        assert_eq!(cache.entry_count(), 3);
+
+        // This will be rejected due to the size constraint.
+        cache.insert('e', "emily"); // Notification 1 for 'e' (size)
+        cache.sync();
+        assert_eq!(cache.entry_count(), 3);
+
+        // Raise the popularity of 'e' so it will not be rejected next time.
+        cache.get(&'e');
+        cache.sync();
+
+        cache.insert('e', "eliza"); // Notification 2 for 'b' (size)
+        cache.sync();
+        assert_eq!(cache.entry_count(), 3);
+
+        // Ensure all scheduled notifications have been processed.
+        std::thread::sleep(Duration::from_secs(1));
+
+        let nx = notifications.lock();
+        // dbg!(&*nx);
+
+        // Verify the notifications.
+        assert_eq!(nx.len(), 3);
+        assert_eq!(nx[0], (Arc::new('a'), "alice", RemovalCause::Explicit));
+        assert_eq!(nx[1], (Arc::new('e'), "emily", RemovalCause::Size));
+        assert_eq!(nx[2], (Arc::new('b'), "bob", RemovalCause::Size));
     }
 
     #[test]

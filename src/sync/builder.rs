@@ -1,5 +1,8 @@
 use super::{Cache, SegmentedCache};
-use crate::common::{builder_utils, concurrent::Weigher};
+use crate::{
+    common::{builder_utils, concurrent::Weigher},
+    notification::{EvictionListener, RemovalCause},
+};
 
 use std::{
     collections::hash_map::RandomState,
@@ -8,6 +11,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
+// use parking_lot::Mutex;
 
 /// Builds a [`Cache`][cache-struct] or [`SegmentedCache`][seg-cache-struct]
 /// with various configuration knobs.
@@ -47,6 +51,7 @@ pub struct CacheBuilder<K, V, C> {
     initial_capacity: Option<usize>,
     num_segments: Option<usize>,
     weigher: Option<Weigher<K, V>>,
+    eviction_listener: Option<EvictionListener<K, V>>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     invalidator_enabled: bool,
@@ -64,6 +69,7 @@ where
             initial_capacity: None,
             num_segments: None,
             weigher: None,
+            eviction_listener: None,
             time_to_live: None,
             time_to_idle: None,
             invalidator_enabled: false,
@@ -102,6 +108,7 @@ where
             initial_capacity: self.initial_capacity,
             num_segments: Some(num_segments),
             weigher: None,
+            eviction_listener: None,
             time_to_live: self.time_to_live,
             time_to_idle: self.time_to_idle,
             invalidator_enabled: self.invalidator_enabled,
@@ -127,6 +134,7 @@ where
             self.initial_capacity,
             build_hasher,
             self.weigher,
+            self.eviction_listener,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -153,6 +161,7 @@ where
             self.initial_capacity,
             hasher,
             self.weigher,
+            self.eviction_listener,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -184,6 +193,7 @@ where
             self.num_segments.unwrap(),
             build_hasher,
             self.weigher,
+            self.eviction_listener,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -211,6 +221,7 @@ where
             self.num_segments.unwrap(),
             hasher,
             self.weigher,
+            self.eviction_listener,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -242,6 +253,18 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     pub fn weigher(self, weigher: impl Fn(&K, &V) -> u32 + Send + Sync + 'static) -> Self {
         Self {
             weigher: Some(Arc::new(weigher)),
+            ..self
+        }
+    }
+
+    pub fn eviction_listener(
+        self,
+        // listener: impl FnMut(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
+        listener: impl Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            // eviction_listener: Some(Arc::new(Mutex::new(listener))),
+            eviction_listener: Some(Arc::new(listener)),
             ..self
         }
     }

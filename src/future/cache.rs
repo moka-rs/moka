@@ -8,6 +8,7 @@ use crate::{
         housekeeper::InnerSync,
         Weigher, WriteOp,
     },
+    notification::EvictionListener,
     sync_base::base_cache::{BaseCache, HouseKeeperArc},
     Policy, PredicateError,
 };
@@ -426,6 +427,7 @@ where
             None,
             None,
             None,
+            None,
             false,
         )
     }
@@ -445,11 +447,14 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
+    // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_everything(
         max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        eviction_listener: Option<EvictionListener<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -460,6 +465,7 @@ where
                 initial_capacity,
                 build_hasher.clone(),
                 weigher,
+                eviction_listener,
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
@@ -912,7 +918,7 @@ where
 impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn sync(&self) {

@@ -1,6 +1,7 @@
 use super::{cache::Cache, CacheBuilder, ConcurrentCacheExt};
 use crate::{
     common::concurrent::Weigher,
+    notification::EvictionListener,
     sync_base::iter::{Iter, ScanningGet},
     Policy, PredicateError,
 };
@@ -99,6 +100,7 @@ where
             None,
             num_segments,
             build_hasher,
+            None,
             None,
             None,
             None,
@@ -201,6 +203,7 @@ where
         num_segments: usize,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        eviction_listener: Option<EvictionListener<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -212,6 +215,7 @@ where
                 num_segments,
                 build_hasher,
                 weigher,
+                eviction_listener,
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
@@ -489,7 +493,7 @@ where
 impl<K, V, S> ConcurrentCacheExt<K, V> for SegmentedCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn sync(&self) {
@@ -576,6 +580,7 @@ where
         num_segments: usize,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        eviction_listener: Option<EvictionListener<K, V>>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -596,6 +601,7 @@ where
                     seg_init_capacity,
                     build_hasher.clone(),
                     weigher.as_ref().map(Arc::clone),
+                    eviction_listener.as_ref().map(Arc::clone),
                     time_to_live,
                     time_to_idle,
                     invalidator_enabled,
