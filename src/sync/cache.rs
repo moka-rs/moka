@@ -769,8 +769,9 @@ where
     {
         if let Some(kv) = self.base.remove_entry(key, hash) {
             if self.base.is_removal_notifier_enabled() {
+                let key = Arc::clone(&kv.key);
                 self.base
-                    .notify_single_removal(&kv.key, &kv.entry, RemovalCause::Explicit);
+                    .notify_single_removal(key, &kv.entry, RemovalCause::Explicit);
             }
             let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
@@ -1942,11 +1943,15 @@ mod tests {
 
     #[test]
     fn test_removal_notifications() {
-        let notifications = Arc::new(Mutex::new(Vec::new()));
+        // These `Vec`s will store actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
 
-        let n1 = Arc::clone(&notifications);
+        // Create an eviction listener.
+        let n1 = Arc::clone(&actual);
         let listener = move |k, v, cause| n1.lock().push((k, v, cause));
 
+        // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(3)
             .eviction_listener(listener)
@@ -1957,7 +1962,9 @@ mod tests {
         let cache = cache;
 
         cache.insert('a', "alice");
-        cache.invalidate(&'a'); // Notification 0 for 'a' (explicit)
+        cache.invalidate(&'a');
+        expected.push((Arc::new('a'), "alice", RemovalCause::Explicit));
+
         cache.sync();
         assert_eq!(cache.entry_count(), 0);
 
@@ -1968,29 +1975,36 @@ mod tests {
         assert_eq!(cache.entry_count(), 3);
 
         // This will be rejected due to the size constraint.
-        cache.insert('e', "emily"); // Notification 1 for 'e' (size)
+        cache.insert('e', "emily");
+        expected.push((Arc::new('e'), "emily", RemovalCause::Size));
         cache.sync();
         assert_eq!(cache.entry_count(), 3);
 
-        // Raise the popularity of 'e' so it will not be rejected next time.
+        // Raise the popularity of 'e' so it will be accepted next time.
         cache.get(&'e');
         cache.sync();
 
-        cache.insert('e', "eliza"); // Notification 2 for 'b' (size)
+        // Retry.
+        cache.insert('e', "eliza");
+        expected.push((Arc::new('b'), "bob", RemovalCause::Size));
+        cache.sync();
+        assert_eq!(cache.entry_count(), 3);
+
+        // Replace an existing entry.
+        cache.insert('d', "dennis");
+        expected.push((Arc::new('d'), "david", RemovalCause::Replaced));
         cache.sync();
         assert_eq!(cache.entry_count(), 3);
 
         // Ensure all scheduled notifications have been processed.
         std::thread::sleep(Duration::from_secs(1));
 
-        let nx = notifications.lock();
-        // dbg!(&*nx);
-
-        // Verify the notifications.
-        assert_eq!(nx.len(), 3);
-        assert_eq!(nx[0], (Arc::new('a'), "alice", RemovalCause::Explicit));
-        assert_eq!(nx[1], (Arc::new('e'), "emily", RemovalCause::Size));
-        assert_eq!(nx[2], (Arc::new('b'), "bob", RemovalCause::Size));
+        // Verify the events.
+        let actual_events = &*actual.lock();
+        assert_eq!(actual_events.len(), expected.len());
+        for (i, (actual, expected)) in actual_events.into_iter().zip(expected).enumerate() {
+            assert_eq!(actual, &expected, "expected[{}]", i);
+        }
     }
 
     #[test]

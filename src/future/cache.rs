@@ -8,7 +8,7 @@ use crate::{
         housekeeper::InnerSync,
         Weigher, WriteOp,
     },
-    notification::EvictionListener,
+    notification::{EvictionListener, RemovalCause},
     sync_base::base_cache::{BaseCache, HouseKeeperArc},
     Policy, PredicateError,
 };
@@ -762,6 +762,11 @@ where
     {
         let hash = self.base.hash(key);
         if let Some(kv) = self.base.remove_entry(key, hash) {
+            if self.base.is_removal_notifier_enabled() {
+                let key = Arc::clone(&kv.key);
+                self.base
+                    .notify_single_removal(key, &kv.entry, RemovalCause::Explicit);
+            }
             let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
             Self::schedule_write_op(&self.base.write_op_ch, op, hk)

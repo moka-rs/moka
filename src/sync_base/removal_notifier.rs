@@ -63,7 +63,7 @@ where
     K: Send + Sync + 'static,
     V: Send + Sync + 'static,
 {
-    pub(crate) fn add_single_notification(&self, key: &Arc<K>, value: V, cause: RemovalCause) {
+    pub(crate) fn add_single_notification(&self, key: Arc<K>, value: V, cause: RemovalCause) {
         let entry = RemovedEntries::new_single(key, value, cause);
         self.snd.send(entry).unwrap();
         self.submit_task_if_necessary();
@@ -198,8 +198,7 @@ enum RemovedEntries<K, V> {
 }
 
 impl<K, V> RemovedEntries<K, V> {
-    fn new_single(key: &Arc<K>, value: V, cause: RemovalCause) -> Self {
-        let key = Arc::clone(key);
+    fn new_single(key: Arc<K>, value: V, cause: RemovalCause) -> Self {
         Self::Single(RemovedEntry::new(key, value, cause))
     }
 

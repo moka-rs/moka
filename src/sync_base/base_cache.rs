@@ -101,7 +101,7 @@ impl<K, V, S> BaseCache<K, V, S> {
 
     pub(crate) fn notify_single_removal(
         &self,
-        key: &Arc<K>,
+        key: Arc<K>,
         entry: &TrioArc<ValueEntry<K, V>>,
         cause: RemovalCause,
     ) where
@@ -382,6 +382,9 @@ where
             (Some((_cnt, ins_op)), None) => ins_op,
             (None, Some((_cnt, old_entry, upd_op))) => {
                 old_entry.unset_q_nodes();
+                if self.is_removal_notifier_enabled() {
+                    self.notify_single_removal(key, &old_entry, RemovalCause::Replaced);
+                }
                 upd_op
             }
             (Some((cnt1, ins_op)), Some((cnt2, old_entry, upd_op))) => {
@@ -389,6 +392,9 @@ where
                     ins_op
                 } else {
                     old_entry.unset_q_nodes();
+                    if self.is_removal_notifier_enabled() {
+                        self.notify_single_removal(key, &old_entry, RemovalCause::Replaced);
+                    }
                     upd_op
                 }
             }
@@ -1051,7 +1057,8 @@ where
                 // The candidate is too big to fit in the cache. Reject it.
                 let removed = self.cache.remove(&Arc::clone(&kh.key), kh.hash);
                 if let Some(entry) = removed {
-                    self.notify_single_removal(&kh.key, &entry, RemovalCause::Size);
+                    let key = Arc::clone(&kh.key);
+                    self.notify_single_removal(key, &entry, RemovalCause::Size);
                 }
                 return;
             }
@@ -1074,7 +1081,7 @@ where
                         self.cache.remove_entry(element.key(), element.hash())
                     {
                         if self.removal_notifier.is_some() {
-                            self.notify_single_removal(&vic_key, &vic_entry, RemovalCause::Size);
+                            self.notify_single_removal(vic_key, &vic_entry, RemovalCause::Size);
                         }
                         // And then remove the victim from the deques.
                         Self::handle_remove(deqs, vic_entry, counters);
@@ -1093,9 +1100,10 @@ where
             AdmissionResult::Rejected { skipped_nodes: s } => {
                 skipped_nodes = s;
                 // Remove the candidate from the cache (hash map).
-                self.cache.remove(&Arc::clone(&kh.key), kh.hash);
+                let key = Arc::clone(&kh.key);
+                self.cache.remove(&key, kh.hash);
                 if self.removal_notifier.is_some() {
-                    self.notify_single_removal(&kh.key, &entry, RemovalCause::Size);
+                    self.notify_single_removal(key, &entry, RemovalCause::Size);
                 }
             }
         };
@@ -1530,7 +1538,7 @@ where
 {
     fn notify_single_removal(
         &self,
-        key: &Arc<K>,
+        key: Arc<K>,
         entry: &TrioArc<ValueEntry<K, V>>,
         cause: RemovalCause,
     ) {
