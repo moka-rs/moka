@@ -11,7 +11,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-// use parking_lot::Mutex;
 
 /// Builds a [`Cache`][cache-struct] or [`SegmentedCache`][seg-cache-struct]
 /// with various configuration knobs.

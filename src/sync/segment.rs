@@ -647,11 +647,25 @@ where
 #[cfg(test)]
 mod tests {
     use super::{ConcurrentCacheExt, SegmentedCache};
+    use crate::notification::RemovalCause;
+    use parking_lot::Mutex;
     use std::{sync::Arc, time::Duration};
 
     #[test]
     fn basic_single_thread() {
-        let mut cache = SegmentedCache::new(3, 1);
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+
+        // Create a cache with the eviction listener.
+        let mut cache = SegmentedCache::builder(1)
+            .max_capacity(3)
+            .eviction_listener(listener)
+            .build();
         cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.
@@ -681,11 +695,13 @@ mod tests {
 
         // "d" should not be admitted because its frequency is too low.
         cache.insert("d", "david"); //   count: d -> 0
+        expected.push((Arc::new("d"), "david", RemovalCause::Size));
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 1
         assert!(!cache.contains_key(&"d"));
 
         cache.insert("d", "david");
+        expected.push((Arc::new("d"), "david", RemovalCause::Size));
         cache.sync();
         assert!(!cache.contains_key(&"d"));
         assert_eq!(cache.get(&"d"), None); //   d -> 2
@@ -693,6 +709,7 @@ mod tests {
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher than c's.
         cache.insert("d", "dennis");
+        expected.push((Arc::new("c"), "cindy", RemovalCause::Size));
         cache.sync();
         assert_eq!(cache.get(&"a"), Some("alice"));
         assert_eq!(cache.get(&"b"), Some("bob"));
@@ -704,8 +721,20 @@ mod tests {
         assert!(cache.contains_key(&"d"));
 
         cache.invalidate(&"b");
+        expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
+        cache.sync();
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"b"));
+
+        // Ensure all scheduled notifications have been processed.
+        std::thread::sleep(Duration::from_secs(1));
+
+        // Verify the notifications.
+        let actual = &*actual.lock();
+        assert_eq!(actual.len(), expected.len());
+        for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            assert_eq!(actual, &expected, "expected[{}]", i);
+        }
     }
 
     #[test]
@@ -738,9 +767,19 @@ mod tests {
         let david = ("david", 15);
         let dennis = ("dennis", 15);
 
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+
+        // Create a cache with the eviction listener.
         let mut cache = SegmentedCache::builder(1)
             .max_capacity(31)
             .weigher(weigher)
+            .eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -773,27 +812,33 @@ mod tests {
         // "d" must have higher count than 3, which is the aggregated count
         // of "a" and "c".
         cache.insert("d", david); //   count: d -> 0
+        expected.push((Arc::new("d"), david, RemovalCause::Size));
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 1
         assert!(!cache.contains_key(&"d"));
 
         cache.insert("d", david);
+        expected.push((Arc::new("d"), david, RemovalCause::Size));
         cache.sync();
         assert!(!cache.contains_key(&"d"));
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         cache.insert("d", david);
+        expected.push((Arc::new("d"), david, RemovalCause::Size));
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 3
         assert!(!cache.contains_key(&"d"));
 
         cache.insert("d", david);
+        expected.push((Arc::new("d"), david, RemovalCause::Size));
         cache.sync();
         assert!(!cache.contains_key(&"d"));
         assert_eq!(cache.get(&"d"), None); //   d -> 4
 
         // Finally "d" should be admitted by evicting "c" and "a".
         cache.insert("d", dennis);
+        expected.push((Arc::new("c"), cindy, RemovalCause::Size));
+        expected.push((Arc::new("a"), alice, RemovalCause::Size));
         cache.sync();
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), Some(bob));
@@ -806,6 +851,8 @@ mod tests {
 
         // Update "b" with "bill" (w: 15 -> 20). This should evict "d" (w: 15).
         cache.insert("b", bill);
+        expected.push((Arc::new("b"), bob, RemovalCause::Replaced));
+        expected.push((Arc::new("d"), dennis, RemovalCause::Size));
         cache.sync();
         assert_eq!(cache.get(&"b"), Some(bill));
         assert_eq!(cache.get(&"d"), None);
@@ -815,6 +862,7 @@ mod tests {
         // Re-add "a" (w: 10) and update "b" with "bob" (w: 20 -> 15).
         cache.insert("a", alice);
         cache.insert("b", bob);
+        expected.push((Arc::new("b"), bill, RemovalCause::Replaced));
         cache.sync();
         assert_eq!(cache.get(&"a"), Some(alice));
         assert_eq!(cache.get(&"b"), Some(bob));
@@ -826,6 +874,16 @@ mod tests {
         // Verify the sizes.
         assert_eq!(cache.entry_count(), 2);
         assert_eq!(cache.weighted_size(), 25);
+
+        // Ensure all scheduled notifications have been processed.
+        std::thread::sleep(Duration::from_secs(1));
+
+        // Verify the notifications.
+        let actual = &*actual.lock();
+        assert_eq!(actual.len(), expected.len());
+        for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            assert_eq!(actual, &expected, "expected[{}]", i);
+        }
     }
 
     #[test]
@@ -865,7 +923,24 @@ mod tests {
 
     #[test]
     fn invalidate_all() {
-        let mut cache = SegmentedCache::new(100, 4);
+        use std::collections::HashMap;
+
+        // The following `HashMap`s will hold actual and expected notifications.
+        // Note: We use `HashMap` here as the order of invalidations is non-deterministic.
+        let actual = Arc::new(Mutex::new(HashMap::new()));
+        let mut expected = HashMap::new();
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| {
+            a1.lock().insert(k, (v, cause));
+        };
+
+        // Create a cache with the eviction listener.
+        let mut cache = SegmentedCache::builder(4)
+            .max_capacity(100)
+            .eviction_listener(listener)
+            .build();
         cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.
@@ -883,6 +958,9 @@ mod tests {
         cache.sync();
 
         cache.invalidate_all();
+        expected.insert(Arc::new("a"), ("alice", RemovalCause::Explicit));
+        expected.insert(Arc::new("b"), ("bob", RemovalCause::Explicit));
+        expected.insert(Arc::new("c"), ("cindy", RemovalCause::Explicit));
         cache.sync();
 
         cache.insert("d", "david");
@@ -896,17 +974,45 @@ mod tests {
         assert!(!cache.contains_key(&"b"));
         assert!(!cache.contains_key(&"c"));
         assert!(cache.contains_key(&"d"));
+
+        // Ensure all scheduled notifications have been processed.
+        std::thread::sleep(Duration::from_secs(1));
+
+        // Verify the notifications.
+        let actual = &*actual.lock();
+        assert_eq!(actual.len(), expected.len());
+        for actual_key in actual.keys() {
+            assert_eq!(
+                actual.get(actual_key),
+                expected.get(actual_key),
+                "expected[{}]",
+                actual_key
+            );
+        }
     }
 
     #[test]
     fn invalidate_entries_if() -> Result<(), Box<dyn std::error::Error>> {
-        use std::collections::HashSet;
+        use std::collections::{HashMap, HashSet};
 
         const SEGMENTS: usize = 4;
 
+        // The following `HashMap`s will hold actual and expected notifications.
+        // Note: We use `HashMap` here as the order of invalidations is non-deterministic.
+        let actual = Arc::new(Mutex::new(HashMap::new()));
+        let mut expected = HashMap::new();
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| {
+            a1.lock().insert(k, (v, cause));
+        };
+
+        // Create a cache with the eviction listener.
         let mut cache = SegmentedCache::builder(SEGMENTS)
             .max_capacity(100)
             .support_invalidation_closures()
+            .eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -932,6 +1038,8 @@ mod tests {
         let names = ["alice", "alex"].iter().cloned().collect::<HashSet<_>>();
         cache.invalidate_entries_if(move |_k, &v| names.contains(v))?;
         assert_eq!(cache.invalidation_predicate_count(), SEGMENTS);
+        expected.insert(Arc::new(0), ("alice", RemovalCause::Explicit));
+        expected.insert(Arc::new(2), ("alex", RemovalCause::Explicit));
 
         mock.increment(Duration::from_secs(5)); // 10 secs from the start.
 
@@ -962,6 +1070,8 @@ mod tests {
         cache.invalidate_entries_if(|_k, &v| v == "alice")?;
         cache.invalidate_entries_if(|_k, &v| v == "bob")?;
         assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 2);
+        expected.insert(Arc::new(1), ("bob", RemovalCause::Explicit));
+        expected.insert(Arc::new(3), ("alice", RemovalCause::Explicit));
 
         // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
         cache.sync(); // To submit the invalidation task.
@@ -977,6 +1087,21 @@ mod tests {
 
         assert_eq!(cache.entry_count(), 0);
         assert_eq!(cache.invalidation_predicate_count(), 0);
+
+        // Ensure all scheduled notifications have been processed.
+        std::thread::sleep(Duration::from_secs(1));
+
+        // Verify the notifications.
+        let actual = &*actual.lock();
+        assert_eq!(actual.len(), expected.len());
+        for actual_key in actual.keys() {
+            assert_eq!(
+                actual.get(actual_key),
+                expected.get(actual_key),
+                "expected[{}]",
+                actual_key
+            );
+        }
 
         Ok(())
     }

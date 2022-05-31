@@ -999,11 +999,10 @@ where
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
-    use parking_lot::Mutex;
-
     use super::{Cache, ConcurrentCacheExt};
     use crate::{common::time::Clock, notification::RemovalCause};
 
+    use parking_lot::Mutex;
     use std::{convert::Infallible, sync::Arc, time::Duration};
 
     #[test]
