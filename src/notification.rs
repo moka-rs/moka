@@ -5,7 +5,7 @@ use std::sync::Arc;
 // TODO: Perhaps `Arc<dyn Fn(...)>` is enough for the most use cases because
 // Sync would require captured values to be interior mutable?
 // pub(crate) type EvictionListener<K, V> =
-//     Arc<Mutex<dyn Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static>>;
+//     Arc<Mutex<dyn FnMut(Arc<K>, V, RemovalCause) + Send + Sync + 'static>>;
 pub(crate) type EvictionListener<K, V> =
     Arc<dyn Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static>;
 

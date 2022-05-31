@@ -1943,7 +1943,7 @@ mod tests {
 
     #[test]
     fn test_removal_notifications() {
-        // These `Vec`s will store actual and expected notifications.
+        // These `Vec`s will hold actual and expected notifications.
         let actual = Arc::new(Mutex::new(Vec::new()));
         let mut expected = Vec::new();
 
@@ -1986,6 +1986,7 @@ mod tests {
 
         // Retry.
         cache.insert('e', "eliza");
+        // and the LRU entry will be evicted.
         expected.push((Arc::new('b'), "bob", RemovalCause::Size));
         cache.sync();
         assert_eq!(cache.entry_count(), 3);
@@ -1999,10 +2000,10 @@ mod tests {
         // Ensure all scheduled notifications have been processed.
         std::thread::sleep(Duration::from_secs(1));
 
-        // Verify the events.
-        let actual_events = &*actual.lock();
-        assert_eq!(actual_events.len(), expected.len());
-        for (i, (actual, expected)) in actual_events.iter().zip(expected).enumerate() {
+        // Verify the notifications.
+        let actual = &*actual.lock();
+        assert_eq!(actual.len(), expected.len());
+        for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
             assert_eq!(actual, &expected, "expected[{}]", i);
         }
     }
