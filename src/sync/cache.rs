@@ -2002,7 +2002,7 @@ mod tests {
         // Verify the events.
         let actual_events = &*actual.lock();
         assert_eq!(actual_events.len(), expected.len());
-        for (i, (actual, expected)) in actual_events.into_iter().zip(expected).enumerate() {
+        for (i, (actual, expected)) in actual_events.iter().zip(expected).enumerate() {
             assert_eq!(actual, &expected, "expected[{}]", i);
         }
     }
