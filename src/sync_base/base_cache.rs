@@ -1371,19 +1371,30 @@ where
         let va = &self.valid_after();
         for _ in 0..batch_size {
             // Peek the front node of the deque and check if it is expired.
-            let key_hash = deq.peek_front().and_then(|node| {
-                if is_expired_entry_ao(tti, va, &*node, now) {
-                    Some((Arc::clone(node.element.key()), node.element.hash()))
-                } else {
-                    None
+            let key_hash_cause = deq.peek_front().and_then(|node| {
+                match is_entry_expired_ao_or_invalid(tti, va, &*node, now) {
+                    (true, _) => Some((
+                        Arc::clone(node.element.key()),
+                        node.element.hash(),
+                        RemovalCause::Expired,
+                    )),
+                    (false, true) => Some((
+                        Arc::clone(node.element.key()),
+                        node.element.hash(),
+                        RemovalCause::Explicit,
+                    )),
+                    (false, false) => None,
                 }
             });
 
-            if key_hash.is_none() {
+            if key_hash_cause.is_none() {
                 break;
             }
 
-            let (key, hash) = key_hash.as_ref().map(|(k, h)| (k, *h)).unwrap();
+            let (key, hash, cause) = key_hash_cause
+                .as_ref()
+                .map(|(k, h, c)| (k, *h, *c))
+                .unwrap();
 
             // Remove the key from the map only when the entry is really
             // expired. This check is needed because it is possible that the entry in
@@ -1396,7 +1407,7 @@ where
             if let Some(entry) = maybe_entry {
                 if eviction_state.is_notifier_enabled() {
                     let key = Arc::clone(key);
-                    eviction_state.add_removed_entry(key, &entry, RemovalCause::Expired);
+                    eviction_state.add_removed_entry(key, &entry, cause);
                 }
                 Self::handle_remove_with_deques(
                     deq_name,
@@ -1456,19 +1467,22 @@ where
         let ttl = &self.time_to_live;
         let va = &self.valid_after();
         for _ in 0..batch_size {
-            let key = deqs.write_order.peek_front().and_then(|node| {
-                if is_expired_entry_wo(ttl, va, &*node, now) {
-                    Some(Arc::clone(node.element.key()))
-                } else {
-                    None
-                }
-            });
+            let key_cause =
+                deqs.write_order.peek_front().and_then(
+                    |node| match is_entry_expired_wo_or_invalid(ttl, va, &*node, now) {
+                        (true, _) => Some((Arc::clone(node.element.key()), RemovalCause::Expired)),
+                        (false, true) => {
+                            Some((Arc::clone(node.element.key()), RemovalCause::Explicit))
+                        }
+                        (false, false) => None,
+                    },
+                );
 
-            if key.is_none() {
+            if key_cause.is_none() {
                 break;
             }
 
-            let key = key.as_ref().unwrap();
+            let (key, cause) = key_cause.as_ref().unwrap();
             let hash = self.hash(key);
 
             let maybe_entry = self
@@ -1478,7 +1492,7 @@ where
             if let Some(entry) = maybe_entry {
                 if eviction_state.is_notifier_enabled() {
                     let key = Arc::clone(key);
-                    eviction_state.add_removed_entry(key, &entry, RemovalCause::Expired);
+                    eviction_state.add_removed_entry(key, &entry, *cause);
                 }
                 Self::handle_remove(deqs, entry, &mut eviction_state.counters);
             } else if let Some(entry) = self.cache.get(key, hash) {
@@ -1659,12 +1673,6 @@ where
             notifier.add_single_notification(key, entry.value.clone(), cause)
         }
     }
-
-    // fn notify_multiple_removals(&self, entries: Vec<RemovedEntry<K, V>>) {
-    //     if let Some(notifier) = &self.removal_notifier {
-    //         notifier.add_multiple_notifications(entries)
-    //     }
-    // }
 }
 
 //
@@ -1707,17 +1715,8 @@ fn is_expired_entry_ao(
     now: Instant,
 ) -> bool {
     if let Some(ts) = entry.last_accessed() {
-        if let Some(va) = valid_after {
-            if ts < *va {
-                return true;
-            }
-        }
-        if let Some(tti) = time_to_idle {
-            let checked_add = ts.checked_add(*tti);
-            if checked_add.is_none() {
-                panic!("ttl overflow")
-            }
-            return checked_add.unwrap() <= now;
+        if is_invalid_entry(valid_after, ts) || is_expired_by_tti(time_to_idle, ts, now) {
+            return true;
         }
     }
     false
@@ -1731,18 +1730,81 @@ fn is_expired_entry_wo(
     now: Instant,
 ) -> bool {
     if let Some(ts) = entry.last_modified() {
-        if let Some(va) = valid_after {
-            if ts < *va {
-                return true;
-            }
+        if is_invalid_entry(valid_after, ts) || is_expired_by_ttl(time_to_live, ts, now) {
+            return true;
         }
-        if let Some(ttl) = time_to_live {
-            let checked_add = ts.checked_add(*ttl);
-            if checked_add.is_none() {
-                panic!("ttl overflow");
-            }
-            return checked_add.unwrap() <= now;
+    }
+    false
+}
+
+#[inline]
+fn is_entry_expired_ao_or_invalid(
+    time_to_idle: &Option<Duration>,
+    valid_after: &Option<Instant>,
+    entry: &impl AccessTime,
+    now: Instant,
+) -> (bool, bool) {
+    if let Some(ts) = entry.last_accessed() {
+        let expired = is_expired_by_tti(time_to_idle, ts, now);
+        let invalid = is_invalid_entry(valid_after, ts);
+        return (expired, invalid);
+    }
+    (false, false)
+}
+
+#[inline]
+fn is_entry_expired_wo_or_invalid(
+    time_to_live: &Option<Duration>,
+    valid_after: &Option<Instant>,
+    entry: &impl AccessTime,
+    now: Instant,
+) -> (bool, bool) {
+    if let Some(ts) = entry.last_modified() {
+        let expired = is_expired_by_ttl(time_to_live, ts, now);
+        let invalid = is_invalid_entry(valid_after, ts);
+        return (expired, invalid);
+    }
+    (false, false)
+}
+
+#[inline]
+fn is_invalid_entry(valid_after: &Option<Instant>, entry_ts: Instant) -> bool {
+    if let Some(va) = valid_after {
+        if entry_ts < *va {
+            return true;
         }
+    }
+    false
+}
+
+#[inline]
+fn is_expired_by_tti(
+    time_to_idle: &Option<Duration>,
+    entry_last_accessed: Instant,
+    now: Instant,
+) -> bool {
+    if let Some(tti) = time_to_idle {
+        let checked_add = entry_last_accessed.checked_add(*tti);
+        if checked_add.is_none() {
+            panic!("tti overflow")
+        }
+        return checked_add.unwrap() <= now;
+    }
+    false
+}
+
+#[inline]
+fn is_expired_by_ttl(
+    time_to_live: &Option<Duration>,
+    entry_last_modified: Instant,
+    now: Instant,
+) -> bool {
+    if let Some(ttl) = time_to_live {
+        let checked_add = entry_last_modified.checked_add(*ttl);
+        if checked_add.is_none() {
+            panic!("ttl overflow");
+        }
+        return checked_add.unwrap() <= now;
     }
     false
 }

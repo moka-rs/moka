@@ -1281,13 +1281,9 @@ mod tests {
         cache.sync();
 
         cache.invalidate_all();
-        // expected.push((Arc::new("a"), "alice", RemovalCause::Explicit));
-        // expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
-        // expected.push((Arc::new("c"), "cindy", RemovalCause::Explicit));
-        expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
-        expected.push((Arc::new("b"), "bob", RemovalCause::Expired));
-        expected.push((Arc::new("c"), "cindy", RemovalCause::Expired));
-
+        expected.push((Arc::new("a"), "alice", RemovalCause::Explicit));
+        expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
+        expected.push((Arc::new("c"), "cindy", RemovalCause::Explicit));
         cache.sync();
 
         cache.insert("d", "david");
