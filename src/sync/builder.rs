@@ -259,11 +259,9 @@ impl<K, V, C> CacheBuilder<K, V, C> {
 
     pub fn eviction_listener(
         self,
-        // listener: impl FnMut(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
         listener: impl Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
     ) -> Self {
         Self {
-            // eviction_listener: Some(Arc::new(Mutex::new(listener))),
             eviction_listener: Some(Arc::new(listener)),
             ..self
         }

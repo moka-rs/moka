@@ -53,6 +53,9 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 - Supports expiration policies:
     - Time to live
     - Time to idle
+- Supports eviction listener, a callback function that will be called when an entry
+  is removed from the cache.
+
 
 [tiny-lfu]: https://github.com/moka-rs/moka/wiki#admission-and-eviction-policies
 
@@ -528,19 +531,22 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
 ## Road Map
 
 - [x] `async` optimized caches. (`v0.2.0`)
-- [x] Size-aware eviction. (`v0.7.0` via
-      [#24](https://github.com/moka-rs/moka/pull/24))
-- [X] API stabilization. (Smaller core cache API, shorter names for frequently
-      used methods) (`v0.8.0` via [#105](https://github.com/moka-rs/moka/pull/105))
+- [x] Size-aware eviction. (`v0.7.0` via [#24][gh-pull-024])
+- [x] API stabilization. (Smaller core cache API, shorter names for frequently
+      used methods) (`v0.8.0` via [#105][gh-pull-105])
     - e.g.
     - `get_or_insert_with(K, F)` → `get_with(K, F)`
     - `get_or_try_insert_with(K, F)` → `try_get_with(K, F)`
     - `blocking_insert(K, V)` → `blocking().insert(K, V)`
     - `time_to_live()` → `policy().time_to_live()`
-- [ ] Notifications on eviction, etc.
+- [x] Notifications on eviction. (`v0.9.0` via [#145][gh-pull-145])
 - [ ] Cache statistics. (Hit rate, etc.)
 - [ ] Upgrade TinyLFU to Window-TinyLFU. ([details][tiny-lfu])
 - [ ] The variable (per-entry) expiration, using a hierarchical timer wheel.
+
+[gh-pull-024]: https://github.com/moka-rs/moka/pull/24
+[gh-pull-105]: https://github.com/moka-rs/moka/pull/105
+[gh-pull-145]: https://github.com/moka-rs/moka/pull/145
 
 
 ## About the Name

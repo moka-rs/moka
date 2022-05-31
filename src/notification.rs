@@ -1,15 +1,8 @@
 use std::sync::Arc;
 
-// use parking_lot::Mutex;
-
-// TODO: Perhaps `Arc<dyn Fn(...)>` is enough for the most use cases because
-// Sync would require captured values to be interior mutable?
-// pub(crate) type EvictionListener<K, V> =
-//     Arc<Mutex<dyn FnMut(Arc<K>, V, RemovalCause) + Send + Sync + 'static>>;
 pub(crate) type EvictionListener<K, V> =
     Arc<dyn Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static>;
 
-// pub(crate) type EvictionListenerRef<'a, K, V> = &'a mut dyn FnMut(Arc<K>, V, RemovalCause);
 pub(crate) type EvictionListenerRef<'a, K, V> =
     &'a Arc<dyn Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static>;
 

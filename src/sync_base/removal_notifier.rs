@@ -69,11 +69,11 @@ where
         self.submit_task_if_necessary();
     }
 
-    // pub(crate) fn add_multiple_notifications(&self, entries: Vec<RemovedEntry<K, V>>) {
-    //     let entries = RemovedEntries::new_multi(entries);
-    //     self.snd.send(entries).unwrap(); // TODO: Error handling?
-    //     self.submit_task_if_necessary();
-    // }
+    pub(crate) fn add_multiple_notifications(&self, entries: Vec<RemovedEntry<K, V>>) {
+        let entries = RemovedEntries::new_multi(entries);
+        self.snd.send(entries).unwrap(); // TODO: Error handling?
+        self.submit_task_if_necessary();
+    }
 
     pub(crate) fn submit_task(&self) {
         // TODO: Use compare and exchange to ensure it was false.
@@ -109,25 +109,24 @@ impl<K, V> NotificationTask<K, V> {
 
     fn execute(&self) {
         let task_lock = self.state.task_lock.lock();
-        // let mut listener = self.state.listener.lock();
         let mut count = 0u16;
 
         while let Ok(entries) = self.state.rcv.try_recv() {
             match entries {
                 RemovedEntries::Single(entry) => {
-                    // self.notify(&mut *listener, entry);
                     self.notify(&self.state.listener, entry);
                     count += 1;
-                } // RemovedEntries::Multi(entries) => {
-                  //     for entry in entries {
-                  //         self.notify(&mut *listener, entry);
-                  //         count += 1;
+                }
+                RemovedEntries::Multi(entries) => {
+                    for entry in entries {
+                        self.notify(&self.state.listener, entry);
+                        count += 1;
 
-                  //         if self.state.is_shutting_down() {
-                  //             break;
-                  //         }
-                  //     }
-                  // }
+                        if self.state.is_shutting_down() {
+                            break;
+                        }
+                    }
+                }
             }
 
             if count > MAX_NOTIFICATIONS_PER_TASK || self.state.is_shutting_down() {
@@ -135,7 +134,6 @@ impl<K, V> NotificationTask<K, V> {
             }
         }
 
-        // std::mem::drop(listener);
         std::mem::drop(task_lock);
         self.state.set_running(false);
     }
@@ -194,7 +192,7 @@ impl<K, V> RemovedEntry<K, V> {
 
 enum RemovedEntries<K, V> {
     Single(RemovedEntry<K, V>),
-    // Multi(Vec<RemovedEntry<K, V>>),
+    Multi(Vec<RemovedEntry<K, V>>),
 }
 
 impl<K, V> RemovedEntries<K, V> {
@@ -202,7 +200,7 @@ impl<K, V> RemovedEntries<K, V> {
         Self::Single(RemovedEntry::new(key, value, cause))
     }
 
-    // fn new_multi(entries: Vec<RemovedEntry<K, V>>) -> Self {
-    //     Self::Multi(entries)
-    // }
+    fn new_multi(entries: Vec<RemovedEntry<K, V>>) -> Self {
+        Self::Multi(entries)
+    }
 }

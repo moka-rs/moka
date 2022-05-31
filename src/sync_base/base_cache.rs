@@ -1,7 +1,7 @@
 use super::{
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
     iter::ScanningGet,
-    removal_notifier::RemovalNotifier,
+    removal_notifier::{RemovalNotifier, RemovedEntry},
     PredicateId,
 };
 
@@ -474,6 +474,53 @@ where
     }
 }
 
+struct EvictionState<K, V> {
+    counters: EvictionCounters,
+    removed_entries: Option<Vec<RemovedEntry<K, V>>>,
+}
+
+impl<K, V> EvictionState<K, V> {
+    fn new(entry_count: u64, weighted_size: u64, is_notifier_enabled: bool) -> Self {
+        let removed_entries = if is_notifier_enabled {
+            Some(Vec::new())
+        } else {
+            None
+        };
+        Self {
+            counters: EvictionCounters::new(entry_count, weighted_size),
+            removed_entries,
+        }
+    }
+
+    fn is_notifier_enabled(&self) -> bool {
+        self.removed_entries.is_some()
+    }
+
+    fn add_removed_entry(
+        &mut self,
+        key: Arc<K>,
+        entry: &TrioArc<ValueEntry<K, V>>,
+        cause: RemovalCause,
+    ) where
+        K: Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+    {
+        if let Some(removed) = &mut self.removed_entries {
+            removed.push(RemovedEntry::new(key, entry.value.clone(), cause));
+        }
+    }
+
+    fn notify_multiple_removals(&mut self, notifier: &RemovalNotifier<K, V>)
+    where
+        K: Send + Sync + 'static,
+        V: Send + Sync + 'static,
+    {
+        if let Some(removed) = self.removed_entries.take() {
+            notifier.add_multiple_notifications(removed)
+        }
+    }
+}
+
 struct EvictionCounters {
     entry_count: u64,
     weighted_size: u64,
@@ -846,7 +893,8 @@ where
 
         let current_ec = self.entry_count.load();
         let current_ws = self.weighted_size.load();
-        let mut counters = EvictionCounters::new(current_ec, current_ws);
+        let mut eviction_state =
+            EvictionState::new(current_ec, current_ws, self.is_removal_notifier_enabled());
 
         while should_sync && calls <= max_repeats {
             let r_len = self.read_op_ch.len();
@@ -856,11 +904,11 @@ where
 
             let w_len = self.write_op_ch.len();
             if w_len > 0 {
-                self.apply_writes(&mut deqs, w_len, &mut counters);
+                self.apply_writes(&mut deqs, w_len, &mut eviction_state);
             }
 
-            if self.should_enable_frequency_sketch(&counters) {
-                self.enable_frequency_sketch(&counters);
+            if self.should_enable_frequency_sketch(&eviction_state.counters) {
+                self.enable_frequency_sketch(&eviction_state.counters);
             }
 
             calls += 1;
@@ -869,7 +917,11 @@ where
         }
 
         if self.has_expiry() || self.has_valid_after() {
-            self.evict_expired(&mut deqs, batch_size::EVICTION_BATCH_SIZE, &mut counters);
+            self.evict_expired(
+                &mut deqs,
+                batch_size::EVICTION_BATCH_SIZE,
+                &mut eviction_state,
+            );
         }
 
         if self.invalidator_enabled {
@@ -879,31 +931,33 @@ where
                         invalidator,
                         &mut deqs,
                         batch_size::INVALIDATION_BATCH_SIZE,
-                        &mut counters,
+                        &mut eviction_state,
                     );
                 }
             }
         }
 
         // Evict if this cache has more entries than its capacity.
-        let weights_to_evict = self.weights_to_evict(&counters);
+        let weights_to_evict = self.weights_to_evict(&eviction_state.counters);
         if weights_to_evict > 0 {
             self.evict_lru_entries(
                 &mut deqs,
                 batch_size::EVICTION_BATCH_SIZE,
                 weights_to_evict,
-                &mut counters,
+                &mut eviction_state,
             );
         }
 
         if let Some(notifier) = &self.removal_notifier {
+            eviction_state.notify_multiple_removals(notifier);
             notifier.submit_task();
         }
 
         debug_assert_eq!(self.entry_count.load(), current_ec);
         debug_assert_eq!(self.weighted_size.load(), current_ws);
-        self.entry_count.store(counters.entry_count);
-        self.weighted_size.store(counters.weighted_size);
+        self.entry_count.store(eviction_state.counters.entry_count);
+        self.weighted_size
+            .store(eviction_state.counters.weighted_size);
 
         if should_sync {
             Some(SyncPace::Fast)
@@ -992,8 +1046,12 @@ where
         }
     }
 
-    fn apply_writes(&self, deqs: &mut Deques<K>, count: usize, counters: &mut EvictionCounters)
-    where
+    fn apply_writes(
+        &self,
+        deqs: &mut Deques<K>,
+        count: usize,
+        eviction_state: &mut EvictionState<K, V>,
+    ) where
         V: Clone,
     {
         use WriteOp::*;
@@ -1008,11 +1066,18 @@ where
                     value_entry: entry,
                     old_weight,
                     new_weight,
-                }) => {
-                    self.handle_upsert(kh, entry, old_weight, new_weight, ts, deqs, &freq, counters)
-                }
+                }) => self.handle_upsert(
+                    kh,
+                    entry,
+                    old_weight,
+                    new_weight,
+                    ts,
+                    deqs,
+                    &freq,
+                    eviction_state,
+                ),
                 Ok(Remove(KvEntry { key: _key, entry })) => {
-                    Self::handle_remove(deqs, entry, counters)
+                    Self::handle_remove(deqs, entry, &mut eviction_state.counters)
                 }
                 Err(_) => break,
             };
@@ -1029,27 +1094,31 @@ where
         timestamp: Instant,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
-        counters: &mut EvictionCounters,
+        eviction_state: &mut EvictionState<K, V>,
     ) where
         V: Clone,
     {
         entry.set_last_accessed(timestamp);
         entry.set_last_modified(timestamp);
 
-        if entry.is_admitted() {
-            // The entry has been already admitted, so treat this as an update.
-            counters.saturating_sub(0, old_weight);
-            counters.saturating_add(0, new_weight);
-            deqs.move_to_back_ao(&entry);
-            deqs.move_to_back_wo(&entry);
-            return;
-        }
+        {
+            let counters = &mut eviction_state.counters;
 
-        if self.has_enough_capacity(new_weight, counters) {
-            // There are enough room in the cache (or the cache is unbounded).
-            // Add the candidate to the deques.
-            self.handle_admit(kh, &entry, new_weight, deqs, counters);
-            return;
+            if entry.is_admitted() {
+                // The entry has been already admitted, so treat this as an update.
+                counters.saturating_sub(0, old_weight);
+                counters.saturating_add(0, new_weight);
+                deqs.move_to_back_ao(&entry);
+                deqs.move_to_back_wo(&entry);
+                return;
+            }
+
+            if self.has_enough_capacity(new_weight, counters) {
+                // There are enough room in the cache (or the cache is unbounded).
+                // Add the candidate to the deques.
+                self.handle_admit(kh, &entry, new_weight, deqs, counters);
+                return;
+            }
         }
 
         if let Some(max) = self.max_capacity {
@@ -1057,8 +1126,10 @@ where
                 // The candidate is too big to fit in the cache. Reject it.
                 let removed = self.cache.remove(&Arc::clone(&kh.key), kh.hash);
                 if let Some(entry) = removed {
-                    let key = Arc::clone(&kh.key);
-                    self.notify_single_removal(key, &entry, RemovalCause::Size);
+                    if eviction_state.is_notifier_enabled() {
+                        let key = Arc::clone(&kh.key);
+                        eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
+                    }
                 }
                 return;
             }
@@ -1080,11 +1151,15 @@ where
                     if let Some((vic_key, vic_entry)) =
                         self.cache.remove_entry(element.key(), element.hash())
                     {
-                        if self.removal_notifier.is_some() {
-                            self.notify_single_removal(vic_key, &vic_entry, RemovalCause::Size);
+                        if eviction_state.is_notifier_enabled() {
+                            eviction_state.add_removed_entry(
+                                vic_key,
+                                &vic_entry,
+                                RemovalCause::Size,
+                            );
                         }
                         // And then remove the victim from the deques.
-                        Self::handle_remove(deqs, vic_entry, counters);
+                        Self::handle_remove(deqs, vic_entry, &mut eviction_state.counters);
                     } else {
                         // Could not remove the victim from the cache. Skip this
                         // victim node as its ValueEntry might have been
@@ -1095,15 +1170,15 @@ where
                 skipped_nodes = skipped;
 
                 // Add the candidate to the deques.
-                self.handle_admit(kh, &entry, new_weight, deqs, counters);
+                self.handle_admit(kh, &entry, new_weight, deqs, &mut eviction_state.counters);
             }
             AdmissionResult::Rejected { skipped_nodes: s } => {
                 skipped_nodes = s;
                 // Remove the candidate from the cache (hash map).
                 let key = Arc::clone(&kh.key);
                 self.cache.remove(&key, kh.hash);
-                if self.removal_notifier.is_some() {
-                    self.notify_single_removal(key, &entry, RemovalCause::Size);
+                if eviction_state.is_notifier_enabled() {
+                    eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
                 }
             }
         };
@@ -1253,12 +1328,14 @@ where
         &self,
         deqs: &mut Deques<K>,
         batch_size: usize,
-        counters: &mut EvictionCounters,
-    ) {
+        eviction_state: &mut EvictionState<K, V>,
+    ) where
+        V: Clone,
+    {
         let now = self.current_time_from_expiration_clock();
 
         if self.is_write_order_queue_enabled() {
-            self.remove_expired_wo(deqs, batch_size, now, counters);
+            self.remove_expired_wo(deqs, batch_size, now, eviction_state);
         }
 
         if self.time_to_idle.is_some() || self.has_valid_after() {
@@ -1270,7 +1347,7 @@ where
             );
 
             let mut rm_expired_ao =
-                |name, deq| self.remove_expired_ao(name, deq, wo, batch_size, now, counters);
+                |name, deq| self.remove_expired_ao(name, deq, wo, batch_size, now, eviction_state);
 
             rm_expired_ao("window", window);
             rm_expired_ao("probation", probation);
@@ -1286,8 +1363,10 @@ where
         write_order_deq: &mut Deque<KeyDate<K>>,
         batch_size: usize,
         now: Instant,
-        counters: &mut EvictionCounters,
-    ) {
+        eviction_state: &mut EvictionState<K, V>,
+    ) where
+        V: Clone,
+    {
         let tti = &self.time_to_idle;
         let va = &self.valid_after();
         for _ in 0..batch_size {
@@ -1315,7 +1394,17 @@ where
                 .remove_if(key, hash, |_, v| is_expired_entry_ao(tti, va, v, now));
 
             if let Some(entry) = maybe_entry {
-                Self::handle_remove_with_deques(deq_name, deq, write_order_deq, entry, counters);
+                if eviction_state.is_notifier_enabled() {
+                    let key = Arc::clone(key);
+                    eviction_state.add_removed_entry(key, &entry, RemovalCause::Expired);
+                }
+                Self::handle_remove_with_deques(
+                    deq_name,
+                    deq,
+                    write_order_deq,
+                    entry,
+                    &mut eviction_state.counters,
+                );
             } else if !self.try_skip_updated_entry(key, hash, deq_name, deq, write_order_deq) {
                 break;
             }
@@ -1360,8 +1449,10 @@ where
         deqs: &mut Deques<K>,
         batch_size: usize,
         now: Instant,
-        counters: &mut EvictionCounters,
-    ) {
+        eviction_state: &mut EvictionState<K, V>,
+    ) where
+        V: Clone,
+    {
         let ttl = &self.time_to_live;
         let va = &self.valid_after();
         for _ in 0..batch_size {
@@ -1385,7 +1476,11 @@ where
                 .remove_if(key, hash, |_, v| is_expired_entry_wo(ttl, va, v, now));
 
             if let Some(entry) = maybe_entry {
-                Self::handle_remove(deqs, entry, counters);
+                if eviction_state.is_notifier_enabled() {
+                    let key = Arc::clone(key);
+                    eviction_state.add_removed_entry(key, &entry, RemovalCause::Expired);
+                }
+                Self::handle_remove(deqs, entry, &mut eviction_state.counters);
             } else if let Some(entry) = self.cache.get(key, hash) {
                 if entry.last_modified().is_none() {
                     deqs.move_to_back_ao(&entry);
@@ -1412,9 +1507,11 @@ where
         invalidator: &Invalidator<K, V, S>,
         deqs: &mut Deques<K>,
         batch_size: usize,
-        counters: &mut EvictionCounters,
-    ) {
-        self.process_invalidation_result(invalidator, deqs, counters);
+        eviction_state: &mut EvictionState<K, V>,
+    ) where
+        V: Clone,
+    {
+        self.process_invalidation_result(invalidator, deqs, eviction_state);
         self.submit_invalidation_task(invalidator, &mut deqs.write_order, batch_size);
     }
 
@@ -1422,15 +1519,20 @@ where
         &self,
         invalidator: &Invalidator<K, V, S>,
         deqs: &mut Deques<K>,
-        counters: &mut EvictionCounters,
-    ) {
+        eviction_state: &mut EvictionState<K, V>,
+    ) where
+        V: Clone,
+    {
         if let Some(InvalidationResult {
             invalidated,
             is_done,
         }) = invalidator.task_result()
         {
-            for KvEntry { key: _, entry } in invalidated {
-                Self::handle_remove(deqs, entry, counters);
+            for KvEntry { key, entry } in invalidated {
+                if eviction_state.is_notifier_enabled() {
+                    eviction_state.add_removed_entry(key, &entry, RemovalCause::Explicit);
+                }
+                Self::handle_remove(deqs, entry, &mut eviction_state.counters);
             }
             if is_done {
                 deqs.write_order.reset_cursor();
@@ -1481,8 +1583,10 @@ where
         deqs: &mut Deques<K>,
         batch_size: usize,
         weights_to_evict: u64,
-        counters: &mut EvictionCounters,
-    ) {
+        eviction_state: &mut EvictionState<K, V>,
+    ) where
+        V: Clone,
+    {
         const DEQ_NAME: &str = "probation";
         let mut evicted = 0u64;
         let (deq, write_order_deq) = (&mut deqs.probation, &mut deqs.write_order);
@@ -1521,8 +1625,17 @@ where
             });
 
             if let Some(entry) = maybe_entry {
+                if eviction_state.is_notifier_enabled() {
+                    eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
+                }
                 let weight = entry.policy_weight();
-                Self::handle_remove_with_deques(DEQ_NAME, deq, write_order_deq, entry, counters);
+                Self::handle_remove_with_deques(
+                    DEQ_NAME,
+                    deq,
+                    write_order_deq,
+                    entry,
+                    &mut eviction_state.counters,
+                );
                 evicted = evicted.saturating_add(weight as u64);
             } else if !self.try_skip_updated_entry(&key, hash, DEQ_NAME, deq, write_order_deq) {
                 break;
