@@ -75,11 +75,12 @@ futures-util = { version = "0.3", optional = true }
 
 [dev-dependencies]
 actix-rt = { version = "2", default-features = false }
+anyhow = "1.0"
 async-std = { version = "1", default-features = false, features = ["attributes"] }
 getrandom = "0.2"
 reqwest = "0.11"
 skeptic = "0.13"
-tokio = { version = "1.16", features = ["rt-multi-thread", "macros", "sync", "time" ] }
+tokio = { version = "1.18", features = ["fs", "macros", "rt-multi-thread", "sync", "time" ] }
 
 [target.'cfg(trybuild)'.dev-dependencies]
 trybuild = "1.0"

@@ -18,7 +18,7 @@ use std::{
 /// [cache-struct]: ./struct.Cache.html
 /// [seg-cache-struct]: ./struct.SegmentedCache.html
 ///
-/// # Examples
+/// # Example: Expirations
 ///
 /// ```rust
 /// use moka::sync::Cache;
@@ -42,6 +42,167 @@ use std::{
 ///
 /// // Even though we keep calling get(), the entry will expire
 /// // after 30 minutes (TTL) from the insert().
+/// ```
+///
+/// # Example: Eviction Listener
+///
+/// A `Cache` can be configured with an `eviction_listener`, a closure that is called
+/// every time there is a cache eviction. The closure takes the key, value and
+/// [`RemovalCause`](../notification/enum.RemovalCause.html) as parameters. It can be
+/// used to keep other data structures in sync with the cache.
+///
+/// The following example demonstrates how to use a cache with an `eviction_listener`
+/// and `time_to_live` to manage the lifecycle of temporary files on a filesystem.
+/// The cache stores the paths of the files, and when one of them has expired, the
+/// eviction lister will be called with the path, so it can remove the file from the
+/// filesystem.
+///
+/// ```rust
+/// // Cargo.toml
+/// //
+/// // [dependencies]
+/// // anyhow = "1.0"
+/// // uuid = { version = "1.1", features = ["v4"] }
+///
+/// use moka::sync::Cache;
+///
+/// use anyhow::{anyhow, Context};
+/// use std::{
+///     fs, io,
+///     path::{Path, PathBuf},
+///     sync::{Arc, RwLock},
+///     time::Duration,
+/// };
+/// use uuid::Uuid;
+///
+/// /// The DataFileManager writes, reads and removes data files.
+/// struct DataFileManager {
+///     base_dir: PathBuf,
+///     file_count: usize,
+/// }
+///
+/// impl DataFileManager {
+///     fn new(base_dir: PathBuf) -> Self {
+///         Self {
+///             base_dir,
+///             file_count: 0,
+///         }
+///     }
+///
+///     fn write_data_file(&mut self, contents: String) -> io::Result<PathBuf> {
+///         loop {
+///             // Generate a unique file path.
+///             let mut path = self.base_dir.to_path_buf();
+///             path.push(Uuid::new_v4().as_hyphenated().to_string());
+///
+///             if path.exists() {
+///                 continue; // This path is already taken by others. Retry.
+///             }
+///
+///             // We have got a unique file path, so create the file at
+///             // the path and write the contents to the file.
+///             fs::write(&path, contents)?;
+///             self.file_count += 1;
+///             println!("Created a data file at {:?} (file count: {})", path, self.file_count);
+///
+///             // Return the path.
+///             return Ok(path);
+///         }
+///     }
+///
+///     fn read_data_file(&self, path: impl AsRef<Path>) -> io::Result<String> {
+///         // Reads the contents of the file at the path, and return the contents.
+///         fs::read_to_string(path)
+///     }
+///
+///     fn remove_data_file(&mut self, path: impl AsRef<Path>) -> io::Result<()> {
+///         // Remove the file at the path.
+///         fs::remove_file(path.as_ref())?;
+///         self.file_count -= 1;
+///         println!(
+///             "Removed a data file at {:?} (file count: {})",
+///             path.as_ref(),
+///             self.file_count
+///         );
+///
+///         Ok(())
+///     }
+/// }
+///
+/// fn main() -> anyhow::Result<()> {
+///     // Create an instance of the DataFileManager and wrap it with
+///     // Arc<RwLock<_>> so it can be shared across threads.
+///     let file_mgr = DataFileManager::new(std::env::temp_dir());
+///     let file_mgr = Arc::new(RwLock::new(file_mgr));
+///
+///     let file_mgr1 = Arc::clone(&file_mgr);
+///
+///     // Create an eviction lister closure.
+///     let listener = move |k, v: PathBuf, cause| {
+///         // Try to remove the data file at the path `v`.
+///         println!(
+///             "\n== An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
+///             k, v, cause
+///         );
+///
+///         // Acquire the write lock of the DataFileManager. We must handle
+///         // error cases here to prevent the listener from panicking.
+///         match file_mgr1.write() {
+///             Err(_e) => {
+///                 eprintln!("The lock has been poisoned");
+///             }
+///             Ok(mut mgr) => {
+///                 // Remove the data file using the DataFileManager.
+///                 if let Err(_e) = mgr.remove_data_file(v.as_path()) {
+///                     eprintln!("Failed to remove a data file at {:?}", v);
+///                 }
+///             }
+///         }
+///     };
+///
+///     // Create the cache. Set time to live for two seconds and set the
+///     // eviction listener.
+///     let cache = Cache::builder()
+///         .max_capacity(100)
+///         .time_to_live(Duration::from_secs(2))
+///         .eviction_listener(listener)
+///         .build();
+///
+///     // Insert an entry to the cache.
+///     // This will create and write a data file for the key "user1", store the
+///     // path of the file to the cache, and return it.
+///     println!("== try_get_with()");
+///     let path = cache
+///         .try_get_with("user1", || -> anyhow::Result<_, anyhow::Error> {
+///             let mut mgr = file_mgr
+///                 .write()
+///                 .map_err(|_e| anyhow::anyhow!("The lock has been poisoned"))?;
+///             let path = mgr
+///                 .write_data_file("user data".into())
+///                 .with_context(|| format!("Failed to create a data file"))?;
+///             Ok(path)
+///         })
+///         .map_err(|e| anyhow!("{}", e))?;
+///
+///     // Read the data file at the path and print the contents.
+///     println!("\n== read_data_file()");
+///     {
+///         let mgr = file_mgr
+///             .read()
+///             .map_err(|_e| anyhow::anyhow!("The lock has been poisoned"))?;
+///         let contents = mgr
+///             .read_data_file(path.as_path())
+///             .with_context(|| format!("Failed to read data from {:?}", path))?;
+///         println!("contents: {}", contents);
+///     }
+///
+///     // Sleep for five seconds. While sleeping, the cache entry for key "user1"
+///     // will be expired and evicted, so the eviction lister will be called to
+///     // remove the file.
+///     std::thread::sleep(Duration::from_secs(5));
+///
+///     Ok(())
+/// }
 /// ```
 ///
 #[must_use]

@@ -37,6 +37,8 @@
 //! - Supports expiration policies:
 //!     - Time to live
 //!     - Time to idle
+//! - Supports eviction listener, a callback function that will be called when an entry
+//!   is removed from the cache.
 //!
 //! # Examples
 //!
