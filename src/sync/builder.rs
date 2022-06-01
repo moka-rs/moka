@@ -173,7 +173,7 @@ use std::{
 ///     // path of the file to the cache, and return it.
 ///     println!("== try_get_with()");
 ///     let path = cache
-///         .try_get_with("user1", || -> anyhow::Result<_, anyhow::Error> {
+///         .try_get_with("user1", || -> anyhow::Result<_> {
 ///             let mut mgr = file_mgr
 ///                 .write()
 ///                 .map_err(|_e| anyhow::anyhow!("The lock has been poisoned"))?;
