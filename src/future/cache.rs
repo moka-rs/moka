@@ -8,7 +8,7 @@ use crate::{
         housekeeper::InnerSync,
         Weigher, WriteOp,
     },
-    notification::{EvictionListener, RemovalCause},
+    notification::EvictionListener,
     sync_base::base_cache::{BaseCache, HouseKeeperArc},
     Policy, PredicateError,
 };
@@ -763,9 +763,7 @@ where
         let hash = self.base.hash(key);
         if let Some(kv) = self.base.remove_entry(key, hash) {
             if self.base.is_removal_notifier_enabled() {
-                let key = Arc::clone(&kv.key);
-                self.base
-                    .notify_single_removal(key, &kv.entry, RemovalCause::Explicit);
+                self.base.notify_invalidate(&kv.key, &kv.entry)
             }
             let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
@@ -2322,6 +2320,180 @@ mod tests {
             cache.try_get_with(1, async { Ok(5) }).await as Result<_, Arc<Infallible>>,
             Ok(5)
         );
+    }
+
+    #[tokio::test]
+    async fn test_removal_notifications() {
+        // NOTE: The following tests also check the notifications:
+        // - basic_single_thread
+        // - size_aware_eviction
+        // - invalidate_entries_if
+        // - time_to_live
+        // - time_to_idle
+
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+
+        // Create a cache with the eviction listener.
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .eviction_listener(listener)
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert('a', "alice").await;
+        cache.invalidate(&'a').await;
+        expected.push((Arc::new('a'), "alice", RemovalCause::Explicit));
+
+        cache.sync();
+        assert_eq!(cache.entry_count(), 0);
+
+        cache.insert('b', "bob").await;
+        cache.insert('c', "cathy").await;
+        cache.insert('d', "david").await;
+        cache.sync();
+        assert_eq!(cache.entry_count(), 3);
+
+        // This will be rejected due to the size constraint.
+        cache.insert('e', "emily").await;
+        expected.push((Arc::new('e'), "emily", RemovalCause::Size));
+        cache.sync();
+        assert_eq!(cache.entry_count(), 3);
+
+        // Raise the popularity of 'e' so it will be accepted next time.
+        cache.get(&'e');
+        cache.sync();
+
+        // Retry.
+        cache.insert('e', "eliza").await;
+        // and the LRU entry will be evicted.
+        expected.push((Arc::new('b'), "bob", RemovalCause::Size));
+        cache.sync();
+        assert_eq!(cache.entry_count(), 3);
+
+        // Replace an existing entry.
+        cache.insert('d', "dennis").await;
+        expected.push((Arc::new('d'), "david", RemovalCause::Replaced));
+        cache.sync();
+        assert_eq!(cache.entry_count(), 3);
+
+        // Ensure all scheduled notifications have been processed.
+        std::thread::sleep(Duration::from_secs(1));
+
+        // Verify the notifications.
+        let actual = &*actual.lock();
+        assert_eq!(actual.len(), expected.len());
+        for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            assert_eq!(actual, &expected, "expected[{}]", i);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_removal_notifications_with_updates() {
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+
+        // Create a cache with the eviction listener and also TTL and TTI.
+        let mut cache = Cache::builder()
+            .eviction_listener(listener)
+            .time_to_live(Duration::from_secs(7))
+            .time_to_idle(Duration::from_secs(5))
+            .build();
+        cache.reconfigure_for_testing();
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("alice", "a0").await;
+        cache.sync();
+
+        // Now alice (a0) has been expired by the idle timeout (TTI).
+        mock.increment(Duration::from_secs(6));
+        expected.push((Arc::new("alice"), "a0", RemovalCause::Expired));
+        assert_eq!(cache.get(&"alice"), None);
+
+        // We have not ran sync after the expiration of alice (a0), so it is
+        // still in the cache.
+        assert_eq!(cache.entry_count(), 1);
+
+        // Re-insert alice with a different value. Since alice (a0) is still
+        // in the cache, this is actually a replace operation rather than an
+        // insert operation. We want to verify that the RemovalCause of a0 is
+        // Expired, not Replaced.
+        cache.insert("alice", "a1").await;
+        cache.sync();
+
+        mock.increment(Duration::from_secs(4));
+        assert_eq!(cache.get(&"alice"), Some("a1"));
+        cache.sync();
+
+        // Now alice has been expired by time-to-live (TTL).
+        mock.increment(Duration::from_secs(4));
+        expected.push((Arc::new("alice"), "a1", RemovalCause::Expired));
+        assert_eq!(cache.get(&"alice"), None);
+
+        // But, again, it is still in the cache.
+        assert_eq!(cache.entry_count(), 1);
+
+        // Re-insert alice with a different value and verify that the
+        // RemovalCause of a1 is Expired (not Replaced).
+        cache.insert("alice", "a2").await;
+        cache.sync();
+
+        assert_eq!(cache.entry_count(), 1);
+
+        // Now alice (a2) has been expired by the idle timeout.
+        mock.increment(Duration::from_secs(6));
+        expected.push((Arc::new("alice"), "a2", RemovalCause::Expired));
+        assert_eq!(cache.get(&"alice"), None);
+        assert_eq!(cache.entry_count(), 1);
+
+        // This invalidate will internally remove alice (a2).
+        cache.invalidate(&"alice").await;
+        cache.sync();
+        assert_eq!(cache.entry_count(), 0);
+
+        // Re-insert, and this time, make it expired by the TTL.
+        cache.insert("alice", "a3").await;
+        cache.sync();
+        mock.increment(Duration::from_secs(4));
+        assert_eq!(cache.get(&"alice"), Some("a3"));
+        cache.sync();
+        mock.increment(Duration::from_secs(4));
+        expected.push((Arc::new("alice"), "a3", RemovalCause::Expired));
+        assert_eq!(cache.get(&"alice"), None);
+        assert_eq!(cache.entry_count(), 1);
+
+        // This invalidate will internally remove alice (a2).
+        cache.invalidate(&"alice").await;
+        cache.sync();
+        assert_eq!(cache.entry_count(), 0);
+
+        // Ensure all scheduled notifications have been processed.
+        std::thread::sleep(Duration::from_secs(1));
+
+        // Verify the notifications.
+        let actual = &*actual.lock();
+        assert_eq!(actual.len(), expected.len());
+        for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+            assert_eq!(actual, &expected, "expected[{}]", i);
+        }
     }
 
     #[tokio::test]

@@ -193,6 +193,10 @@ impl<K, V, S> HashMap<K, V, S> {
         }
     }
 
+    pub(crate) fn actual_num_segments(&self) -> usize {
+        self.segments.len()
+    }
+
     /// Returns the number of elements in the map.
     ///
     /// # Safety
@@ -559,10 +563,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
         K: Borrow<Q>,
     {
         bucket::hash(&self.build_hasher, key)
-    }
-
-    pub(crate) fn actual_num_segments(&self) -> usize {
-        self.segments.len()
     }
 }
 

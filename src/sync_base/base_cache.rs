@@ -99,16 +99,12 @@ impl<K, V, S> BaseCache<K, V, S> {
         self.inner.is_removal_notifier_enabled()
     }
 
-    pub(crate) fn notify_single_removal(
-        &self,
-        key: Arc<K>,
-        entry: &TrioArc<ValueEntry<K, V>>,
-        cause: RemovalCause,
-    ) where
+    pub(crate) fn notify_invalidate(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>)
+    where
         K: Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
     {
-        self.inner.notify_single_removal(key, entry, cause)
+        self.inner.notify_invalidate(key, entry);
     }
 
     #[cfg(feature = "unstable-debug-counters")]
@@ -362,11 +358,13 @@ where
                 //    prevent this new ValueEntry from being evicted by an expiration policy.
                 // 3. This method will update the policy_weight with the new weight.
                 let old_weight = old_entry.policy_weight();
+                let old_timestamps = (old_entry.last_accessed(), old_entry.last_modified());
                 let entry = self.new_value_entry_from(value.clone(), weight, old_entry);
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((
                     cnt,
                     TrioArc::clone(old_entry),
+                    old_timestamps,
                     WriteOp::Upsert {
                         key_hash: KeyHash::new(Arc::clone(&key), hash),
                         value_entry: TrioArc::clone(&entry),
@@ -380,20 +378,29 @@ where
 
         match (op1, op2) {
             (Some((_cnt, ins_op)), None) => ins_op,
-            (None, Some((_cnt, old_entry, upd_op))) => {
+            (None, Some((_cnt, old_entry, (old_last_accessed, old_last_modified), upd_op))) => {
                 old_entry.unset_q_nodes();
                 if self.is_removal_notifier_enabled() {
-                    self.notify_single_removal(key, &old_entry, RemovalCause::Replaced);
+                    self.inner
+                        .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified);
                 }
                 upd_op
             }
-            (Some((cnt1, ins_op)), Some((cnt2, old_entry, upd_op))) => {
+            (
+                Some((cnt1, ins_op)),
+                Some((cnt2, old_entry, (old_last_accessed, old_last_modified), upd_op)),
+            ) => {
                 if cnt1 > cnt2 {
                     ins_op
                 } else {
                     old_entry.unset_q_nodes();
                     if self.is_removal_notifier_enabled() {
-                        self.notify_single_removal(key, &old_entry, RemovalCause::Replaced);
+                        self.inner.notify_upsert(
+                            key,
+                            &old_entry,
+                            old_last_accessed,
+                            old_last_modified,
+                        );
                     }
                     upd_op
                 }
@@ -643,6 +650,60 @@ impl<K, V, S> Inner<K, V, S> {
             self.frequency_sketch.read().table_size(),
         )
     }
+
+    #[inline]
+    fn current_time_from_expiration_clock(&self) -> Instant {
+        if self.has_expiration_clock.load(Ordering::Relaxed) {
+            Instant::new(
+                self.expiration_clock
+                    .read()
+                    .as_ref()
+                    .expect("Cannot get the expiration clock")
+                    .now(),
+            )
+        } else {
+            Instant::now()
+        }
+    }
+
+    fn num_cht_segments(&self) -> usize {
+        self.cache.actual_num_segments()
+    }
+
+    #[inline]
+    fn time_to_live(&self) -> Option<Duration> {
+        self.time_to_live
+    }
+
+    #[inline]
+    fn time_to_idle(&self) -> Option<Duration> {
+        self.time_to_idle
+    }
+
+    #[inline]
+    fn has_expiry(&self) -> bool {
+        self.time_to_live.is_some() || self.time_to_idle.is_some()
+    }
+
+    #[inline]
+    fn is_write_order_queue_enabled(&self) -> bool {
+        self.time_to_live.is_some() || self.invalidator_enabled
+    }
+
+    #[inline]
+    fn valid_after(&self) -> Option<Instant> {
+        self.valid_after.instant()
+    }
+
+    #[inline]
+    fn set_valid_after(&self, timestamp: Instant) {
+        self.valid_after.set_instant(timestamp);
+    }
+
+    #[inline]
+    fn has_valid_after(&self) -> bool {
+        self.valid_after.is_set()
+    }
 }
 
 // functions/methods used by BaseCache
@@ -757,45 +818,6 @@ where
         self.cache.keys(cht_segment, Arc::clone)
     }
 
-    fn num_cht_segments(&self) -> usize {
-        self.cache.actual_num_segments()
-    }
-
-    #[inline]
-    fn time_to_live(&self) -> Option<Duration> {
-        self.time_to_live
-    }
-
-    #[inline]
-    fn time_to_idle(&self) -> Option<Duration> {
-        self.time_to_idle
-    }
-
-    #[inline]
-    fn has_expiry(&self) -> bool {
-        self.time_to_live.is_some() || self.time_to_idle.is_some()
-    }
-
-    #[inline]
-    fn is_write_order_queue_enabled(&self) -> bool {
-        self.time_to_live.is_some() || self.invalidator_enabled
-    }
-
-    #[inline]
-    fn valid_after(&self) -> Option<Instant> {
-        self.valid_after.instant()
-    }
-
-    #[inline]
-    fn set_valid_after(&self, timestamp: Instant) {
-        self.valid_after.set_instant(timestamp);
-    }
-
-    #[inline]
-    fn has_valid_after(&self) -> bool {
-        self.valid_after.is_set()
-    }
-
     #[inline]
     fn register_invalidation_predicate(
         &self,
@@ -822,21 +844,6 @@ where
     #[inline]
     fn weigh(&self, key: &K, value: &V) -> u32 {
         self.weigher.as_ref().map(|w| w(key, value)).unwrap_or(1)
-    }
-
-    #[inline]
-    fn current_time_from_expiration_clock(&self) -> Instant {
-        if self.has_expiration_clock.load(Ordering::Relaxed) {
-            Instant::new(
-                self.expiration_clock
-                    .read()
-                    .as_ref()
-                    .expect("Cannot get the expiration clock")
-                    .now(),
-            )
-        } else {
-            Instant::now()
-        }
     }
 }
 
@@ -1672,6 +1679,56 @@ where
         if let Some(notifier) = &self.removal_notifier {
             notifier.add_single_notification(key, entry.value.clone(), cause)
         }
+    }
+
+    #[inline]
+    fn notify_upsert(
+        &self,
+        key: Arc<K>,
+        entry: &TrioArc<ValueEntry<K, V>>,
+        last_accessed: Option<Instant>,
+        last_modified: Option<Instant>,
+    ) {
+        let now = self.current_time_from_expiration_clock();
+
+        let mut cause = RemovalCause::Replaced;
+
+        if let Some(last_accessed) = last_accessed {
+            if is_expired_by_tti(&self.time_to_idle, last_accessed, now) {
+                cause = RemovalCause::Expired;
+            }
+        }
+
+        if let Some(last_modified) = last_modified {
+            if is_expired_by_ttl(&self.time_to_live, last_modified, now) {
+                cause = RemovalCause::Expired;
+            } else if is_invalid_entry(&self.valid_after(), last_modified) {
+                cause = RemovalCause::Explicit;
+            }
+        }
+
+        self.notify_single_removal(key, entry, cause);
+    }
+
+    #[inline]
+    fn notify_invalidate(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>) {
+        let now = self.current_time_from_expiration_clock();
+
+        let mut cause = RemovalCause::Explicit;
+
+        if let Some(last_accessed) = entry.last_accessed() {
+            if is_expired_by_tti(&self.time_to_idle, last_accessed, now) {
+                cause = RemovalCause::Expired;
+            }
+        }
+
+        if let Some(last_modified) = entry.last_modified() {
+            if is_expired_by_ttl(&self.time_to_live, last_modified, now) {
+                cause = RemovalCause::Expired;
+            }
+        }
+
+        self.notify_single_removal(Arc::clone(key), entry, cause);
     }
 }
 
