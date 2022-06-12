@@ -1,7 +1,7 @@
 use super::{cache::Cache, CacheBuilder, ConcurrentCacheExt};
 use crate::{
     common::concurrent::Weigher,
-    notification::EvictionListener,
+    notification::{EvictionListener, EvictionNotificationMode},
     sync_base::iter::{Iter, ScanningGet},
     Policy, PredicateError,
 };
@@ -100,6 +100,7 @@ where
             None,
             num_segments,
             build_hasher,
+            None,
             None,
             None,
             None,
@@ -204,6 +205,7 @@ where
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
+        eviction_notification_mode: Option<EvictionNotificationMode>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -216,6 +218,7 @@ where
                 build_hasher,
                 weigher,
                 eviction_listener,
+                eviction_notification_mode,
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
@@ -581,6 +584,7 @@ where
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
+        eviction_notification_mode: Option<EvictionNotificationMode>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -602,6 +606,7 @@ where
                     build_hasher.clone(),
                     weigher.as_ref().map(Arc::clone),
                     eviction_listener.as_ref().map(Arc::clone),
+                    eviction_notification_mode.clone(),
                     time_to_live,
                     time_to_idle,
                     invalidator_enabled,
@@ -647,7 +652,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{ConcurrentCacheExt, SegmentedCache};
-    use crate::notification::RemovalCause;
+    use crate::notification::{EvictionNotificationMode, RemovalCause};
     use parking_lot::Mutex;
     use std::{sync::Arc, time::Duration};
 
@@ -664,7 +669,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = SegmentedCache::builder(1)
             .max_capacity(3)
-            .eviction_listener(listener)
+            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
             .build();
         cache.reconfigure_for_testing();
 
@@ -779,7 +784,7 @@ mod tests {
         let mut cache = SegmentedCache::builder(1)
             .max_capacity(31)
             .weigher(weigher)
-            .eviction_listener(listener)
+            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
             .build();
         cache.reconfigure_for_testing();
 
@@ -939,7 +944,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = SegmentedCache::builder(4)
             .max_capacity(100)
-            .eviction_listener(listener)
+            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1012,7 +1017,7 @@ mod tests {
         let mut cache = SegmentedCache::builder(SEGMENTS)
             .max_capacity(100)
             .support_invalidation_closures()
-            .eviction_listener(listener)
+            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
             .build();
         cache.reconfigure_for_testing();
 

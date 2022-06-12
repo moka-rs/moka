@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     common::concurrent::thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
-    notification::{EvictionListener, EvictionListenerRef, RemovalCause},
+    notification::{EvictionListener, EvictionListenerRef, EvictionNotificationMode, RemovalCause},
 };
 
 use crossbeam_channel::{Receiver, Sender};
@@ -18,13 +18,104 @@ const CHANNEL_CAPACITY: usize = 1_024;
 const SUBMIT_TASK_THRESHOLD: usize = 100;
 const MAX_NOTIFICATIONS_PER_TASK: u16 = 5_000;
 
-pub(crate) struct RemovalNotifier<K, V> {
+pub(crate) enum RemovalNotifier<K, V> {
+    Blocking(BlockingRemovalNotifier<K, V>),
+    // NonBlocking(NonBlockingRemovalNotifier<K, V>),
+    ThreadPool(ThreadPoolRemovalNotifier<K, V>),
+}
+
+impl<K, V> RemovalNotifier<K, V> {
+    pub(crate) fn new(listener: EvictionListener<K, V>, mode: EvictionNotificationMode) -> Self {
+        match mode {
+            EvictionNotificationMode::Blocking => {
+                Self::Blocking(BlockingRemovalNotifier::new(listener))
+            }
+            EvictionNotificationMode::NonBlocking => {
+                Self::ThreadPool(ThreadPoolRemovalNotifier::new(listener))
+            }
+        }
+    }
+
+    pub(crate) fn is_batching_supported(&self) -> bool {
+        matches!(
+            self,
+            // RemovalNotifier::NonBlocking(_) | RemovalNotifier::ThreadPool(_)
+            RemovalNotifier::ThreadPool(_)
+        )
+    }
+
+    pub(crate) fn notify(&self, key: Arc<K>, value: V, cause: RemovalCause)
+    where
+        K: Send + Sync + 'static,
+        V: Send + Sync + 'static,
+    {
+        match self {
+            RemovalNotifier::Blocking(notifier) => notifier.notify(key, value, cause),
+            // RemovalNotifier::NonBlocking(_) => todo!(),
+            RemovalNotifier::ThreadPool(notifier) => {
+                notifier.add_single_notification(key, value, cause)
+            }
+        }
+    }
+
+    pub(crate) fn batch_notify(&self, entries: Vec<RemovedEntry<K, V>>)
+    where
+        K: Send + Sync + 'static,
+        V: Send + Sync + 'static,
+    {
+        match self {
+            RemovalNotifier::Blocking(_) => unreachable!(),
+            // RemovalNotifier::NonBlocking(_) => todo!(),
+            RemovalNotifier::ThreadPool(notifier) => notifier.add_multiple_notifications(entries),
+        }
+    }
+
+    pub(crate) fn sync(&self)
+    where
+        K: Send + Sync + 'static,
+        V: Send + Sync + 'static,
+    {
+        match self {
+            RemovalNotifier::Blocking(_) => unreachable!(),
+            // RemovalNotifier::NonBlocking(_) => todo!(),
+            RemovalNotifier::ThreadPool(notifier) => notifier.submit_task(),
+        }
+    }
+}
+
+pub(crate) struct BlockingRemovalNotifier<K, V> {
+    listener: EvictionListener<K, V>,
+}
+
+impl<K, V> BlockingRemovalNotifier<K, V> {
+    fn new(listener: EvictionListener<K, V>) -> Self {
+        Self { listener }
+    }
+
+    fn notify(&self, key: Arc<K>, value: V, cause: RemovalCause) {
+        // use std::panic::{catch_unwind, AssertUnwindSafe};
+
+        (self.listener)(key, value, cause);
+
+        // let listener_clo = || listener(key, value, cause);
+        // match catch_unwind(AssertUnwindSafe(listener_clo)) {
+        //     Ok(_) => todo!(),
+        //     Err(_) => todo!(),
+        // }
+    }
+}
+
+// pub(crate) struct NonBlockingRemovalNotifier<K, V> {
+//     _phantom: std::marker::PhantomData<(K, V)>,
+// }
+
+pub(crate) struct ThreadPoolRemovalNotifier<K, V> {
     snd: Sender<RemovedEntries<K, V>>,
     state: Arc<NotifierState<K, V>>,
     thread_pool: Arc<ThreadPool>,
 }
 
-impl<K, V> Drop for RemovalNotifier<K, V> {
+impl<K, V> Drop for ThreadPoolRemovalNotifier<K, V> {
     fn drop(&mut self) {
         let state = &self.state;
         // Disallow to create and run a notification task by now.
@@ -39,8 +130,8 @@ impl<K, V> Drop for RemovalNotifier<K, V> {
     }
 }
 
-impl<K, V> RemovalNotifier<K, V> {
-    pub(crate) fn new(listener: EvictionListener<K, V>) -> Self {
+impl<K, V> ThreadPoolRemovalNotifier<K, V> {
+    fn new(listener: EvictionListener<K, V>) -> Self {
         let (snd, rcv) = crossbeam_channel::bounded(CHANNEL_CAPACITY);
         let thread_pool = ThreadPoolRegistry::acquire_pool(PoolName::RemovalNotifier);
         let state = NotifierState {
@@ -58,24 +149,24 @@ impl<K, V> RemovalNotifier<K, V> {
     }
 }
 
-impl<K, V> RemovalNotifier<K, V>
+impl<K, V> ThreadPoolRemovalNotifier<K, V>
 where
     K: Send + Sync + 'static,
     V: Send + Sync + 'static,
 {
-    pub(crate) fn add_single_notification(&self, key: Arc<K>, value: V, cause: RemovalCause) {
+    fn add_single_notification(&self, key: Arc<K>, value: V, cause: RemovalCause) {
         let entry = RemovedEntries::new_single(key, value, cause);
         self.snd.send(entry).unwrap();
         self.submit_task_if_necessary();
     }
 
-    pub(crate) fn add_multiple_notifications(&self, entries: Vec<RemovedEntry<K, V>>) {
+    fn add_multiple_notifications(&self, entries: Vec<RemovedEntry<K, V>>) {
         let entries = RemovedEntries::new_multi(entries);
         self.snd.send(entries).unwrap(); // TODO: Error handling?
         self.submit_task_if_necessary();
     }
 
-    pub(crate) fn submit_task(&self) {
+    fn submit_task(&self) {
         // TODO: Use compare and exchange to ensure it was false.
 
         if self.state.is_running() {

@@ -1,7 +1,7 @@
 use super::{
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
     iter::ScanningGet,
-    removal_notifier::{RemovalNotifier, RemovedEntry},
+    removal_notifier::RemovedEntry,
     PredicateId,
 };
 
@@ -25,7 +25,8 @@ use crate::{
         time::{CheckedTimeOps, Clock, Instant},
         CacheRegion,
     },
-    notification::{EvictionListener, RemovalCause},
+    notification::{EvictionListener, EvictionNotificationMode, RemovalCause},
+    sync_base::removal_notifier::RemovalNotifier,
     Policy, PredicateError,
 };
 
@@ -127,6 +128,7 @@ where
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
+        eviction_notification_mode: Option<EvictionNotificationMode>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -139,6 +141,7 @@ where
             build_hasher,
             weigher,
             eviction_listener,
+            eviction_notification_mode,
             r_rcv,
             w_rcv,
             time_to_live,
@@ -324,6 +327,10 @@ where
         let mut op1 = None;
         let mut op2 = None;
 
+        // TODO: If blocking removal notification is enabled, lock the key until
+        // notification is processed by the listener. (How can we handle async
+        // lock here for `future::Cache`?)
+
         // Since the cache (cht::SegmentedHashMap) employs optimistic locking
         // strategy, insert_with_or_modify() may get an insert/modify operation
         // conflicted with other concurrent hash table operations. In that case, it
@@ -481,27 +488,40 @@ where
     }
 }
 
-struct EvictionState<K, V> {
+struct EvictionState<'a, K, V> {
     counters: EvictionCounters,
+    notifier: Option<&'a RemovalNotifier<K, V>>,
     removed_entries: Option<Vec<RemovedEntry<K, V>>>,
 }
 
-impl<K, V> EvictionState<K, V> {
-    fn new(entry_count: u64, weighted_size: u64, is_notifier_enabled: bool) -> Self {
-        let removed_entries = if is_notifier_enabled {
-            Some(Vec::new())
-        } else {
-            None
-        };
+impl<'a, K, V> EvictionState<'a, K, V> {
+    fn new(
+        entry_count: u64,
+        weighted_size: u64,
+        notifier: Option<&'a RemovalNotifier<K, V>>,
+    ) -> Self {
+        let removed_entries = notifier.and_then(|n| {
+            if n.is_batching_supported() {
+                Some(Vec::new())
+            } else {
+                None
+            }
+        });
+
         Self {
             counters: EvictionCounters::new(entry_count, weighted_size),
+            notifier,
             removed_entries,
         }
     }
 
     fn is_notifier_enabled(&self) -> bool {
-        self.removed_entries.is_some()
+        self.notifier.is_some()
     }
+
+    // fn is_batch_notification_supported(&self) -> bool {
+    //     self.removed_entries.is_some()
+    // }
 
     fn add_removed_entry(
         &mut self,
@@ -512,18 +532,23 @@ impl<K, V> EvictionState<K, V> {
         K: Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
     {
+        debug_assert!(self.is_notifier_enabled());
+
         if let Some(removed) = &mut self.removed_entries {
             removed.push(RemovedEntry::new(key, entry.value.clone(), cause));
+        } else if let Some(notifier) = self.notifier {
+            notifier.notify(key, entry.value.clone(), cause);
         }
     }
 
-    fn notify_multiple_removals(&mut self, notifier: &RemovalNotifier<K, V>)
+    fn notify_multiple_removals(&mut self)
     where
         K: Send + Sync + 'static,
         V: Send + Sync + 'static,
     {
-        if let Some(removed) = self.removed_entries.take() {
-            notifier.add_multiple_notifications(removed)
+        if let (Some(notifier), Some(removed)) = (self.notifier, self.removed_entries.take()) {
+            notifier.batch_notify(removed);
+            notifier.sync();
         }
     }
 }
@@ -722,6 +747,7 @@ where
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
+        eviction_notification_mode: Option<EvictionNotificationMode>,
         read_op_ch: Receiver<ReadOp<K, V>>,
         write_op_ch: Receiver<WriteOp<K, V>>,
         time_to_live: Option<Duration>,
@@ -737,7 +763,9 @@ where
             initial_capacity,
             build_hasher.clone(),
         );
-        let removal_notifier = eviction_listener.map(RemovalNotifier::new);
+        let removal_notifier = eviction_listener.map(|listener| {
+            RemovalNotifier::new(listener, eviction_notification_mode.unwrap_or_default())
+        });
 
         Self {
             max_capacity: max_capacity.map(|n| n as u64),
@@ -865,6 +893,10 @@ where
     where
         F: FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool,
     {
+        // TODO: If blocking removal notification is enabled, lock the key until
+        // notification is processed b  y the listener. (How can we handle async
+        // lock here for `future::Cache`?)
+
         self.cache.remove_if(key, hash, condition)
     }
 }
@@ -901,7 +933,7 @@ where
         let current_ec = self.entry_count.load();
         let current_ws = self.weighted_size.load();
         let mut eviction_state =
-            EvictionState::new(current_ec, current_ws, self.is_removal_notifier_enabled());
+            EvictionState::new(current_ec, current_ws, self.removal_notifier.as_ref());
 
         while should_sync && calls <= max_repeats {
             let r_len = self.read_op_ch.len();
@@ -955,10 +987,7 @@ where
             );
         }
 
-        if let Some(notifier) = &self.removal_notifier {
-            eviction_state.notify_multiple_removals(notifier);
-            notifier.submit_task();
-        }
+        eviction_state.notify_multiple_removals();
 
         debug_assert_eq!(self.entry_count.load(), current_ec);
         debug_assert_eq!(self.weighted_size.load(), current_ws);
@@ -1057,7 +1086,7 @@ where
         &self,
         deqs: &mut Deques<K>,
         count: usize,
-        eviction_state: &mut EvictionState<K, V>,
+        eviction_state: &mut EvictionState<'_, K, V>,
     ) where
         V: Clone,
     {
@@ -1101,7 +1130,7 @@ where
         timestamp: Instant,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
-        eviction_state: &mut EvictionState<K, V>,
+        eviction_state: &mut EvictionState<'_, K, V>,
     ) where
         V: Clone,
     {
@@ -1152,6 +1181,10 @@ where
                 victim_nodes,
                 skipped_nodes: mut skipped,
             } => {
+                // TODO: If blocking removal notification is enabled, lock the key until
+                // notification is processed by the listener. (How can we handle async
+                // lock here for `future::Cache`?)
+
                 // Try to remove the victims from the cache (hash map).
                 for victim in victim_nodes {
                     let element = unsafe { &victim.as_ref().element };
@@ -1181,6 +1214,11 @@ where
             }
             AdmissionResult::Rejected { skipped_nodes: s } => {
                 skipped_nodes = s;
+
+                // TODO: If blocking removal notification is enabled, lock the key until
+                // notification is processed by the listener. (How can we handle async
+                // lock here for `future::Cache`?)
+
                 // Remove the candidate from the cache (hash map).
                 let key = Arc::clone(&kh.key);
                 self.cache.remove(&key, kh.hash);
@@ -1335,7 +1373,7 @@ where
         &self,
         deqs: &mut Deques<K>,
         batch_size: usize,
-        eviction_state: &mut EvictionState<K, V>,
+        eviction_state: &mut EvictionState<'_, K, V>,
     ) where
         V: Clone,
     {
@@ -1370,7 +1408,7 @@ where
         write_order_deq: &mut Deque<KeyDate<K>>,
         batch_size: usize,
         now: Instant,
-        eviction_state: &mut EvictionState<K, V>,
+        eviction_state: &mut EvictionState<'_, K, V>,
     ) where
         V: Clone,
     {
@@ -1402,6 +1440,10 @@ where
                 .as_ref()
                 .map(|(k, h, c)| (k, *h, *c))
                 .unwrap();
+
+            // TODO: If blocking removal notification is enabled, lock the key until
+            // notification is processed b  y the listener. (How can we handle async
+            // lock here for `future::Cache`?)
 
             // Remove the key from the map only when the entry is really
             // expired. This check is needed because it is possible that the entry in
@@ -1467,7 +1509,7 @@ where
         deqs: &mut Deques<K>,
         batch_size: usize,
         now: Instant,
-        eviction_state: &mut EvictionState<K, V>,
+        eviction_state: &mut EvictionState<'_, K, V>,
     ) where
         V: Clone,
     {
@@ -1491,6 +1533,10 @@ where
 
             let (key, cause) = key_cause.as_ref().unwrap();
             let hash = self.hash(key);
+
+            // TODO: If blocking removal notification is enabled, lock the key until
+            // notification is processed by the listener. (How can we handle async
+            // lock here for `future::Cache`?)
 
             let maybe_entry = self
                 .cache
@@ -1528,7 +1574,7 @@ where
         invalidator: &Invalidator<K, V, S>,
         deqs: &mut Deques<K>,
         batch_size: usize,
-        eviction_state: &mut EvictionState<K, V>,
+        eviction_state: &mut EvictionState<'_, K, V>,
     ) where
         V: Clone,
     {
@@ -1540,7 +1586,7 @@ where
         &self,
         invalidator: &Invalidator<K, V, S>,
         deqs: &mut Deques<K>,
-        eviction_state: &mut EvictionState<K, V>,
+        eviction_state: &mut EvictionState<'_, K, V>,
     ) where
         V: Clone,
     {
@@ -1550,6 +1596,9 @@ where
         }) = invalidator.task_result()
         {
             for KvEntry { key, entry } in invalidated {
+                // TODO: If blocking removal notification is enabled, process
+                // notification when they were actually removed.
+
                 if eviction_state.is_notifier_enabled() {
                     eviction_state.add_removed_entry(key, &entry, RemovalCause::Explicit);
                 }
@@ -1604,7 +1653,7 @@ where
         deqs: &mut Deques<K>,
         batch_size: usize,
         weights_to_evict: u64,
-        eviction_state: &mut EvictionState<K, V>,
+        eviction_state: &mut EvictionState<'_, K, V>,
     ) where
         V: Clone,
     {
@@ -1645,6 +1694,10 @@ where
                 }
             });
 
+            // TODO: If blocking removal notification is enabled, lock the key until
+            // notification is processed by the listener.  (How can we handle async
+            // lock here for `future::Cache`?)
+
             if let Some(entry) = maybe_entry {
                 if eviction_state.is_notifier_enabled() {
                     eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
@@ -1677,7 +1730,7 @@ where
         cause: RemovalCause,
     ) {
         if let Some(notifier) = &self.removal_notifier {
-            notifier.add_single_notification(key, entry.value.clone(), cause)
+            notifier.notify(key, entry.value.clone(), cause)
         }
     }
 
@@ -1883,6 +1936,7 @@ mod tests {
                 Some(max_capacity),
                 None,
                 RandomState::default(),
+                None,
                 None,
                 None,
                 None,

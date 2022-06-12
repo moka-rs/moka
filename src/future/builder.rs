@@ -1,7 +1,7 @@
 use super::Cache;
 use crate::{
     common::{builder_utils, concurrent::Weigher},
-    notification::{EvictionListener, RemovalCause},
+    notification::{EvictionListener, EvictionNotificationMode, RemovalCause},
 };
 
 use std::{
@@ -74,7 +74,7 @@ use std::{
 /// // uuid = { version = "1.1", features = ["v4"] }
 /// // tokio = { version = "1.18", features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
 ///
-/// use moka::future::Cache;
+/// use moka::{future::Cache, notification::EvictionNotificationMode};
 ///
 /// use anyhow::{anyhow, Context};
 /// use std::{
@@ -176,7 +176,7 @@ use std::{
 ///     let cache = Cache::builder()
 ///         .max_capacity(100)
 ///         .time_to_live(Duration::from_secs(2))
-///         .eviction_listener(listener)
+///         .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
 ///         .build();
 ///
 ///     // Insert an entry to the cache.
@@ -221,6 +221,7 @@ pub struct CacheBuilder<K, V, C> {
     initial_capacity: Option<usize>,
     weigher: Option<Weigher<K, V>>,
     eviction_listener: Option<EvictionListener<K, V>>,
+    eviction_notification_mode: Option<EvictionNotificationMode>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     invalidator_enabled: bool,
@@ -238,6 +239,7 @@ where
             initial_capacity: None,
             weigher: None,
             eviction_listener: None,
+            eviction_notification_mode: None,
             time_to_live: None,
             time_to_idle: None,
             invalidator_enabled: false,
@@ -276,6 +278,7 @@ where
             build_hasher,
             self.weigher,
             self.eviction_listener,
+            self.eviction_notification_mode,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -300,6 +303,7 @@ where
             hasher,
             self.weigher,
             self.eviction_listener,
+            self.eviction_notification_mode,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -335,12 +339,16 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
+    // TODO: Need to come up with a better interface than always specifying the mode.
+
     pub fn eviction_listener(
         self,
         listener: impl Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
+        mode: EvictionNotificationMode,
     ) -> Self {
         Self {
             eviction_listener: Some(Arc::new(listener)),
+            eviction_notification_mode: Some(mode),
             ..self
         }
     }

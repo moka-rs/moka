@@ -11,6 +11,18 @@ pub(crate) type EvictionListenerRef<'a, K, V> =
 // the notifications, but currently there is no way to know when all entries
 // have been invalidated and their notifications have been sent.
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EvictionNotificationMode {
+    Blocking,
+    NonBlocking,
+}
+
+impl Default for EvictionNotificationMode {
+    fn default() -> Self {
+        Self::Blocking
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RemovalCause {
     /// The entry's expiration timestamp has passed.
