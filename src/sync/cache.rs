@@ -770,13 +770,36 @@ where
         Arc<K>: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        // TODO: If blocking removal notification is enabled, lock the key until
-        // notification is processed by the listener.
+        // Lock the key for removal if blocking removal notification is enabled.
+        let mut kl = None;
+        let mut klg = None;
+        if self.base.is_removal_notifier_enabled() && self.base.is_blocking_removal_notification() {
+            // To lock the key, we have to get Arc<K> for key (&Q).
+            //
+            // TODO: Enhance this if possible. This is rather hack now because
+            // it cannot prevent race conditions like this:
+            //
+            // 1. We miss the key because it does not exist. So we do not lock
+            //    the key.
+            // 2. Somebody else (other thread) inserts the key.
+            // 3. We remove the entry for the key, but without the key lock!
+            //
+            if let Some(arc_key) = self.base.get_key_with_hash(key, hash) {
+                kl = self.base.maybe_key_lock(&arc_key);
+                klg = kl.as_ref().map(|kl| kl.lock());
+            }
+        }
 
         if let Some(kv) = self.base.remove_entry(key, hash) {
             if self.base.is_removal_notifier_enabled() {
                 self.base.notify_invalidate(&kv.key, &kv.entry)
             }
+            // Drop the locks before scheduling write op to avoid a potential dead lock.
+            // (Scheduling write can do spin lock when the queue is full, and queue will
+            // be drained by the housekeeping thread that can lock the same key)
+            std::mem::drop(klg);
+            std::mem::drop(kl);
+
             let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
             Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to remove");
@@ -1025,7 +1048,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(3)
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener, EvictionNotificationMode::Blocking)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1121,7 +1144,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(31)
             .weigher(weigher)
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener, EvictionNotificationMode::Blocking)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1268,7 +1291,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener, EvictionNotificationMode::Blocking)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1331,7 +1354,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .support_invalidation_closures()
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener, EvictionNotificationMode::Blocking)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1437,7 +1460,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .time_to_live(Duration::from_secs(10))
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener, EvictionNotificationMode::Blocking)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1527,7 +1550,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .time_to_idle(Duration::from_secs(10))
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener, EvictionNotificationMode::Blocking)
             .build();
         cache.reconfigure_for_testing();
 
@@ -2101,6 +2124,7 @@ mod tests {
         );
     }
 
+    // TODO: In general, test both blocking and non-blocking notifications.
     #[test]
     fn test_removal_notifications() {
         // NOTE: The following tests also check the notifications:
@@ -2121,7 +2145,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(3)
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener, EvictionNotificationMode::Blocking)
             .build();
         cache.reconfigure_for_testing();
 
@@ -2187,7 +2211,7 @@ mod tests {
 
         // Create a cache with the eviction listener and also TTL and TTI.
         let mut cache = Cache::builder()
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener, EvictionNotificationMode::Blocking)
             .time_to_live(Duration::from_secs(7))
             .time_to_idle(Duration::from_secs(5))
             .build();

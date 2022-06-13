@@ -36,6 +36,10 @@ impl<K, V> RemovalNotifier<K, V> {
         }
     }
 
+    pub(crate) fn is_blocking(&self) -> bool {
+        matches!(self, RemovalNotifier::Blocking(_))
+    }
+
     pub(crate) fn is_batching_supported(&self) -> bool {
         matches!(
             self,

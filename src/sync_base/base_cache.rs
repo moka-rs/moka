@@ -1,6 +1,7 @@
 use super::{
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
     iter::ScanningGet,
+    key_lock::{KeyLock, KeyLockMap},
     removal_notifier::RemovedEntry,
     PredicateId,
 };
@@ -100,6 +101,11 @@ impl<K, V, S> BaseCache<K, V, S> {
         self.inner.is_removal_notifier_enabled()
     }
 
+    #[inline]
+    pub(crate) fn is_blocking_removal_notification(&self) -> bool {
+        self.inner.is_blocking_removal_notification()
+    }
+
     pub(crate) fn notify_invalidate(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>)
     where
         K: Send + Sync + 'static,
@@ -111,6 +117,16 @@ impl<K, V, S> BaseCache<K, V, S> {
     #[cfg(feature = "unstable-debug-counters")]
     pub fn debug_stats(&self) -> CacheDebugStats {
         self.inner.debug_stats()
+    }
+}
+
+impl<K, V, S> BaseCache<K, V, S>
+where
+    K: Hash + Eq,
+    S: BuildHasher,
+{
+    pub(crate) fn maybe_key_lock(&self, key: &Arc<K>) -> Option<KeyLock<'_, K, S>> {
+        self.inner.maybe_key_lock(key)
     }
 }
 
@@ -224,6 +240,15 @@ where
         }
     }
 
+    pub(crate) fn get_key_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<Arc<K>>
+    where
+        Arc<K>: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.inner
+            .get_key_value_and(key, hash, |k, _entry| Arc::clone(k))
+    }
+
     #[inline]
     pub(crate) fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<KvEntry<K, V>>
     where
@@ -327,9 +352,9 @@ where
         let mut op1 = None;
         let mut op2 = None;
 
-        // TODO: If blocking removal notification is enabled, lock the key until
-        // notification is processed by the listener. (How can we handle async
-        // lock here for `future::Cache`?)
+        // Lock the key for update if blocking removal notification is enabled.
+        let kl = self.maybe_key_lock(&key);
+        let _klg = &kl.as_ref().map(|kl| kl.lock());
 
         // Since the cache (cht::SegmentedHashMap) employs optimistic locking
         // strategy, insert_with_or_modify() may get an insert/modify operation
@@ -636,6 +661,7 @@ pub(crate) struct Inner<K, V, S> {
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
     removal_notifier: Option<RemovalNotifier<K, V>>,
+    key_locks: Option<KeyLockMap<K, S>>,
     invalidator_enabled: bool,
     invalidator: RwLock<Option<Invalidator<K, V, S>>>,
     has_expiration_clock: AtomicBool,
@@ -661,6 +687,14 @@ impl<K, V, S> Inner<K, V, S> {
     #[inline]
     fn is_removal_notifier_enabled(&self) -> bool {
         self.removal_notifier.is_some()
+    }
+
+    #[inline]
+    pub(crate) fn is_blocking_removal_notification(&self) -> bool {
+        self.removal_notifier
+            .as_ref()
+            .map(|rn| rn.is_blocking())
+            .unwrap_or_default()
     }
 
     #[cfg(feature = "unstable-debug-counters")]
@@ -734,6 +768,17 @@ impl<K, V, S> Inner<K, V, S> {
 // functions/methods used by BaseCache
 impl<K, V, S> Inner<K, V, S>
 where
+    K: Hash + Eq,
+    S: BuildHasher,
+{
+    fn maybe_key_lock(&self, key: &Arc<K>) -> Option<KeyLock<'_, K, S>> {
+        self.key_locks.as_ref().map(|kls| kls.key_lock(key))
+    }
+}
+
+// functions/methods used by BaseCache
+impl<K, V, S> Inner<K, V, S>
+where
     K: Hash + Eq + Send + Sync + 'static,
     V: Send + Sync + 'static,
     S: BuildHasher + Clone,
@@ -763,9 +808,17 @@ where
             initial_capacity,
             build_hasher.clone(),
         );
-        let removal_notifier = eviction_listener.map(|listener| {
-            RemovalNotifier::new(listener, eviction_notification_mode.unwrap_or_default())
-        });
+        let (removal_notifier, key_locks) = if let Some(listener) = eviction_listener {
+            let rn = RemovalNotifier::new(listener, eviction_notification_mode.unwrap_or_default());
+            if rn.is_blocking() {
+                let kl = KeyLockMap::with_hasher(build_hasher.clone());
+                (Some(rn), Some(kl))
+            } else {
+                (Some(rn), None)
+            }
+        } else {
+            (None, None)
+        };
 
         Self {
             max_capacity: max_capacity.map(|n| n as u64),
@@ -783,6 +836,7 @@ where
             valid_after: Default::default(),
             weigher,
             removal_notifier,
+            key_locks,
             invalidator_enabled,
             // When enabled, this field will be set later via the set_invalidator method.
             invalidator: RwLock::new(None),
@@ -891,13 +945,21 @@ where
         condition: F,
     ) -> Option<TrioArc<ValueEntry<K, V>>>
     where
+        K: Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
         F: FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool,
     {
-        // TODO: If blocking removal notification is enabled, lock the key until
-        // notification is processed b  y the listener. (How can we handle async
-        // lock here for `future::Cache`?)
+        // Lock the key for removal if blocking removal notification is enabled.
+        let kl = self.maybe_key_lock(key);
+        let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-        self.cache.remove_if(key, hash, condition)
+        let maybe_entry = self.cache.remove_if(key, hash, condition);
+        if let Some(entry) = &maybe_entry {
+            if self.is_removal_notifier_enabled() {
+                self.notify_single_removal(Arc::clone(key), entry, RemovalCause::Explicit);
+            }
+        }
+        maybe_entry
     }
 }
 
@@ -1160,6 +1222,11 @@ where
         if let Some(max) = self.max_capacity {
             if new_weight as u64 > max {
                 // The candidate is too big to fit in the cache. Reject it.
+
+                // Lock the key for removal if blocking removal notification is enabled.
+                let kl = self.maybe_key_lock(&kh.key);
+                let _klg = &kl.as_ref().map(|kl| kl.lock());
+
                 let removed = self.cache.remove(&Arc::clone(&kh.key), kh.hash);
                 if let Some(entry) = removed {
                     if eviction_state.is_notifier_enabled() {
@@ -1181,13 +1248,14 @@ where
                 victim_nodes,
                 skipped_nodes: mut skipped,
             } => {
-                // TODO: If blocking removal notification is enabled, lock the key until
-                // notification is processed by the listener. (How can we handle async
-                // lock here for `future::Cache`?)
-
                 // Try to remove the victims from the cache (hash map).
                 for victim in victim_nodes {
                     let element = unsafe { &victim.as_ref().element };
+
+                    // Lock the key for removal if blocking removal notification is enabled.
+                    let kl = self.maybe_key_lock(element.key());
+                    let _klg = &kl.as_ref().map(|kl| kl.lock());
+
                     if let Some((vic_key, vic_entry)) =
                         self.cache.remove_entry(element.key(), element.hash())
                     {
@@ -1215,9 +1283,9 @@ where
             AdmissionResult::Rejected { skipped_nodes: s } => {
                 skipped_nodes = s;
 
-                // TODO: If blocking removal notification is enabled, lock the key until
-                // notification is processed by the listener. (How can we handle async
-                // lock here for `future::Cache`?)
+                // Lock the key for removal if blocking removal notification is enabled.
+                let kl = self.maybe_key_lock(&kh.key);
+                let _klg = &kl.as_ref().map(|kl| kl.lock());
 
                 // Remove the candidate from the cache (hash map).
                 let key = Arc::clone(&kh.key);
@@ -1441,9 +1509,9 @@ where
                 .map(|(k, h, c)| (k, *h, *c))
                 .unwrap();
 
-            // TODO: If blocking removal notification is enabled, lock the key until
-            // notification is processed b  y the listener. (How can we handle async
-            // lock here for `future::Cache`?)
+            // Lock the key for removal if blocking removal notification is enabled.
+            let kl = self.maybe_key_lock(key);
+            let _klg = &kl.as_ref().map(|kl| kl.lock());
 
             // Remove the key from the map only when the entry is really
             // expired. This check is needed because it is possible that the entry in
@@ -1534,9 +1602,9 @@ where
             let (key, cause) = key_cause.as_ref().unwrap();
             let hash = self.hash(key);
 
-            // TODO: If blocking removal notification is enabled, lock the key until
-            // notification is processed by the listener. (How can we handle async
-            // lock here for `future::Cache`?)
+            // Lock the key for removal if blocking removal notification is enabled.
+            let kl = self.maybe_key_lock(key);
+            let _klg = &kl.as_ref().map(|kl| kl.lock());
 
             let maybe_entry = self
                 .cache
@@ -1595,13 +1663,7 @@ where
             is_done,
         }) = invalidator.task_result()
         {
-            for KvEntry { key, entry } in invalidated {
-                // TODO: If blocking removal notification is enabled, process
-                // notification when they were actually removed.
-
-                if eviction_state.is_notifier_enabled() {
-                    eviction_state.add_removed_entry(key, &entry, RemovalCause::Explicit);
-                }
+            for KvEntry { key: _key, entry } in invalidated {
                 Self::handle_remove(deqs, entry, &mut eviction_state.counters);
             }
             if is_done {
@@ -1615,7 +1677,9 @@ where
         invalidator: &Invalidator<K, V, S>,
         write_order: &mut Deque<KeyDate<K>>,
         batch_size: usize,
-    ) {
+    ) where
+        V: Clone,
+    {
         let now = self.current_time_from_expiration_clock();
 
         // If the write order queue is empty, we are done and can remove the predicates
@@ -1686,6 +1750,10 @@ where
                 None => break,
             };
 
+            // Lock the key for removal if blocking removal notification is enabled.
+            let kl = self.maybe_key_lock(&key);
+            let _klg = &kl.as_ref().map(|kl| kl.lock());
+
             let maybe_entry = self.cache.remove_if(&key, hash, |_, v| {
                 if let Some(lm) = v.last_modified() {
                     lm == ts
@@ -1693,10 +1761,6 @@ where
                     false
                 }
             });
-
-            // TODO: If blocking removal notification is enabled, lock the key until
-            // notification is processed by the listener.  (How can we handle async
-            // lock here for `future::Cache`?)
 
             if let Some(entry) = maybe_entry {
                 if eviction_state.is_notifier_enabled() {
