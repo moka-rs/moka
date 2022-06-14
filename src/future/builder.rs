@@ -11,7 +11,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-// use parking_lot::Mutex;
 
 /// Builds a [`Cache`][cache-struct] with various configuration knobs.
 ///
@@ -74,7 +73,7 @@ use std::{
 /// // uuid = { version = "1.1", features = ["v4"] }
 /// // tokio = { version = "1.18", features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
 ///
-/// use moka::{future::Cache, notification::EvictionNotificationMode};
+/// use moka::future::Cache;
 ///
 /// use anyhow::{anyhow, Context};
 /// use std::{
@@ -176,7 +175,7 @@ use std::{
 ///     let cache = Cache::builder()
 ///         .max_capacity(100)
 ///         .time_to_live(Duration::from_secs(2))
-///         .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+///         .eviction_listener(listener)
 ///         .build();
 ///
 ///     // Insert an entry to the cache.
@@ -339,16 +338,13 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
-    // TODO: Need to come up with a better interface than always specifying the mode.
-
     pub fn eviction_listener(
         self,
         listener: impl Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
-        mode: EvictionNotificationMode,
     ) -> Self {
         Self {
             eviction_listener: Some(Arc::new(listener)),
-            eviction_notification_mode: Some(mode),
+            eviction_notification_mode: Some(EvictionNotificationMode::NonBlocking),
             ..self
         }
     }

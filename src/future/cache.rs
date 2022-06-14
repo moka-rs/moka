@@ -764,10 +764,6 @@ where
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.base.hash(key);
-
-        // TODO: If blocking removal notification is enabled, lock the key until
-        // notification is processed by the listener.
-
         if let Some(kv) = self.base.remove_entry(key, hash) {
             if self.base.is_removal_notifier_enabled() {
                 self.base.notify_invalidate(&kv.key, &kv.entry)
@@ -1127,10 +1123,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Cache, ConcurrentCacheExt};
-    use crate::{
-        common::time::Clock,
-        notification::{EvictionNotificationMode, RemovalCause},
-    };
+    use crate::{common::time::Clock, notification::RemovalCause};
 
     use async_io::Timer;
     use parking_lot::Mutex;
@@ -1149,7 +1142,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(3)
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1292,7 +1285,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(31)
             .weigher(weigher)
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1446,7 +1439,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1509,7 +1502,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .support_invalidation_closures()
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1615,7 +1608,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .time_to_live(Duration::from_secs(10))
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1705,7 +1698,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .time_to_idle(Duration::from_secs(10))
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -2352,7 +2345,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(3)
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -2418,7 +2411,7 @@ mod tests {
 
         // Create a cache with the eviction listener and also TTL and TTI.
         let mut cache = Cache::builder()
-            .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+            .eviction_listener(listener)
             .time_to_live(Duration::from_secs(7))
             .time_to_idle(Duration::from_secs(5))
             .build();
