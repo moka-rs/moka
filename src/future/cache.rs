@@ -49,9 +49,9 @@ use std::{
 ///   [`insert`](#method.insert), [`get_with`](#method.get_with)
 ///   or [`invalidate`](#method.invalidate) methods for updating the cache and `await`
 ///   them.
-/// - Outside any async context, use [`blocking_insert`](#method.blocking_insert) or
-///   [`blocking_invalidate`](#method.blocking_invalidate) methods. They will block
-///   for a short time under heavy updates.
+/// - Outside any async context, use [`blocking`](#method.blocking) method to access
+///   blocking version of [`insert`](./struct.BlockingOp.html#method.insert) or
+///   [`invalidate`](struct.BlockingOp.html#method.invalidate) methods.
 ///
 /// Here's an example of reading and updating a cache by using multiple asynchronous
 /// tasks with [Tokio][tokio-crate] runtime:
@@ -887,7 +887,8 @@ where
     }
 
     /// Returns a `BlockingOp` for this cache. It provides blocking
-    /// [insert](#method.insert) and [invalidate](#method.invalidate) methods, which
+    /// [`insert`](./struct.BlockingOp.html#method.insert) and
+    /// [`invalidate`](struct.BlockingOp.html#method.invalidate) methods, which
     /// can be called outside of asynchronous contexts.
     pub fn blocking(&self) -> BlockingOp<'_, K, V, S> {
         BlockingOp(self)
@@ -1084,8 +1085,8 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    /// Blocking [insert](./struct.Cache.html#method.insert) to call outside of
-    /// asynchronous contexts.
+    /// Inserts a key-value pair into the cache. If the cache has this key present,
+    /// the value is updated.
     ///
     /// This method is intended for use cases where you are inserting from
     /// synchronous code.
@@ -1093,11 +1094,13 @@ where
         self.0.do_blocking_insert(key, value)
     }
 
-    /// Blocking [invalidate](./struct.Cache.html#method.invalidate) to call outside
-    /// of asynchronous contexts.
+    /// Discards any cached value for the key.
     ///
     /// This method is intended for use cases where you are invalidating from
     /// synchronous code.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
+    /// on the borrowed form _must_ match those for the key type.
     pub fn invalidate<Q>(&self, key: &Q)
     where
         Arc<K>: Borrow<Q>,
