@@ -13,7 +13,7 @@ on:
     - '.vscode/**'
   schedule:
     # Run against the last commit on the default branch on Friday at 8pm (UTC?)
-    - cron:  '0 20 * * 5'
+    - cron: '0 20 * * 5'
 
 jobs:
   test:
@@ -54,10 +54,15 @@ jobs:
 
       - name: Pin some dependencies to specific versions (MSRV only)
         if: ${{ matrix.rust == '1.51.0' }}
-        # Avoid hashbrown >= v0.12, which requires Rust 2021 edition.
+        # hashbrown >= v0.12 requires Rust 2021 edition.
+        # native-tls >= v0.2.9 requires more recent Rust version.
+        # async-global-executor >= 2.1 requires Rust 2021 edition.
         run: |
           cargo update -p dashmap --precise 5.2.0
+          cargo update -p indexmap --precise 1.8.2
           cargo update -p hashbrown --precise 0.11.2
+          cargo update -p native-tls --precise 0.2.8
+          cargo update -p async-global-executor --precise 2.0.4
 
       - name: Run tests (debug, but no quanta feature)
         uses: actions-rs/cargo@v1

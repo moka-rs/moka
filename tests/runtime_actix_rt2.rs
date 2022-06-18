@@ -1,9 +1,10 @@
-#![cfg(features = "future")]
+#![cfg(all(test, feature = "future"))]
 
-use actix_rt::{Arbiter, System};
+use actix_rt::Runtime;
 use moka::future::Cache;
 
-fn main() {
+#[test]
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     const NUM_TASKS: usize = 16;
     const NUM_KEYS_PER_TASK: usize = 64;
 
@@ -15,8 +16,7 @@ fn main() {
     let cache = Cache::new(10_000);
 
     // Create Actix Runtime
-    let _ = System::new();
-    let arbiter = Arbiter::new();
+    let rt = Runtime::new()?;
 
     // Spawn async tasks and write to and read from the cache.
     let tasks: Vec<_> = (0..NUM_TASKS)
@@ -28,11 +28,11 @@ fn main() {
             let end = (i + 1) * NUM_KEYS_PER_TASK;
 
             // NOTE: Actix Runtime is single threaded.
-            arbiter.spawn(async move {
+            rt.spawn(async move {
                 // Insert 64 entries. (NUM_KEYS_PER_TASK = 64)
                 for key in start..end {
                     if key % 8 == 0 {
-                        my_cache.blocking_insert(key, value(key));
+                        my_cache.blocking().insert(key, value(key));
                     } else {
                         // insert() is an async method, so await it
                         my_cache.insert(key, value(key)).await;
@@ -44,7 +44,7 @@ fn main() {
                 // Invalidate every 4 element of the inserted entries.
                 for key in (start..end).step_by(4) {
                     if key % 8 == 0 {
-                        my_cache.blocking_invalidate(&key).await;
+                        my_cache.blocking().invalidate(&key);
                     } else {
                         // invalidate() is an async method, so await it
                         my_cache.invalidate(&key).await;
@@ -54,8 +54,7 @@ fn main() {
         })
         .collect();
 
-    // Wait for all tasks to complete.
-    futures_util::future::join_all(tasks).await;
+    rt.block_on(futures_util::future::join_all(tasks));
 
     // Verify the result.
     for key in 0..(NUM_TASKS * NUM_KEYS_PER_TASK) {
@@ -65,4 +64,6 @@ fn main() {
             assert_eq!(cache.get(&key), Some(value(key)));
         }
     }
+
+    Ok(())
 }

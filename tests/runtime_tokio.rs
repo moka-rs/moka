@@ -1,8 +1,8 @@
-#![cfg(features = "future")]
+#![cfg(all(test, feature = "future"))]
 
 use moka::future::Cache;
 
-#[tokio::main]
+#[tokio::test]
 async fn main() {
     const NUM_TASKS: usize = 16;
     const NUM_KEYS_PER_TASK: usize = 64;
@@ -27,7 +27,7 @@ async fn main() {
                 // Insert 64 entries. (NUM_KEYS_PER_TASK = 64)
                 for key in start..end {
                     if key % 8 == 0 {
-                        my_cache.blocking_insert(key, value(key));
+                        my_cache.blocking().insert(key, value(key));
                     } else {
                         // insert() is an async method, so await it
                         my_cache.insert(key, value(key)).await;
@@ -39,7 +39,7 @@ async fn main() {
                 // Invalidate every 4 element of the inserted entries.
                 for key in (start..end).step_by(4) {
                     if key % 8 == 0 {
-                        my_cache.blocking_invalidate(&key).await;
+                        my_cache.blocking().invalidate(&key);
                     } else {
                         // invalidate() is an async method, so await it
                         my_cache.invalidate(&key).await;
