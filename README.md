@@ -212,8 +212,8 @@ until either evicted or manually invalidated:
 
 - Inside an async context (`async fn` or `async` block), use `insert` or `invalidate`
   method for updating the cache and `await` them.
-- Outside any async context, use `blocking_insert` or `blocking_invalidate`
-  methods. They will block for a short time under heavy updates.
+- Outside any async context, use `blocking` method to access blocking version of
+  `insert` or `invalidate` methods.
 
 Here is a similar program to the previous example, but using asynchronous cache with
 [Tokio][tokio-crate] runtime:
