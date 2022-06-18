@@ -70,12 +70,12 @@ async-lock = { version = "2.4", optional = true }
 futures-util = { version = "0.3", optional = true }
 
 [dev-dependencies]
-actix-rt = { version = "2", default-features = false }
-async-std = { version = "1", default-features = false, features = ["attributes"] }
+actix-rt = { version = "2.7", default-features = false }
+async-std = { version = "1.11", features = ["attributes"] }
 getrandom = "0.2"
 reqwest = "0.11"
 skeptic = "0.13"
-tokio = { version = "1.16", features = ["rt-multi-thread", "macros", "sync", "time" ] }
+tokio = { version = "1.19", features = ["rt-multi-thread", "macros", "sync", "time" ] }
 
 [target.'cfg(trybuild)'.dev-dependencies]
 trybuild = "1.0"
