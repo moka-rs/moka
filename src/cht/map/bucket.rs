@@ -9,7 +9,7 @@ use std::{
 #[cfg(feature = "unstable-debug-counters")]
 use crate::common::concurrent::debug_counters;
 
-use crossbeam_epoch::{Atomic, CompareAndSetError, Guard, Owned, Shared};
+use crossbeam_epoch::{Atomic, CompareExchangeError, Guard, Owned, Shared};
 
 pub(crate) const BUCKET_ARRAY_DEFAULT_LENGTH: usize = 128;
 
@@ -154,10 +154,11 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
 
             let new_bucket_ptr = this_bucket_ptr.with_tag(TOMBSTONE_TAG);
 
-            match this_bucket.compare_and_set_weak(
+            match this_bucket.compare_exchange(
                 this_bucket_ptr,
                 new_bucket_ptr,
-                (Ordering::Release, Ordering::Relaxed),
+                Ordering::Release,
+                Ordering::Relaxed,
                 guard,
             ) {
                 // Succeeded. Return the removed value. (can be null)
@@ -207,10 +208,11 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
 
             let new_bucket = state.into_insert_bucket();
 
-            if let Err(CompareAndSetError { new, .. }) = this_bucket.compare_and_set_weak(
+            if let Err(CompareExchangeError { new, .. }) = this_bucket.compare_exchange(
                 this_bucket_ptr,
                 new_bucket,
-                (Ordering::Release, Ordering::Relaxed),
+                Ordering::Release,
+                Ordering::Relaxed,
                 guard,
             ) {
                 maybe_state = Some(InsertOrModifyState::from_bucket_value(new, None));
@@ -272,10 +274,11 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
                     (state.into_insert_bucket(), None)
                 };
 
-            if let Err(CompareAndSetError { new, .. }) = this_bucket.compare_and_set_weak(
+            if let Err(CompareExchangeError { new, .. }) = this_bucket.compare_exchange(
                 this_bucket_ptr,
                 new_bucket,
-                (Ordering::Release, Ordering::Relaxed),
+                Ordering::Release,
+                Ordering::Relaxed,
                 guard,
             ) {
                 // Failed. Reload to retry.
@@ -321,10 +324,11 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
             if this_bucket_ptr.is_null() && is_tombstone(bucket_ptr) {
                 ProbeLoopAction::Return(None)
             } else if this_bucket
-                .compare_and_set_weak(
+                .compare_exchange(
                     this_bucket_ptr,
                     bucket_ptr,
-                    (Ordering::Release, Ordering::Relaxed),
+                    Ordering::Release,
+                    Ordering::Relaxed,
                     guard,
                 )
                 .is_ok()
@@ -427,10 +431,11 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
 
                     while is_borrowed(next_bucket_ptr)
                         && next_bucket
-                            .compare_and_set_weak(
+                            .compare_exchange(
                                 next_bucket_ptr,
                                 to_put_ptr,
-                                (Ordering::Release, Ordering::Relaxed),
+                                Ordering::Release,
+                                Ordering::Relaxed,
                                 guard,
                             )
                             .is_err()
@@ -447,10 +452,11 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
                 }
 
                 if this_bucket
-                    .compare_and_set_weak(
+                    .compare_exchange(
                         this_bucket_ptr,
                         Shared::null().with_tag(SENTINEL_TAG),
-                        (Ordering::Release, Ordering::Relaxed),
+                        Ordering::Release,
+                        Ordering::Relaxed,
                         guard,
                     )
                     .is_ok()
@@ -486,14 +492,15 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
                 Owned::new(BucketArray::with_length(self.epoch + 1, new_length))
             });
 
-            match self.next.compare_and_set_weak(
+            match self.next.compare_exchange(
                 Shared::null(),
                 new_next,
-                (Ordering::Release, Ordering::Relaxed),
+                Ordering::Release,
+                Ordering::Relaxed,
                 guard,
             ) {
                 Ok(p) => return unsafe { p.deref() },
-                Err(CompareAndSetError { new, .. }) => {
+                Err(CompareExchangeError { new, .. }) => {
                     maybe_new_next = Some(new);
                 }
             }

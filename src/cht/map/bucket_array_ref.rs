@@ -6,7 +6,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crossbeam_epoch::{Atomic, CompareAndSetError, Guard, Owned, Shared};
+use crossbeam_epoch::{Atomic, CompareExchangeError, Guard, Owned, Shared};
 
 pub(crate) struct BucketArrayRef<'a, K, V, S> {
     pub(crate) bucket_array: &'a Atomic<BucketArray<K, V>>,
@@ -310,14 +310,15 @@ impl<'a, 'g, K, V, S> BucketArrayRef<'a, K, V, S> {
             let new_bucket_array =
                 maybe_new_bucket_array.unwrap_or_else(|| Owned::new(BucketArray::default()));
 
-            match self.bucket_array.compare_and_set_weak(
+            match self.bucket_array.compare_exchange(
                 Shared::null(),
                 new_bucket_array,
-                (Ordering::Release, Ordering::Relaxed),
+                Ordering::Release,
+                Ordering::Relaxed,
                 guard,
             ) {
                 Ok(b) => return unsafe { b.as_ref() }.unwrap(),
-                Err(CompareAndSetError { new, .. }) => maybe_new_bucket_array = Some(new),
+                Err(CompareExchangeError { new, .. }) => maybe_new_bucket_array = Some(new),
             }
         }
     }
@@ -338,10 +339,11 @@ impl<'a, 'g, K, V, S> BucketArrayRef<'a, K, V, S> {
                 return;
             }
 
-            match self.bucket_array.compare_and_set_weak(
+            match self.bucket_array.compare_exchange(
                 current_ptr,
                 min_ptr,
-                (Ordering::Release, Ordering::Relaxed),
+                Ordering::Release,
+                Ordering::Relaxed,
                 guard,
             ) {
                 Ok(_) => unsafe { bucket::defer_acquire_destroy(guard, current_ptr) },
