@@ -1,0 +1,47 @@
+name: Cargo Audit
+
+on:
+  push:
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+  schedule:
+    # https://crontab.guru/
+    - cron: '5 20 * * 5'
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Moka
+        uses: actions/checkout@v2
+
+      - name: Install Rust toolchain (Nightly)
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+
+      - uses: Swatinem/rust-cache@v1
+
+      - name: cargo clean
+        uses: actions-rs/cargo@v1
+        with:
+          command: clean
+
+      - name: Check for known security vulnerabilities (Latest versions)
+        uses: actions-rs/audit-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Downgrade dependencies to minimal versions
+        uses: actions-rs/cargo@v1
+        with:
+          command: update
+          args: -Z minimal-versions
+
+      - name: Check for known security vulnerabilities (Minimal versions)
+        uses: actions-rs/audit-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
