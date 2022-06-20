@@ -1,7 +1,7 @@
 use super::{Cache, SegmentedCache};
 use crate::{
     common::{builder_utils, concurrent::Weigher},
-    notification::{EvictionListener, EvictionNotificationMode, RemovalCause},
+    notification::{self, EvictionListener, RemovalCause},
 };
 
 use std::{
@@ -64,7 +64,7 @@ use std::{
 /// // anyhow = "1.0"
 /// // uuid = { version = "1.1", features = ["v4"] }
 ///
-/// use moka::{sync::Cache, notification::EvictionNotificationMode};
+/// use moka::{sync::Cache, notification};
 ///
 /// use anyhow::{anyhow, Context};
 /// use std::{
@@ -160,12 +160,16 @@ use std::{
 ///         }
 ///     };
 ///
+///     let listener_conf = notification::Configuration::builder()
+///         .delivery_mode(notification::DeliveryMode::Queued)
+///         .build();
+///
 ///     // Create the cache. Set time to live for two seconds and set the
 ///     // eviction listener.
 ///     let cache = Cache::builder()
 ///         .max_capacity(100)
 ///         .time_to_live(Duration::from_secs(2))
-///         .eviction_listener(listener, EvictionNotificationMode::NonBlocking)
+///         .eviction_listener_with_conf(listener, listener_conf)
 ///         .build();
 ///
 ///     // Insert an entry to the cache.
@@ -212,7 +216,7 @@ pub struct CacheBuilder<K, V, C> {
     num_segments: Option<usize>,
     weigher: Option<Weigher<K, V>>,
     eviction_listener: Option<EvictionListener<K, V>>,
-    eviction_notification_mode: Option<EvictionNotificationMode>,
+    eviction_listener_conf: Option<notification::Configuration>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     invalidator_enabled: bool,
@@ -231,7 +235,7 @@ where
             num_segments: None,
             weigher: None,
             eviction_listener: None,
-            eviction_notification_mode: None,
+            eviction_listener_conf: None,
             time_to_live: None,
             time_to_idle: None,
             invalidator_enabled: false,
@@ -271,7 +275,7 @@ where
             num_segments: Some(num_segments),
             weigher: None,
             eviction_listener: None,
-            eviction_notification_mode: None,
+            eviction_listener_conf: None,
             time_to_live: self.time_to_live,
             time_to_idle: self.time_to_idle,
             invalidator_enabled: self.invalidator_enabled,
@@ -298,7 +302,7 @@ where
             build_hasher,
             self.weigher,
             self.eviction_listener,
-            self.eviction_notification_mode,
+            self.eviction_listener_conf,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -326,7 +330,7 @@ where
             hasher,
             self.weigher,
             self.eviction_listener,
-            self.eviction_notification_mode,
+            self.eviction_listener_conf,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -359,7 +363,7 @@ where
             build_hasher,
             self.weigher,
             self.eviction_listener,
-            self.eviction_notification_mode,
+            self.eviction_listener_conf,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -388,7 +392,7 @@ where
             hasher,
             self.weigher,
             self.eviction_listener,
-            self.eviction_notification_mode,
+            self.eviction_listener_conf,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -424,16 +428,25 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
-    // TODO: Need to come up with a better interface than always specifying the mode.
-
     pub fn eviction_listener(
         self,
         listener: impl Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
-        mode: EvictionNotificationMode,
     ) -> Self {
         Self {
             eviction_listener: Some(Arc::new(listener)),
-            eviction_notification_mode: Some(mode),
+            eviction_listener_conf: Some(Default::default()),
+            ..self
+        }
+    }
+
+    pub fn eviction_listener_with_conf(
+        self,
+        listener: impl Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
+        conf: notification::Configuration,
+    ) -> Self {
+        Self {
+            eviction_listener: Some(Arc::new(listener)),
+            eviction_listener_conf: Some(conf),
             ..self
         }
     }

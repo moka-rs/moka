@@ -26,7 +26,7 @@ use crate::{
         time::{CheckedTimeOps, Clock, Instant},
         CacheRegion,
     },
-    notification::{EvictionListener, EvictionNotificationMode, RemovalCause},
+    notification::{self, EvictionListener, RemovalCause},
     sync_base::removal_notifier::RemovalNotifier,
     Policy, PredicateError,
 };
@@ -144,7 +144,7 @@ where
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
-        eviction_notification_mode: Option<EvictionNotificationMode>,
+        eviction_listener_conf: Option<notification::Configuration>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
@@ -157,7 +157,7 @@ where
             build_hasher,
             weigher,
             eviction_listener,
-            eviction_notification_mode,
+            eviction_listener_conf,
             r_rcv,
             w_rcv,
             time_to_live,
@@ -792,7 +792,7 @@ where
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
-        eviction_notification_mode: Option<EvictionNotificationMode>,
+        eviction_listener_conf: Option<notification::Configuration>,
         read_op_ch: Receiver<ReadOp<K, V>>,
         write_op_ch: Receiver<WriteOp<K, V>>,
         time_to_live: Option<Duration>,
@@ -809,7 +809,7 @@ where
             build_hasher.clone(),
         );
         let (removal_notifier, key_locks) = if let Some(listener) = eviction_listener {
-            let rn = RemovalNotifier::new(listener, eviction_notification_mode.unwrap_or_default());
+            let rn = RemovalNotifier::new(listener, eviction_listener_conf.unwrap_or_default());
             if rn.is_blocking() {
                 let kl = KeyLockMap::with_hasher(build_hasher.clone());
                 (Some(rn), Some(kl))

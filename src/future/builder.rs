@@ -1,7 +1,7 @@
 use super::Cache;
 use crate::{
     common::{builder_utils, concurrent::Weigher},
-    notification::{EvictionListener, EvictionNotificationMode, RemovalCause},
+    notification::{self, DeliveryMode, EvictionListener, RemovalCause},
 };
 
 use std::{
@@ -220,7 +220,7 @@ pub struct CacheBuilder<K, V, C> {
     initial_capacity: Option<usize>,
     weigher: Option<Weigher<K, V>>,
     eviction_listener: Option<EvictionListener<K, V>>,
-    eviction_notification_mode: Option<EvictionNotificationMode>,
+    eviction_listener_conf: Option<notification::Configuration>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     invalidator_enabled: bool,
@@ -238,7 +238,7 @@ where
             initial_capacity: None,
             weigher: None,
             eviction_listener: None,
-            eviction_notification_mode: None,
+            eviction_listener_conf: None,
             time_to_live: None,
             time_to_idle: None,
             invalidator_enabled: false,
@@ -277,7 +277,7 @@ where
             build_hasher,
             self.weigher,
             self.eviction_listener,
-            self.eviction_notification_mode,
+            self.eviction_listener_conf,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -302,7 +302,7 @@ where
             hasher,
             self.weigher,
             self.eviction_listener,
-            self.eviction_notification_mode,
+            self.eviction_listener_conf,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -342,9 +342,12 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         self,
         listener: impl Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
     ) -> Self {
+        let conf = notification::Configuration::builder()
+            .delivery_mode(DeliveryMode::Queued)
+            .build();
         Self {
             eviction_listener: Some(Arc::new(listener)),
-            eviction_notification_mode: Some(EvictionNotificationMode::NonBlocking),
+            eviction_listener_conf: Some(conf),
             ..self
         }
     }

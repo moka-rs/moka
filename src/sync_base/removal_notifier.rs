@@ -8,7 +8,7 @@ use std::{
 
 use crate::{
     common::concurrent::thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
-    notification::{EvictionListener, EvictionListenerRef, EvictionNotificationMode, RemovalCause},
+    notification::{self, DeliveryMode, EvictionListener, EvictionListenerRef, RemovalCause},
 };
 
 use crossbeam_channel::{Receiver, Sender};
@@ -25,14 +25,10 @@ pub(crate) enum RemovalNotifier<K, V> {
 }
 
 impl<K, V> RemovalNotifier<K, V> {
-    pub(crate) fn new(listener: EvictionListener<K, V>, mode: EvictionNotificationMode) -> Self {
-        match mode {
-            EvictionNotificationMode::Blocking => {
-                Self::Blocking(BlockingRemovalNotifier::new(listener))
-            }
-            EvictionNotificationMode::NonBlocking => {
-                Self::ThreadPool(ThreadPoolRemovalNotifier::new(listener))
-            }
+    pub(crate) fn new(listener: EvictionListener<K, V>, conf: notification::Configuration) -> Self {
+        match conf.delivery_mode() {
+            DeliveryMode::Direct => Self::Blocking(BlockingRemovalNotifier::new(listener)),
+            DeliveryMode::Queued => Self::ThreadPool(ThreadPoolRemovalNotifier::new(listener)),
         }
     }
 
