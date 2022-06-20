@@ -44,13 +44,13 @@ impl ConfigurationBuilder {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DeliveryMode {
-    Direct,
+    Immediate,
     Queued,
 }
 
 impl Default for DeliveryMode {
     fn default() -> Self {
-        Self::Direct
+        Self::Immediate
     }
 }
 
@@ -73,7 +73,7 @@ impl RemovalCause {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sync"))]
 pub(crate) mod macros {
 
     macro_rules! assert_with_mode {

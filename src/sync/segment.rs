@@ -662,7 +662,7 @@ mod tests {
 
     #[test]
     fn basic_single_thread() {
-        run_test(DeliveryMode::Direct);
+        run_test(DeliveryMode::Immediate);
         run_test(DeliveryMode::Queued);
 
         fn run_test(delivery_mode: DeliveryMode) {
@@ -779,7 +779,7 @@ mod tests {
 
     #[test]
     fn size_aware_eviction() {
-        run_test(DeliveryMode::Direct);
+        run_test(DeliveryMode::Immediate);
         run_test(DeliveryMode::Queued);
 
         fn run_test(delivery_mode: DeliveryMode) {
@@ -956,7 +956,7 @@ mod tests {
 
     #[test]
     fn invalidate_all() {
-        run_test(DeliveryMode::Direct);
+        run_test(DeliveryMode::Immediate);
         run_test(DeliveryMode::Queued);
 
         fn run_test(delivery_mode: DeliveryMode) {
@@ -1035,7 +1035,7 @@ mod tests {
 
     #[test]
     fn invalidate_entries_if() -> Result<(), Box<dyn std::error::Error>> {
-        run_test(DeliveryMode::Direct)?;
+        run_test(DeliveryMode::Immediate)?;
         run_test(DeliveryMode::Queued)?;
 
         fn run_test(delivery_mode: DeliveryMode) -> Result<(), Box<dyn std::error::Error>> {
