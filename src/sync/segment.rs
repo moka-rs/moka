@@ -742,7 +742,7 @@ mod tests {
             assert_eq_with_mode!(cache.get(&"b"), None, delivery_mode);
             assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
 
-            verify_notification_vec(actual, &expected, delivery_mode);
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
         }
     }
 
@@ -891,7 +891,7 @@ mod tests {
             assert_eq_with_mode!(cache.entry_count(), 2, delivery_mode);
             assert_eq_with_mode!(cache.weighted_size(), 25, delivery_mode);
 
-            verify_notification_vec(actual, &expected, delivery_mode);
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
         }
     }
 
@@ -991,7 +991,7 @@ mod tests {
             assert_with_mode!(!cache.contains_key(&"c"), delivery_mode);
             assert_with_mode!(cache.contains_key(&"d"), delivery_mode);
 
-            verify_notification_map(actual, &expected, delivery_mode);
+            verify_notification_map(&cache, actual, &expected, delivery_mode);
         }
     }
 
@@ -1107,7 +1107,7 @@ mod tests {
             assert_eq_with_mode!(cache.entry_count(), 0, delivery_mode);
             assert_eq_with_mode!(cache.invalidation_predicate_count(), 0, delivery_mode);
 
-            verify_notification_map(actual, &expected, delivery_mode);
+            verify_notification_map(&cache, actual, &expected, delivery_mode);
 
             Ok(())
         }
@@ -1585,13 +1585,15 @@ mod tests {
     type NotificationPair<V> = (V, RemovalCause);
     type NotificationTriple<K, V> = (Arc<K>, V, RemovalCause);
 
-    fn verify_notification_vec<K, V>(
+    fn verify_notification_vec<K, V, S>(
+        cache: &SegmentedCache<K, V, S>,
         actual: Arc<Mutex<Vec<NotificationTriple<K, V>>>>,
         expected: &[NotificationTriple<K, V>],
         delivery_mode: DeliveryMode,
     ) where
-        K: Eq + std::fmt::Debug,
-        V: Eq + std::fmt::Debug,
+        K: std::hash::Hash + Eq + std::fmt::Debug + Send + Sync + 'static,
+        V: Eq + std::fmt::Debug + Clone + Send + Sync + 'static,
+        S: std::hash::BuildHasher + Clone + Send + Sync + 'static,
     {
         // Retries will be needed when testing in a QEMU VM.
         const MAX_RETRIES: usize = 5;
@@ -1604,6 +1606,7 @@ mod tests {
             if actual.len() != expected.len() {
                 if retries <= MAX_RETRIES {
                     retries += 1;
+                    cache.sync();
                     continue;
                 } else {
                     assert_eq!(
@@ -1627,13 +1630,15 @@ mod tests {
         }
     }
 
-    fn verify_notification_map<K, V>(
+    fn verify_notification_map<K, V, S>(
+        cache: &SegmentedCache<K, V, S>,
         actual: Arc<Mutex<std::collections::HashMap<Arc<K>, NotificationPair<V>>>>,
         expected: &std::collections::HashMap<Arc<K>, NotificationPair<V>>,
         delivery_mode: DeliveryMode,
     ) where
-        K: Eq + std::hash::Hash + std::fmt::Display,
-        V: Eq + std::fmt::Debug,
+        K: std::hash::Hash + Eq + std::fmt::Display + Send + Sync + 'static,
+        V: Eq + std::fmt::Debug + Clone + Send + Sync + 'static,
+        S: std::hash::BuildHasher + Clone + Send + Sync + 'static,
     {
         // Retries will be needed when testing in a QEMU VM.
         const MAX_RETRIES: usize = 5;
@@ -1646,6 +1651,7 @@ mod tests {
             if actual.len() != expected.len() {
                 if retries <= MAX_RETRIES {
                     retries += 1;
+                    cache.sync();
                     continue;
                 } else {
                     assert_eq!(

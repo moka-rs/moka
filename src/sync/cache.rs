@@ -1121,7 +1121,7 @@ mod tests {
             assert_eq_with_mode!(cache.get(&"b"), None, delivery_mode);
             assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
 
-            verify_notification_vec(actual, &expected, delivery_mode);
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
         }
     }
 
@@ -1251,7 +1251,7 @@ mod tests {
             assert_eq_with_mode!(cache.entry_count(), 2, delivery_mode);
             assert_eq_with_mode!(cache.weighted_size(), 25, delivery_mode);
 
-            verify_notification_vec(actual, &expected, delivery_mode);
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
         }
     }
 
@@ -1338,7 +1338,7 @@ mod tests {
             assert_with_mode!(!cache.contains_key(&"c"), delivery_mode);
             assert_with_mode!(cache.contains_key(&"d"), delivery_mode);
 
-            verify_notification_vec(actual, &expected, delivery_mode);
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
         }
     }
 
@@ -1444,7 +1444,7 @@ mod tests {
             assert_eq_with_mode!(cache.entry_count(), 0, delivery_mode);
             assert_eq_with_mode!(cache.invalidation_predicate_count(), 0, delivery_mode);
 
-            verify_notification_vec(actual, &expected, delivery_mode);
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
 
             Ok(())
         }
@@ -1538,7 +1538,7 @@ mod tests {
             cache.sync();
             assert_with_mode!(cache.is_table_empty(), delivery_mode);
 
-            verify_notification_vec(actual, &expected, delivery_mode);
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
         }
     }
 
@@ -1625,7 +1625,7 @@ mod tests {
             cache.sync();
             assert_with_mode!(cache.is_table_empty(), delivery_mode);
 
-            verify_notification_vec(actual, &expected, delivery_mode);
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
         }
     }
 
@@ -2201,7 +2201,7 @@ mod tests {
             cache.sync();
             assert_eq_with_mode!(cache.entry_count(), 3, delivery_mode);
 
-            verify_notification_vec(actual, &expected, delivery_mode);
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
         }
     }
 
@@ -2339,19 +2339,22 @@ mod tests {
 
     type NotificationTuple<K, V> = (Arc<K>, V, RemovalCause);
 
-    fn verify_notification_vec<K, V>(
+    fn verify_notification_vec<K, V, S>(
+        cache: &Cache<K, V, S>,
         actual: Arc<Mutex<Vec<NotificationTuple<K, V>>>>,
         expected: &[NotificationTuple<K, V>],
         delivery_mode: DeliveryMode,
     ) where
-        K: Eq + std::fmt::Debug,
-        V: Eq + std::fmt::Debug,
+        K: std::hash::Hash + Eq + std::fmt::Debug + Send + Sync + 'static,
+        V: Eq + std::fmt::Debug + Clone + Send + Sync + 'static,
+        S: std::hash::BuildHasher + Clone + Send + Sync + 'static,
     {
         // Retries will be needed when testing in a QEMU VM.
         const MAX_RETRIES: usize = 5;
         let mut retries = 0;
         loop {
             // Ensure all scheduled notifications have been processed.
+            cache.sync();
             std::thread::sleep(Duration::from_millis(500));
 
             let actual = &*actual.lock();

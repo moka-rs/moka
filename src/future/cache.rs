@@ -1209,7 +1209,7 @@ mod tests {
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"b"));
 
-        verify_notification_vec(actual, &expected);
+        verify_notification_vec(&cache, actual, &expected);
     }
 
     #[test]
@@ -1378,7 +1378,7 @@ mod tests {
         assert_eq!(cache.entry_count(), 2);
         assert_eq!(cache.weighted_size(), 25);
 
-        verify_notification_vec(actual, &expected);
+        verify_notification_vec(&cache, actual, &expected);
     }
 
     #[tokio::test]
@@ -1464,7 +1464,7 @@ mod tests {
         assert!(!cache.contains_key(&"c"));
         assert!(cache.contains_key(&"d"));
 
-        verify_notification_vec(actual, &expected);
+        verify_notification_vec(&cache, actual, &expected);
     }
 
     #[tokio::test]
@@ -1562,7 +1562,7 @@ mod tests {
         assert_eq!(cache.entry_count(), 0);
         assert_eq!(cache.invalidation_predicate_count(), 0);
 
-        verify_notification_vec(actual, &expected);
+        verify_notification_vec(&cache, actual, &expected);
 
         Ok(())
     }
@@ -1646,7 +1646,7 @@ mod tests {
         cache.sync();
         assert!(cache.is_table_empty());
 
-        verify_notification_vec(actual, &expected);
+        verify_notification_vec(&cache, actual, &expected);
     }
 
     #[tokio::test]
@@ -1725,7 +1725,7 @@ mod tests {
         cache.sync();
         assert!(cache.is_table_empty());
 
-        verify_notification_vec(actual, &expected);
+        verify_notification_vec(&cache, actual, &expected);
     }
 
     #[tokio::test]
@@ -2345,7 +2345,7 @@ mod tests {
         cache.sync();
         assert_eq!(cache.entry_count(), 3);
 
-        verify_notification_vec(actual, &expected);
+        verify_notification_vec(&cache, actual, &expected);
     }
 
     #[tokio::test]
@@ -2437,17 +2437,19 @@ mod tests {
         cache.sync();
         assert_eq!(cache.entry_count(), 0);
 
-        verify_notification_vec(actual, &expected);
+        verify_notification_vec(&cache, actual, &expected);
     }
 
     type NotificationTuple<K, V> = (Arc<K>, V, RemovalCause);
 
-    fn verify_notification_vec<K, V>(
+    fn verify_notification_vec<K, V, S>(
+        cache: &Cache<K, V, S>,
         actual: Arc<Mutex<Vec<NotificationTuple<K, V>>>>,
         expected: &[NotificationTuple<K, V>],
     ) where
-        K: Eq + std::fmt::Debug,
-        V: Eq + std::fmt::Debug,
+        K: std::hash::Hash + Eq + std::fmt::Debug + Send + Sync + 'static,
+        V: Eq + std::fmt::Debug + Clone + Send + Sync + 'static,
+        S: std::hash::BuildHasher + Clone + Send + Sync + 'static,
     {
         // Retries will be needed when testing in a QEMU VM.
         const MAX_RETRIES: usize = 5;
@@ -2460,6 +2462,7 @@ mod tests {
             if actual.len() != expected.len() {
                 if retries <= MAX_RETRIES {
                     retries += 1;
+                    cache.sync();
                     continue;
                 } else {
                     assert_eq!(actual.len(), expected.len(), "Retries exhausted");
