@@ -1121,19 +1121,7 @@ mod tests {
             assert_eq_with_mode!(cache.get(&"b"), None, delivery_mode);
             assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
 
-            // Ensure all scheduled notifications have been processed.
-            std::thread::sleep(Duration::from_secs(1));
-
-            // Verify the notifications.
-            let actual = &*actual.lock();
-            assert_eq_with_mode!(actual.len(), expected.len(), delivery_mode);
-            for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-                assert_eq!(
-                    actual, &expected,
-                    "expected[{}] (delivery mode: {:?})",
-                    i, delivery_mode
-                );
-            }
+            verify_notification_vec(actual, &expected, delivery_mode);
         }
     }
 
@@ -1263,19 +1251,7 @@ mod tests {
             assert_eq_with_mode!(cache.entry_count(), 2, delivery_mode);
             assert_eq_with_mode!(cache.weighted_size(), 25, delivery_mode);
 
-            // Ensure all scheduled notifications have been processed.
-            std::thread::sleep(Duration::from_secs(1));
-
-            // Verify the notifications.
-            let actual = &*actual.lock();
-            assert_eq_with_mode!(actual.len(), expected.len(), delivery_mode);
-            for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-                assert_eq!(
-                    actual, &expected,
-                    "expected[{}] (delivery mode: {:?})",
-                    i, delivery_mode
-                );
-            }
+            verify_notification_vec(actual, &expected, delivery_mode);
         }
     }
 
@@ -1362,19 +1338,7 @@ mod tests {
             assert_with_mode!(!cache.contains_key(&"c"), delivery_mode);
             assert_with_mode!(cache.contains_key(&"d"), delivery_mode);
 
-            // Ensure all scheduled notifications have been processed.
-            std::thread::sleep(Duration::from_secs(1));
-
-            // Verify the notifications.
-            let actual = &*actual.lock();
-            assert_eq_with_mode!(actual.len(), expected.len(), delivery_mode);
-            for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-                assert_eq!(
-                    actual, &expected,
-                    "expected[{}] (delivery mode: {:?})",
-                    i, delivery_mode
-                );
-            }
+            verify_notification_vec(actual, &expected, delivery_mode);
         }
     }
 
@@ -1480,19 +1444,7 @@ mod tests {
             assert_eq_with_mode!(cache.entry_count(), 0, delivery_mode);
             assert_eq_with_mode!(cache.invalidation_predicate_count(), 0, delivery_mode);
 
-            // Ensure all scheduled notifications have been processed.
-            std::thread::sleep(Duration::from_secs(1));
-
-            // Verify the notifications.
-            let actual = &*actual.lock();
-            assert_eq_with_mode!(actual.len(), expected.len(), delivery_mode);
-            for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-                assert_eq!(
-                    actual, &expected,
-                    "expected[{}] (delivery mode: {:?})",
-                    i, delivery_mode
-                );
-            }
+            verify_notification_vec(actual, &expected, delivery_mode);
 
             Ok(())
         }
@@ -1586,19 +1538,7 @@ mod tests {
             cache.sync();
             assert_with_mode!(cache.is_table_empty(), delivery_mode);
 
-            // Ensure all scheduled notifications have been processed.
-            std::thread::sleep(Duration::from_secs(1));
-
-            // Verify the notifications.
-            let actual = &*actual.lock();
-            assert_eq_with_mode!(actual.len(), expected.len(), delivery_mode);
-            for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-                assert_eq!(
-                    actual, &expected,
-                    "expected[{}] (delivery mode: {:?})",
-                    i, delivery_mode
-                );
-            }
+            verify_notification_vec(actual, &expected, delivery_mode);
         }
     }
 
@@ -1685,19 +1625,7 @@ mod tests {
             cache.sync();
             assert_with_mode!(cache.is_table_empty(), delivery_mode);
 
-            // Ensure all scheduled notifications have been processed.
-            std::thread::sleep(Duration::from_secs(1));
-
-            // Verify the notifications.
-            let actual = &*actual.lock();
-            assert_eq_with_mode!(actual.len(), expected.len(), delivery_mode);
-            for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-                assert_eq!(
-                    actual, &expected,
-                    "expected[{}] (delivery mode: {:?})",
-                    i, delivery_mode
-                );
-            }
+            verify_notification_vec(actual, &expected, delivery_mode);
         }
     }
 
@@ -2273,131 +2201,124 @@ mod tests {
             cache.sync();
             assert_eq_with_mode!(cache.entry_count(), 3, delivery_mode);
 
-            // Ensure all scheduled notifications have been processed.
-            std::thread::sleep(Duration::from_secs(1));
-
-            // Verify the notifications.
-            let actual = &*actual.lock();
-            assert_eq_with_mode!(actual.len(), expected.len(), delivery_mode);
-            for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-                assert_eq!(
-                    actual, &expected,
-                    "expected[{}] (delivery mode: {:?})",
-                    i, delivery_mode
-                );
-            }
+            verify_notification_vec(actual, &expected, delivery_mode);
         }
     }
 
     #[test]
-    fn test_removal_notifications_with_updates() {
-        run_test(DeliveryMode::Immediate);
-        run_test(DeliveryMode::Queued);
+    fn test_immediate_removal_notifications_with_updates() {
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
 
-        fn run_test(delivery_mode: DeliveryMode) {
-            // The following `Vec`s will hold actual and expected notifications.
-            let actual = Arc::new(Mutex::new(Vec::new()));
-            let mut expected = Vec::new();
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+        let listener_conf = notification::Configuration::builder()
+            .delivery_mode(DeliveryMode::Immediate)
+            .build();
 
-            // Create an eviction listener.
-            let a1 = Arc::clone(&actual);
-            let listener = move |k, v, cause| a1.lock().push((k, v, cause));
-            let listener_conf = notification::Configuration::builder()
-                .delivery_mode(delivery_mode)
-                .build();
+        // Create a cache with the eviction listener and also TTL and TTI.
+        let mut cache = Cache::builder()
+            .eviction_listener_with_conf(listener, listener_conf)
+            .time_to_live(Duration::from_secs(7))
+            .time_to_idle(Duration::from_secs(5))
+            .build();
+        cache.reconfigure_for_testing();
 
-            // Create a cache with the eviction listener and also TTL and TTI.
-            let mut cache = Cache::builder()
-                .eviction_listener_with_conf(listener, listener_conf)
-                .time_to_live(Duration::from_secs(7))
-                .time_to_idle(Duration::from_secs(5))
-                .build();
-            cache.reconfigure_for_testing();
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
 
-            let (clock, mock) = Clock::mock();
-            cache.set_expiration_clock(Some(clock));
+        // Make the cache exterior immutable.
+        let cache = cache;
 
-            // Make the cache exterior immutable.
-            let cache = cache;
+        cache.insert("alice", "a0");
+        cache.sync();
 
-            cache.insert("alice", "a0");
-            cache.sync();
+        // Now alice (a0) has been expired by the idle timeout (TTI).
+        mock.increment(Duration::from_secs(6));
+        assert_eq!(cache.get(&"alice"), None);
 
-            // Now alice (a0) has been expired by the idle timeout (TTI).
-            mock.increment(Duration::from_secs(6));
-            expected.push((Arc::new("alice"), "a0", RemovalCause::Expired));
-            assert_eq_with_mode!(cache.get(&"alice"), None, delivery_mode);
+        // We have not ran sync after the expiration of alice (a0), so it is
+        // still in the cache.
+        assert_eq!(cache.entry_count(), 1);
 
-            // We have not ran sync after the expiration of alice (a0), so it is
-            // still in the cache.
-            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
+        // Re-insert alice with a different value. Since alice (a0) is still
+        // in the cache, this is actually a replace operation rather than an
+        // insert operation. We want to verify that the RemovalCause of a0 is
+        // Expired, not Replaced.
+        cache.insert("alice", "a1");
+        {
+            let mut a = actual.lock();
+            assert_eq!(a.len(), 1);
+            assert_eq!(a[0], (Arc::new("alice"), "a0", RemovalCause::Expired));
+            a.clear();
+        }
 
-            // Re-insert alice with a different value. Since alice (a0) is still
-            // in the cache, this is actually a replace operation rather than an
-            // insert operation. We want to verify that the RemovalCause of a0 is
-            // Expired, not Replaced.
-            cache.insert("alice", "a1");
-            cache.sync();
+        cache.sync();
 
-            mock.increment(Duration::from_secs(4));
-            assert_eq_with_mode!(cache.get(&"alice"), Some("a1"), delivery_mode);
-            cache.sync();
+        mock.increment(Duration::from_secs(4));
+        assert_eq!(cache.get(&"alice"), Some("a1"));
+        cache.sync();
 
-            // Now alice has been expired by time-to-live (TTL).
-            mock.increment(Duration::from_secs(4));
-            expected.push((Arc::new("alice"), "a1", RemovalCause::Expired));
-            assert_eq_with_mode!(cache.get(&"alice"), None, delivery_mode);
+        // Now alice has been expired by time-to-live (TTL).
+        mock.increment(Duration::from_secs(4));
+        assert_eq!(cache.get(&"alice"), None);
 
-            // But, again, it is still in the cache.
-            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
+        // But, again, it is still in the cache.
+        assert_eq!(cache.entry_count(), 1);
 
-            // Re-insert alice with a different value and verify that the
-            // RemovalCause of a1 is Expired (not Replaced).
-            cache.insert("alice", "a2");
-            cache.sync();
+        // Re-insert alice with a different value and verify that the
+        // RemovalCause of a1 is Expired (not Replaced).
+        cache.insert("alice", "a2");
+        {
+            let mut a = actual.lock();
+            assert_eq!(a.len(), 1);
+            assert_eq!(a[0], (Arc::new("alice"), "a1", RemovalCause::Expired));
+            a.clear();
+        }
 
-            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
+        cache.sync();
 
-            // Now alice (a2) has been expired by the idle timeout.
-            mock.increment(Duration::from_secs(6));
-            expected.push((Arc::new("alice"), "a2", RemovalCause::Expired));
-            assert_eq_with_mode!(cache.get(&"alice"), None, delivery_mode);
-            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
+        assert_eq!(cache.entry_count(), 1);
 
-            // This invalidate will internally remove alice (a2).
-            cache.invalidate(&"alice");
-            cache.sync();
-            assert_eq_with_mode!(cache.entry_count(), 0, delivery_mode);
+        // Now alice (a2) has been expired by the idle timeout.
+        mock.increment(Duration::from_secs(6));
+        assert_eq!(cache.get(&"alice"), None);
+        assert_eq!(cache.entry_count(), 1);
 
-            // Re-insert, and this time, make it expired by the TTL.
-            cache.insert("alice", "a3");
-            cache.sync();
-            mock.increment(Duration::from_secs(4));
-            assert_eq_with_mode!(cache.get(&"alice"), Some("a3"), delivery_mode);
-            cache.sync();
-            mock.increment(Duration::from_secs(4));
-            expected.push((Arc::new("alice"), "a3", RemovalCause::Expired));
-            assert_eq_with_mode!(cache.get(&"alice"), None, delivery_mode);
-            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
+        // This invalidate will internally remove alice (a2).
+        cache.invalidate(&"alice");
+        cache.sync();
+        assert_eq!(cache.entry_count(), 0);
 
-            // This invalidate will internally remove alice (a2).
-            cache.invalidate(&"alice");
-            cache.sync();
-            assert_eq_with_mode!(cache.entry_count(), 0, delivery_mode);
+        {
+            let mut a = actual.lock();
+            assert_eq!(a.len(), 1);
+            assert_eq!(a[0], (Arc::new("alice"), "a2", RemovalCause::Expired));
+            a.clear();
+        }
 
-            // Ensure all scheduled notifications have been processed.
-            std::thread::sleep(Duration::from_secs(1));
+        // Re-insert, and this time, make it expired by the TTL.
+        cache.insert("alice", "a3");
+        cache.sync();
+        mock.increment(Duration::from_secs(4));
+        assert_eq!(cache.get(&"alice"), Some("a3"));
+        cache.sync();
+        mock.increment(Duration::from_secs(4));
+        assert_eq!(cache.get(&"alice"), None);
+        assert_eq!(cache.entry_count(), 1);
 
-            // Verify the notifications.
-            let actual = &*actual.lock();
-            assert_eq_with_mode!(actual.len(), expected.len(), delivery_mode);
-            for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-                assert_eq!(
-                    actual, &expected,
-                    "expected[{}] (delivery mode: {:?})",
-                    i, delivery_mode
-                );
-            }
+        // This invalidate will internally remove alice (a2).
+        cache.invalidate(&"alice");
+        cache.sync();
+
+        assert_eq!(cache.entry_count(), 0);
+
+        {
+            let mut a = actual.lock();
+            assert_eq!(a.len(), 1);
+            assert_eq!(a[0], (Arc::new("alice"), "a3", RemovalCause::Expired));
+            a.clear();
         }
     }
 
@@ -2414,5 +2335,49 @@ mod tests {
         assert!(debug_str.contains(r#"'b': "bob""#));
         assert!(debug_str.contains(r#"'c': "cindy""#));
         assert!(debug_str.ends_with('}'));
+    }
+
+    type NotificationTuple<K, V> = (Arc<K>, V, RemovalCause);
+
+    fn verify_notification_vec<K, V>(
+        actual: Arc<Mutex<Vec<NotificationTuple<K, V>>>>,
+        expected: &[NotificationTuple<K, V>],
+        delivery_mode: DeliveryMode,
+    ) where
+        K: Eq + std::fmt::Debug,
+        V: Eq + std::fmt::Debug,
+    {
+        // Retries will be needed when testing in a QEMU VM.
+        const MAX_RETRIES: usize = 5;
+        let mut retries = 0;
+        loop {
+            // Ensure all scheduled notifications have been processed.
+            std::thread::sleep(Duration::from_millis(500));
+
+            let actual = &*actual.lock();
+            if actual.len() != expected.len() {
+                if retries <= MAX_RETRIES {
+                    retries += 1;
+                    continue;
+                } else {
+                    assert_eq!(
+                        actual.len(),
+                        expected.len(),
+                        "Retries exhausted (delivery mode: {:?})",
+                        delivery_mode
+                    );
+                }
+            }
+
+            for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+                assert_eq!(
+                    actual, expected,
+                    "expected[{}] (delivery mode: {:?})",
+                    i, delivery_mode
+                );
+            }
+
+            break;
+        }
     }
 }

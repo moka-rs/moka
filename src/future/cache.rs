@@ -1140,6 +1140,8 @@ mod tests {
 
         // Create an eviction listener.
         let a1 = Arc::clone(&actual);
+        // We use non-async mutex in the eviction listener (because the listener
+        // is a regular closure).
         let listener = move |k, v, cause| a1.lock().push((k, v, cause));
 
         // Create a cache with the eviction listener.
@@ -1207,15 +1209,7 @@ mod tests {
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"b"));
 
-        // Ensure all scheduled notifications have been processed.
-        std::thread::sleep(Duration::from_secs(1));
-
-        // Verify the notifications.
-        let actual = &*actual.lock();
-        assert_eq!(actual.len(), expected.len());
-        for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-            assert_eq!(actual, &expected, "expected[{}]", i);
-        }
+        verify_notification_vec(actual, &expected);
     }
 
     #[test]
@@ -1384,15 +1378,7 @@ mod tests {
         assert_eq!(cache.entry_count(), 2);
         assert_eq!(cache.weighted_size(), 25);
 
-        // Ensure all scheduled notifications have been processed.
-        std::thread::sleep(Duration::from_secs(1));
-
-        // Verify the notifications.
-        let actual = &*actual.lock();
-        assert_eq!(actual.len(), expected.len());
-        for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-            assert_eq!(actual, &expected, "expected[{}]", i);
-        }
+        verify_notification_vec(actual, &expected);
     }
 
     #[tokio::test]
@@ -1478,15 +1464,7 @@ mod tests {
         assert!(!cache.contains_key(&"c"));
         assert!(cache.contains_key(&"d"));
 
-        // Ensure all scheduled notifications have been processed.
-        std::thread::sleep(Duration::from_secs(1));
-
-        // Verify the notifications.
-        let actual = &*actual.lock();
-        assert_eq!(actual.len(), expected.len());
-        for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-            assert_eq!(actual, &expected, "expected[{}]", i);
-        }
+        verify_notification_vec(actual, &expected);
     }
 
     #[tokio::test]
@@ -1584,15 +1562,7 @@ mod tests {
         assert_eq!(cache.entry_count(), 0);
         assert_eq!(cache.invalidation_predicate_count(), 0);
 
-        // Ensure all scheduled notifications have been processed.
-        std::thread::sleep(Duration::from_secs(1));
-
-        // Verify the notifications.
-        let actual = &*actual.lock();
-        assert_eq!(actual.len(), expected.len());
-        for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-            assert_eq!(actual, &expected, "expected[{}]", i);
-        }
+        verify_notification_vec(actual, &expected);
 
         Ok(())
     }
@@ -1676,15 +1646,7 @@ mod tests {
         cache.sync();
         assert!(cache.is_table_empty());
 
-        // Ensure all scheduled notifications have been processed.
-        std::thread::sleep(Duration::from_secs(1));
-
-        // Verify the notifications.
-        let actual = &*actual.lock();
-        assert_eq!(actual.len(), expected.len());
-        for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-            assert_eq!(actual, &expected, "expected[{}]", i);
-        }
+        verify_notification_vec(actual, &expected);
     }
 
     #[tokio::test]
@@ -1763,15 +1725,7 @@ mod tests {
         cache.sync();
         assert!(cache.is_table_empty());
 
-        // Ensure all scheduled notifications have been processed.
-        std::thread::sleep(Duration::from_secs(1));
-
-        // Verify the notifications.
-        let actual = &*actual.lock();
-        assert_eq!(actual.len(), expected.len());
-        for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-            assert_eq!(actual, &expected, "expected[{}]", i);
-        }
+        verify_notification_vec(actual, &expected);
     }
 
     #[tokio::test]
@@ -2391,15 +2345,7 @@ mod tests {
         cache.sync();
         assert_eq!(cache.entry_count(), 3);
 
-        // Ensure all scheduled notifications have been processed.
-        std::thread::sleep(Duration::from_secs(1));
-
-        // Verify the notifications.
-        let actual = &*actual.lock();
-        assert_eq!(actual.len(), expected.len());
-        for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-            assert_eq!(actual, &expected, "expected[{}]", i);
-        }
+        verify_notification_vec(actual, &expected);
     }
 
     #[tokio::test]
@@ -2491,14 +2437,40 @@ mod tests {
         cache.sync();
         assert_eq!(cache.entry_count(), 0);
 
-        // Ensure all scheduled notifications have been processed.
-        std::thread::sleep(Duration::from_secs(1));
+        verify_notification_vec(actual, &expected);
+    }
 
-        // Verify the notifications.
-        let actual = &*actual.lock();
-        assert_eq!(actual.len(), expected.len());
-        for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-            assert_eq!(actual, &expected, "expected[{}]", i);
+    type NotificationTuple<K, V> = (Arc<K>, V, RemovalCause);
+
+    fn verify_notification_vec<K, V>(
+        actual: Arc<Mutex<Vec<NotificationTuple<K, V>>>>,
+        expected: &[NotificationTuple<K, V>],
+    ) where
+        K: Eq + std::fmt::Debug,
+        V: Eq + std::fmt::Debug,
+    {
+        // Retries will be needed when testing in a QEMU VM.
+        const MAX_RETRIES: usize = 5;
+        let mut retries = 0;
+        loop {
+            // Ensure all scheduled notifications have been processed.
+            std::thread::sleep(Duration::from_millis(500));
+
+            let actual = &*actual.lock();
+            if actual.len() != expected.len() {
+                if retries <= MAX_RETRIES {
+                    retries += 1;
+                    continue;
+                } else {
+                    assert_eq!(actual.len(), expected.len(), "Retries exhausted");
+                }
+            }
+
+            for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+                assert_eq!(actual, expected, "expected[{}]", i);
+            }
+
+            break;
         }
     }
 

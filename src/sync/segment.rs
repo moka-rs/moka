@@ -742,19 +742,7 @@ mod tests {
             assert_eq_with_mode!(cache.get(&"b"), None, delivery_mode);
             assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
 
-            // Ensure all scheduled notifications have been processed.
-            std::thread::sleep(Duration::from_secs(1));
-
-            // Verify the notifications.
-            let actual = &*actual.lock();
-            assert_eq_with_mode!(actual.len(), expected.len(), delivery_mode);
-            for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-                assert_eq!(
-                    actual, &expected,
-                    "expected[{}] (delivery mode: {:?})",
-                    i, delivery_mode
-                );
-            }
+            verify_notification_vec(actual, &expected, delivery_mode);
         }
     }
 
@@ -903,19 +891,7 @@ mod tests {
             assert_eq_with_mode!(cache.entry_count(), 2, delivery_mode);
             assert_eq_with_mode!(cache.weighted_size(), 25, delivery_mode);
 
-            // Ensure all scheduled notifications have been processed.
-            std::thread::sleep(Duration::from_secs(1));
-
-            // Verify the notifications.
-            let actual = &*actual.lock();
-            assert_eq_with_mode!(actual.len(), expected.len(), delivery_mode);
-            for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-                assert_eq!(
-                    actual, &expected,
-                    "expected[{}] (delivery mode: {:?})",
-                    i, delivery_mode
-                );
-            }
+            verify_notification_vec(actual, &expected, delivery_mode);
         }
     }
 
@@ -1015,21 +991,7 @@ mod tests {
             assert_with_mode!(!cache.contains_key(&"c"), delivery_mode);
             assert_with_mode!(cache.contains_key(&"d"), delivery_mode);
 
-            // Ensure all scheduled notifications have been processed.
-            std::thread::sleep(Duration::from_secs(1));
-
-            // Verify the notifications.
-            let actual = &*actual.lock();
-            assert_eq_with_mode!(actual.len(), expected.len(), delivery_mode);
-            for actual_key in actual.keys() {
-                assert_eq!(
-                    actual.get(actual_key),
-                    expected.get(actual_key),
-                    "expected[{}] (delivery mode: {:?})",
-                    actual_key,
-                    delivery_mode
-                );
-            }
+            verify_notification_map(actual, &expected, delivery_mode);
         }
     }
 
@@ -1145,21 +1107,7 @@ mod tests {
             assert_eq_with_mode!(cache.entry_count(), 0, delivery_mode);
             assert_eq_with_mode!(cache.invalidation_predicate_count(), 0, delivery_mode);
 
-            // Ensure all scheduled notifications have been processed.
-            std::thread::sleep(Duration::from_secs(1));
-
-            // Verify the notifications.
-            let actual = &*actual.lock();
-            assert_eq_with_mode!(actual.len(), expected.len(), delivery_mode);
-            for actual_key in actual.keys() {
-                assert_eq!(
-                    actual.get(actual_key),
-                    expected.get(actual_key),
-                    "expected[{}] (delivery mode: {:?})",
-                    actual_key,
-                    delivery_mode
-                );
-            }
+            verify_notification_map(actual, &expected, delivery_mode);
 
             Ok(())
         }
@@ -1632,5 +1580,94 @@ mod tests {
         assert!(debug_str.contains(r#"'b': "bob""#));
         assert!(debug_str.contains(r#"'c': "cindy""#));
         assert!(debug_str.ends_with('}'));
+    }
+
+    type NotificationPair<V> = (V, RemovalCause);
+    type NotificationTriple<K, V> = (Arc<K>, V, RemovalCause);
+
+    fn verify_notification_vec<K, V>(
+        actual: Arc<Mutex<Vec<NotificationTriple<K, V>>>>,
+        expected: &[NotificationTriple<K, V>],
+        delivery_mode: DeliveryMode,
+    ) where
+        K: Eq + std::fmt::Debug,
+        V: Eq + std::fmt::Debug,
+    {
+        // Retries will be needed when testing in a QEMU VM.
+        const MAX_RETRIES: usize = 5;
+        let mut retries = 0;
+        loop {
+            // Ensure all scheduled notifications have been processed.
+            std::thread::sleep(Duration::from_millis(500));
+
+            let actual = &*actual.lock();
+            if actual.len() != expected.len() {
+                if retries <= MAX_RETRIES {
+                    retries += 1;
+                    continue;
+                } else {
+                    assert_eq!(
+                        actual.len(),
+                        expected.len(),
+                        "Retries exhausted (delivery mode: {:?})",
+                        delivery_mode
+                    );
+                }
+            }
+
+            for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+                assert_eq!(
+                    actual, expected,
+                    "expected[{}] (delivery mode: {:?})",
+                    i, delivery_mode
+                );
+            }
+
+            break;
+        }
+    }
+
+    fn verify_notification_map<K, V>(
+        actual: Arc<Mutex<std::collections::HashMap<Arc<K>, NotificationPair<V>>>>,
+        expected: &std::collections::HashMap<Arc<K>, NotificationPair<V>>,
+        delivery_mode: DeliveryMode,
+    ) where
+        K: Eq + std::hash::Hash + std::fmt::Display,
+        V: Eq + std::fmt::Debug,
+    {
+        // Retries will be needed when testing in a QEMU VM.
+        const MAX_RETRIES: usize = 5;
+        let mut retries = 0;
+        loop {
+            // Ensure all scheduled notifications have been processed.
+            std::thread::sleep(Duration::from_millis(500));
+
+            let actual = &*actual.lock();
+            if actual.len() != expected.len() {
+                if retries <= MAX_RETRIES {
+                    retries += 1;
+                    continue;
+                } else {
+                    assert_eq!(
+                        actual.len(),
+                        expected.len(),
+                        "Retries exhausted (delivery mode: {:?})",
+                        delivery_mode
+                    );
+                }
+            }
+
+            for actual_key in actual.keys() {
+                assert_eq!(
+                    actual.get(actual_key),
+                    expected.get(actual_key),
+                    "expected[{}] (delivery mode: {:?})",
+                    actual_key,
+                    delivery_mode
+                );
+            }
+
+            break;
+        }
     }
 }
