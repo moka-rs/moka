@@ -1404,11 +1404,6 @@ mod tests {
         cache.insert(0, 1).await;
         assert_eq!(cache.get(&0), Some(1));
 
-        // use moka::sync::ConcurrentCacheExt;
-        // cache.sync();
-
-        // Timer::after(Duration::from_millis(520)).await;
-
         cache.invalidate_all();
         assert_eq!(cache.get(&0), None);
     }
