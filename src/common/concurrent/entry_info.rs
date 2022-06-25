@@ -106,7 +106,7 @@ mod test {
             if cfg!(feature = "quanta") {
                 24
             } else {
-                48
+                40
             }
         } else {
             // ignore
