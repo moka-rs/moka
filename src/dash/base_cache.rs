@@ -813,8 +813,6 @@ where
         freq: &FrequencySketch,
         counters: &mut EvictionCounters,
     ) {
-        // entry.set_last_accessed(timestamp);
-        // entry.set_last_modified(timestamp);
         entry.set_dirty(false);
 
         if entry.is_admitted() {
