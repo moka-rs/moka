@@ -96,10 +96,23 @@ mod test {
         use std::mem::size_of;
 
         // As of Rust 1.61.
-        if cfg!(target_pointer_width = "64") || cfg!(target_pointer_width = "32") {
-            assert_eq!(size_of::<EntryInfo>(), 24);
+        let size = if cfg!(target_pointer_width = "64") {
+            if cfg!(feature = "quanta") {
+                24
+            } else {
+                72
+            }
+        } else if cfg!(target_pointer_width = "32") {
+            if cfg!(feature = "quanta") {
+                24
+            } else {
+                48
+            }
         } else {
             // ignore
-        }
+            return;
+        };
+
+        assert_eq!(size_of::<EntryInfo>(), size);
     }
 }

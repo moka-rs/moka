@@ -15,8 +15,10 @@ impl Default for AtomicInstant {
 }
 
 impl AtomicInstant {
-    pub(crate) fn reset(&self) {
-        *self.instant.write() = None;
+    pub(crate) fn new(timestamp: Instant) -> Self {
+        let ai = Self::default();
+        ai.set_instant(timestamp);
+        ai
     }
 
     pub(crate) fn is_set(&self) -> bool {
