@@ -5,6 +5,7 @@ use crate::common::{concurrent::atomic_time::AtomicInstant, time::Instant};
 
 pub(crate) struct EntryInfo {
     is_admitted: AtomicBool,
+    is_dirty: AtomicBool,
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
     policy_weight: AtomicU32,
@@ -12,14 +13,15 @@ pub(crate) struct EntryInfo {
 
 impl EntryInfo {
     #[inline]
-    pub(crate) fn new(policy_weight: u32) -> Self {
+    pub(crate) fn new(timestamp: Instant, policy_weight: u32) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
         super::debug_counters::InternalGlobalDebugCounters::entry_info_created();
 
         Self {
             is_admitted: Default::default(),
-            last_accessed: Default::default(),
-            last_modified: Default::default(),
+            is_dirty: AtomicBool::new(true),
+            last_accessed: AtomicInstant::new(timestamp),
+            last_modified: AtomicInstant::new(timestamp),
             policy_weight: AtomicU32::new(policy_weight),
         }
     }
@@ -30,14 +32,18 @@ impl EntryInfo {
     }
 
     #[inline]
-    pub(crate) fn set_is_admitted(&self, value: bool) {
+    pub(crate) fn set_admitted(&self, value: bool) {
         self.is_admitted.store(value, Ordering::Release);
     }
 
     #[inline]
-    pub(crate) fn reset_timestamps(&self) {
-        self.last_accessed.reset();
-        self.last_modified.reset();
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.is_dirty.load(Ordering::Acquire)
+    }
+
+    #[inline]
+    pub(crate) fn set_dirty(&self, value: bool) {
+        self.is_dirty.store(value, Ordering::Release);
     }
 
     #[inline]
@@ -76,5 +82,24 @@ impl AccessTime for EntryInfo {
     #[inline]
     fn set_last_modified(&self, timestamp: Instant) {
         self.last_modified.set_instant(timestamp);
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::EntryInfo;
+
+    // Ignore this test by default as struct size may change in the future.
+    // #[ignore]
+    #[test]
+    fn check_struct_size() {
+        use std::mem::size_of;
+
+        // As of Rust 1.61.
+        if cfg!(target_pointer_width = "64") || cfg!(target_pointer_width = "32") {
+            assert_eq!(size_of::<EntryInfo>(), 24);
+        } else {
+            // ignore
+        }
     }
 }

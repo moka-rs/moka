@@ -258,6 +258,7 @@ where
 
     #[inline]
     pub(crate) fn do_insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) -> WriteOp<K, V> {
+        let ts = self.inner.current_time_from_expiration_clock();
         let weight = self.inner.weigh(&key, &value);
         let mut insert_op = None;
         let mut update_op = None;
@@ -273,7 +274,7 @@ where
                 //    prevent this new ValueEntry from being evicted by an expiration policy.
                 // 3. This method will update the policy_weight with the new weight.
                 let old_weight = entry.policy_weight();
-                *entry = self.new_value_entry_from(value.clone(), weight, entry);
+                *entry = self.new_value_entry_from(value.clone(), ts, weight, entry);
                 update_op = Some(WriteOp::Upsert {
                     key_hash: KeyHash::new(Arc::clone(&key), hash),
                     value_entry: TrioArc::clone(entry),
@@ -283,7 +284,7 @@ where
             })
             // Insert
             .or_insert_with(|| {
-                let entry = self.new_value_entry(value.clone(), weight);
+                let entry = self.new_value_entry(value.clone(), ts, weight);
                 insert_op = Some(WriteOp::Upsert {
                     key_hash: KeyHash::new(Arc::clone(&key), hash),
                     value_entry: TrioArc::clone(&entry),
@@ -301,8 +302,13 @@ where
     }
 
     #[inline]
-    fn new_value_entry(&self, value: V, policy_weight: u32) -> TrioArc<ValueEntry<K, V>> {
-        let info = TrioArc::new(EntryInfo::new(policy_weight));
+    fn new_value_entry(
+        &self,
+        value: V,
+        timestamp: Instant,
+        policy_weight: u32,
+    ) -> TrioArc<ValueEntry<K, V>> {
+        let info = TrioArc::new(EntryInfo::new(timestamp, policy_weight));
         TrioArc::new(ValueEntry::new(value, info))
     }
 
@@ -310,10 +316,16 @@ where
     fn new_value_entry_from(
         &self,
         value: V,
+        timestamp: Instant,
         policy_weight: u32,
         other: &ValueEntry<K, V>,
     ) -> TrioArc<ValueEntry<K, V>> {
         let info = TrioArc::clone(other.entry_info());
+        // To prevent this updated ValueEntry from being evicted by an expiration policy,
+        // set the dirty flag to true. It will be reset to false when the write is applied.
+        info.set_dirty(true);
+        info.set_last_accessed(timestamp);
+        info.set_last_modified(timestamp);
         info.set_policy_weight(policy_weight);
         TrioArc::new(ValueEntry::new_from(value, info, other))
     }
@@ -773,7 +785,6 @@ where
         use WriteOp::*;
         let freq = self.frequency_sketch.read();
         let ch = &self.write_op_ch;
-        let ts = self.current_time_from_expiration_clock();
 
         for _ in 0..count {
             match ch.try_recv() {
@@ -782,9 +793,7 @@ where
                     value_entry: entry,
                     old_weight,
                     new_weight,
-                }) => {
-                    self.handle_upsert(kh, entry, old_weight, new_weight, ts, deqs, &freq, counters)
-                }
+                }) => self.handle_upsert(kh, entry, old_weight, new_weight, deqs, &freq, counters),
                 Ok(Remove(KvEntry { key: _key, entry })) => {
                     Self::handle_remove(deqs, entry, counters)
                 }
@@ -800,13 +809,13 @@ where
         entry: TrioArc<ValueEntry<K, V>>,
         old_weight: u32,
         new_weight: u32,
-        timestamp: Instant,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
         counters: &mut EvictionCounters,
     ) {
-        entry.set_last_accessed(timestamp);
-        entry.set_last_modified(timestamp);
+        // entry.set_last_accessed(timestamp);
+        // entry.set_last_modified(timestamp);
+        entry.set_dirty(false);
 
         if entry.is_admitted() {
             // The entry has been already admitted, so treat this as an update.
@@ -971,7 +980,7 @@ where
         if self.is_write_order_queue_enabled() {
             deqs.push_back_wo(KeyDate::new(key, entry.entry_info()), entry);
         }
-        entry.set_is_admitted(true);
+        entry.set_admitted(true);
     }
 
     fn handle_remove(
@@ -980,7 +989,7 @@ where
         counters: &mut EvictionCounters,
     ) {
         if entry.is_admitted() {
-            entry.set_is_admitted(false);
+            entry.set_admitted(false);
             counters.saturating_sub(1, entry.policy_weight());
             // The following two unlink_* functions will unset the deq nodes.
             deqs.unlink_ao(&entry);
@@ -998,7 +1007,7 @@ where
         counters: &mut EvictionCounters,
     ) {
         if entry.is_admitted() {
-            entry.set_is_admitted(false);
+            entry.set_admitted(false);
             counters.saturating_sub(1, entry.policy_weight());
             // The following two unlink_* functions will unset the deq nodes.
             Deques::unlink_ao_from_deque(ao_deq_name, ao_deq, &entry);
@@ -1090,7 +1099,7 @@ where
         write_order_deq: &mut Deque<KeyDate<K>>,
     ) -> bool {
         if let Some(entry) = self.cache.get(key) {
-            if entry.last_accessed().is_none() {
+            if entry.is_dirty() {
                 // The key exists and the entry has been updated.
                 Deques::move_to_back_ao_in_deque(deq_name, deq, &entry);
                 Deques::move_to_back_wo_in_deque(write_order_deq, &entry);

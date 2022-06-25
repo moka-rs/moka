@@ -212,10 +212,6 @@ impl<K, V> ValueEntry<K, V> {
                 write_order_q_node: other_nodes.write_order_q_node,
             }
         };
-        // To prevent this updated ValueEntry from being evicted by an expiration policy,
-        // set the max value to the timestamps. They will be replaced with the real
-        // timestamps when applying writes.
-        entry_info.reset_timestamps();
         Self {
             value,
             info: entry_info,
@@ -231,8 +227,16 @@ impl<K, V> ValueEntry<K, V> {
         self.info.is_admitted()
     }
 
-    pub(crate) fn set_is_admitted(&self, value: bool) {
-        self.info.set_is_admitted(value);
+    pub(crate) fn set_admitted(&self, value: bool) {
+        self.info.set_admitted(value);
+    }
+
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.info.is_dirty()
+    }
+
+    pub(crate) fn set_dirty(&self, value: bool) {
+        self.info.set_dirty(value);
     }
 
     #[inline]
