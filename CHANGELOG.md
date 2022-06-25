@@ -5,7 +5,7 @@
 ### Fixed
 
 - Fix a bug caused `invalidate_all` will not invalidate entries inserted just
-  before calling it. ([#155](gh-issue-0155))
+  before calling it. ([#155][gh-issue-0155])
 
 
 ## Version 0.8.5
