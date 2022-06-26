@@ -1059,6 +1059,7 @@ where
         for _ in 0..batch_size {
             // Peek the front node of the deque and check if it is expired.
             let key = deq.peek_front().and_then(|node| {
+                // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
                 if is_expired_entry_ao(tti, va, &*node, now) {
                     Some(Arc::clone(node.element.key()))
                 } else {
@@ -1131,6 +1132,7 @@ where
         let va = &self.valid_after();
         for _ in 0..batch_size {
             let key = deqs.write_order.peek_front().and_then(|node| {
+                // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
                 if is_expired_entry_wo(ttl, va, &*node, now) {
                     Some(Arc::clone(node.element.key()))
                 } else {
@@ -1188,15 +1190,20 @@ where
             }
 
             let maybe_key_and_ts = deq.peek_front().map(|node| {
+                let entry_info = node.element.entry_info();
                 (
                     Arc::clone(node.element.key()),
-                    node.element.entry_info().last_modified(),
+                    entry_info.is_dirty(),
+                    entry_info.last_modified(),
                 )
             });
 
             let (key, ts) = match maybe_key_and_ts {
-                Some((key, Some(ts))) => (key, ts),
-                Some((key, None)) => {
+                Some((key, false, Some(ts))) => (key, ts),
+                // TODO: Remove the second pattern `Some((_key, false, None))` once we change
+                // `last_modified` and `last_accessed` in `EntryInfo` from `Option<Instant>` to
+                // `Instant`.
+                Some((key, true, _)) | Some((key, false, None)) => {
                     if self.try_skip_updated_entry(&key, DEQ_NAME, deq, write_order_deq) {
                         continue;
                     } else {

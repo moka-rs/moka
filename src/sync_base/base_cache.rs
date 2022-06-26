@@ -1242,6 +1242,7 @@ where
         for _ in 0..batch_size {
             // Peek the front node of the deque and check if it is expired.
             let key_hash = deq.peek_front().and_then(|node| {
+                // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
                 if is_expired_entry_ao(tti, va, &*node, now) {
                     Some((Arc::clone(node.element.key()), node.element.hash()))
                 } else {
@@ -1315,6 +1316,7 @@ where
         let va = &self.valid_after();
         for _ in 0..batch_size {
             let key = deqs.write_order.peek_front().and_then(|node| {
+                // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
                 if is_expired_entry_wo(ttl, va, &*node, now) {
                     Some(Arc::clone(node.element.key()))
                 } else {
@@ -1408,11 +1410,13 @@ where
 
         while len < batch_size {
             if let Some(kd) = iter.next() {
-                if let Some(ts) = kd.last_modified() {
-                    let key = kd.key();
-                    let hash = self.hash(key);
-                    candidates.push(KeyDateLite::new(key, hash, ts));
-                    len += 1;
+                if !kd.is_dirty() {
+                    if let Some(ts) = kd.last_modified() {
+                        let key = kd.key();
+                        let hash = self.hash(key);
+                        candidates.push(KeyDateLite::new(key, hash, ts));
+                        len += 1;
+                    }
                 }
             } else {
                 break;
@@ -1442,16 +1446,21 @@ where
             }
 
             let maybe_key_hash_ts = deq.peek_front().map(|node| {
+                let entry_info = node.element.entry_info();
                 (
                     Arc::clone(node.element.key()),
                     node.element.hash(),
-                    node.element.entry_info().last_modified(),
+                    entry_info.is_dirty(),
+                    entry_info.last_modified(),
                 )
             });
 
             let (key, hash, ts) = match maybe_key_hash_ts {
-                Some((key, hash, Some(ts))) => (key, hash, ts),
-                Some((key, hash, None)) => {
+                Some((key, hash, false, Some(ts))) => (key, hash, ts),
+                // TODO: Remove the second pattern `Some((_key, false, None))` once we change
+                // `last_modified` and `last_accessed` in `EntryInfo` from `Option<Instant>` to
+                // `Instant`.
+                Some((key, hash, true, _)) | Some((key, hash, false, None)) => {
                     if self.try_skip_updated_entry(&key, hash, DEQ_NAME, deq, write_order_deq) {
                         continue;
                     } else {
