@@ -4,8 +4,13 @@
 
 ### Fixed
 
-- Fix a bug caused `invalidate_all` will not invalidate entries inserted just
-  before calling it. ([#155][gh-issue-0155])
+- Fix a bug caused `invalidate_all` and `invalidate_entries_if` of the following
+  caches will not invalidate entries inserted just before calling them
+  ([#155][gh-issue-0155]):
+    - `sync::Cache`
+    - `sync::SegmentedCache`
+    - `future::Cache`
+    - Experimental `dash::Cache`
 
 
 ## Version 0.8.5
