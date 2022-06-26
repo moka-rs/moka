@@ -2322,12 +2322,13 @@ mod tests {
         }
     }
 
-    // This test ensures the key-level lock for the immediate delivery mode
-    // is working so that the notifications for a given key should always ordered.
-    // This should be true even if multiple clients try to modify the entries
-    // for the key at the same time.
+    // This test ensures the key-level lock for the immediate notification
+    // delivery mode is working so that the notifications for a given key
+    // should always be ordered. This is true even if multiple client threads
+    // try to modify the entries for the key at the same time. (This test will
+    // run three client threads)
     #[test]
-    fn test_immediate_removal_notifications_on_the_same_key() {
+    fn test_key_lock_used_by_immediate_removal_notifications() {
         use std::thread::{sleep, spawn};
 
         const KEY: &str = "alice";
@@ -2363,6 +2364,8 @@ mod tests {
             .time_to_live(Duration::from_millis(200))
             .build();
 
+        // - Notifications for the same key must not overlap.
+
         // Time  Event
         // ----- -------------------------------------
         // 0000: Insert value a0
@@ -2370,13 +2373,12 @@ mod tests {
         // 0210: Insert value a1 -> expired a0 (N-A0)
         // 0220: Insert value a2 (waiting) (A-A2)
         // 0310: N-A0 processed
-        //       I-A2 inserted -> replace a1 (N-A1)
+        //       A-A2 finished waiting -> replace a1 (N-A1)
         // 0320: Invalidate (waiting) (R-A2)
         // 0410: N-A1 processed
-        //       R-A2 processed -> explicit a2 (N-A2)
+        //       R-A2 finished waiting -> explicit a2 (N-A2)
         // 0510: N-A2 processed
 
-        // - Notifications for the same key must not overlap!
 
         let expected = vec![
             Event::Insert("a0"),
