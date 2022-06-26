@@ -7,11 +7,14 @@ use std::{
 };
 
 use crate::{
-    common::concurrent::thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
+    common::concurrent::{
+        constants::WRITE_RETRY_INTERVAL_MICROS,
+        thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
+    },
     notification::{self, DeliveryMode, EvictionListener, EvictionListenerRef, RemovalCause},
 };
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender, TrySendError};
 use parking_lot::Mutex;
 
 const CHANNEL_CAPACITY: usize = 1_024;
@@ -156,14 +159,33 @@ where
 {
     fn add_single_notification(&self, key: Arc<K>, value: V, cause: RemovalCause) {
         let entry = RemovedEntries::new_single(key, value, cause);
-        self.snd.send(entry).unwrap();
-        self.submit_task_if_necessary();
+        self.send_entries(entry)
+            .expect("Failed to send notification");
     }
 
     fn add_multiple_notifications(&self, entries: Vec<RemovedEntry<K, V>>) {
         let entries = RemovedEntries::new_multi(entries);
-        self.snd.send(entries).unwrap(); // TODO: Error handling?
-        self.submit_task_if_necessary();
+        self.send_entries(entries)
+            .expect("Failed to send notification");
+    }
+
+    fn send_entries(
+        &self,
+        entries: RemovedEntries<K, V>,
+    ) -> Result<(), TrySendError<RemovedEntries<K, V>>> {
+        let mut entries = entries;
+        loop {
+            self.submit_task_if_necessary();
+            match self.snd.try_send(entries) {
+                Ok(()) => break,
+                Err(TrySendError::Full(entries1)) => {
+                    entries = entries1;
+                    std::thread::sleep(Duration::from_millis(WRITE_RETRY_INTERVAL_MICROS));
+                }
+                Err(e @ TrySendError::Disconnected(_)) => return Err(e),
+            }
+        }
+        Ok(())
     }
 
     fn submit_task(&self) {
