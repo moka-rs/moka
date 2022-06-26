@@ -9,7 +9,7 @@ pub(crate) struct EntryInfo {
     /// the cache or evicted from the cache (so it should not have LRU nodes).
     is_admitted: AtomicBool,
     /// `is_dirty` indicates that the entry has been inserted (or updated)
-    /// in the hash table, but the history of the insertion has not yet 
+    /// in the hash table, but the history of the insertion has not yet
     /// been applied to the LRU deques and LFU estimator.
     is_dirty: AtomicBool,
     last_accessed: AtomicInstant,
