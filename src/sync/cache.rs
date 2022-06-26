@@ -2379,7 +2379,6 @@ mod tests {
         //       R-A2 finished waiting -> explicit a2 (N-A2)
         // 0510: N-A2 processed
 
-
         let expected = vec![
             Event::Insert("a0"),
             Event::Insert("a1"),

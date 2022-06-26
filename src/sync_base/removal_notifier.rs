@@ -88,23 +88,33 @@ impl<K, V> RemovalNotifier<K, V> {
 
 pub(crate) struct BlockingRemovalNotifier<K, V> {
     listener: EvictionListener<K, V>,
+    is_enabled: AtomicBool,
 }
 
 impl<K, V> BlockingRemovalNotifier<K, V> {
     fn new(listener: EvictionListener<K, V>) -> Self {
-        Self { listener }
+        Self {
+            listener,
+            is_enabled: AtomicBool::new(true),
+        }
     }
 
     fn notify(&self, key: Arc<K>, value: V, cause: RemovalCause) {
-        // use std::panic::{catch_unwind, AssertUnwindSafe};
+        use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 
-        (self.listener)(key, value, cause);
+        if !self.is_enabled.load(Ordering::Acquire) {
+            return;
+        }
 
-        // let listener_clo = || listener(key, value, cause);
-        // match catch_unwind(AssertUnwindSafe(listener_clo)) {
-        //     Ok(_) => todo!(),
-        //     Err(_) => todo!(),
-        // }
+        let listener_clo = || (self.listener)(key, value, cause);
+
+        // Safety: It is safe to assert unwind safety here because we will not
+        // call the listener again if it has been panicked.
+        let result = catch_unwind(AssertUnwindSafe(listener_clo));
+        if let Err(payload) = result {
+            self.is_enabled.store(false, Ordering::Release);
+            resume_unwind(payload);
+        }
     }
 }
 
@@ -141,6 +151,7 @@ impl<K, V> ThreadPoolRemovalNotifier<K, V> {
             task_lock: Default::default(),
             rcv,
             listener,
+            is_enabled: AtomicBool::new(true),
             is_running: Default::default(),
             is_shutting_down: Default::default(),
         };
@@ -191,12 +202,14 @@ where
     fn submit_task(&self) {
         // TODO: Use compare and exchange to ensure it was false.
 
-        if self.state.is_running() {
+        let state = &self.state;
+
+        if state.is_running() || !state.is_enabled() || state.is_shutting_down() {
             return;
         }
-        self.state.set_running(true);
+        state.set_running(true);
 
-        let task = NotificationTask::new(&self.state);
+        let task = NotificationTask::new(state);
         self.thread_pool.pool.execute(move || {
             task.execute();
         });
@@ -221,23 +234,36 @@ impl<K, V> NotificationTask<K, V> {
     }
 
     fn execute(&self) {
+        // Only one task can be executed at a time for a cache segment.
         let task_lock = self.state.task_lock.lock();
         let mut count = 0u16;
+        let mut is_enabled = self.state.is_enabled();
+
+        if !is_enabled {
+            return;
+        }
 
         while let Ok(entries) = self.state.rcv.try_recv() {
             match entries {
                 RemovedEntries::Single(entry) => {
-                    self.notify(&self.state.listener, entry);
+                    let result = self.notify(&self.state.listener, entry);
+                    if result.is_err() {
+                        is_enabled = false;
+                        break;
+                    }
                     count += 1;
                 }
                 RemovedEntries::Multi(entries) => {
                     for entry in entries {
-                        self.notify(&self.state.listener, entry);
-                        count += 1;
-
+                        let result = self.notify(&self.state.listener, entry);
+                        if result.is_err() {
+                            is_enabled = false;
+                            break;
+                        }
                         if self.state.is_shutting_down() {
                             break;
                         }
+                        count += 1;
                     }
                 }
             }
@@ -247,21 +273,29 @@ impl<K, V> NotificationTask<K, V> {
             }
         }
 
+        if !is_enabled {
+            self.state.set_enabled(false);
+        }
+
         std::mem::drop(task_lock);
         self.state.set_running(false);
     }
 
-    fn notify(&self, listener: EvictionListenerRef<'_, K, V>, entry: RemovedEntry<K, V>) {
-        // use std::panic::{catch_unwind, AssertUnwindSafe};
+    /// Returns `Ok(())` when calling the listener succeeded. Returns
+    /// `Err(panic_payload)` when the listener panicked.
+    fn notify(
+        &self,
+        listener: EvictionListenerRef<'_, K, V>,
+        entry: RemovedEntry<K, V>,
+    ) -> Result<(), Box<dyn std::any::Any + Send>> {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
 
         let RemovedEntry { key, value, cause } = entry;
-        listener(key, value, cause);
+        let listener_clo = || (listener)(key, value, cause);
 
-        // let listener_clo = || listener(key, value, cause);
-        // match catch_unwind(AssertUnwindSafe(listener_clo)) {
-        //     Ok(_) => todo!(),
-        //     Err(_) => todo!(),
-        // }
+        // Safety: It is safe to assert unwind safety here because we will not
+        // call the listener again if it has been panicked.
+        catch_unwind(AssertUnwindSafe(listener_clo))
     }
 }
 
@@ -269,11 +303,20 @@ struct NotifierState<K, V> {
     task_lock: Mutex<()>,
     rcv: Receiver<RemovedEntries<K, V>>,
     listener: EvictionListener<K, V>,
+    is_enabled: AtomicBool,
     is_running: AtomicBool,
     is_shutting_down: AtomicBool,
 }
 
 impl<K, V> NotifierState<K, V> {
+    fn is_enabled(&self) -> bool {
+        self.is_enabled.load(Ordering::Acquire)
+    }
+
+    fn set_enabled(&self, value: bool) {
+        self.is_enabled.store(value, Ordering::Release);
+    }
+
     fn is_running(&self) -> bool {
         self.is_running.load(Ordering::Acquire)
     }
