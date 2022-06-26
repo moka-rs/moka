@@ -77,11 +77,12 @@ impl<K> KeyDate<K> {
         &self.key
     }
 
+    // #[cfg(any(feature = "sync", feature = "future"))]
     pub(crate) fn last_modified(&self) -> Option<Instant> {
         self.entry_info.last_modified()
     }
 
-    #[cfg(any(feature = "sync", feature = "future"))]
+    // #[cfg(any(feature = "sync", feature = "future"))]
     pub(crate) fn is_dirty(&self) -> bool {
         self.entry_info.is_dirty()
     }
