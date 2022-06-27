@@ -1,5 +1,18 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.8.6
+
+### Fixed
+
+- Fix a bug caused `invalidate_all` and `invalidate_entries_if` of the following
+  caches will not invalidate entries inserted just before calling them
+  ([#155][gh-issue-0155]):
+    - `sync::Cache`
+    - `sync::SegmentedCache`
+    - `future::Cache`
+    - Experimental `dash::Cache`
+
+
 ## Version 0.8.5
 
 ### Added
@@ -368,6 +381,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [panic_in_quanta]: https://github.com/moka-rs/moka#integer-overflow-in-quanta-crate-on-some-x86_64-machines
 [resolving-error-on-32bit]: https://github.com/moka-rs/moka#compile-errors-on-some-32-bit-platforms
 
+[gh-issue-0155]: https://github.com/moka-rs/moka/issues/155/
 [gh-issue-0123]: https://github.com/moka-rs/moka/issues/123/
 [gh-issue-0119]: https://github.com/moka-rs/moka/issues/119/
 [gh-issue-0107]: https://github.com/moka-rs/moka/issues/107/
