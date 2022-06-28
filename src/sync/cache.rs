@@ -2130,16 +2130,8 @@ mod tests {
         );
     }
 
-    // TODO: In general, test both blocking and non-blocking notifications.
     #[test]
     fn test_removal_notifications() {
-        // NOTE: The following tests also check the notifications:
-        // - basic_single_thread
-        // - size_aware_eviction
-        // - invalidate_entries_if
-        // - time_to_live
-        // - time_to_idle
-
         run_test(DeliveryMode::Immediate);
         run_test(DeliveryMode::Queued);
 
@@ -2441,6 +2433,70 @@ mod tests {
 
         for (i, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
             assert_eq!(actual, expected, "expected[{}]", i);
+        }
+    }
+
+    #[test]
+    fn recover_from_panicking_eviction_listener() {
+        run_test(DeliveryMode::Immediate);
+        run_test(DeliveryMode::Queued);
+
+        fn run_test(delivery_mode: DeliveryMode) {
+            use std::panic::{catch_unwind, AssertUnwindSafe};
+
+            // The following `Vec`s will hold actual and expected notifications.
+            let actual = Arc::new(Mutex::new(Vec::new()));
+            let mut expected = Vec::new();
+
+            // Create an eviction listener that panics when it see
+            // a value "panic now!".
+            let a1 = Arc::clone(&actual);
+            let listener = move |k, v, cause| {
+                if v == "panic now!" {
+                    panic!("Panic now!");
+                }
+                a1.lock().push((k, v, cause))
+            };
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(delivery_mode)
+                .build();
+
+            // Create a cache with the eviction listener.
+            let mut cache = Cache::builder()
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.reconfigure_for_testing();
+
+            // Make the cache exterior immutable.
+            let cache = cache;
+
+            // Insert an okay value.
+            cache.insert("alice", "a0");
+            cache.sync();
+
+            // Insert a value that will cause the eviction listener to panic.
+            cache.insert("alice", "panic now!");
+            expected.push((Arc::new("alice"), "a0", RemovalCause::Replaced));
+            cache.sync();
+
+            // Insert an okay value. This will replace the previsous
+            // value "panic now!" so the eviction listener will panick.
+            match catch_unwind(AssertUnwindSafe(|| cache.insert("alice", "a2"))) {
+                Ok(()) if delivery_mode == DeliveryMode::Queued => (), // pass
+                Err(_) if delivery_mode == DeliveryMode::Immediate => (), // pass
+                r => panic!(
+                    "Unexpected result for delivery mode {:?}: {:?}",
+                    delivery_mode, r
+                ),
+            }
+            cache.sync();
+            // No more removal notification should be sent.
+
+            // Invalidate the okay value.
+            cache.invalidate(&"alice");
+            cache.sync();
+
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
         }
     }
 

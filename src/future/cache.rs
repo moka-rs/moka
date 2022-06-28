@@ -2284,13 +2284,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_removal_notifications() {
-        // NOTE: The following tests also check the notifications:
-        // - basic_single_thread
-        // - size_aware_eviction
-        // - invalidate_entries_if
-        // - time_to_live
-        // - time_to_idle
-
         // The following `Vec`s will hold actual and expected notifications.
         let actual = Arc::new(Mutex::new(Vec::new()));
         let mut expected = Vec::new();
@@ -2440,6 +2433,75 @@ mod tests {
         verify_notification_vec(&cache, actual, &expected);
     }
 
+    #[tokio::test]
+    async fn recover_from_panicking_eviction_listener() {
+        use futures_util::FutureExt;
+        use std::panic::AssertUnwindSafe;
+
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Create an eviction listener that panics when it see
+        // a value "panic now!".
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| {
+            if v == "panic now!" {
+                panic!("Panic now!");
+            }
+            a1.lock().push((k, v, cause))
+        };
+
+        // Create a cache with the eviction listener.
+        let mut cache = Cache::builder().eviction_listener(listener).build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        // Insert an okay value.
+        cache.insert("alice", "a0").await;
+        cache.sync();
+
+        // Insert a value that will cause the eviction listener to panic.
+        cache.insert("alice", "panic now!").await;
+        expected.push((Arc::new("alice"), "a0", RemovalCause::Replaced));
+        cache.sync();
+
+        // Insert an okay value. This will replace the previsous
+        // value "panic now!" so the eviction listener will panick.
+        match AssertUnwindSafe(cache.insert("alice", "a2"))
+            .catch_unwind()
+            .await
+        {
+            Ok(()) => (), // pass
+            r => panic!("Unexpected result: {:?}", r),
+        }
+        cache.sync();
+        // No more removal notification should be sent.
+
+        // Invalidate the okay value.
+        cache.invalidate(&"alice").await;
+        cache.sync();
+
+        verify_notification_vec(&cache, actual, &expected);
+    }
+
+    #[tokio::test]
+    async fn test_debug_format() {
+        let cache = Cache::new(10);
+        cache.insert('a', "alice").await;
+        cache.insert('b', "bob").await;
+        cache.insert('c', "cindy").await;
+
+        let debug_str = format!("{:?}", cache);
+        assert!(debug_str.starts_with('{'));
+        assert!(debug_str.contains(r#"'a': "alice""#));
+        assert!(debug_str.contains(r#"'b': "bob""#));
+        assert!(debug_str.contains(r#"'c': "cindy""#));
+        assert!(debug_str.ends_with('}'));
+    }
+
     type NotificationTuple<K, V> = (Arc<K>, V, RemovalCause);
 
     fn verify_notification_vec<K, V, S>(
@@ -2475,20 +2537,5 @@ mod tests {
 
             break;
         }
-    }
-
-    #[tokio::test]
-    async fn test_debug_format() {
-        let cache = Cache::new(10);
-        cache.insert('a', "alice").await;
-        cache.insert('b', "bob").await;
-        cache.insert('c', "cindy").await;
-
-        let debug_str = format!("{:?}", cache);
-        assert!(debug_str.starts_with('{'));
-        assert!(debug_str.contains(r#"'a': "alice""#));
-        assert!(debug_str.contains(r#"'b': "bob""#));
-        assert!(debug_str.contains(r#"'c': "cindy""#));
-        assert!(debug_str.ends_with('}'));
     }
 }
