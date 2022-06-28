@@ -1194,7 +1194,10 @@ mod tests {
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
         assert!(cache.contains_key(&"c"));
-        cache.sync();
+
+        // `cache.sync()` is no longer needed here before invalidating. The last
+        // modified timestamp of the entries were updated when they were inserted.
+        // https://github.com/moka-rs/moka/issues/155
 
         cache.invalidate_all();
         cache.sync();
