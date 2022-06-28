@@ -1318,7 +1318,10 @@ mod tests {
             assert_with_mode!(cache.contains_key(&"a"), delivery_mode);
             assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
             assert_with_mode!(cache.contains_key(&"c"), delivery_mode);
-            cache.sync();
+
+            // `cache.sync()` is no longer needed here before invalidating. The last
+            // modified timestamp of the entries were updated when they were inserted.
+            // https://github.com/moka-rs/moka/issues/155
 
             cache.invalidate_all();
             expected.push((Arc::new("a"), "alice", RemovalCause::Explicit));

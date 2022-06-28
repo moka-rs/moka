@@ -1444,7 +1444,10 @@ mod tests {
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
         assert!(cache.contains_key(&"c"));
-        cache.sync();
+
+        // `cache.sync()` is no longer needed here before invalidating. The last
+        // modified timestamp of the entries were updated when they were inserted.
+        // https://github.com/moka-rs/moka/issues/155
 
         cache.invalidate_all();
         expected.push((Arc::new("a"), "alice", RemovalCause::Explicit));
@@ -1465,6 +1468,19 @@ mod tests {
         assert!(cache.contains_key(&"d"));
 
         verify_notification_vec(&cache, actual, &expected);
+    }
+
+    // This test is for https://github.com/moka-rs/moka/issues/155
+    #[tokio::test]
+    async fn invalidate_all_without_sync() {
+        let cache = Cache::new(1024);
+
+        assert_eq!(cache.get(&0), None);
+        cache.insert(0, 1).await;
+        assert_eq!(cache.get(&0), Some(1));
+
+        cache.invalidate_all();
+        assert_eq!(cache.get(&0), None);
     }
 
     #[tokio::test]
