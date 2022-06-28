@@ -21,8 +21,10 @@ impl Default for AtomicInstant {
 // quanta v0.10.0 no longer provides `quanta::Instant::as_u64` method.
 
 impl AtomicInstant {
-    pub(crate) fn reset(&self) {
-        self.instant.store(std::u64::MAX, Ordering::Release);
+    pub(crate) fn new(timestamp: Instant) -> Self {
+        let ai = Self::default();
+        ai.set_instant(timestamp);
+        ai
     }
 
     pub(crate) fn is_set(&self) -> bool {
