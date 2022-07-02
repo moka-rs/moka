@@ -23,7 +23,6 @@ const MAX_NOTIFICATIONS_PER_TASK: u16 = 5_000;
 
 pub(crate) enum RemovalNotifier<K, V> {
     Blocking(BlockingRemovalNotifier<K, V>),
-    // NonBlocking(NonBlockingRemovalNotifier<K, V>),
     ThreadPool(ThreadPoolRemovalNotifier<K, V>),
 }
 
@@ -40,11 +39,7 @@ impl<K, V> RemovalNotifier<K, V> {
     }
 
     pub(crate) fn is_batching_supported(&self) -> bool {
-        matches!(
-            self,
-            // RemovalNotifier::NonBlocking(_) | RemovalNotifier::ThreadPool(_)
-            RemovalNotifier::ThreadPool(_)
-        )
+        matches!(self, RemovalNotifier::ThreadPool(_))
     }
 
     pub(crate) fn notify(&self, key: Arc<K>, value: V, cause: RemovalCause)
@@ -54,7 +49,6 @@ impl<K, V> RemovalNotifier<K, V> {
     {
         match self {
             RemovalNotifier::Blocking(notifier) => notifier.notify(key, value, cause),
-            // RemovalNotifier::NonBlocking(_) => todo!(),
             RemovalNotifier::ThreadPool(notifier) => {
                 notifier.add_single_notification(key, value, cause)
             }
@@ -68,7 +62,6 @@ impl<K, V> RemovalNotifier<K, V> {
     {
         match self {
             RemovalNotifier::Blocking(_) => unreachable!(),
-            // RemovalNotifier::NonBlocking(_) => todo!(),
             RemovalNotifier::ThreadPool(notifier) => notifier.add_multiple_notifications(entries),
         }
     }
@@ -80,7 +73,6 @@ impl<K, V> RemovalNotifier<K, V> {
     {
         match self {
             RemovalNotifier::Blocking(_) => unreachable!(),
-            // RemovalNotifier::NonBlocking(_) => todo!(),
             RemovalNotifier::ThreadPool(notifier) => notifier.submit_task(),
         }
     }
@@ -100,7 +92,7 @@ impl<K, V> BlockingRemovalNotifier<K, V> {
     }
 
     fn notify(&self, key: Arc<K>, value: V, cause: RemovalCause) {
-        use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
+        use std::panic::{catch_unwind, AssertUnwindSafe};
 
         if !self.is_enabled.load(Ordering::Acquire) {
             return;
@@ -111,9 +103,10 @@ impl<K, V> BlockingRemovalNotifier<K, V> {
         // Safety: It is safe to assert unwind safety here because we will not
         // call the listener again if it has been panicked.
         let result = catch_unwind(AssertUnwindSafe(listener_clo));
-        if let Err(payload) = result {
+        if let Err(_payload) = result {
             self.is_enabled.store(false, Ordering::Release);
-            resume_unwind(payload);
+            #[cfg(feature = "logging")]
+            log_panic(&*_payload);
         }
     }
 }
@@ -295,7 +288,14 @@ impl<K, V> NotificationTask<K, V> {
 
         // Safety: It is safe to assert unwind safety here because we will not
         // call the listener again if it has been panicked.
-        catch_unwind(AssertUnwindSafe(listener_clo))
+        let result = catch_unwind(AssertUnwindSafe(listener_clo));
+        #[cfg(feature = "logging")]
+        {
+            if let Err(payload) = &result {
+                log_panic(&**payload);
+            }
+        }
+        result
     }
 }
 
@@ -358,5 +358,23 @@ impl<K, V> RemovedEntries<K, V> {
 
     fn new_multi(entries: Vec<RemovedEntry<K, V>>) -> Self {
         Self::Multi(entries)
+    }
+}
+
+#[cfg(feature = "logging")]
+fn log_panic(payload: &(dyn std::any::Any + Send + 'static)) {
+    let message: Option<std::borrow::Cow<'_, str>> = if let Some(s) = payload.downcast_ref::<&str>()
+    {
+        Some((*s).into())
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        Some(s.into())
+    } else {
+        None
+    };
+
+    if let Some(m) = message {
+        log::error!("Eviction listener panicked at '{}'", m);
+    } else {
+        log::error!("Eviction listener panicked");
     }
 }

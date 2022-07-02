@@ -2449,10 +2449,15 @@ mod tests {
         verify_notification_vec(&cache, actual, &expected);
     }
 
+    // NOTE: To enable the panic logging, run the following command:
+    //
+    // RUST_LOG=moka=info cargo test --features 'future, logging' -- \
+    //   future::cache::tests::recover_from_panicking_eviction_listener --exact --nocapture
+    //
     #[tokio::test]
     async fn recover_from_panicking_eviction_listener() {
-        use futures_util::FutureExt;
-        use std::panic::AssertUnwindSafe;
+        #[cfg(feature = "logging")]
+        let _ = env_logger::builder().is_test(true).try_init();
 
         // The following `Vec`s will hold actual and expected notifications.
         let actual = Arc::new(Mutex::new(Vec::new()));
@@ -2485,14 +2490,8 @@ mod tests {
         cache.sync();
 
         // Insert an okay value. This will replace the previsous
-        // value "panic now!" so the eviction listener will panick.
-        match AssertUnwindSafe(cache.insert("alice", "a2"))
-            .catch_unwind()
-            .await
-        {
-            Ok(()) => (), // pass
-            r => panic!("Unexpected result: {:?}", r),
-        }
+        // value "panic now!" so the eviction listener will panic.
+        cache.insert("alice", "a2").await;
         cache.sync();
         // No more removal notification should be sent.
 

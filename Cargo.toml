@@ -85,6 +85,7 @@ log = { version = "0.4", optional = true }
 actix-rt = { version = "2.7", default-features = false }
 anyhow = "1.0"
 async-std = { version = "1.11", features = ["attributes"] }
+env_logger = "0.9"
 getrandom = "0.2"
 reqwest = "0.11.11"
 skeptic = "0.13"
