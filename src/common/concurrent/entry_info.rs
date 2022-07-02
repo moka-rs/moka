@@ -95,29 +95,44 @@ impl AccessTime for EntryInfo {
 mod test {
     use super::EntryInfo;
 
-    // Ignore this test by default as struct size may change in the future.
+    // Note: the size of the struct may change in a future version of Rust.
     // #[ignore]
     #[test]
     fn check_struct_size() {
         use std::mem::size_of;
 
-        // As of Rust 1.61.
-        let size = if cfg!(target_pointer_width = "64") {
-            if cfg!(feature = "quanta") {
-                24
-            } else {
-                72
-            }
-        } else if cfg!(target_pointer_width = "32") {
-            if cfg!(feature = "quanta") {
-                24
-            } else {
-                40
-            }
-        } else {
-            // ignore
-            return;
-        };
+        // Rust 1.62:
+        //
+        // | pointer width | quanta | no quanta |
+        // | ------------- | ------ | --------- |
+        // | 64-bit        |   24   |     72    |
+        // | 32-bit        |   24   |     72    |
+
+        let size = if cfg!(feature = "quanta") { 24 } else { 72 };
+
+        // Rust 1.61 or older:
+        //
+        // | pointer width | quanta | no quanta |
+        // | ------------- | ------ | --------- |
+        // | 64-bit        |   24   |     72    |
+        // | 32-bit        |   24   |     40    |
+        //
+        // let size = if cfg!(target_pointer_width = "64") {
+        //     if cfg!(feature = "quanta") {
+        //         24
+        //     } else {
+        //         72
+        //     }
+        // } else if cfg!(target_pointer_width = "32") {
+        //     if cfg!(feature = "quanta") {
+        //         24
+        //     } else {
+        //         40
+        //     }
+        // } else {
+        //     // ignore
+        //     return;
+        // };
 
         assert_eq!(size_of::<EntryInfo>(), size);
     }
