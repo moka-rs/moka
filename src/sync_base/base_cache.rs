@@ -1497,7 +1497,7 @@ where
             // Peek the front node of the deque and check if it is expired.
             let key_hash_cause = deq.peek_front().and_then(|node| {
                 // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
-                match is_entry_expired_ao_or_invalid(tti, va, &*node, now) {
+                match is_entry_expired_ao_or_invalid(tti, va, node, now) {
                     (true, _) => Some((
                         Arc::clone(node.element.key()),
                         node.element.hash(),
@@ -1598,7 +1598,7 @@ where
         for _ in 0..batch_size {
             let key_cause = deqs.write_order.peek_front().and_then(
                 // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
-                |node| match is_entry_expired_wo_or_invalid(ttl, va, &*node, now) {
+                |node| match is_entry_expired_wo_or_invalid(ttl, va, node, now) {
                     (true, _) => Some((Arc::clone(node.element.key()), RemovalCause::Expired)),
                     (false, true) => Some((Arc::clone(node.element.key()), RemovalCause::Explicit)),
                     (false, false) => None,
