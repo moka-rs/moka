@@ -868,7 +868,7 @@ where
             let key = deq
                 .peek_front()
                 .and_then(|node| {
-                    if Self::is_expired_entry_ao(time_to_idle, &*node, now) {
+                    if Self::is_expired_entry_ao(time_to_idle, node, now) {
                         Some(Some(Rc::clone(&node.element.key)))
                     } else {
                         None
@@ -909,7 +909,7 @@ where
                 .write_order
                 .peek_front()
                 .and_then(|node| {
-                    if Self::is_expired_entry_wo(time_to_live, &*node, now) {
+                    if Self::is_expired_entry_wo(time_to_live, node, now) {
                         Some(Some(Rc::clone(&node.element.key)))
                     } else {
                         None
