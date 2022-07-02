@@ -1243,7 +1243,7 @@ where
             // Peek the front node of the deque and check if it is expired.
             let key_hash = deq.peek_front().and_then(|node| {
                 // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
-                if is_expired_entry_ao(tti, va, &*node, now) {
+                if is_expired_entry_ao(tti, va, node, now) {
                     Some((Arc::clone(node.element.key()), node.element.hash()))
                 } else {
                     None
@@ -1317,7 +1317,7 @@ where
         for _ in 0..batch_size {
             let key = deqs.write_order.peek_front().and_then(|node| {
                 // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
-                if is_expired_entry_wo(ttl, va, &*node, now) {
+                if is_expired_entry_wo(ttl, va, node, now) {
                     Some(Arc::clone(node.element.key()))
                 } else {
                     None

@@ -230,7 +230,6 @@ impl<K, V, S> BaseCache<K, V, S> {
         let i = &self.inner;
         let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
         let now = i.current_time_from_expiration_clock();
-        let entry = &*entry;
 
         is_expired_entry_wo(ttl, va, entry, now) || is_expired_entry_ao(tti, va, entry, now)
     }
@@ -1060,7 +1059,7 @@ where
             // Peek the front node of the deque and check if it is expired.
             let key = deq.peek_front().and_then(|node| {
                 // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
-                if is_expired_entry_ao(tti, va, &*node, now) {
+                if is_expired_entry_ao(tti, va, node, now) {
                     Some(Arc::clone(node.element.key()))
                 } else {
                     None
@@ -1133,7 +1132,7 @@ where
         for _ in 0..batch_size {
             let key = deqs.write_order.peek_front().and_then(|node| {
                 // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
-                if is_expired_entry_wo(ttl, va, &*node, now) {
+                if is_expired_entry_wo(ttl, va, node, now) {
                     Some(Arc::clone(node.element.key()))
                 } else {
                     None
