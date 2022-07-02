@@ -82,11 +82,11 @@ jobs:
           command: test
           args: --no-default-features --features 'future, atomic64'
 
-      - name: Run tests (future feature, but no quanta feature)
+      - name: Run tests (future, sync and logging features, but no quanta feature)
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --no-default-features --features 'sync, future, atomic64'
+          args: --no-default-features --features 'sync, future, atomic64, logging'
 
       - name: Run tests (dash feature, but no quanta and sync features)
         uses: actions-rs/cargo@v1

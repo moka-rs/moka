@@ -30,6 +30,11 @@ future = ["crossbeam-epoch", "thiserror", "uuid", "async-io", "async-lock", "fut
 # few releases.
 dash = ["dashmap"]
 
+# Enable this feature to activate optional logging from caches.
+# Currently cache will emit log only when it encounters a panic in user provided
+# callback closure.
+logging = ["log"]
+
 # This feature is enabled by default. Disable it when the target platform does not
 # support `std::sync::atomic::AtomicU64`. (e.g. `armv5te-unknown-linux-musleabi`
 # or `mips-unknown-linux-musl`)
@@ -72,6 +77,9 @@ dashmap = { version = "5.2", optional = true }
 async-io = { version = "1.4", optional = true }
 async-lock = { version = "2.4", optional = true }
 futures-util = { version = "0.3", optional = true }
+
+# Optional dependencies (logging)
+log = { version = "0.4", optional = true }
 
 [dev-dependencies]
 actix-rt = { version = "2.7", default-features = false }
