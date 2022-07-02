@@ -363,14 +363,13 @@ impl<K, V> RemovedEntries<K, V> {
 
 #[cfg(feature = "logging")]
 fn log_panic(payload: &(dyn std::any::Any + Send + 'static)) {
-    let message: Option<std::borrow::Cow<'_, str>> = if let Some(s) = payload.downcast_ref::<&str>()
-    {
-        Some((*s).into())
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        Some(s.into())
-    } else {
-        None
-    };
+    // Try to downcast the payload into &str or String.
+    //
+    // NOTE: Clippy will complain if we use `if let Some(_)` here.
+    // https://rust-lang.github.io/rust-clippy/master/index.html#manual_map
+    let message: Option<std::borrow::Cow<'_, str>> =
+        (payload.downcast_ref::<&str>().map(|s| (*s).into()))
+            .or_else(|| payload.downcast_ref::<String>().map(Into::into));
 
     if let Some(m) = message {
         log::error!("Eviction listener panicked at '{}'", m);
