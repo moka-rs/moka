@@ -40,14 +40,27 @@ use std::{
 ///
 /// To use this cache, enable a crate feature called "future".
 ///
-/// # Examples
+/// # Table of Contents
+///
+/// - [Example: `insert`, `get` and `invalidate`](#example-insert-get-and-invalidate)
+/// - [Avoiding to clone the value at `get`](#avoiding-to-clone-the-value-at-get)
+/// - [Example: Size-based Eviction](#example-size-based-eviction)
+/// - [Example: Time-based Expirations](#example-time-based-expirations)
+/// - [Example: Eviction Listener](#example-eviction-listener)
+///     - [You should avoid eviction listener to panic](#you-should-avoid-eviction-listener-to-panic)
+///     - [Delivery Modes for Eviction Listener](#delivery-modes-for-eviction-listener)
+/// - [Thread Safety](#thread-safety)
+/// - [Sharing a cache across threads](#sharing-a-cache-across-threads)
+/// - [Hashing Algorithm](#hashing-algorithm)
+///
+/// # Example: `insert`, `get` and `invalidate`
 ///
 /// Cache entries are manually added using an insert method, and are stored in the
 /// cache until either evicted or manually invalidated:
 ///
 /// - Inside an async context (`async fn` or `async` block), use
-///   [`insert`](#method.insert), [`get_with`](#method.get_with)
-///   or [`invalidate`](#method.invalidate) methods for updating the cache and `await`
+///   [`insert`](#method.insert), [`get_with`](#method.get_with) or
+///   [`invalidate`](#method.invalidate) methods for updating the cache and `await`
 ///   them.
 /// - Outside any async context, use [`blocking`](#method.blocking) method to access
 ///   blocking version of [`insert`](./struct.BlockingOp.html#method.insert) or
@@ -123,8 +136,7 @@ use std::{
 ///
 /// If you want to atomically initialize and insert a value when the key is not
 /// present, you might want to check other insertion methods
-/// [`get_with`](#method.get_with) and
-/// [`try_get_with`](#method.try_get_with).
+/// [`get_with`](#method.get_with) and [`try_get_with`](#method.try_get_with).
 ///
 /// # Avoiding to clone the value at `get`
 ///
@@ -141,7 +153,7 @@ use std::{
 ///
 /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
 ///
-/// # Size-based Eviction
+/// # Example: Size-based Eviction
 ///
 /// ```rust
 /// // Cargo.toml
@@ -196,7 +208,7 @@ use std::{
 ///
 /// [builder-struct]: ./struct.CacheBuilder.html
 ///
-/// # Time-based Expirations
+/// # Example: Time-based Expirations
 ///
 /// `Cache` supports the following expiration policies:
 ///
@@ -237,6 +249,206 @@ use std::{
 /// }
 /// ```
 ///
+/// # Example: Eviction Listener
+///
+/// A `Cache` can be configured with an eviction listener, a closure that is called
+/// every time there is a cache eviction. The listener takes three parameters: the
+/// key and value of the evicted entry, and the
+/// [`RemovalCause`](../notification/enum.RemovalCause.html) to indicate why the
+/// entry was evicted.
+///
+/// An eviction listener can be used to keep other data structures in sync with the
+/// cache.
+///
+/// The following example demonstrates how to use an eviction listener with
+/// time-to-live expiration to manage the lifecycle of temporary files on a
+/// filesystem. The cache stores the paths of the files, and when one of them has
+/// expired, the eviction lister will be called with the path, so it can remove the
+/// file from the filesystem.
+///
+/// ```rust
+/// // Cargo.toml
+/// //
+/// // [dependencies]
+/// // anyhow = "1.0"
+/// // uuid = { version = "1.1", features = ["v4"] }
+/// // tokio = { version = "1.18", features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
+///
+/// use moka::future::Cache;
+///
+/// use anyhow::{anyhow, Context};
+/// use std::{
+///     io,
+///     path::{Path, PathBuf},
+///     sync::Arc,
+///     time::Duration,
+/// };
+/// use tokio::{fs, sync::RwLock};
+/// use uuid::Uuid;
+///
+/// /// The DataFileManager writes, reads and removes data files.
+/// struct DataFileManager {
+///     base_dir: PathBuf,
+///     file_count: usize,
+/// }
+///
+/// impl DataFileManager {
+///     fn new(base_dir: PathBuf) -> Self {
+///         Self {
+///             base_dir,
+///             file_count: 0,
+///         }
+///     }
+///
+///     async fn write_data_file(&mut self, contents: String) -> io::Result<PathBuf> {
+///         loop {
+///             // Generate a unique file path.
+///             let mut path = self.base_dir.to_path_buf();
+///             path.push(Uuid::new_v4().as_hyphenated().to_string());
+///
+///             if path.exists() {
+///                 continue; // This path is already taken by others. Retry.
+///             }
+///
+///             // We have got a unique file path, so create the file at
+///             // the path and write the contents to the file.
+///             fs::write(&path, contents).await?;
+///             self.file_count += 1;
+///             println!(
+///                 "Created a data file at {:?} (file count: {})",
+///                 path, self.file_count
+///             );
+///
+///             // Return the path.
+///             return Ok(path);
+///         }
+///     }
+///
+///     async fn read_data_file(&self, path: impl AsRef<Path>) -> io::Result<String> {
+///         // Reads the contents of the file at the path, and return the contents.
+///         fs::read_to_string(path).await
+///     }
+///
+///     async fn remove_data_file(&mut self, path: impl AsRef<Path>) -> io::Result<()> {
+///         // Remove the file at the path.
+///         fs::remove_file(path.as_ref()).await?;
+///         self.file_count -= 1;
+///         println!(
+///             "Removed a data file at {:?} (file count: {})",
+///             path.as_ref(),
+///             self.file_count
+///         );
+///
+///         Ok(())
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     // Create an instance of the DataFileManager and wrap it with
+///     // Arc<RwLock<_>> so it can be shared across threads.
+///     let file_mgr = DataFileManager::new(std::env::temp_dir());
+///     let file_mgr = Arc::new(RwLock::new(file_mgr));
+///
+///     let file_mgr1 = Arc::clone(&file_mgr);
+///     let rt = tokio::runtime::Handle::current();
+///
+///     // Create an eviction lister closure.
+///     let listener = move |k, v: PathBuf, cause| {
+///         // Try to remove the data file at the path `v`.
+///         println!(
+///             "\n== An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
+///             k, v, cause
+///         );
+///         rt.block_on(async {
+///             // Acquire the write lock of the DataFileManager.
+///             let mut mgr = file_mgr1.write().await;
+///             // Remove the data file. We must handle error cases here to
+///             // prevent the listener from panicking.
+///             if let Err(_e) = mgr.remove_data_file(v.as_path()).await {
+///                 eprintln!("Failed to remove a data file at {:?}", v);
+///             }
+///         });
+///     };
+///
+///     // Create the cache. Set time to live for two seconds and set the
+///     // eviction listener.
+///     let cache = Cache::builder()
+///         .max_capacity(100)
+///         .time_to_live(Duration::from_secs(2))
+///         .eviction_listener_with_queued_delivery_mode(listener)
+///         .build();
+///
+///     // Insert an entry to the cache.
+///     // This will create and write a data file for the key "user1", store the
+///     // path of the file to the cache, and return it.
+///     println!("== try_get_with()");
+///     let path = cache
+///         .try_get_with("user1", async {
+///             let mut mgr = file_mgr.write().await;
+///             let path = mgr
+///                 .write_data_file("user data".into())
+///                 .await
+///                 .with_context(|| format!("Failed to create a data file"))?;
+///             Ok(path) as anyhow::Result<_>
+///         })
+///         .await
+///         .map_err(|e| anyhow!("{}", e))?;
+///
+///     // Read the data file at the path and print the contents.
+///     println!("\n== read_data_file()");
+///     {
+///         let mgr = file_mgr.read().await;
+///         let contents = mgr
+///             .read_data_file(path.as_path())
+///             .await
+///             .with_context(|| format!("Failed to read data from {:?}", path))?;
+///         println!("contents: {}", contents);
+///     }
+///
+///     // Sleep for five seconds. While sleeping, the cache entry for key "user1"
+///     // will be expired and evicted, so the eviction lister will be called to
+///     // remove the file.
+///     tokio::time::sleep(Duration::from_secs(5)).await;
+///
+///     Ok(())
+/// }
+/// ```
+///
+/// ## You should avoid eviction listener to panic
+///
+/// It is very important to make an eviction listener closure not to panic.
+/// Otherwise, the cache will stop calling the listener after a panic. This is an
+/// intended behavior because the cache cannot know whether it is memory safe or not
+/// to call the panicked lister again.
+///
+/// When a listener panics, the cache will swallow the panic and disable the
+/// listener. If you want to know when a listener panics and the reason of the panic,
+/// you can enable an optional `logging` feature of Moka and check error-level logs.
+///
+/// To enable the `logging`, do the followings:
+///
+/// 1. In `Cargo.toml`, add the crate feature `logging` for `moka`.
+/// 2. Set the logging level for `moka` to `error` or any lower levels (`warn`,
+///    `info`, ...):
+///     - If you are using the `env_logger` crate, you can achieve this by setting
+///       `RUST_LOG` environment variable to `moka=error`.
+/// 3. If you have more than one cache, you may want to set a distinct name for each
+///    cache by using builder's [`name`](#method.name) method. (TODO: Add the `name`
+///    method to the builder)
+///
+/// ## Delivery Modes for Eviction Listener
+///
+/// The [`DeliveryMode`][delivery-mode] specifies how and when an eviction
+/// notifications should be delivered to an eviction listener. Currently, the
+/// `future::Cache` supports only one delivery mode: `Queued` mode.
+///
+/// For more details about the delivery modes, see [this section][sync-delivery-modes]
+/// of `sync::Cache` documentation.
+///  
+/// [delivery-mode]: ../notification/enum.DeliveryMode.html
+/// [sync-delivery-modes]: ../sync/struct.Cache.html#delivery-modes-for-eviction-listener
+///
 /// # Thread Safety
 ///
 /// All methods provided by the `Cache` are considered thread-safe, and can be safely
@@ -272,9 +484,9 @@ use std::{
 /// protect against attacks such as HashDoS.
 ///
 /// The hashing algorithm can be replaced on a per-`Cache` basis using the
-/// [`build_with_hasher`][build-with-hasher-method] method of the
-/// `CacheBuilder`. Many alternative algorithms are available on crates.io, such
-/// as the [aHash][ahash-crate] crate.
+/// [`build_with_hasher`][build-with-hasher-method] method of the `CacheBuilder`.
+/// Many alternative algorithms are available on crates.io, such as the
+/// [aHash][ahash-crate] crate.
 ///
 /// [build-with-hasher-method]: ./struct.CacheBuilder.html#method.build_with_hasher
 /// [ahash-crate]: https://crates.io/crates/ahash
@@ -1147,7 +1359,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(3)
-            .eviction_listener(listener)
+            .eviction_listener_with_queued_delivery_mode(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1282,7 +1494,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(31)
             .weigher(weigher)
-            .eviction_listener(listener)
+            .eviction_listener_with_queued_delivery_mode(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1428,7 +1640,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
-            .eviction_listener(listener)
+            .eviction_listener_with_queued_delivery_mode(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1499,7 +1711,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .support_invalidation_closures()
-            .eviction_listener(listener)
+            .eviction_listener_with_queued_delivery_mode(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1597,7 +1809,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .time_to_live(Duration::from_secs(10))
-            .eviction_listener(listener)
+            .eviction_listener_with_queued_delivery_mode(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -1679,7 +1891,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .time_to_idle(Duration::from_secs(10))
-            .eviction_listener(listener)
+            .eviction_listener_with_queued_delivery_mode(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -2311,7 +2523,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(3)
-            .eviction_listener(listener)
+            .eviction_listener_with_queued_delivery_mode(listener)
             .build();
         cache.reconfigure_for_testing();
 
@@ -2369,7 +2581,7 @@ mod tests {
 
         // Create a cache with the eviction listener and also TTL and TTI.
         let mut cache = Cache::builder()
-            .eviction_listener(listener)
+            .eviction_listener_with_queued_delivery_mode(listener)
             .time_to_live(Duration::from_secs(7))
             .time_to_idle(Duration::from_secs(5))
             .build();
@@ -2474,7 +2686,9 @@ mod tests {
         };
 
         // Create a cache with the eviction listener.
-        let mut cache = Cache::builder().eviction_listener(listener).build();
+        let mut cache = Cache::builder()
+            .eviction_listener_with_queued_delivery_mode(listener)
+            .build();
         cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.

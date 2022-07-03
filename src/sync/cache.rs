@@ -38,7 +38,23 @@ use std::{
 /// replacement algorithm to determine which entries to evict when the capacity is
 /// exceeded.
 ///
-/// # Examples
+/// # Table of Contents
+///
+/// - [Example: `insert`, `get` and `invalidate`](#example-insert-get-and-invalidate)
+/// - [Avoiding to clone the value at `get`](#avoiding-to-clone-the-value-at-get)
+/// - [Example: Size-based Eviction](#example-size-based-eviction)
+/// - [Example: Time-based Expirations](#example-time-based-expirations)
+/// - [Example: Eviction Listener](#example-eviction-listener)
+///     - [You should avoid eviction listener to panic](#you-should-avoid-eviction-listener-to-panic)
+///     - [Delivery Modes for Eviction Listener](#delivery-modes-for-eviction-listener)
+///         - [`Immediate` Mode](#immediate-mode)
+///         - [`Queued` Mode](#queued-mode)
+///     - [Example: `Queued` Delivery Mode](#example-queued-delivery-mode)
+/// - [Thread Safety](#thread-safety)
+/// - [Sharing a cache across threads](#sharing-a-cache-across-threads)
+/// - [Hashing Algorithm](#hashing-algorithm)
+///
+/// # Example: `insert`, `get` and `invalidate`
 ///
 /// Cache entries are manually added using [`insert`](#method.insert) or
 /// [`get_with`](#method.get_with) methods, and are stored in
@@ -119,7 +135,7 @@ use std::{
 ///
 /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
 ///
-/// # Size-based Eviction
+/// # Example: Size-based Eviction
 ///
 /// ```rust
 /// use std::convert::TryInto;
@@ -164,7 +180,7 @@ use std::{
 ///
 /// [builder-struct]: ./struct.CacheBuilder.html
 ///
-/// # Time-based Expirations
+/// # Example: Time-based Expirations
 ///
 /// `Cache` supports the following expiration policies:
 ///
@@ -194,6 +210,427 @@ use std::{
 /// // Even though we keep calling get(), the entry will expire
 /// // after 30 minutes (TTL) from the insert().
 /// ```
+///
+/// # Example: Eviction Listener
+///
+/// A `Cache` can be configured with an eviction listener, a closure that is called
+/// every time there is a cache eviction. The listener takes three parameters: the
+/// key and value of the evicted entry, and the
+/// [`RemovalCause`](../notification/enum.RemovalCause.html) to indicate why the
+/// entry was evicted.
+///
+/// An eviction listener can be used to keep other data structures in sync with the
+/// cache.
+///
+/// The following example demonstrates how to use an eviction listener with
+/// time-to-live expiration to manage the lifecycle of temporary files on a
+/// filesystem. The cache stores the paths of the files, and when one of them has
+/// expired, the eviction lister will be called with the path, so it can remove the
+/// file from the filesystem.
+///
+/// ```rust
+/// // Cargo.toml
+/// //
+/// // [dependencies]
+/// // anyhow = "1.0"
+///
+/// use moka::{sync::Cache, notification};
+///
+/// use anyhow::{anyhow, Context};
+/// use std::{
+///     fs, io,
+///     path::{Path, PathBuf},
+///     sync::{Arc, RwLock},
+///     time::Duration,
+/// };
+///
+/// /// The DataFileManager writes, reads and removes data files.
+/// struct DataFileManager {
+///     base_dir: PathBuf,
+///     file_count: usize,
+/// }
+///
+/// impl DataFileManager {
+///     fn new(base_dir: PathBuf) -> Self {
+///         Self {
+///             base_dir,
+///             file_count: 0,
+///         }
+///     }
+///
+///     fn write_data_file(
+///         &mut self,
+///         key: impl AsRef<str>,
+///         contents: String
+///     ) -> io::Result<PathBuf> {
+///         // Use the key as a part of the filename.
+///         let mut path = self.base_dir.to_path_buf();
+///         path.push(key.as_ref());
+///
+///         assert!(!path.exists(), "Path already exists: {:?}", path);
+///
+///         // create the file at the path and write the contents to the file.
+///         fs::write(&path, contents)?;
+///         self.file_count += 1;
+///         println!("Created a data file at {:?} (file count: {})", path, self.file_count);
+///         Ok(path)
+///     }
+///
+///     fn read_data_file(&self, path: impl AsRef<Path>) -> io::Result<String> {
+///         // Reads the contents of the file at the path, and return the contents.
+///         fs::read_to_string(path)
+///     }
+///
+///     fn remove_data_file(&mut self, path: impl AsRef<Path>) -> io::Result<()> {
+///         // Remove the file at the path.
+///         fs::remove_file(path.as_ref())?;
+///         self.file_count -= 1;
+///         println!(
+///             "Removed a data file at {:?} (file count: {})",
+///             path.as_ref(),
+///             self.file_count
+///         );
+///
+///         Ok(())
+///     }
+/// }
+///
+/// fn main() -> anyhow::Result<()> {
+///     // Create an instance of the DataFileManager and wrap it with
+///     // Arc<RwLock<_>> so it can be shared across threads.
+///     let file_mgr = DataFileManager::new(std::env::temp_dir());
+///     let file_mgr = Arc::new(RwLock::new(file_mgr));
+///
+///     let file_mgr1 = Arc::clone(&file_mgr);
+///
+///     // Create an eviction lister closure.
+///     let listener = move |k, v: PathBuf, cause| {
+///         // Try to remove the data file at the path `v`.
+///         println!(
+///             "\n== An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
+///             k, v, cause
+///         );
+///
+///         // Acquire the write lock of the DataFileManager. We must handle
+///         // error cases here to prevent the listener from panicking.
+///         match file_mgr1.write() {
+///             Err(_e) => {
+///                 eprintln!("The lock has been poisoned");
+///             }
+///             Ok(mut mgr) => {
+///                 // Remove the data file using the DataFileManager.
+///                 if let Err(_e) = mgr.remove_data_file(v.as_path()) {
+///                     eprintln!("Failed to remove a data file at {:?}", v);
+///                 }
+///             }
+///         }
+///     };
+///
+///     let listener_conf = notification::Configuration::builder()
+///         .delivery_mode(notification::DeliveryMode::Queued)
+///         .build();
+///
+///     // Create the cache. Set time to live for two seconds and set the
+///     // eviction listener.
+///     let cache = Cache::builder()
+///         .max_capacity(100)
+///         .time_to_live(Duration::from_secs(2))
+///         .eviction_listener_with_conf(listener, listener_conf)
+///         .build();
+///
+///     // Insert an entry to the cache.
+///     // This will create and write a data file for the key "user1", store the
+///     // path of the file to the cache, and return it.
+///     println!("== try_get_with()");
+///     let key = "user1";
+///     let path = cache
+///         .try_get_with(key, || -> anyhow::Result<_> {
+///             let mut mgr = file_mgr
+///                 .write()
+///                 .map_err(|_e| anyhow::anyhow!("The lock has been poisoned"))?;
+///             let path = mgr
+///                 .write_data_file(key, "user data".into())
+///                 .with_context(|| format!("Failed to create a data file"))?;
+///             Ok(path)
+///         })
+///         .map_err(|e| anyhow!("{}", e))?;
+///
+///     // Read the data file at the path and print the contents.
+///     println!("\n== read_data_file()");
+///     {
+///         let mgr = file_mgr
+///             .read()
+///             .map_err(|_e| anyhow::anyhow!("The lock has been poisoned"))?;
+///         let contents = mgr
+///             .read_data_file(path.as_path())
+///             .with_context(|| format!("Failed to read data from {:?}", path))?;
+///         println!("contents: {}", contents);
+///     }
+///
+///     // Sleep for five seconds. While sleeping, the cache entry for key "user1"
+///     // will be expired and evicted, so the eviction lister will be called to
+///     // remove the file.
+///     std::thread::sleep(Duration::from_secs(5));
+///
+///     Ok(())
+/// }
+/// ```
+///
+/// ## You should avoid eviction listener to panic
+///
+/// It is very important to make an eviction listener closure not to panic.
+/// Otherwise, the cache will stop calling the listener after a panic. This is an
+/// intended behavior because the cache cannot know whether it is memory safe or not
+/// to call the panicked lister again.
+///
+/// When a listener panics, the cache will swallow the panic and disable the
+/// listener. If you want to know when a listener panics and the reason of the panic,
+/// you can enable an optional `logging` feature of Moka and check error-level logs.
+///
+/// To enable the `logging`, do the followings:
+///
+/// 1. In `Cargo.toml`, add the crate feature `logging` for `moka`.
+/// 2. Set the logging level for `moka` to `error` or any lower levels (`warn`,
+///    `info`, ...):
+///     - If you are using the `env_logger` crate, you can achieve this by setting
+///       `RUST_LOG` environment variable to `moka=error`.
+/// 3. If you have more than one cache, you may want to set a distinct name for each
+///    cache by using builder's [`name`](#method.name) method. (TODO: Add the `name`
+///    method to the builder)
+///
+/// ## Delivery Modes for Eviction Listener
+///
+/// The [`DeliveryMode`][delivery-mode] specifies how and when an eviction
+/// notifications should be delivered to an eviction listener. The `sync` caches
+/// (`Cache` and `SegmentedCache`) support two delivery modes: `Immediate` and
+/// `Queued` modes.
+///
+/// [delivery-mode]: ../notification/enum.DeliveryMode.html
+///
+/// ### `Immediate` Mode
+///
+/// Tne `Immediate` mode is the default delivery mode for the `sync` caches. Use this
+/// mode when it is import to keep the order of write operations and eviction
+/// notifications.
+///
+/// This mode has the following characteristics:
+///
+/// - The listener is called immediately after an entry is evicted.
+/// - The listener is called by the thread who evicted the entry:
+///    - The calling thread can be a background eviction thread or a user thread
+///      invoking a cache write operation such as `insert`, `get_with` or
+///      `invalidate`.
+///    - The calling thread is blocked until the listener returns.
+/// - This mode guarantees that write operations and eviction notifications for a
+///   given cache key are ordered by the time when they occurred.
+/// - This mode adds some performance overhead to cache write operations as it uses
+///   internal per-key lock to guarantee the ordering.
+///
+/// ### `Queued` Mode
+///
+/// Use this mode when write performance is more important than preserving the order
+/// of write operations and eviction notifications.
+///
+/// - The listener will be called some time after an entry was evicted.
+/// - A notification will be stashed in a queue. The queue will be processed by
+///   dedicated notification thread(s) and that thread will call the listener.
+/// - This mode does not preserve the order of write operations and eviction
+///   notifications.
+/// - This mode adds almost no performance overhead to cache write operations as it
+///   does not use the per-key lock.
+///
+/// ### Example: `Queued` Delivery Mode
+///
+/// Because the `Immediate` mode is the default mode for `sync` caches, the previous
+/// example was using it implicitly.
+///
+/// The following is the same example but modified for the `Queued` delivery mode.
+/// (Showing only changed lines)
+///
+/// ```rust
+/// // Cargo.toml
+/// //
+/// // [dependencies]
+/// // anyhow = "1.0"
+/// // uuid = { version = "1.1", features = ["v4"] }
+///
+/// use moka::{sync::Cache, notification};
+///
+/// # use anyhow::{anyhow, Context};
+/// # use std::{
+/// #     fs, io,
+/// #     path::{Path, PathBuf},
+/// #     sync::{Arc, RwLock},
+/// #     time::Duration,
+/// # };
+/// // Use UUID crate to generate a random file name.
+/// use uuid::Uuid;
+///
+/// # struct DataFileManager {
+/// #     base_dir: PathBuf,
+/// #     file_count: usize,
+/// # }
+/// #
+/// impl DataFileManager {
+/// #   fn new(base_dir: PathBuf) -> Self {
+/// #       Self {
+/// #           base_dir,
+/// #           file_count: 0,
+/// #       }
+/// #   }
+/// #
+///     fn write_data_file(
+///         &mut self,
+///         _key: impl AsRef<str>,
+///         contents: String
+///     ) -> io::Result<PathBuf> {
+///         // We do not use the key for the filename anymore. Instead, we
+///         // use UUID to generate a unique filename for each call.
+///         loop {
+///             // Generate a file path with unique file name.
+///             let mut path = self.base_dir.to_path_buf();
+///             path.push(Uuid::new_v4().as_hyphenated().to_string());
+///
+///             if path.exists() {
+///                 continue; // This path is already taken by others. Retry.
+///             }
+///
+///             // We have got a unique file path, so create the file at
+///             // the path and write the contents to the file.
+///             fs::write(&path, contents)?;
+///             self.file_count += 1;
+///             println!("Created a data file at {:?} (file count: {})", path, self.file_count);
+///
+///             // Return the path.
+///             return Ok(path);
+///         }
+///     }
+///
+///     // Other associate functions and methods are unchanged.
+/// #
+/// #   fn read_data_file(&self, path: impl AsRef<Path>) -> io::Result<String> {
+/// #       fs::read_to_string(path)
+/// #   }
+/// #
+/// #   fn remove_data_file(&mut self, path: impl AsRef<Path>) -> io::Result<()> {
+/// #       fs::remove_file(path.as_ref())?;
+/// #       self.file_count -= 1;
+/// #       println!(
+/// #           "Removed a data file at {:?} (file count: {})",
+/// #           path.as_ref(),
+/// #           self.file_count
+/// #       );
+/// #
+/// #       Ok(())
+/// #   }
+/// }
+///
+/// fn main() -> anyhow::Result<()> {
+///     // (Omitted unchanged lines)
+///
+/// #   let file_mgr = DataFileManager::new(std::env::temp_dir());
+/// #   let file_mgr = Arc::new(RwLock::new(file_mgr));
+/// #
+/// #   let file_mgr1 = Arc::clone(&file_mgr);
+/// #
+///     // Create an eviction lister closure.
+///     // let listener = ...
+///
+/// #   let listener = move |k, v: PathBuf, cause| {
+/// #       println!(
+/// #           "\n== An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
+/// #           k, v, cause
+/// #       );
+/// #
+/// #       match file_mgr1.write() {
+/// #           Err(_e) => {
+/// #               eprintln!("The lock has been poisoned");
+/// #           }
+/// #           Ok(mut mgr) => {
+/// #               if let Err(_e) = mgr.remove_data_file(v.as_path()) {
+/// #                   eprintln!("Failed to remove a data file at {:?}", v);
+/// #               }
+/// #           }
+/// #       }
+/// #   };
+/// #
+///     // Create a listener configuration with Queued delivery mode.
+///     let listener_conf = notification::Configuration::builder()
+///         .delivery_mode(notification::DeliveryMode::Queued)
+///         .build();
+///
+///     // Create the cache.
+///     let cache = Cache::builder()
+///         .max_capacity(100)
+///         .time_to_live(Duration::from_secs(2))
+///         // Set the eviction listener with the configuration.
+///         .eviction_listener_with_conf(listener, listener_conf)
+///         .build();
+///
+///     // Insert an entry to the cache.
+///     // ...
+/// #   println!("== try_get_with()");
+/// #   let key = "user1";
+/// #   let path = cache
+/// #       .try_get_with(key, || -> anyhow::Result<_> {
+/// #           let mut mgr = file_mgr
+/// #               .write()
+/// #               .map_err(|_e| anyhow::anyhow!("The lock has been poisoned"))?;
+/// #           let path = mgr
+/// #               .write_data_file(key, "user data".into())
+/// #               .with_context(|| format!("Failed to create a data file"))?;
+/// #           Ok(path)
+/// #       })
+/// #       .map_err(|e| anyhow!("{}", e))?;
+/// #
+///     // Read the data file at the path and print the contents.
+///     // ...
+/// #   println!("\n== read_data_file()");
+/// #   {
+/// #       let mgr = file_mgr
+/// #           .read()
+/// #           .map_err(|_e| anyhow::anyhow!("The lock has been poisoned"))?;
+/// #       let contents = mgr
+/// #           .read_data_file(path.as_path())
+/// #           .with_context(|| format!("Failed to read data from {:?}", path))?;
+/// #       println!("contents: {}", contents);
+/// #   }
+/// #
+///     // Sleep for five seconds.
+///     // ...
+/// #   std::thread::sleep(Duration::from_secs(5));
+///
+///     Ok(())
+/// }
+/// ```
+///
+/// As you can see, `DataFileManager::write_data_file` method no longer uses the
+/// cache key for the file name. Instead, it generates a UUID-based unique file name
+/// on each call. This kind of treatment will be needed for `Queued` mode because
+/// notifications will be delivered with some delay.
+///
+/// For example, a user thread could do the followings:
+///
+/// 1. `insert` an entry, and create a file.
+/// 2. The entry is evicted due to size constraint:
+///     - This will trigger an eviction notification but it will be fired some time
+///       later.
+///     - The notification listener will remove the file when it is called, but we
+///       cannot predict when the call would be made.
+/// 3. `insert` the entry again, and create the file again.
+///
+/// In `Queued` mode, the notification of the eviction at step 2 can be delivered
+/// either before or after the re-`insert` at step 3. If the `write_data_file` method
+/// does not generate unique file name on each call and the notification has not been
+/// delivered before step 3, the user thread could overwrite the file created at step
+/// 1. And then the notification will be delivered and the eviction listener will
+/// remove a wrong file created at step 3 (instead of the correct one created at step
+/// 1). This will cause the cache entires and the files on the filesystem to become
+/// out of sync.
+///
+/// Generating unique file names prevents this problem, as the user thread will never
+/// overwrite the file created at step 1 and the eviction lister will never remove a
+/// wrong file.
 ///
 /// # Thread Safety
 ///

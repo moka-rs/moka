@@ -3,6 +3,7 @@
     "rust-analyzer.server.extraEnv": {
         "CARGO_TARGET_DIR": "target/ra"
     },
+    "editor.rulers": [85],
     "cSpell.words": [
         "aarch",
         "actix",
