@@ -84,6 +84,10 @@ impl<K, V, S> Drop for BaseCache<K, V, S> {
 }
 
 impl<K, V, S> BaseCache<K, V, S> {
+    pub(crate) fn name(&self) -> Option<&str> {
+        self.inner.name()
+    }
+
     pub(crate) fn policy(&self) -> Policy {
         self.inner.policy()
     }
@@ -140,6 +144,7 @@ where
     // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
+        name: Option<String>,
         max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         build_hasher: S,
@@ -153,6 +158,7 @@ where
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
         let inner = Arc::new(Inner::new(
+            name,
             max_capacity,
             initial_capacity,
             build_hasher,
@@ -660,6 +666,7 @@ enum AdmissionResult<K> {
 type CacheStore<K, V, S> = crate::cht::SegmentedHashMap<Arc<K>, TrioArc<ValueEntry<K, V>>, S>;
 
 pub(crate) struct Inner<K, V, S> {
+    name: Option<String>,
     max_capacity: Option<u64>,
     entry_count: AtomicCell<u64>,
     weighted_size: AtomicCell<u64>,
@@ -684,6 +691,10 @@ pub(crate) struct Inner<K, V, S> {
 
 // functions/methods used by BaseCache
 impl<K, V, S> Inner<K, V, S> {
+    fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
     fn policy(&self) -> Policy {
         Policy::new(self.max_capacity, 1, self.time_to_live, self.time_to_idle)
     }
@@ -802,6 +813,7 @@ where
     // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
     #[allow(clippy::too_many_arguments)]
     fn new(
+        name: Option<String>,
         max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         build_hasher: S,
@@ -824,7 +836,11 @@ where
             build_hasher.clone(),
         );
         let (removal_notifier, key_locks) = if let Some(listener) = eviction_listener {
-            let rn = RemovalNotifier::new(listener, eviction_listener_conf.unwrap_or_default());
+            let rn = RemovalNotifier::new(
+                listener,
+                eviction_listener_conf.unwrap_or_default(),
+                name.clone(),
+            );
             if rn.is_blocking() {
                 let kl = KeyLockMap::with_hasher(build_hasher.clone());
                 (Some(rn), Some(kl))
@@ -836,6 +852,7 @@ where
         };
 
         Self {
+            name,
             max_capacity: max_capacity.map(|n| n as u64),
             entry_count: Default::default(),
             weighted_size: Default::default(),
@@ -2014,6 +2031,7 @@ mod tests {
 
         let ensure_sketch_len = |max_capacity, len, name| {
             let cache = BaseCache::<u8, u8>::new(
+                None,
                 Some(max_capacity),
                 None,
                 RandomState::default(),

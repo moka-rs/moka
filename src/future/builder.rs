@@ -54,6 +54,7 @@ use std::{
 ///
 #[must_use]
 pub struct CacheBuilder<K, V, C> {
+    name: Option<String>,
     max_capacity: Option<u64>,
     initial_capacity: Option<usize>,
     weigher: Option<Weigher<K, V>>,
@@ -72,6 +73,7 @@ where
 {
     fn default() -> Self {
         Self {
+            name: None,
             max_capacity: None,
             initial_capacity: None,
             weigher: None,
@@ -110,6 +112,7 @@ where
         let build_hasher = RandomState::default();
         builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
         Cache::with_everything(
+            self.name,
             self.max_capacity,
             self.initial_capacity,
             build_hasher,
@@ -135,6 +138,7 @@ where
     {
         builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
         Cache::with_everything(
+            self.name,
             self.max_capacity,
             self.initial_capacity,
             hasher,
@@ -149,6 +153,15 @@ where
 }
 
 impl<K, V, C> CacheBuilder<K, V, C> {
+    /// Sets the name of the cache. Currently the name is used for identification
+    /// only in logging messages.
+    pub fn name(self, name: &str) -> Self {
+        Self {
+            name: Some(name.to_string()),
+            ..self
+        }
+    }
+
     /// Sets the max capacity of the cache.
     pub fn max_capacity(self, max_capacity: u64) -> Self {
         Self {

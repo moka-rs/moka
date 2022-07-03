@@ -27,10 +27,18 @@ pub(crate) enum RemovalNotifier<K, V> {
 }
 
 impl<K, V> RemovalNotifier<K, V> {
-    pub(crate) fn new(listener: EvictionListener<K, V>, conf: notification::Configuration) -> Self {
+    pub(crate) fn new(
+        listener: EvictionListener<K, V>,
+        conf: notification::Configuration,
+        cache_name: Option<String>,
+    ) -> Self {
         match conf.delivery_mode() {
-            DeliveryMode::Immediate => Self::Blocking(BlockingRemovalNotifier::new(listener)),
-            DeliveryMode::Queued => Self::ThreadPool(ThreadPoolRemovalNotifier::new(listener)),
+            DeliveryMode::Immediate => {
+                Self::Blocking(BlockingRemovalNotifier::new(listener, cache_name))
+            }
+            DeliveryMode::Queued => {
+                Self::ThreadPool(ThreadPoolRemovalNotifier::new(listener, cache_name))
+            }
         }
     }
 
@@ -81,13 +89,15 @@ impl<K, V> RemovalNotifier<K, V> {
 pub(crate) struct BlockingRemovalNotifier<K, V> {
     listener: EvictionListener<K, V>,
     is_enabled: AtomicBool,
+    cache_name: Option<String>,
 }
 
 impl<K, V> BlockingRemovalNotifier<K, V> {
-    fn new(listener: EvictionListener<K, V>) -> Self {
+    fn new(listener: EvictionListener<K, V>, cache_name: Option<String>) -> Self {
         Self {
             listener,
             is_enabled: AtomicBool::new(true),
+            cache_name,
         }
     }
 
@@ -106,7 +116,7 @@ impl<K, V> BlockingRemovalNotifier<K, V> {
         if let Err(_payload) = result {
             self.is_enabled.store(false, Ordering::Release);
             #[cfg(feature = "logging")]
-            log_panic(&*_payload);
+            log_panic(&*_payload, self.cache_name.as_deref());
         }
     }
 }
@@ -137,13 +147,14 @@ impl<K, V> Drop for ThreadPoolRemovalNotifier<K, V> {
 }
 
 impl<K, V> ThreadPoolRemovalNotifier<K, V> {
-    fn new(listener: EvictionListener<K, V>) -> Self {
+    fn new(listener: EvictionListener<K, V>, cache_name: Option<String>) -> Self {
         let (snd, rcv) = crossbeam_channel::bounded(CHANNEL_CAPACITY);
         let thread_pool = ThreadPoolRegistry::acquire_pool(PoolName::RemovalNotifier);
         let state = NotifierState {
             task_lock: Default::default(),
             rcv,
             listener,
+            cache_name,
             is_enabled: AtomicBool::new(true),
             is_running: Default::default(),
             is_shutting_down: Default::default(),
@@ -292,7 +303,7 @@ impl<K, V> NotificationTask<K, V> {
         #[cfg(feature = "logging")]
         {
             if let Err(payload) = &result {
-                log_panic(&**payload);
+                log_panic(&**payload, self.state.cache_name.as_deref());
             }
         }
         result
@@ -303,6 +314,7 @@ struct NotifierState<K, V> {
     task_lock: Mutex<()>,
     rcv: Receiver<RemovedEntries<K, V>>,
     listener: EvictionListener<K, V>,
+    cache_name: Option<String>,
     is_enabled: AtomicBool,
     is_running: AtomicBool,
     is_shutting_down: AtomicBool,
@@ -362,7 +374,7 @@ impl<K, V> RemovedEntries<K, V> {
 }
 
 #[cfg(feature = "logging")]
-fn log_panic(payload: &(dyn std::any::Any + Send + 'static)) {
+fn log_panic(payload: &(dyn std::any::Any + Send + 'static), cache_name: Option<&str>) {
     // Try to downcast the payload into &str or String.
     //
     // NOTE: Clippy will complain if we use `if let Some(_)` here.
@@ -371,9 +383,17 @@ fn log_panic(payload: &(dyn std::any::Any + Send + 'static)) {
         (payload.downcast_ref::<&str>().map(|s| (*s).into()))
             .or_else(|| payload.downcast_ref::<String>().map(Into::into));
 
+    let cn = cache_name
+        .map(|name| format!("[{}] ", name))
+        .unwrap_or_default();
+
     if let Some(m) = message {
-        log::error!("Eviction listener panicked at '{}'", m);
+        log::error!(
+            "{}Disabled the eviction listener because it panicked at '{}'",
+            cn,
+            m
+        );
     } else {
-        log::error!("Eviction listener panicked");
+        log::error!("{}Disabled the eviction listener because it panicked", cn);
     }
 }

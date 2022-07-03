@@ -96,6 +96,7 @@ where
     pub fn new(max_capacity: u64, num_segments: usize) -> Self {
         let build_hasher = RandomState::default();
         Self::with_everything(
+            None,
             Some(max_capacity),
             None,
             num_segments,
@@ -119,6 +120,11 @@ where
 }
 
 impl<K, V, S> SegmentedCache<K, V, S> {
+    /// Returns cache’s name.
+    pub fn name(&self) -> Option<&str> {
+        self.inner.segments[0].name()
+    }
+
     /// Returns a read-only cache policy of this cache.
     ///
     /// At this time, cache policy cannot be modified after cache creation.
@@ -199,6 +205,7 @@ where
     /// Panics if `num_segments` is 0.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_everything(
+        name: Option<String>,
         max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         num_segments: usize,
@@ -212,6 +219,7 @@ where
     ) -> Self {
         Self {
             inner: Arc::new(Inner::new(
+                name,
                 max_capacity,
                 initial_capacity,
                 num_segments,
@@ -578,6 +586,7 @@ where
     /// Panics if `num_segments` is 0.
     #[allow(clippy::too_many_arguments)]
     fn new(
+        name: Option<String>,
         max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         num_segments: usize,
@@ -601,6 +610,7 @@ where
         let segments = (0..actual_num_segments)
             .map(|_| {
                 Cache::with_everything(
+                    name.clone(),
                     seg_max_capacity,
                     seg_init_capacity,
                     build_hasher.clone(),

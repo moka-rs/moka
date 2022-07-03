@@ -730,6 +730,11 @@ where
 }
 
 impl<K, V, S> Cache<K, V, S> {
+    /// Returns cache’s name.
+    pub fn name(&self) -> Option<&str> {
+        self.base.name()
+    }
+
     /// Returns a read-only cache policy of this cache.
     ///
     /// At this time, cache policy cannot be modified after cache creation.
@@ -802,6 +807,7 @@ where
     pub fn new(max_capacity: u64) -> Self {
         let build_hasher = RandomState::default();
         Self::with_everything(
+            None,
             Some(max_capacity),
             None,
             build_hasher,
@@ -832,6 +838,7 @@ where
     // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_everything(
+        name: Option<String>,
         max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         build_hasher: S,
@@ -844,6 +851,7 @@ where
     ) -> Self {
         Self {
             base: BaseCache::new(
+                name,
                 max_capacity,
                 initial_capacity,
                 build_hasher.clone(),
@@ -2909,6 +2917,7 @@ mod tests {
 
             // Create a cache with the eviction listener.
             let mut cache = Cache::builder()
+                .name("My Sync Cache")
                 .eviction_listener_with_conf(listener, listener_conf)
                 .build();
             cache.reconfigure_for_testing();
