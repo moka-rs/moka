@@ -57,8 +57,8 @@ use std::{
 /// # Example: `insert`, `get` and `invalidate`
 ///
 /// Cache entries are manually added using [`insert`](#method.insert) or
-/// [`get_with`](#method.get_with) methods, and are stored in
-/// the cache until either evicted or manually invalidated.
+/// [`get_with`](#method.get_with) methods, and are stored in the cache until either
+/// evicted or manually invalidated.
 ///
 /// Here's an example of reading and updating a cache by using multiple threads:
 ///
@@ -117,8 +117,7 @@ use std::{
 ///
 /// If you want to atomically initialize and insert a value when the key is not
 /// present, you might want to check other insertion methods
-/// [`get_with`](#method.get_with) and
-/// [`try_get_with`](#method.try_get_with).
+/// [`get_with`](#method.get_with) and [`try_get_with`](#method.try_get_with).
 ///
 /// # Avoiding to clone the value at `get`
 ///
@@ -220,7 +219,7 @@ use std::{
 /// entry was evicted.
 ///
 /// An eviction listener can be used to keep other data structures in sync with the
-/// cache.
+/// cache, for example.
 ///
 /// The following example demonstrates how to use an eviction listener with
 /// time-to-live expiration to manage the lifecycle of temporary files on a
@@ -394,9 +393,11 @@ use std::{
 ///    `info`, ...):
 ///     - If you are using the `env_logger` crate, you can achieve this by setting
 ///       `RUST_LOG` environment variable to `moka=error`.
-/// 3. If you have more than one cache, you may want to set a distinct name for each
-///    cache by using builder's [`name`](#method.name) method. (TODO: Add the `name`
-///    method to the builder)
+/// 3. If you have more than one caches, you may want to set a distinct name for each
+///    cache by using cache builder's [`name`][builder-name-method] method. The name
+///    will appear in the log.
+///
+/// [builder-name-method]: ./struct.CacheBuilder.html#method.name
 ///
 /// ## Delivery Modes for Eviction Listener
 ///
@@ -415,7 +416,7 @@ use std::{
 ///
 /// This mode has the following characteristics:
 ///
-/// - The listener is called immediately after an entry is evicted.
+/// - The listener is called immediately after an entry was evicted.
 /// - The listener is called by the thread who evicted the entry:
 ///    - The calling thread can be a background eviction thread or a user thread
 ///      invoking a cache write operation such as `insert`, `get_with` or
@@ -445,7 +446,7 @@ use std::{
 /// example was using it implicitly.
 ///
 /// The following is the same example but modified for the `Queued` delivery mode.
-/// (Showing only changed lines)
+/// (Showing changed lines only)
 ///
 /// ```rust
 /// // Cargo.toml
@@ -622,11 +623,11 @@ use std::{
 /// In `Queued` mode, the notification of the eviction at step 2 can be delivered
 /// either before or after the re-`insert` at step 3. If the `write_data_file` method
 /// does not generate unique file name on each call and the notification has not been
-/// delivered before step 3, the user thread could overwrite the file created at step
-/// 1. And then the notification will be delivered and the eviction listener will
-/// remove a wrong file created at step 3 (instead of the correct one created at step
-/// 1). This will cause the cache entires and the files on the filesystem to become
-/// out of sync.
+/// delivered before step 3, the user thread could overwrite the file created at
+/// step 1. And then the notification will be delivered and the eviction listener
+/// will remove a wrong file created at step 3 (instead of the correct one created at
+/// step 1). This will cause the cache entires and the files on the filesystem to
+/// become out of sync.
 ///
 /// Generating unique file names prevents this problem, as the user thread will never
 /// overwrite the file created at step 1 and the eviction lister will never remove a
@@ -667,9 +668,9 @@ use std::{
 /// protect against attacks such as HashDoS.
 ///
 /// The hashing algorithm can be replaced on a per-`Cache` basis using the
-/// [`build_with_hasher`][build-with-hasher-method] method of the
-/// `CacheBuilder`. Many alternative algorithms are available on crates.io, such
-/// as the [aHash][ahash-crate] crate.
+/// [`build_with_hasher`][build-with-hasher-method] method of the `CacheBuilder`.
+/// Many alternative algorithms are available on crates.io, such as the
+/// [aHash][ahash-crate] crate.
 ///
 /// [build-with-hasher-method]: ./struct.CacheBuilder.html#method.build_with_hasher
 /// [ahash-crate]: https://crates.io/crates/ahash

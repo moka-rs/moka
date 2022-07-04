@@ -258,7 +258,7 @@ use std::{
 /// entry was evicted.
 ///
 /// An eviction listener can be used to keep other data structures in sync with the
-/// cache.
+/// cache, for example.
 ///
 /// The following example demonstrates how to use an eviction listener with
 /// time-to-live expiration to manage the lifecycle of temporary files on a
@@ -433,9 +433,11 @@ use std::{
 ///    `info`, ...):
 ///     - If you are using the `env_logger` crate, you can achieve this by setting
 ///       `RUST_LOG` environment variable to `moka=error`.
-/// 3. If you have more than one cache, you may want to set a distinct name for each
-///    cache by using builder's [`name`](#method.name) method. (TODO: Add the `name`
-///    method to the builder)
+/// 3. If you have more than one caches, you may want to set a distinct name for each
+///    cache by using cache builder's [`name`][builder-name-method] method. The name
+///    will appear in the log.
+///
+/// [builder-name-method]: ./struct.CacheBuilder.html#method.name
 ///
 /// ## Delivery Modes for Eviction Listener
 ///

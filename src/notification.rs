@@ -1,3 +1,5 @@
+//! Common data types for notifications.
+
 use std::sync::Arc;
 
 pub(crate) type EvictionListener<K, V> =
@@ -55,27 +57,30 @@ impl ConfigurationBuilder {
 /// Specifies how and when an eviction notifications should be delivered to an
 /// eviction listener.
 ///
-/// For more details, see [the document][delivery-mode-doc] for `sync::CacheBuilder`.
+/// For more details, see [the document][delivery-mode-doc] of `sync::Cache`.
 ///
-/// [delivery-mode-doc]: ./sync/struct.CacheBuilder.html#delivery-modes-for-eviction-listener
+/// [delivery-mode-doc]: ../sync/struct.Cache.html#delivery-modes-for-eviction-listener
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DeliveryMode {
-    /// When the `Immediate` mode is used, a notification should be delivered to the
-    /// listener immediately after an entry is evicted. This mode also guarantees
-    /// that cache write operations such and `insert`, `get_with` and `invalidate`
-    /// and eviction notifications for a given cache key are ordered by the time when
-    /// they occurred.
+    /// With mode, a notification should be delivered to the listener immediately
+    /// after an entry was evicted. It also guarantees that eviction notifications
+    /// and cache write operations such and `insert`, `get_with` and `invalidate` for
+    /// a given cache key are ordered by the time when they occurred.
     ///
-    /// To guarantee the order, it adds some performance overheads to cache write
-    /// operations. Use this mode when the order is more import than the write
-    /// performance.
+    /// To guarantee the order, cache maintains key-level lock, which will reduce
+    /// concurrent write performance.
+    ///
+    /// Use this mode when the order is more import than the write performance.
     Immediate,
-    /// When tne `Queued` mode is used, a notification will be delivered to the
-    /// listener some time after an entry was evicted. Therefore, it does not
-    /// preserve the order of write operations and eviction notifications.
+    /// With this mode, a notification will be delivered to the listener some time
+    /// after an entry was evicted. Therefore, it does not preserve the order of
+    /// eviction notifications and write operations.
+    ///
+    /// On the other hand, cache does not maintain key-level lock, so there will be
+    /// no overhead on write performance.
     ///
     /// Use this mode when write performance is more important than preserving the
-    /// order of write operations and eviction notifications.
+    /// order of eviction notifications and write operations.
     Queued,
 }
 
