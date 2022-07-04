@@ -56,7 +56,7 @@ impl ConfigurationBuilder {
     }
 }
 
-/// Specifies how and when an eviction notifications should be delivered to an
+/// Specifies how and when an eviction notification should be delivered to an
 /// eviction listener.
 ///
 /// For more details, see [the document][delivery-mode-doc] of `sync::Cache`.
@@ -64,10 +64,11 @@ impl ConfigurationBuilder {
 /// [delivery-mode-doc]: ../sync/struct.Cache.html#delivery-modes-for-eviction-listener
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DeliveryMode {
-    /// With mode, a notification should be delivered to the listener immediately
-    /// after an entry was evicted. It also guarantees that eviction notifications
-    /// and cache write operations such and `insert`, `get_with` and `invalidate` for
-    /// a given cache key are ordered by the time when they occurred.
+    /// With this mode, a notification should be delivered to the listener
+    /// immediately after an entry was evicted. It also guarantees that eviction
+    /// notifications and cache write operations such and `insert`, `get_with` and
+    /// `invalidate` for a given cache key are ordered by the time when they
+    /// occurred.
     ///
     /// To guarantee the order, cache maintains key-level lock, which will reduce
     /// concurrent write performance.
