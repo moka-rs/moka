@@ -11,6 +11,8 @@ pub(crate) enum PoolName {
     Housekeeper,
     #[cfg(any(feature = "sync", feature = "future"))]
     Invalidator,
+    #[cfg(any(feature = "sync", feature = "future"))]
+    RemovalNotifier,
 }
 
 impl PoolName {
@@ -19,6 +21,8 @@ impl PoolName {
             PoolName::Housekeeper => "moka-housekeeper-{}",
             #[cfg(any(feature = "sync", feature = "future"))]
             PoolName::Invalidator => "moka-invalidator-{}",
+            #[cfg(any(feature = "sync", feature = "future"))]
+            PoolName::RemovalNotifier => "moka-notifier-{}",
         }
     }
 }

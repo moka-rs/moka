@@ -1,5 +1,5 @@
 /// The error type for the functionalities around
-/// [`Cache#invalidate_entries_if`][invalidate-if] method.
+/// [`Cache::invalidate_entries_if`][invalidate-if] method.
 ///
 /// [invalidate-if]: ./sync/struct.Cache.html#method.invalidate_entries_if
 #[derive(thiserror::Error, Debug)]

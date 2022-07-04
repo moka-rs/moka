@@ -37,6 +37,8 @@
 //! - Supports expiration policies:
 //!     - Time to live
 //!     - Time to idle
+//! - Supports eviction listener, a callback function that will be called when an entry
+//!   is removed from the cache.
 //!
 //! # Examples
 //!
@@ -172,6 +174,10 @@ pub mod dash;
 #[cfg(feature = "future")]
 #[cfg_attr(docsrs, doc(cfg(feature = "future")))]
 pub mod future;
+
+#[cfg(any(feature = "sync", feature = "future"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
+pub mod notification;
 
 #[cfg(feature = "sync")]
 #[cfg_attr(docsrs, doc(cfg(feature = "sync")))]
