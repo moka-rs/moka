@@ -89,15 +89,17 @@ impl<K, V> RemovalNotifier<K, V> {
 pub(crate) struct BlockingRemovalNotifier<K, V> {
     listener: EvictionListener<K, V>,
     is_enabled: AtomicBool,
+    #[cfg(feature = "logging")]
     cache_name: Option<String>,
 }
 
 impl<K, V> BlockingRemovalNotifier<K, V> {
-    fn new(listener: EvictionListener<K, V>, cache_name: Option<String>) -> Self {
+    fn new(listener: EvictionListener<K, V>, _cache_name: Option<String>) -> Self {
         Self {
             listener,
             is_enabled: AtomicBool::new(true),
-            cache_name,
+            #[cfg(feature = "logging")]
+            cache_name: _cache_name,
         }
     }
 
@@ -147,14 +149,15 @@ impl<K, V> Drop for ThreadPoolRemovalNotifier<K, V> {
 }
 
 impl<K, V> ThreadPoolRemovalNotifier<K, V> {
-    fn new(listener: EvictionListener<K, V>, cache_name: Option<String>) -> Self {
+    fn new(listener: EvictionListener<K, V>, _cache_name: Option<String>) -> Self {
         let (snd, rcv) = crossbeam_channel::bounded(CHANNEL_CAPACITY);
         let thread_pool = ThreadPoolRegistry::acquire_pool(PoolName::RemovalNotifier);
         let state = NotifierState {
             task_lock: Default::default(),
             rcv,
             listener,
-            cache_name,
+            #[cfg(feature = "logging")]
+            cache_name: _cache_name,
             is_enabled: AtomicBool::new(true),
             is_running: Default::default(),
             is_shutting_down: Default::default(),
@@ -314,6 +317,7 @@ struct NotifierState<K, V> {
     task_lock: Mutex<()>,
     rcv: Receiver<RemovedEntries<K, V>>,
     listener: EvictionListener<K, V>,
+    #[cfg(feature = "logging")]
     cache_name: Option<String>,
     is_enabled: AtomicBool,
     is_running: AtomicBool,
