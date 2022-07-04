@@ -1,5 +1,7 @@
 //! Common data types for notifications.
 
+pub(crate) mod notifier;
+
 use std::sync::Arc;
 
 pub(crate) type EvictionListener<K, V> =

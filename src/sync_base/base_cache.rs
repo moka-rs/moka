@@ -2,7 +2,6 @@ use super::{
     invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
     iter::ScanningGet,
     key_lock::{KeyLock, KeyLockMap},
-    removal_notifier::RemovedEntry,
     PredicateId,
 };
 
@@ -26,8 +25,11 @@ use crate::{
         time::{CheckedTimeOps, Clock, Instant},
         CacheRegion,
     },
-    notification::{self, EvictionListener, RemovalCause},
-    sync_base::removal_notifier::RemovalNotifier,
+    notification::{
+        self,
+        notifier::{RemovalNotifier, RemovedEntry},
+        EvictionListener, RemovalCause,
+    },
     Policy, PredicateError,
 };
 
