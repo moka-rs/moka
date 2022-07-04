@@ -566,10 +566,6 @@ impl<'a, K, V> EvictionState<'a, K, V> {
         self.notifier.is_some()
     }
 
-    // fn is_batch_notification_supported(&self) -> bool {
-    //     self.removed_entries.is_some()
-    // }
-
     fn add_removed_entry(
         &mut self,
         key: Arc<K>,

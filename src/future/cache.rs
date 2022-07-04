@@ -442,7 +442,7 @@ use std::{
 /// ## Delivery Modes for Eviction Listener
 ///
 /// The [`DeliveryMode`][delivery-mode] specifies how and when an eviction
-/// notifications should be delivered to an eviction listener. Currently, the
+/// notification should be delivered to an eviction listener. Currently, the
 /// `future::Cache` supports only one delivery mode: `Queued` mode.
 ///
 /// A future version of `future::Cache` will support `Immediate` mode, which will be

@@ -123,10 +123,6 @@ impl<K, V> BlockingRemovalNotifier<K, V> {
     }
 }
 
-// pub(crate) struct NonBlockingRemovalNotifier<K, V> {
-//     _phantom: std::marker::PhantomData<(K, V)>,
-// }
-
 pub(crate) struct ThreadPoolRemovalNotifier<K, V> {
     snd: Sender<RemovedEntries<K, V>>,
     state: Arc<NotifierState<K, V>>,
