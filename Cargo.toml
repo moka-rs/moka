@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.8.6"
+version = "0.9.0"
 edition = "2018"
 rust-version = "1.51"
 
@@ -16,15 +16,24 @@ exclude = [".circleci", ".devcontainer", ".github", ".gitpod.yml", ".vscode"]
 build = "build.rs"
 
 [features]
-default = ["atomic64", "quanta"]
+default = ["sync", "atomic64", "quanta"]
+
+# This feature is enabled by default. Disable it when you do not need
+# `moka::sync::{Cache, SegmentedCache}`
+sync = ["crossbeam-epoch", "thiserror", "uuid"]
 
 # Enable this feature to use `moka::future::Cache`.
-future = ["async-io", "async-lock", "futures-util"]
+future = ["crossbeam-epoch", "thiserror", "uuid", "async-io", "async-lock", "futures-util"]
 
 # Enable this feature to use **experimental** `moka::dash::Cache`.
 # Please note that the APIs for this feature will be frequently changed in next
 # few releases.
 dash = ["dashmap"]
+
+# Enable this feature to activate optional logging from caches.
+# Currently cache will emit log only when it encounters a panic in user provided
+# callback closure.
+logging = ["log"]
 
 # This feature is enabled by default. Disable it when the target platform does not
 # support `std::sync::atomic::AtomicU64`. (e.g. `armv5te-unknown-linux-musleabi`
@@ -43,23 +52,23 @@ crossbeam-utils = "0.8"
 num_cpus = "1.13"
 once_cell = "1.7"
 parking_lot = "0.12"
-scheduled-thread-pool = "0.2.5"
+scheduled-thread-pool = "0.2.6"
 smallvec = "1.8"
 tagptr = "0.2"
-thiserror = "1.0"
-uuid = { version = "1.1", features = ["v4"] }
+
+# Opt-out serde and stable_deref_trait features
+# https://github.com/Manishearth/triomphe/pull/5
+triomphe = { version = "0.1.3", default-features = false }
+
+# Optional dependencies (enabled by default)
+quanta = { version = "0.10.0", optional = true }
+thiserror = { version = "1.0", optional = true }
+uuid = { version = "1.1", features = ["v4"], optional = true }
 
 # Although v0.8.2 is not the current version (v0.9.x), we will keep using it until
 # we perform enough tests to get conformable with memory safety.
 # See: https://github.com/moka-rs/moka/issues/34
-crossbeam-epoch = "0.8.2"
-
-# Opt-out serde and stable_deref_trait features
-# https://github.com/Manishearth/triomphe/pull/5
-triomphe = { version = "0.1", default-features = false }
-
-# Optional dependencies (quanta, enabled by default)
-quanta = { version = "0.10.0", optional = true }
+crossbeam-epoch = { version = "0.8.2", optional = true }
 
 # Optional dependencies (dashmap)
 dashmap = { version = "5.2", optional = true }
@@ -69,13 +78,18 @@ async-io = { version = "1.4", optional = true }
 async-lock = { version = "2.4", optional = true }
 futures-util = { version = "0.3", optional = true }
 
+# Optional dependencies (logging)
+log = { version = "0.4", optional = true }
+
 [dev-dependencies]
 actix-rt = { version = "2.7", default-features = false }
+anyhow = "1.0"
 async-std = { version = "1.11", features = ["attributes"] }
+env_logger = "0.9"
 getrandom = "0.2"
 reqwest = "0.11.11"
 skeptic = "0.13"
-tokio = { version = "1.19", features = ["rt-multi-thread", "macros", "sync", "time" ] }
+tokio = { version = "1.19", features = ["fs", "macros", "rt-multi-thread", "sync", "time" ] }
 
 [target.'cfg(trybuild)'.dev-dependencies]
 trybuild = "1.0"

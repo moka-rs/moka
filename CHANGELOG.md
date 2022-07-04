@@ -1,5 +1,25 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.9.0
+
+### Added
+
+- Add support for eviction listener to the following caches ([#145][gh-pull-0145]).
+  Eviction listener is a callback function that will be called when an entry is
+  removed from the cache.
+    - `sync::Cache`
+    - `sync::SegmentedCache`
+    - `future::Cache`
+- Add a crate feature `sync` for enabling and disabling `sync` caches.
+  ([#143][gh-pull-0143])
+    - This feature is enabled by default.
+    - When using experimental `dash` cache, opting out of `sync` will reduce the
+      number of dependencies.
+- Add a crate feature `logging` to enable optional log crate dependency.
+  ([#159][gh-pull-0159])
+    - Currently log will be emitted only when an eviction listener has panicked.
+
+
 ## Version 0.8.6
 
 ### Fixed
@@ -392,6 +412,9 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0159]: https://github.com/moka-rs/moka/pull/159/
+[gh-pull-0145]: https://github.com/moka-rs/moka/pull/145/
+[gh-pull-0143]: https://github.com/moka-rs/moka/pull/143/
 [gh-pull-0138]: https://github.com/moka-rs/moka/pull/138/
 [gh-pull-0137]: https://github.com/moka-rs/moka/pull/137/
 [gh-pull-0133]: https://github.com/moka-rs/moka/pull/133/

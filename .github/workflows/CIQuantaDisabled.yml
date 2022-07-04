@@ -64,25 +64,31 @@ jobs:
           cargo update -p native-tls --precise 0.2.8
           cargo update -p async-global-executor --precise 2.0.4
 
-      - name: Build (no quanta feature)
-        uses: actions-rs/cargo@v1
-        with:
-          command: build
-          args: --no-default-features --features atomic64
-
-      - name: Run tests (release, no quanta feature)
+      - name: Run tests (debug, but no quanta feature)
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --release --no-default-features --features atomic64
+          args: --no-default-features --features 'sync, atomic64'
 
-      - name: Run tests (future feature, but no quanta feature)
+      - name: Run tests (release, but no quanta feature)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --release --no-default-features --features 'sync, atomic64'
+
+      - name: Run tests (future feature, but no quanta and sync features)
         uses: actions-rs/cargo@v1
         with:
           command: test
           args: --no-default-features --features 'future, atomic64'
 
-      - name: Run tests (dash feature, but no quanta feature)
+      - name: Run tests (future, sync and logging features, but no quanta feature)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --no-default-features --features 'sync, future, atomic64, logging'
+
+      - name: Run tests (dash feature, but no quanta and sync features)
         uses: actions-rs/cargo@v1
         with:
           command: test

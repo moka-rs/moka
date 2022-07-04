@@ -1,8 +1,9 @@
 {
-    "rust-analyzer.cargo.features": ["future", "dash", "unstable-debug-counters"],
+    "rust-analyzer.cargo.features": ["future", "dash", "logging", "unstable-debug-counters"],
     "rust-analyzer.server.extraEnv": {
         "CARGO_TARGET_DIR": "target/ra"
     },
+    "editor.rulers": [85],
     "cSpell.words": [
         "aarch",
         "actix",

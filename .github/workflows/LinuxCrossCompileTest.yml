@@ -59,12 +59,12 @@ jobs:
         with:
           command: clean
 
-      - name: Run tests (no features)
+      - name: Run tests (sync feature)
         uses: actions-rs/cargo@v1
         with:
           use-cross: true
           command: test
-          args: --release --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
+          args: --release --features sync --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
 
       - name: Run tests (future feature)
         uses: actions-rs/cargo@v1
