@@ -445,9 +445,19 @@ use std::{
 /// notifications should be delivered to an eviction listener. Currently, the
 /// `future::Cache` supports only one delivery mode: `Queued` mode.
 ///
+/// A future version of `future::Cache` will support `Immediate` mode, which will be
+/// easier to use in many use cases than queued mode. Unlike the `future::Cache`,
+/// the `sync::Cache` already supports it.
+///
+/// Once `future::Cache` supports the immediate mode, the `eviction_listener` and
+/// `eviction_listener_with_conf` methods will be added to the
+/// `future::CacheBuilder`. The former will use the immediate mode, and the latter
+/// will take a custom configurations to specify the queued mode. The current method
+/// `eviction_listener_with_queued_delivery_mode` will be deprecated.
+///
 /// For more details about the delivery modes, see [this section][sync-delivery-modes]
 /// of `sync::Cache` documentation.
-///  
+///
 /// [delivery-mode]: ../notification/enum.DeliveryMode.html
 /// [sync-delivery-modes]: ../sync/struct.Cache.html#delivery-modes-for-eviction-listener
 ///
