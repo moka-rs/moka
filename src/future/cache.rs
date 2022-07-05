@@ -75,7 +75,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.8", features = ["future"] }
+/// // moka = { version = "0.9", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures-util = "0.3"
 ///
@@ -159,7 +159,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.8", features = ["future"] }
+/// // moka = { version = "0.9", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures-util = "0.3"
 ///
@@ -221,7 +221,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.8", features = ["future"] }
+/// // moka = { version = "0.9", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures-util = "0.3"
 ///
@@ -585,7 +585,7 @@ impl<K, V, S> Cache<K, V, S> {
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.8", features = ["future"] }
+    /// // moka = { version = "0.9", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
     ///
@@ -773,7 +773,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.8", features = ["future"] }
+    /// // moka = { version = "0.9", features = ["future"] }
     /// // futures-util = "0.3"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
@@ -883,7 +883,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.8", features = ["future"] }
+    /// // moka = { version = "0.9", features = ["future"] }
     /// // futures-util = "0.3"
     /// // reqwest = "0.11"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
@@ -1105,7 +1105,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.8.2", features = ["future"] }
+    /// // moka = { version = "0.9", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
     ///

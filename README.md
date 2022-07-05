@@ -113,14 +113,14 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-moka = "0.8"
+moka = "0.9"
 ```
 
 To use the asynchronous cache, enable a crate feature called "future".
 
 ```toml
 [dependencies]
-moka = { version = "0.8", features = ["future"] }
+moka = { version = "0.9", features = ["future"] }
 ```
 
 
@@ -222,7 +222,7 @@ Here is a similar program to the previous example, but using asynchronous cache 
 // Cargo.toml
 //
 // [dependencies]
-// moka = { version = "0.8", features = ["future"] }
+// moka = { version = "0.9", features = ["future"] }
 // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 // futures-util = "0.3"
 
@@ -495,9 +495,9 @@ to the dependency declaration.
 
 ```toml:Cargo.toml
 [dependencies]
-moka = { version = "0.8", default-feautures = false }
+moka = { version = "0.9", default-feautures = false }
 # Or
-moka = { version = "0.8", default-feautures = false, features = ["future"] }
+moka = { version = "0.9", default-feautures = false, features = ["future"] }
 ```
 
 This will make Moka to switch to a fall-back implementation, so it will compile.
