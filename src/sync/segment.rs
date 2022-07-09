@@ -1,6 +1,6 @@
 use super::{cache::Cache, CacheBuilder, ConcurrentCacheExt};
 use crate::{
-    common::concurrent::Weigher,
+    common::concurrent::{housekeeper, Weigher},
     notification::{self, EvictionListener},
     sync_base::iter::{Iter, ScanningGet},
     Policy, PredicateError,
@@ -107,6 +107,7 @@ where
             None,
             None,
             false,
+            housekeeper::Configuration::new_thread_pool(true),
         )
     }
 
@@ -216,6 +217,7 @@ where
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
+        housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
         Self {
             inner: Arc::new(Inner::new(
@@ -230,6 +232,7 @@ where
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
+                housekeeper_conf,
             )),
         }
     }
@@ -597,6 +600,7 @@ where
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
+        housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
         assert!(num_segments > 0);
 
@@ -620,6 +624,7 @@ where
                     time_to_live,
                     time_to_idle,
                     invalidator_enabled,
+                    housekeeper_conf.clone(),
                 )
             })
             .collect::<Vec<_>>();

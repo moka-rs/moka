@@ -56,6 +56,7 @@ pub struct CacheBuilder<K, V, C> {
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     invalidator_enabled: bool,
+    thread_pool_enabled: bool,
     cache_type: PhantomData<C>,
 }
 
@@ -76,6 +77,8 @@ where
             time_to_live: None,
             time_to_idle: None,
             invalidator_enabled: false,
+            // TODO: Change this to `false` in Moka 0.10.0.
+            thread_pool_enabled: true,
             cache_type: Default::default(),
         }
     }
@@ -117,6 +120,7 @@ where
             time_to_live: self.time_to_live,
             time_to_idle: self.time_to_idle,
             invalidator_enabled: self.invalidator_enabled,
+            thread_pool_enabled: self.thread_pool_enabled,
             cache_type: PhantomData::default(),
         }
     }
@@ -145,6 +149,7 @@ where
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
+            builder_utils::housekeeper_conf(self.thread_pool_enabled),
         )
     }
 
@@ -174,6 +179,7 @@ where
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
+            builder_utils::housekeeper_conf(self.thread_pool_enabled),
         )
     }
 }
@@ -208,6 +214,7 @@ where
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
+            builder_utils::housekeeper_conf(self.thread_pool_enabled),
         )
     }
 
@@ -238,6 +245,7 @@ where
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
+            builder_utils::housekeeper_conf(true),
         )
     }
 }
@@ -377,6 +385,18 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     pub fn support_invalidation_closures(self) -> Self {
         Self {
             invalidator_enabled: true,
+            ..self
+        }
+    }
+
+    /// Specify whether or not to enable thread pool for housekeeping tasks, such as
+    /// ... `true` to enable and `false` to disable.
+    ///
+    /// The thread pool is enabled by default in current version of Moka but the
+    /// default will be changed to disabled in future version.
+    pub fn thread_pool_enabled(self, v: bool) -> Self {
+        Self {
+            thread_pool_enabled: v,
             ..self
         }
     }

@@ -5,7 +5,7 @@ use super::{
 use crate::{
     common::concurrent::{
         constants::{MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
-        housekeeper::InnerSync,
+        housekeeper::{self, InnerSync},
         Weigher, WriteOp,
     },
     notification::{self, EvictionListener},
@@ -803,6 +803,7 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: u64) -> Self {
         let build_hasher = RandomState::default();
+        let housekeeper_conf = housekeeper::Configuration::new_thread_pool(true);
         Self::with_everything(
             None,
             Some(max_capacity),
@@ -814,6 +815,7 @@ where
             None,
             None,
             false,
+            housekeeper_conf,
         )
     }
 
@@ -845,6 +847,7 @@ where
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
+        housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
         Self {
             base: BaseCache::new(
@@ -858,6 +861,7 @@ where
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
+                housekeeper_conf,
             ),
             value_initializer: Arc::new(ValueInitializer::with_hasher(build_hasher)),
         }
@@ -996,11 +1000,11 @@ where
     ///
     /// # Panics
     ///
-    /// This method panics when the `init` closure has been panicked. When it
-    /// happens, only the caller whose `init` closure panicked will get the panic
-    /// (e.g. only thread 1 in the above sample). If there are other calls in
-    /// progress (e.g. thread 0, 2 and 3 above), this method will restart and resolve
-    /// one of the remaining `init` closure.
+    /// This method panics when the `init` closure has panicked. When it happens,
+    /// only the caller whose `init` closure panicked will get the panic (e.g. only
+    /// thread 1 in the above sample). If there are other calls in progress (e.g.
+    /// thread 0, 2 and 3 above), this method will restart and resolve one of the
+    /// remaining `init` closure.
     ///
     pub fn get_with(&self, key: K, init: impl FnOnce() -> V) -> V {
         let hash = self.base.hash(&key);
@@ -1134,11 +1138,11 @@ where
     ///
     /// # Panics
     ///
-    /// This method panics when the `init` closure has been panicked. When it
-    /// happens, only the caller whose `init` closure panicked will get the panic
-    /// (e.g. only thread 1 in the above sample). If there are other calls in
-    /// progress (e.g. thread 0, 2 and 3 above), this method will restart and resolve
-    /// one of the remaining `init` closure.
+    /// This method panics when the `init` closure has panicked. When it happens,
+    /// only the caller whose `init` closure panicked will get the panic (e.g. only
+    /// thread 1 in the above sample). If there are other calls in progress (e.g.
+    /// thread 0, 2 and 3 above), this method will restart and resolve one of the
+    /// remaining `init` closure.
     ///
     pub fn try_get_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
@@ -1191,7 +1195,8 @@ where
     pub(crate) fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
         let op = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
-        Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to insert");
+        Self::schedule_write_op(self.base.inner.as_ref(), &self.base.write_op_ch, op, hk)
+            .expect("Failed to insert");
     }
 
     /// Discards any cached value for the key.
@@ -1244,7 +1249,8 @@ where
 
             let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
-            Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to remove");
+            Self::schedule_write_op(self.base.inner.as_ref(), &self.base.write_op_ch, op, hk)
+                .expect("Failed to remove");
         }
     }
 
@@ -1415,6 +1421,7 @@ where
 {
     #[inline]
     fn schedule_write_op(
+        inner: &impl InnerSync,
         ch: &Sender<WriteOp<K, V>>,
         op: WriteOp<K, V>,
         housekeeper: Option<&HouseKeeperArc<K, V, S>>,
@@ -1426,7 +1433,7 @@ where
         // - We are doing a busy-loop here. We were originally calling `ch.send(op)?`,
         //   but we got a notable performance degradation.
         loop {
-            BaseCache::apply_reads_writes_if_needed(ch, housekeeper);
+            BaseCache::apply_reads_writes_if_needed(inner, ch, housekeeper);
             match ch.try_send(op) {
                 Ok(()) => break,
                 Err(TrySendError::Full(op1)) => {

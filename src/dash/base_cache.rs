@@ -10,7 +10,7 @@ use crate::{
             },
             deques::Deques,
             entry_info::EntryInfo,
-            housekeeper::{Housekeeper, InnerSync, SyncPace},
+            housekeeper::{self, Housekeeper, InnerSync, SyncPace},
             AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, ReadOp, ValueEntry, Weigher,
             WriteOp,
         },
@@ -111,7 +111,8 @@ where
             time_to_live,
             time_to_idle,
         ));
-        let housekeeper = Housekeeper::new(Arc::downgrade(&inner));
+        let h_cfg = housekeeper::Configuration::new_thread_pool(true);
+        let housekeeper = Housekeeper::new(Arc::downgrade(&inner), h_cfg);
         Self {
             inner,
             read_op_ch: r_snd,
@@ -166,19 +167,24 @@ where
                 let i = &self.inner;
                 let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
                 let now = i.current_time_from_expiration_clock();
-                let entry = &*entry;
+                let arc_entry = &*entry;
 
-                if is_expired_entry_wo(ttl, va, entry, now)
-                    || is_expired_entry_ao(tti, va, entry, now)
+                if is_expired_entry_wo(ttl, va, arc_entry, now)
+                    || is_expired_entry_ao(tti, va, arc_entry, now)
                 {
+                    // Drop the entry to avoid to deadlock with record_read_op.
+                    std::mem::drop(entry);
                     // Expired or invalidated entry. Record this access as a cache miss
                     // rather than a hit.
                     record(ReadOp::Miss(hash));
                     None
                 } else {
                     // Valid entry.
-                    let v = entry.value.clone();
-                    record(ReadOp::Hit(hash, TrioArc::clone(entry), now));
+                    let v = arc_entry.value.clone();
+                    let e = TrioArc::clone(arc_entry);
+                    // Drop the entry to avoid to deadlock with record_read_op.
+                    std::mem::drop(entry);
+                    record(ReadOp::Hit(hash, e, now));
                     Some(v)
                 }
             }
@@ -196,6 +202,7 @@ where
 
     #[inline]
     pub(crate) fn apply_reads_writes_if_needed(
+        inner: &impl InnerSync,
         ch: &Sender<WriteOp<K, V>>,
         housekeeper: Option<&HouseKeeperArc<K, V, S>>,
     ) {
@@ -203,7 +210,7 @@ where
 
         if Self::should_apply_writes(w_len) {
             if let Some(h) = housekeeper {
-                h.try_schedule_sync();
+                h.try_sync(inner);
             }
         }
     }
@@ -246,7 +253,7 @@ where
 {
     #[inline]
     fn record_read_op(&self, op: ReadOp<K, V>) -> Result<(), TrySendError<ReadOp<K, V>>> {
-        self.apply_reads_if_needed();
+        self.apply_reads_if_needed(self.inner.as_ref());
         let ch = &self.read_op_ch;
         match ch.try_send(op) {
             // Discard the ReadOp when the channel is full.
@@ -330,24 +337,24 @@ where
     }
 
     #[inline]
-    fn apply_reads_if_needed(&self) {
+    fn apply_reads_if_needed(&self, inner: &impl InnerSync) {
         let len = self.read_op_ch.len();
 
         if Self::should_apply_reads(len) {
             if let Some(h) = &self.housekeeper {
-                h.try_schedule_sync();
+                h.try_sync(inner);
             }
         }
     }
 
     #[inline]
     fn should_apply_reads(ch_len: usize) -> bool {
-        ch_len >= READ_LOG_FLUSH_POINT
+        ch_len >= READ_LOG_FLUSH_POINT / 8
     }
 
     #[inline]
     fn should_apply_writes(ch_len: usize) -> bool {
-        ch_len >= WRITE_LOG_FLUSH_POINT
+        ch_len >= WRITE_LOG_FLUSH_POINT / 8
     }
 }
 
@@ -364,11 +371,7 @@ where
     pub(crate) fn reconfigure_for_testing(&mut self) {
         // Stop the housekeeping job that may cause sync() method to return earlier.
         if let Some(housekeeper) = &self.housekeeper {
-            // TODO: Extract this into a housekeeper method.
-            let mut job = housekeeper.periodical_sync_job().lock();
-            if let Some(job) = job.take() {
-                job.cancel();
-            }
+            housekeeper.stop_periodical_sync_job();
         }
         // Enable the frequency sketch.
         self.inner.enable_frequency_sketch_for_testing();

@@ -16,7 +16,7 @@ use crate::{
             },
             deques::Deques,
             entry_info::EntryInfo,
-            housekeeper::{Housekeeper, InnerSync, SyncPace},
+            housekeeper::{self, Housekeeper, InnerSync, SyncPace},
             AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, ReadOp, ValueEntry, Weigher,
             WriteOp,
         },
@@ -156,6 +156,7 @@ where
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
+        housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
@@ -176,7 +177,7 @@ where
         if invalidator_enabled {
             inner.set_invalidator(&inner);
         }
-        let housekeeper = Housekeeper::new(Arc::downgrade(&inner));
+        let housekeeper = Housekeeper::new(Arc::downgrade(&inner), housekeeper_conf);
         Self {
             inner,
             read_op_ch: r_snd,
@@ -270,6 +271,7 @@ where
 
     #[inline]
     pub(crate) fn apply_reads_writes_if_needed(
+        inner: &impl InnerSync,
         ch: &Sender<WriteOp<K, V>>,
         housekeeper: Option<&HouseKeeperArc<K, V, S>>,
     ) {
@@ -277,7 +279,7 @@ where
 
         if Self::should_apply_writes(w_len) {
             if let Some(h) = housekeeper {
-                h.try_schedule_sync();
+                h.try_sync(inner);
             }
         }
     }
@@ -345,7 +347,7 @@ where
 {
     #[inline]
     fn record_read_op(&self, op: ReadOp<K, V>) -> Result<(), TrySendError<ReadOp<K, V>>> {
-        self.apply_reads_if_needed();
+        self.apply_reads_if_needed(&self.inner);
         let ch = &self.read_op_ch;
         match ch.try_send(op) {
             // Discard the ReadOp when the channel is full.
@@ -482,24 +484,24 @@ where
     }
 
     #[inline]
-    fn apply_reads_if_needed(&self) {
+    fn apply_reads_if_needed(&self, inner: &Inner<K, V, S>) {
         let len = self.read_op_ch.len();
 
         if Self::should_apply_reads(len) {
             if let Some(h) = &self.housekeeper {
-                h.try_schedule_sync();
+                h.try_sync(inner);
             }
         }
     }
 
     #[inline]
     fn should_apply_reads(ch_len: usize) -> bool {
-        ch_len >= READ_LOG_FLUSH_POINT
+        ch_len >= READ_LOG_FLUSH_POINT / 8
     }
 
     #[inline]
     fn should_apply_writes(ch_len: usize) -> bool {
-        ch_len >= WRITE_LOG_FLUSH_POINT
+        ch_len >= WRITE_LOG_FLUSH_POINT / 8
     }
 }
 
@@ -520,11 +522,7 @@ where
     pub(crate) fn reconfigure_for_testing(&mut self) {
         // Stop the housekeeping job that may cause sync() method to return earlier.
         if let Some(housekeeper) = &self.housekeeper {
-            // TODO: Extract this into a housekeeper method.
-            let mut job = housekeeper.periodical_sync_job().lock();
-            if let Some(job) = job.take() {
-                job.cancel();
-            }
+            housekeeper.stop_periodical_sync_job();
         }
         // Enable the frequency sketch.
         self.inner.enable_frequency_sketch_for_testing();
@@ -2017,6 +2015,8 @@ fn is_expired_by_ttl(
 
 #[cfg(test)]
 mod tests {
+    use crate::common::concurrent::housekeeper;
+
     use super::BaseCache;
 
     #[cfg_attr(target_pointer_width = "16", ignore)]
@@ -2039,6 +2039,7 @@ mod tests {
                 None,
                 None,
                 false,
+                housekeeper::Configuration::new_thread_pool(true),
             );
             cache.inner.enable_frequency_sketch_for_testing();
             assert_eq!(

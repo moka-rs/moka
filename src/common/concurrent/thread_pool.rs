@@ -33,6 +33,24 @@ pub(crate) struct ThreadPool {
     // pub(crate) num_threads: usize,
 }
 
+impl ThreadPool {
+    fn new(name: PoolName, num_threads: usize) -> Self {
+        // println!("Created pool: {:?}", name);
+        let pool = ScheduledThreadPool::with_name(name.thread_name_template(), num_threads);
+        Self {
+            name,
+            pool,
+            // num_threads,
+        }
+    }
+}
+
+// impl Drop for ThreadPool {
+//     fn drop(&mut self) {
+//         println!("Dropped pool: {:?}", self.name)
+//     }
+// }
+
 pub(crate) struct ThreadPoolRegistry {
     pools: RwLock<HashMap<PoolName, Arc<ThreadPool>>>,
 }
@@ -64,14 +82,8 @@ impl ThreadPoolRegistry {
                     // https://github.com/moka-rs/moka/pull/39#issuecomment-916888859
                     // https://github.com/seanmonstar/num_cpus/issues/69
                     let num_threads = num_cpus::get().max(1);
-                    let pool =
-                        ScheduledThreadPool::with_name(name.thread_name_template(), num_threads);
-                    let t_pool = ThreadPool {
-                        name,
-                        pool,
-                        // num_threads,
-                    };
-                    Arc::new(t_pool)
+                    let pool = ThreadPool::new(name, num_threads);
+                    Arc::new(pool)
                 });
             }
         }
