@@ -325,16 +325,12 @@ use std::{
 ///         }
 ///     };
 ///
-///     let listener_conf = notification::Configuration::builder()
-///         .delivery_mode(notification::DeliveryMode::Queued)
-///         .build();
-///
 ///     // Create the cache. Set time to live for two seconds and set the
 ///     // eviction listener.
 ///     let cache = Cache::builder()
 ///         .max_capacity(100)
 ///         .time_to_live(Duration::from_secs(2))
-///         .eviction_listener_with_conf(listener, listener_conf)
+///         .eviction_listener(listener)
 ///         .build();
 ///
 ///     // Insert an entry to the cache.
