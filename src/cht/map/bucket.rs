@@ -3,7 +3,10 @@ use std::{
     hash::{BuildHasher, Hash, Hasher},
     mem::{self, MaybeUninit},
     ptr,
-    sync::atomic::{self, AtomicUsize, Ordering},
+    sync::{
+        atomic::{self, AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 #[cfg(feature = "unstable-debug-counters")]
@@ -90,7 +93,8 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
                 return ProbeLoopAction::Return(Shared::null());
             };
 
-            if this_bucket_ref.key.borrow() != key {
+            let this_key: &K = &this_bucket_ref.key;
+            if this_key.borrow() != key {
                 // Different key. Try next bucket
                 return ProbeLoopAction::Continue;
             }
@@ -131,7 +135,7 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
                 return ProbeLoopAction::Return(Shared::null());
             };
 
-            let this_key = &this_bucket_ref.key;
+            let this_key: &K = &this_bucket_ref.key;
 
             if this_key.borrow() != key {
                 // Different key. Try next bucket.
@@ -145,7 +149,7 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
 
             let this_value = unsafe { &*this_bucket_ref.maybe_value.as_ptr() };
 
-            if !condition(this_key, this_value) {
+            if !condition(&this_bucket_ref.key, this_value) {
                 // Found but the condition is false. Do not remove.
                 return ProbeLoopAction::Return(Shared::null());
             }
@@ -189,7 +193,8 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
             let state = maybe_state.take().unwrap();
 
             if let Some(this_bucket_ref) = unsafe { this_bucket_ptr.as_ref() } {
-                if this_bucket_ref.key.borrow() != state.key() {
+                let this_key: &K = &this_bucket_ref.key;
+                if this_key.borrow() != state.key() {
                     // Different key. Try next bucket.
                     maybe_state = Some(state);
                     return ProbeLoopAction::Continue;
@@ -247,7 +252,7 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
 
             let (new_bucket, maybe_insert_value) =
                 if let Some(this_bucket_ref) = unsafe { this_bucket_ptr.as_ref() } {
-                    let this_key = &this_bucket_ref.key;
+                    let this_key: &K = &this_bucket_ref.key;
 
                     if this_key != state.key() {
                         // Different key. Try next bucket.
@@ -344,7 +349,7 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
         with_key: &mut F,
     ) -> Result<Vec<T>, RelocatedError>
     where
-        F: FnMut(&K) -> T,
+        F: FnMut(&Arc<K>) -> T,
     {
         let mut keys = Vec::new();
 
@@ -504,12 +509,12 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
 #[repr(align(8))]
 #[derive(Debug)]
 pub(crate) struct Bucket<K, V> {
-    pub(crate) key: K,
+    pub(crate) key: Arc<K>,
     pub(crate) maybe_value: MaybeUninit<V>,
 }
 
 impl<K, V> Bucket<K, V> {
-    pub(crate) fn new(key: K, value: V) -> Bucket<K, V> {
+    pub(crate) fn new(key: Arc<K>, value: V) -> Bucket<K, V> {
         #[cfg(feature = "unstable-debug-counters")]
         debug_counters::InternalGlobalDebugCounters::bucket_created();
 
@@ -531,7 +536,7 @@ impl<K, V> Drop for Bucket<K, V> {
 pub(crate) struct RelocatedError;
 
 pub(crate) enum InsertOrModifyState<K, V, F: FnOnce() -> V> {
-    New(K, F),
+    New(Arc<K>, F),
     AttemptedInsertion(Owned<Bucket<K, V>>),
     AttemptedModification(Owned<Bucket<K, V>>, ValueOrFunction<V, F>),
 }
@@ -764,7 +769,10 @@ mod tests {
         InsertOrModifyState, InsertionResult, RelocatedError,
     };
     use crossbeam_epoch::{Guard, Shared};
-    use std::{collections::hash_map::RandomState, sync::atomic::Ordering};
+    use std::{
+        collections::hash_map::RandomState,
+        sync::{atomic::Ordering, Arc},
+    };
 
     #[test]
     fn get_insert_remove() {
@@ -855,7 +863,7 @@ mod tests {
         K: Eq,
         F: FnOnce() -> V,
     {
-        let state = InsertOrModifyState::New(key, value_init);
+        let state = InsertOrModifyState::New(Arc::new(key), value_init);
         buckets.insert_if_not_present(guard, hash, state)
     }
 

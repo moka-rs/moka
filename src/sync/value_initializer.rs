@@ -28,7 +28,7 @@ pub(crate) struct ValueInitializer<K, V, S> {
 
 impl<K, V, S> ValueInitializer<K, V, S>
 where
-    Arc<K>: Eq + Hash,
+    K: Eq + Hash,
     V: Clone,
     S: BuildHasher,
 {
@@ -168,8 +168,8 @@ where
     }
 
     #[inline]
-    fn cht_key_hash(&self, key: &Arc<K>, type_id: TypeId) -> ((Arc<K>, TypeId), u64) {
-        let cht_key = (Arc::clone(key), type_id);
+    fn cht_key_hash(&self, key: &Arc<K>, type_id: TypeId) -> (Arc<(Arc<K>, TypeId)>, u64) {
+        let cht_key = Arc::new((Arc::clone(key), type_id));
         let hash = self.waiters.hash(&cht_key);
         (cht_key, hash)
     }

@@ -244,7 +244,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.inner.hash(key);
@@ -263,7 +263,7 @@ where
     /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.inner.hash(key);
@@ -358,7 +358,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn invalidate<Q>(&self, key: &Q)
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.inner.hash(key);
@@ -635,7 +635,7 @@ where
     #[inline]
     fn hash<Q>(&self, key: &Q) -> u64
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         let mut hasher = self.build_hasher.build_hasher();
@@ -1578,6 +1578,31 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+    }
+
+    // This test ensures that the `contains_key`, `get` and `invalidate` can use
+    // borrowed form `&[u8]` for key with type `Vec<u8>`.
+    // https://github.com/moka-rs/moka/issues/166
+    #[test]
+    fn borrowed_forms_of_key() {
+        let cache: SegmentedCache<Vec<u8>, ()> = SegmentedCache::new(1, 2);
+
+        let key = vec![1_u8];
+        cache.insert(key.clone(), ());
+
+        // key as &Vec<u8>
+        let key_v: &Vec<u8> = &key;
+        assert!(cache.contains_key(key_v));
+        assert_eq!(cache.get(key_v), Some(()));
+        cache.invalidate(key_v);
+
+        cache.insert(key, ());
+
+        // key as &[u8]
+        let key_s: &[u8] = [1_u8].as_slice();
+        assert!(cache.contains_key(key_s));
+        assert_eq!(cache.get(key_s), Some(()));
+        cache.invalidate(key_s);
     }
 
     #[test]

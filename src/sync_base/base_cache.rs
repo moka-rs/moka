@@ -188,7 +188,7 @@ where
     #[inline]
     pub(crate) fn hash<Q>(&self, key: &Q) -> u64
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.inner.hash(key)
@@ -196,7 +196,7 @@ where
 
     pub(crate) fn contains_key_with_hash<Q>(&self, key: &Q, hash: u64) -> bool
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.inner
@@ -214,7 +214,7 @@ where
 
     pub(crate) fn get_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<V>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         // Define a closure to record a read op.
@@ -252,7 +252,7 @@ where
     #[cfg(feature = "sync")]
     pub(crate) fn get_key_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<Arc<K>>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.inner
@@ -262,7 +262,7 @@ where
     #[inline]
     pub(crate) fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<KvEntry<K, V>>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.inner.remove_entry(key, hash)
@@ -661,7 +661,7 @@ enum AdmissionResult<K> {
     },
 }
 
-type CacheStore<K, V, S> = crate::cht::SegmentedHashMap<Arc<K>, TrioArc<ValueEntry<K, V>>, S>;
+type CacheStore<K, V, S> = crate::cht::SegmentedHashMap<K, TrioArc<ValueEntry<K, V>>, S>;
 
 pub(crate) struct Inner<K, V, S> {
     name: Option<String>,
@@ -882,7 +882,7 @@ where
     #[inline]
     fn hash<Q>(&self, key: &Q) -> u64
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         let mut hasher = self.build_hasher.build_hasher();
@@ -893,7 +893,7 @@ where
     #[inline]
     fn get_key_value_and<Q, F, T>(&self, key: &Q, hash: u64, with_entry: F) -> Option<T>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
         F: FnOnce(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> T,
     {
@@ -903,7 +903,7 @@ where
     #[inline]
     fn get_key_value_and_then<Q, F, T>(&self, key: &Q, hash: u64, with_entry: F) -> Option<T>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
         F: FnOnce(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> Option<T>,
     {
@@ -913,7 +913,7 @@ where
     #[inline]
     fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<KvEntry<K, V>>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.cache
@@ -977,7 +977,7 @@ where
     where
         K: Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
-        F: FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool,
+        F: FnMut(&K, &TrioArc<ValueEntry<K, V>>) -> bool,
     {
         // Lock the key for removal if blocking removal notification is enabled.
         let kl = self.maybe_key_lock(key);

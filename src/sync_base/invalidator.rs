@@ -41,7 +41,7 @@ pub(crate) trait GetOrRemoveEntry<K, V> {
     where
         K: Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
-        F: FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool;
+        F: FnMut(&K, &TrioArc<ValueEntry<K, V>>) -> bool;
 }
 
 pub(crate) struct KeyDateLite<K> {

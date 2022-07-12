@@ -32,7 +32,7 @@ struct WaiterGuard<'a, K, V, S>
 // NOTE: We usually do not attach trait bounds to here at the struct definition, but
 // the Drop trait requires these bounds here.
 where
-    Arc<K>: Eq + Hash,
+    K: Eq + Hash,
     V: Clone,
     S: BuildHasher,
 {
@@ -45,7 +45,7 @@ where
 
 impl<'a, K, V, S> WaiterGuard<'a, K, V, S>
 where
-    Arc<K>: Eq + Hash,
+    K: Eq + Hash,
     V: Clone,
     S: BuildHasher,
 {
@@ -72,7 +72,7 @@ where
 
 impl<'a, K, V, S> Drop for WaiterGuard<'a, K, V, S>
 where
-    Arc<K>: Eq + Hash,
+    K: Eq + Hash,
     V: Clone,
     S: BuildHasher,
 {
@@ -98,7 +98,7 @@ pub(crate) struct ValueInitializer<K, V, S> {
 
 impl<K, V, S> ValueInitializer<K, V, S>
 where
-    Arc<K>: Eq + Hash,
+    K: Eq + Hash,
     V: Clone,
     S: BuildHasher,
 {
@@ -257,10 +257,10 @@ where
     }
 
     #[inline]
-    fn cht_key_hash(&self, key: &Arc<K>, type_id: TypeId) -> ((Arc<K>, TypeId), u64) {
+    fn cht_key_hash(&self, key: &Arc<K>, type_id: TypeId) -> (Arc<(Arc<K>, TypeId)>, u64) {
         let cht_key = (Arc::clone(key), type_id);
         let hash = self.waiters.hash(&cht_key);
-        (cht_key, hash)
+        (Arc::new(cht_key), hash)
     }
 }
 

@@ -3,7 +3,10 @@ use super::bucket::{self, Bucket, BucketArray, InsertOrModifyState, RehashOp};
 use std::{
     borrow::Borrow,
     hash::{BuildHasher, Hash},
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 use crossbeam_epoch::{Atomic, CompareAndSetError, Guard, Owned, Shared};
@@ -28,7 +31,7 @@ where
     where
         Q: Hash + Eq + ?Sized,
         K: Borrow<Q>,
-        F: FnOnce(&K, &V) -> Option<T>,
+        F: FnOnce(&Arc<K>, &V) -> Option<T>,
     {
         let guard = &crossbeam_epoch::pin();
         let current_ref = self.get(guard);
@@ -75,7 +78,7 @@ where
         Q: Hash + Eq + ?Sized,
         K: Borrow<Q>,
         F: FnMut(&K, &V) -> bool,
-        G: FnOnce(&K, &V) -> T,
+        G: FnOnce(&Arc<K>, &V) -> T,
     {
         let guard = &crossbeam_epoch::pin();
         let current_ref = self.get(guard);
@@ -131,7 +134,7 @@ where
 
     pub(crate) fn insert_if_not_present_and<F, G, T>(
         &self,
-        key: K,
+        key: Arc<K>,
         hash: u64,
         on_insert: F,
         with_existing_entry: G,
@@ -200,7 +203,7 @@ where
 
     pub(crate) fn insert_with_or_modify_entry_and<T, F, G, H>(
         &self,
-        key: K,
+        key: Arc<K>,
         hash: u64,
         on_insert: F,
         mut on_modify: G,
@@ -269,7 +272,7 @@ where
 
     pub(crate) fn keys<F, T>(&self, mut with_key: F) -> Vec<T>
     where
-        F: FnMut(&K) -> T,
+        F: FnMut(&Arc<K>) -> T,
     {
         let guard = &crossbeam_epoch::pin();
         let current_ref = self.get(guard);

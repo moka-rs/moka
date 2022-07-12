@@ -13,10 +13,10 @@ const LOCK_MAP_NUM_SEGMENTS: usize = 64;
 // We need the `where` clause here because of the Drop impl.
 pub(crate) struct KeyLock<'a, K, S>
 where
-    Arc<K>: Eq + Hash,
+    K: Eq + Hash,
     S: BuildHasher,
 {
-    map: &'a SegmentedHashMap<Arc<K>, TrioArc<Mutex<()>>, S>,
+    map: &'a SegmentedHashMap<K, TrioArc<Mutex<()>>, S>,
     key: Arc<K>,
     hash: u64,
     lock: TrioArc<Mutex<()>>,
@@ -24,7 +24,7 @@ where
 
 impl<'a, K, S> Drop for KeyLock<'a, K, S>
 where
-    Arc<K>: Eq + Hash,
+    K: Eq + Hash,
     S: BuildHasher,
 {
     fn drop(&mut self) {
@@ -37,7 +37,7 @@ where
 
 impl<'a, K, S> KeyLock<'a, K, S>
 where
-    Arc<K>: Eq + Hash,
+    K: Eq + Hash,
     S: BuildHasher,
 {
     fn new(map: &'a LockMap<K, S>, key: &Arc<K>, hash: u64, lock: TrioArc<Mutex<()>>) -> Self {
@@ -54,7 +54,7 @@ where
     }
 }
 
-type LockMap<K, S> = SegmentedHashMap<Arc<K>, TrioArc<Mutex<()>>, S>;
+type LockMap<K, S> = SegmentedHashMap<K, TrioArc<Mutex<()>>, S>;
 
 pub(crate) struct KeyLockMap<K, S> {
     locks: LockMap<K, S>,
@@ -62,7 +62,7 @@ pub(crate) struct KeyLockMap<K, S> {
 
 impl<K, S> KeyLockMap<K, S>
 where
-    Arc<K>: Eq + Hash,
+    K: Eq + Hash,
     S: BuildHasher,
 {
     pub(crate) fn with_hasher(hasher: S) -> Self {
