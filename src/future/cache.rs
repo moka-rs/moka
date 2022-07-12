@@ -2756,7 +2756,7 @@ mod tests {
         cache.insert(key, ()).await;
 
         // key as &[u8]
-        let key_s: &[u8] = [1_u8].as_slice();
+        let key_s: &[u8] = &[1_u8];
         assert!(cache.contains_key(key_s));
         assert_eq!(cache.get(key_s), Some(()));
         cache.invalidate(key_s).await;
