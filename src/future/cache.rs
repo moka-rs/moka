@@ -719,7 +719,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.base.contains_key_with_hash(key, self.base.hash(key))
@@ -737,7 +737,7 @@ where
     /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.base.get_with_hash(key, self.base.hash(key))
@@ -992,7 +992,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub async fn invalidate<Q>(&self, key: &Q)
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.base.hash(key);
@@ -1010,7 +1010,7 @@ where
 
     fn do_blocking_invalidate<Q>(&self, key: &Q)
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.base.hash(key);
@@ -1347,7 +1347,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn invalidate<Q>(&self, key: &Q)
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.0.do_blocking_invalidate(key)
@@ -2724,7 +2724,7 @@ mod tests {
         expected.push((Arc::new("alice"), "a0", RemovalCause::Replaced));
         cache.sync();
 
-        // Insert an okay value. This will replace the previsous
+        // Insert an okay value. This will replace the previous
         // value "panic now!" so the eviction listener will panic.
         cache.insert("alice", "a2").await;
         cache.sync();
@@ -2735,6 +2735,31 @@ mod tests {
         cache.sync();
 
         verify_notification_vec(&cache, actual, &expected);
+    }
+
+    // This test ensures that the `contains_key`, `get` and `invalidate` can use
+    // borrowed form `&[u8]` for key with type `Vec<u8>`.
+    // https://github.com/moka-rs/moka/issues/166
+    #[tokio::test]
+    async fn borrowed_forms_of_key() {
+        let cache: Cache<Vec<u8>, ()> = Cache::new(1);
+
+        let key = vec![1_u8];
+        cache.insert(key.clone(), ()).await;
+
+        // key as &Vec<u8>
+        let key_v: &Vec<u8> = &key;
+        assert!(cache.contains_key(key_v));
+        assert_eq!(cache.get(key_v), Some(()));
+        cache.invalidate(key_v).await;
+
+        cache.insert(key, ()).await;
+
+        // key as &[u8]
+        let key_s: &[u8] = &[1_u8];
+        assert!(cache.contains_key(key_s));
+        assert_eq!(cache.get(key_s), Some(()));
+        cache.invalidate(key_s).await;
     }
 
     #[tokio::test]

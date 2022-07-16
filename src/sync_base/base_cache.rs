@@ -188,7 +188,7 @@ where
     #[inline]
     pub(crate) fn hash<Q>(&self, key: &Q) -> u64
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.inner.hash(key)
@@ -196,7 +196,7 @@ where
 
     pub(crate) fn contains_key_with_hash<Q>(&self, key: &Q, hash: u64) -> bool
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.inner
@@ -214,7 +214,7 @@ where
 
     pub(crate) fn get_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<V>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         // Define a closure to record a read op.
@@ -252,7 +252,7 @@ where
     #[cfg(feature = "sync")]
     pub(crate) fn get_key_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<Arc<K>>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.inner
@@ -262,7 +262,7 @@ where
     #[inline]
     pub(crate) fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<KvEntry<K, V>>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.inner.remove_entry(key, hash)
@@ -882,7 +882,7 @@ where
     #[inline]
     fn hash<Q>(&self, key: &Q) -> u64
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         let mut hasher = self.build_hasher.build_hasher();
@@ -893,31 +893,33 @@ where
     #[inline]
     fn get_key_value_and<Q, F, T>(&self, key: &Q, hash: u64, with_entry: F) -> Option<T>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
         F: FnOnce(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> T,
     {
-        self.cache.get_key_value_and(key, hash, with_entry)
+        self.cache
+            .get_key_value_and(hash, |k| (k as &K).borrow() == key, with_entry)
     }
 
     #[inline]
     fn get_key_value_and_then<Q, F, T>(&self, key: &Q, hash: u64, with_entry: F) -> Option<T>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
         F: FnOnce(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> Option<T>,
     {
-        self.cache.get_key_value_and_then(key, hash, with_entry)
+        self.cache
+            .get_key_value_and_then(hash, |k| (k as &K).borrow() == key, with_entry)
     }
 
     #[inline]
     fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<KvEntry<K, V>>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.cache
-            .remove_entry(key, hash)
+            .remove_entry(hash, |k| (k as &K).borrow() == key)
             .map(|(key, entry)| KvEntry::new(key, entry))
     }
 
@@ -965,25 +967,24 @@ where
     S: BuildHasher,
 {
     fn get_value_entry(&self, key: &Arc<K>, hash: u64) -> Option<TrioArc<ValueEntry<K, V>>> {
-        self.cache.get(key, hash)
+        self.cache.get(hash, |k| k == key)
     }
 
-    fn remove_key_value_if<F>(
+    fn remove_key_value_if(
         &self,
         key: &Arc<K>,
         hash: u64,
-        condition: F,
+        condition: impl FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool,
     ) -> Option<TrioArc<ValueEntry<K, V>>>
     where
         K: Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
-        F: FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool,
     {
         // Lock the key for removal if blocking removal notification is enabled.
         let kl = self.maybe_key_lock(key);
         let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-        let maybe_entry = self.cache.remove_if(key, hash, condition);
+        let maybe_entry = self.cache.remove_if(hash, |k| k == key, condition);
         if let Some(entry) = &maybe_entry {
             if self.is_removal_notifier_enabled() {
                 self.notify_single_removal(Arc::clone(key), entry, RemovalCause::Explicit);
@@ -1253,7 +1254,7 @@ where
                 let kl = self.maybe_key_lock(&kh.key);
                 let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-                let removed = self.cache.remove(&Arc::clone(&kh.key), kh.hash);
+                let removed = self.cache.remove(kh.hash, |k| k == &kh.key);
                 if let Some(entry) = removed {
                     if eviction_state.is_notifier_enabled() {
                         let key = Arc::clone(&kh.key);
@@ -1282,8 +1283,9 @@ where
                     let kl = self.maybe_key_lock(element.key());
                     let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-                    if let Some((vic_key, vic_entry)) =
-                        self.cache.remove_entry(element.key(), element.hash())
+                    if let Some((vic_key, vic_entry)) = self
+                        .cache
+                        .remove_entry(element.hash(), |k| k == element.key())
                     {
                         if eviction_state.is_notifier_enabled() {
                             eviction_state.add_removed_entry(
@@ -1315,7 +1317,7 @@ where
 
                 // Remove the candidate from the cache (hash map).
                 let key = Arc::clone(&kh.key);
-                self.cache.remove(&key, kh.hash);
+                self.cache.remove(kh.hash, |k| k == &key);
                 if eviction_state.is_notifier_enabled() {
                     eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
                 }
@@ -1372,7 +1374,7 @@ where
                 next_victim = victim.next_node();
                 let vic_elem = &victim.element;
 
-                if let Some(vic_entry) = cache.get(vic_elem.key(), vic_elem.hash()) {
+                if let Some(vic_entry) = cache.get(vic_elem.hash(), |k| k == vic_elem.key()) {
                     victims.add_policy_weight(vic_entry.policy_weight());
                     victims.add_frequency(freq, vic_elem.hash());
                     victim_nodes.push(NonNull::from(victim));
@@ -1544,9 +1546,11 @@ where
             // expired. This check is needed because it is possible that the entry in
             // the map has been updated or deleted but its deque node we checked
             // above has not been updated yet.
-            let maybe_entry = self
-                .cache
-                .remove_if(key, hash, |_, v| is_expired_entry_ao(tti, va, v, now));
+            let maybe_entry = self.cache.remove_if(
+                hash,
+                |k| k == key,
+                |_, v| is_expired_entry_ao(tti, va, v, now),
+            );
 
             if let Some(entry) = maybe_entry {
                 if eviction_state.is_notifier_enabled() {
@@ -1575,7 +1579,7 @@ where
         deq: &mut Deque<KeyHashDate<K>>,
         write_order_deq: &mut Deque<KeyDate<K>>,
     ) -> bool {
-        if let Some(entry) = self.cache.get(key, hash) {
+        if let Some(entry) = self.cache.get(hash, |k| (k.borrow() as &K) == key) {
             if entry.is_dirty() {
                 // The key exists and the entry has been updated.
                 Deques::move_to_back_ao_in_deque(deq_name, deq, &entry);
@@ -1631,9 +1635,11 @@ where
             let kl = self.maybe_key_lock(key);
             let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-            let maybe_entry = self
-                .cache
-                .remove_if(key, hash, |_, v| is_expired_entry_wo(ttl, va, v, now));
+            let maybe_entry = self.cache.remove_if(
+                hash,
+                |k| k == key,
+                |_, v| is_expired_entry_wo(ttl, va, v, now),
+            );
 
             if let Some(entry) = maybe_entry {
                 if eviction_state.is_notifier_enabled() {
@@ -1641,7 +1647,7 @@ where
                     eviction_state.add_removed_entry(key, &entry, *cause);
                 }
                 Self::handle_remove(deqs, entry, &mut eviction_state.counters);
-            } else if let Some(entry) = self.cache.get(key, hash) {
+            } else if let Some(entry) = self.cache.get(hash, |k| k == key) {
                 if entry.last_modified().is_none() {
                     deqs.move_to_back_ao(&entry);
                     deqs.move_to_back_wo(&entry);
@@ -1786,13 +1792,17 @@ where
             let kl = self.maybe_key_lock(&key);
             let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-            let maybe_entry = self.cache.remove_if(&key, hash, |_, v| {
-                if let Some(lm) = v.last_modified() {
-                    lm == ts
-                } else {
-                    false
-                }
-            });
+            let maybe_entry = self.cache.remove_if(
+                hash,
+                |k| k == &key,
+                |_, v| {
+                    if let Some(lm) = v.last_modified() {
+                        lm == ts
+                    } else {
+                        false
+                    }
+                },
+            );
 
             if let Some(entry) = maybe_entry {
                 if eviction_state.is_notifier_enabled() {

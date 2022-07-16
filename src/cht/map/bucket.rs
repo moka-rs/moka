@@ -1,5 +1,4 @@
 use std::{
-    borrow::Borrow,
     hash::{BuildHasher, Hash, Hasher},
     mem::{self, MaybeUninit},
     ptr,
@@ -72,16 +71,12 @@ impl<K, V> Drop for BucketArray<K, V> {
 }
 
 impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
-    pub(crate) fn get<Q>(
+    pub(crate) fn get(
         &self,
         guard: &'g Guard,
         hash: u64,
-        key: &Q,
-    ) -> Result<Shared<'g, Bucket<K, V>>, RelocatedError>
-    where
-        Q: Eq + ?Sized,
-        K: Borrow<Q>,
-    {
+        mut eq: impl FnMut(&K) -> bool,
+    ) -> Result<Shared<'g, Bucket<K, V>>, RelocatedError> {
         let loop_result = self.probe_loop(guard, hash, |_, _, this_bucket_ptr| {
             let this_bucket_ref = if let Some(r) = unsafe { this_bucket_ptr.as_ref() } {
                 r
@@ -90,7 +85,7 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
                 return ProbeLoopAction::Return(Shared::null());
             };
 
-            if this_bucket_ref.key.borrow() != key {
+            if !eq(&this_bucket_ref.key) {
                 // Different key. Try next bucket
                 return ProbeLoopAction::Continue;
             }
@@ -111,16 +106,14 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
         }
     }
 
-    pub(crate) fn remove_if<Q, F>(
+    pub(crate) fn remove_if<F>(
         &self,
         guard: &'g Guard,
         hash: u64,
-        key: &Q,
+        mut eq: impl FnMut(&K) -> bool,
         mut condition: F,
     ) -> Result<Shared<'g, Bucket<K, V>>, F>
     where
-        Q: Eq + ?Sized,
-        K: Borrow<Q>,
         F: FnMut(&K, &V) -> bool,
     {
         let loop_result = self.probe_loop(guard, hash, |_, this_bucket, this_bucket_ptr| {
@@ -133,7 +126,7 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
 
             let this_key = &this_bucket_ref.key;
 
-            if this_key.borrow() != key {
+            if !eq(this_key) {
                 // Different key. Try next bucket.
                 return ProbeLoopAction::Continue;
             }
@@ -189,7 +182,7 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
             let state = maybe_state.take().unwrap();
 
             if let Some(this_bucket_ref) = unsafe { this_bucket_ptr.as_ref() } {
-                if this_bucket_ref.key.borrow() != state.key() {
+                if &this_bucket_ref.key != state.key() {
                     // Different key. Try next bucket.
                     maybe_state = Some(state);
                     return ProbeLoopAction::Continue;
@@ -784,52 +777,79 @@ mod tests {
         let h3 = hash(&build_hasher, k3);
         let v3 = 15;
 
-        assert_eq!(buckets.get(guard, h1, k1), Ok(Shared::null()));
-        assert_eq!(buckets.get(guard, h2, k2), Ok(Shared::null()));
-        assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
+        assert_eq!(buckets.get(guard, h1, |&k| k == k1), Ok(Shared::null()));
+        assert_eq!(buckets.get(guard, h2, |&k| k == k2), Ok(Shared::null()));
+        assert_eq!(buckets.get(guard, h3, |&k| k == k3), Ok(Shared::null()));
 
         assert!(matches!(
             insert(&buckets, guard, k1, h1, || v1),
             Ok(InsertionResult::Inserted)
         ));
 
-        assert_eq!(into_value(buckets.get(guard, h1, k1)), Ok(Some(v1)));
-        assert_eq!(buckets.get(guard, h2, k2), Ok(Shared::null()));
-        assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
+        assert_eq!(
+            into_value(buckets.get(guard, h1, |&k| k == k1)),
+            Ok(Some(v1))
+        );
+        assert_eq!(buckets.get(guard, h2, |&k| k == k2), Ok(Shared::null()));
+        assert_eq!(buckets.get(guard, h3, |&k| k == k3), Ok(Shared::null()));
 
         assert!(matches!(
             insert(&buckets, guard, k2, h2, || v2),
             Ok(InsertionResult::Inserted)
         ));
 
-        assert_eq!(into_value(buckets.get(guard, h1, k1)), Ok(Some(v1)));
-        assert_eq!(into_value(buckets.get(guard, h2, k2)), Ok(Some(v2)));
-        assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
+        assert_eq!(
+            into_value(buckets.get(guard, h1, |&k| k == k1)),
+            Ok(Some(v1))
+        );
+        assert_eq!(
+            into_value(buckets.get(guard, h2, |&k| k == k2)),
+            Ok(Some(v2))
+        );
+        assert_eq!(buckets.get(guard, h3, |&k| k == k3), Ok(Shared::null()));
 
         assert!(matches!(
             insert(&buckets, guard, k3, h3, || v3),
             Ok(InsertionResult::Inserted)
         ));
 
-        assert_eq!(into_value(buckets.get(guard, h1, k1)), Ok(Some(v1)));
-        assert_eq!(into_value(buckets.get(guard, h2, k2)), Ok(Some(v2)));
-        assert_eq!(into_value(buckets.get(guard, h3, k3)), Ok(Some(v3)));
+        assert_eq!(
+            into_value(buckets.get(guard, h1, |&k| k == k1)),
+            Ok(Some(v1))
+        );
+        assert_eq!(
+            into_value(buckets.get(guard, h2, |&k| k == k2)),
+            Ok(Some(v2))
+        );
+        assert_eq!(
+            into_value(buckets.get(guard, h3, |&k| k == k3)),
+            Ok(Some(v3))
+        );
 
-        let b1 = buckets.remove_if(guard, h1, k1, |_, _| true).ok().unwrap();
+        let b1 = buckets
+            .remove_if(guard, h1, |&k| k == k1, |_, _| true)
+            .ok()
+            .unwrap();
         assert!(is_tombstone(b1));
         unsafe { defer_destroy_tombstone(guard, b1) };
 
-        let b2 = buckets.remove_if(guard, h2, k2, |_, _| true).ok().unwrap();
+        let b2 = buckets
+            .remove_if(guard, h2, |&k| k == k2, |_, _| true)
+            .ok()
+            .unwrap();
         assert!(is_tombstone(b2));
         unsafe { defer_destroy_tombstone(guard, b2) };
 
-        let b3 = buckets.remove_if(guard, h3, k3, |_, _| true).ok().unwrap();
+        let b3 = buckets
+            .remove_if(guard, h3, |&k| k == k3, |_, _| true)
+            .ok()
+            .unwrap();
         assert!(is_tombstone(b3));
         unsafe { defer_destroy_tombstone(guard, b3) };
 
-        assert_eq!(buckets.get(guard, h1, k1), Ok(Shared::null()));
-        assert_eq!(buckets.get(guard, h2, k2), Ok(Shared::null()));
-        assert_eq!(buckets.get(guard, h3, k3), Ok(Shared::null()));
+        assert_eq!(buckets.get(guard, h1, |&k| k == k1), Ok(Shared::null()));
+        assert_eq!(buckets.get(guard, h2, |&k| k == k2), Ok(Shared::null()));
+        assert_eq!(buckets.get(guard, h3, |&k| k == k3), Ok(Shared::null()));
 
         for this_bucket in buckets.buckets.iter() {
             let this_bucket_ptr = this_bucket.swap(Shared::null(), Ordering::Relaxed, guard);
