@@ -967,7 +967,7 @@ where
     S: BuildHasher,
 {
     fn get_value_entry(&self, key: &Arc<K>, hash: u64) -> Option<TrioArc<ValueEntry<K, V>>> {
-        self.cache.get(hash, |k| (k.borrow() as &Arc<K>) == key)
+        self.cache.get(hash, |k| k == key)
     }
 
     fn remove_key_value_if(
@@ -984,9 +984,7 @@ where
         let kl = self.maybe_key_lock(key);
         let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-        let maybe_entry = self
-            .cache
-            .remove_if(hash, |k| (k.borrow() as &Arc<K>) == key, condition);
+        let maybe_entry = self.cache.remove_if(hash, |k| k == key, condition);
         if let Some(entry) = &maybe_entry {
             if self.is_removal_notifier_enabled() {
                 self.notify_single_removal(Arc::clone(key), entry, RemovalCause::Explicit);
