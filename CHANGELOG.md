@@ -1,12 +1,24 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.9.1
+
+### Fixed (Changed)
+
+- Relax the too restrictive requirement `Arc<K>: Borrow<Q>` to `K: Borrow<Q>` for the
+  `contains_key`, `get` and `invalidate` methods of the following caches, so that
+  they will accept `&[u8]` as the key when `K` is `Vec<u8>`: ([#167][gh-pull-0167])
+    - `sync::Cache`
+    - `sync::SegmentedCache`
+    - `future::Cache`
+
+
 ## Version 0.9.0
 
 ### Added
 
 - Add support for eviction listener to the following caches ([#145][gh-pull-0145]).
   Eviction listener is a callback function that will be called when an entry is
-  removed from the cache.
+  removed from the cache:
     - `sync::Cache`
     - `sync::SegmentedCache`
     - `future::Cache`
@@ -412,6 +424,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0167]: https://github.com/moka-rs/moka/pull/167/
 [gh-pull-0159]: https://github.com/moka-rs/moka/pull/159/
 [gh-pull-0145]: https://github.com/moka-rs/moka/pull/145/
 [gh-pull-0143]: https://github.com/moka-rs/moka/pull/143/
