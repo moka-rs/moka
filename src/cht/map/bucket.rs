@@ -124,7 +124,9 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
                 return ProbeLoopAction::Return(Shared::null());
             };
 
-            if !eq(&this_bucket_ref.key) {
+            let this_key = &this_bucket_ref.key;
+
+            if !eq(this_key) {
                 // Different key. Try next bucket.
                 return ProbeLoopAction::Continue;
             }
@@ -136,7 +138,7 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
 
             let this_value = unsafe { &*this_bucket_ref.maybe_value.as_ptr() };
 
-            if !condition(&this_bucket_ref.key, this_value) {
+            if !condition(this_key, this_value) {
                 // Found but the condition is false. Do not remove.
                 return ProbeLoopAction::Return(Shared::null());
             }
@@ -180,8 +182,7 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
             let state = maybe_state.take().unwrap();
 
             if let Some(this_bucket_ref) = unsafe { this_bucket_ptr.as_ref() } {
-                let this_key: &K = &this_bucket_ref.key;
-                if this_key != state.key() {
+                if &this_bucket_ref.key != state.key() {
                     // Different key. Try next bucket.
                     maybe_state = Some(state);
                     return ProbeLoopAction::Continue;
@@ -239,7 +240,7 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
 
             let (new_bucket, maybe_insert_value) =
                 if let Some(this_bucket_ref) = unsafe { this_bucket_ptr.as_ref() } {
-                    let this_key: &K = &this_bucket_ref.key;
+                    let this_key = &this_bucket_ref.key;
 
                     if this_key != state.key() {
                         // Different key. Try next bucket.
