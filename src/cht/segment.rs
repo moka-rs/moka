@@ -39,10 +39,7 @@ use std::{
     borrow::Borrow,
     hash::{BuildHasher, Hash},
     ptr,
-    sync::{
-        atomic::{self, AtomicUsize, Ordering},
-        Arc,
-    },
+    sync::atomic::{self, AtomicUsize, Ordering},
 };
 
 use crossbeam_epoch::Atomic;
@@ -253,65 +250,37 @@ impl<K, V, S> HashMap<K, V, S> {
 
 impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// Returns a clone of the value corresponding to the key.
-    ///
-    /// The key may be any borrowed form of the map's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
-    /// the key type.
-    ///
-    /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
-    /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     #[inline]
-    pub(crate) fn get<Q>(&self, key: &Q, hash: u64) -> Option<V>
+    pub(crate) fn get(&self, hash: u64, eq: impl FnMut(&K) -> bool) -> Option<V>
     where
-        Q: Hash + Eq + ?Sized,
-        K: Borrow<Q>,
         V: Clone,
     {
-        self.get_key_value_and(key, hash, |_, v| v.clone())
+        self.get_key_value_and(hash, eq, |_, v| v.clone())
     }
 
     /// Returns the result of invoking a function with a reference to the
     /// key-value pair corresponding to the supplied key.
-    ///
-    /// The supplied key may be any borrowed form of the map's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for the key
-    /// type.
-    ///
-    /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
-    /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     #[inline]
-    pub(crate) fn get_key_value_and<Q, F, T>(&self, key: &Q, hash: u64, with_entry: F) -> Option<T>
-    where
-        Q: Hash + Eq + ?Sized,
-        K: Borrow<Q>,
-        F: FnOnce(&Arc<K>, &V) -> T,
-    {
-        self.get_key_value_and_then(key, hash, |k, v| Some(with_entry(k, v)))
-    }
-
-    /// Returns the result of invoking a function with a reference to the
-    /// key-value pair corresponding to the supplied key.
-    ///
-    /// The supplied key may be any borrowed form of the map's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for the key
-    /// type.
-    ///
-    /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
-    /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
-    #[inline]
-    pub(crate) fn get_key_value_and_then<Q, F, T>(
+    pub(crate) fn get_key_value_and<T>(
         &self,
-        key: &Q,
         hash: u64,
-        with_entry: F,
-    ) -> Option<T>
-    where
-        Q: Hash + Eq + ?Sized,
-        K: Borrow<Q>,
-        F: FnOnce(&Arc<K>, &V) -> Option<T>,
-    {
+        eq: impl FnMut(&K) -> bool,
+        with_entry: impl FnOnce(&K, &V) -> T,
+    ) -> Option<T> {
+        self.get_key_value_and_then(hash, eq, |k, v| Some(with_entry(k, v)))
+    }
+
+    /// Returns the result of invoking a function with a reference to the
+    /// key-value pair corresponding to the supplied key.
+    #[inline]
+    pub(crate) fn get_key_value_and_then<T>(
+        &self,
+        hash: u64,
+        eq: impl FnMut(&K) -> bool,
+        with_entry: impl FnOnce(&K, &V) -> Option<T>,
+    ) -> Option<T> {
         self.bucket_array_ref(hash)
-            .get_key_value_and_then(key, hash, with_entry)
+            .get_key_value_and_then(hash, eq, with_entry)
     }
 
     /// Inserts a key-value pair into the map, returning the result of invoking
@@ -322,16 +291,15 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// updated.
     #[cfg(test)]
     #[inline]
-    pub fn insert_entry_and<F, T>(
+    pub fn insert_entry_and<T>(
         &self,
-        key: Arc<K>,
+        key: K,
         hash: u64,
         value: V,
-        with_previous_entry: F,
+        with_previous_entry: impl FnOnce(&K, &V) -> T,
     ) -> Option<T>
     where
         V: Clone,
-        F: FnOnce(&K, &V) -> T,
     {
         let result = self
             .bucket_array_ref(hash)
@@ -353,40 +321,23 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
 
     /// Removes a key from the map, returning a clone of the value previously
     /// corresponding to the key.
-    ///
-    /// The key may be any borrowed form of the map's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
-    /// the key type.
-    ///
-    /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
-    /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     #[inline]
-    pub(crate) fn remove<Q>(&self, key: &Q, hash: u64) -> Option<V>
+    pub(crate) fn remove(&self, hash: u64, eq: impl FnMut(&K) -> bool) -> Option<V>
     where
-        Q: Hash + Eq + ?Sized,
-        K: Borrow<Q>,
         V: Clone,
     {
-        self.remove_entry_if_and(key, hash, |_, _| true, |_, v| v.clone())
+        self.remove_entry_if_and(hash, eq, |_, _| true, |_, v| v.clone())
     }
 
     /// Removes a key from the map, returning a clone of the key-value pair
     /// previously corresponding to the key.
-    ///
-    /// The key may be any borrowed form of the map's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
-    /// the key type.
-    ///
-    /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
-    /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     #[inline]
-    pub(crate) fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<(Arc<K>, V)>
+    pub(crate) fn remove_entry(&self, hash: u64, eq: impl FnMut(&K) -> bool) -> Option<(K, V)>
     where
-        Q: Hash + Eq + ?Sized,
-        K: Borrow<Q>,
+        K: Clone,
         V: Clone,
     {
-        self.remove_entry_if_and(key, hash, |_, _| true, |k, v| (k.clone(), v.clone()))
+        self.remove_entry_if_and(hash, eq, |_, _| true, |k, v| (k.clone(), v.clone()))
     }
 
     /// Removes a key from the map if a condition is met, returning a clone of
@@ -395,22 +346,18 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// `condition` will be invoked at least once if [`Some`] is returned. It
     /// may also be invoked one or more times if [`None`] is returned.
     ///
-    /// The key may be any borrowed form of the map's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
-    /// the key type.
-    ///
-    /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
-    /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     /// [`Some`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.Some
     /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
-    pub(crate) fn remove_if<Q, F>(&self, key: &Q, hash: u64, condition: F) -> Option<V>
+    pub(crate) fn remove_if(
+        &self,
+        hash: u64,
+        eq: impl FnMut(&K) -> bool,
+        condition: impl FnMut(&K, &V) -> bool,
+    ) -> Option<V>
     where
-        Q: Hash + Eq + ?Sized,
-        K: Borrow<Q>,
         V: Clone,
-        F: FnMut(&K, &V) -> bool,
     {
-        self.remove_entry_if_and(key, hash, condition, move |_, v| v.clone())
+        self.remove_entry_if_and(hash, eq, condition, move |_, v| v.clone())
     }
 
     /// Removes a key from the map if a condition is met, returning the result
@@ -420,30 +367,18 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// `condition` will be invoked at least once if [`Some`] is returned. It
     /// may also be invoked one or more times if [`None`] is returned.
     ///
-    /// The key may be any borrowed form of the map's key type, but
-    /// [`Hash`] and [`Eq`] on the borrowed form *must* match those for
-    /// the key type.
-    ///
-    /// [`Hash`]: https://doc.rust-lang.org/std/hash/trait.Hash.html
-    /// [`Eq`]: https://doc.rust-lang.org/std/cmp/trait.Eq.html
     /// [`Some`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.Some
     /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
     #[inline]
-    pub(crate) fn remove_entry_if_and<Q, F, G, T>(
+    pub(crate) fn remove_entry_if_and<T>(
         &self,
-        key: &Q,
         hash: u64,
-        condition: F,
-        with_previous_entry: G,
-    ) -> Option<T>
-    where
-        Q: Hash + Eq + ?Sized,
-        K: Borrow<Q>,
-        F: FnMut(&K, &V) -> bool,
-        G: FnOnce(&Arc<K>, &V) -> T,
-    {
+        eq: impl FnMut(&K) -> bool,
+        condition: impl FnMut(&K, &V) -> bool,
+        with_previous_entry: impl FnOnce(&K, &V) -> T,
+    ) -> Option<T> {
         self.bucket_array_ref(hash)
-            .remove_entry_if_and(key, hash, condition, move |k, v| {
+            .remove_entry_if_and(hash, eq, condition, move |k, v| {
                 self.len.fetch_sub(1, Ordering::Relaxed);
 
                 with_previous_entry(k, v)
@@ -462,17 +397,15 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// [`Some`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.Some
     /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
     #[inline]
-    pub(crate) fn insert_with_or_modify<F, G>(
+    pub(crate) fn insert_with_or_modify(
         &self,
-        key: Arc<K>,
+        key: K,
         hash: u64,
-        on_insert: F,
-        on_modify: G,
+        on_insert: impl FnOnce() -> V,
+        on_modify: impl FnMut(&K, &V) -> V,
     ) -> Option<V>
     where
         V: Clone,
-        F: FnOnce() -> V,
-        G: FnMut(&K, &V) -> V,
     {
         self.insert_with_or_modify_entry_and(key, hash, on_insert, on_modify, |_, v| v.clone())
     }
@@ -490,19 +423,14 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     /// [`Some`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.Some
     /// [`None`]: https://doc.rust-lang.org/std/option/enum.Option.html#variant.None
     #[inline]
-    pub(crate) fn insert_with_or_modify_entry_and<F, G, H, T>(
+    pub(crate) fn insert_with_or_modify_entry_and<T>(
         &self,
-        key: Arc<K>,
+        key: K,
         hash: u64,
-        on_insert: F,
-        on_modify: G,
-        with_old_entry: H,
-    ) -> Option<T>
-    where
-        F: FnOnce() -> V,
-        G: FnMut(&K, &V) -> V,
-        H: FnOnce(&K, &V) -> T,
-    {
+        on_insert: impl FnOnce() -> V,
+        on_modify: impl FnMut(&K, &V) -> V,
+        with_old_entry: impl FnOnce(&K, &V) -> T,
+    ) -> Option<T> {
         let result = self.bucket_array_ref(hash).insert_with_or_modify_entry_and(
             key,
             hash,
@@ -519,7 +447,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     }
 
     #[inline]
-    pub(crate) fn insert_if_not_present(&self, key: Arc<K>, hash: u64, value: V) -> Option<V>
+    pub(crate) fn insert_if_not_present(&self, key: K, hash: u64, value: V) -> Option<V>
     where
         V: Clone,
     {
@@ -537,10 +465,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
         result
     }
 
-    pub(crate) fn keys<F, T>(&self, segment: usize, with_key: F) -> Option<Vec<T>>
-    where
-        F: FnMut(&Arc<K>) -> T,
-    {
+    pub(crate) fn keys<T>(&self, segment: usize, with_key: impl FnMut(&K) -> T) -> Option<Vec<T>> {
         if segment >= self.segments.len() {
             return None;
         }
@@ -668,16 +593,13 @@ mod tests {
         let key = "key1";
         let hash = map.hash(key);
 
-        assert_eq!(
-            map.insert_entry_and(Arc::new(key), hash, 5, |_, v| *v),
-            None
-        );
-        assert_eq!(map.get(key, hash), Some(5));
+        assert_eq!(map.insert_entry_and(key, hash, 5, |_, v| *v), None);
+        assert_eq!(map.get(hash, |k| k == &key), Some(5));
 
         assert!(!map.is_empty());
         assert_eq!(map.len(), 1);
 
-        assert_eq!(map.remove(key, hash), Some(5));
+        assert_eq!(map.remove(hash, |k| k == &key), Some(5));
         assert!(map.is_empty());
         assert_eq!(map.len(), 0);
 
@@ -692,18 +614,18 @@ mod tests {
         let key = "key1";
         let hash = map.hash(key);
 
-        assert_eq!(map.insert_if_not_present(Arc::new(key), hash, 5), None);
-        assert_eq!(map.get(key, hash), Some(5));
+        assert_eq!(map.insert_if_not_present(key, hash, 5), None);
+        assert_eq!(map.get(hash, |k| k == &key), Some(5));
 
-        assert_eq!(map.insert_if_not_present(Arc::new(key), hash, 6), Some(5));
-        assert_eq!(map.get(key, hash), Some(5));
+        assert_eq!(map.insert_if_not_present(key, hash, 6), Some(5));
+        assert_eq!(map.get(hash, |k| k == &key), Some(5));
 
-        assert_eq!(map.remove(key, hash), Some(5));
+        assert_eq!(map.remove(hash, |k| k == &key), Some(5));
 
-        assert_eq!(map.insert_if_not_present(Arc::new(key), hash, 7), None);
-        assert_eq!(map.get(key, hash), Some(7));
+        assert_eq!(map.insert_if_not_present(key, hash, 7), None);
+        assert_eq!(map.get(hash, |k| k == &key), Some(7));
 
-        assert_eq!(map.remove(key, hash), Some(7));
+        assert_eq!(map.remove(hash, |k| k == &key), Some(7));
         assert!(map.is_empty());
         assert_eq!(map.len(), 0);
 
@@ -731,7 +653,6 @@ mod tests {
 
                     for key in 0..MAX_VALUE {
                         let hash = hashmap.hash(&key);
-                        let key = Arc::new(key);
                         let result = hashmap.insert_if_not_present(key, hash, thread_id);
                         if result.is_none() {
                             success_count += 1;
@@ -771,7 +692,7 @@ mod tests {
         // Get all entries from the cht MashMap.
         for key in 0..MAX_VALUE {
             let hash = hashmap.hash(&key);
-            if let Some(thread_id) = hashmap.get(&key, hash) {
+            if let Some(thread_id) = hashmap.get(hash, |&k| k == key) {
                 let count = results2.get_mut(&thread_id).unwrap();
                 *count += 1;
             }
@@ -790,21 +711,19 @@ mod tests {
         let map = HashMap::with_capacity(MAX_VALUE as usize);
 
         for i in 0..MAX_VALUE {
-            let key = Arc::new(i);
-            assert_eq!(map.insert_entry_and(key, map.hash(&i), i, |_, v| *v), None);
+            assert_eq!(map.insert_entry_and(i, map.hash(&i), i, |_, v| *v), None);
 
             assert!(!map.is_empty());
             assert_eq!(map.len(), (i + 1) as usize);
 
             for j in 0..=i {
                 let hash = map.hash(&j);
-                assert_eq!(map.get(&j, hash), Some(j));
-                let key = Arc::new(j);
-                assert_eq!(map.insert_entry_and(key, hash, j, |_, v| *v), Some(j));
+                assert_eq!(map.get(hash, |&k| k == j), Some(j));
+                assert_eq!(map.insert_entry_and(j, hash, j, |_, v| *v), Some(j));
             }
 
-            for k in i + 1..MAX_VALUE {
-                assert_eq!(map.get(&k, map.hash(&k)), None);
+            for l in i + 1..MAX_VALUE {
+                assert_eq!(map.get(map.hash(&l), |&k| k == l), None);
             }
         }
 
@@ -818,21 +737,19 @@ mod tests {
         let map = HashMap::with_capacity(0);
 
         for i in 0..MAX_VALUE {
-            let key = Arc::new(i);
-            assert_eq!(map.insert_entry_and(key, map.hash(&i), i, |_, v| *v), None);
+            assert_eq!(map.insert_entry_and(i, map.hash(&i), i, |_, v| *v), None);
 
             assert!(!map.is_empty());
             assert_eq!(map.len(), (i + 1) as usize);
 
             for j in 0..=i {
                 let hash = map.hash(&j);
-                assert_eq!(map.get(&j, hash), Some(j));
-                let key = Arc::new(j);
-                assert_eq!(map.insert_entry_and(key, hash, j, |_, v| *v), Some(j));
+                assert_eq!(map.get(hash, |&k| k == j), Some(j));
+                assert_eq!(map.insert_entry_and(j, hash, j, |_, v| *v), Some(j));
             }
 
-            for k in i + 1..MAX_VALUE {
-                assert_eq!(map.get(&k, map.hash(&k)), None);
+            for l in i + 1..MAX_VALUE {
+                assert_eq!(map.get(map.hash(&l), |&k| k == l), None);
             }
         }
 
@@ -864,8 +781,7 @@ mod tests {
                     barrier.wait();
 
                     for j in (0..MAX_VALUE).map(|j| j + (i as i32 * MAX_VALUE)) {
-                        let key = Arc::new(j);
-                        assert_eq!(map.insert_entry_and(key, map.hash(&j), j, |_, v| *v), None);
+                        assert_eq!(map.insert_entry_and(j, map.hash(&j), j, |_, v| *v), None);
                     }
                 })
             })
@@ -879,7 +795,7 @@ mod tests {
         assert_eq!(map.len(), MAX_INSERTED_VALUE as usize);
 
         for i in 0..MAX_INSERTED_VALUE {
-            assert_eq!(map.get(&i, map.hash(&i)), Some(i));
+            assert_eq!(map.get(map.hash(&i), |&k| k == i), Some(i));
         }
 
         run_deferred();
@@ -905,8 +821,7 @@ mod tests {
                     barrier.wait();
 
                     for j in (0..MAX_VALUE).map(|j| j + (i as i32 * MAX_VALUE)) {
-                        let key = Arc::new(j);
-                        assert_eq!(map.insert_entry_and(key, map.hash(&j), j, |_, v| *v), None);
+                        assert_eq!(map.insert_entry_and(j, map.hash(&j), j, |_, v| *v), None);
                     }
                 })
             })
@@ -920,7 +835,7 @@ mod tests {
         assert_eq!(map.len(), MAX_INSERTED_VALUE as usize);
 
         for i in 0..MAX_INSERTED_VALUE {
-            assert_eq!(map.get(&i, map.hash(&i)), Some(i));
+            assert_eq!(map.get(map.hash(&i), |&k| k == i), Some(i));
         }
 
         run_deferred();
@@ -933,19 +848,18 @@ mod tests {
         let map = HashMap::with_capacity(MAX_VALUE as usize);
 
         for i in 0..MAX_VALUE {
-            let key = Arc::new(i);
-            assert_eq!(map.insert_entry_and(key, map.hash(&i), i, |_, v| *v), None);
+            assert_eq!(map.insert_entry_and(i, map.hash(&i), i, |_, v| *v), None);
         }
 
         for i in 0..MAX_VALUE {
-            assert_eq!(map.remove(&i, map.hash(&i)), Some(i));
+            assert_eq!(map.remove(map.hash(&i), |&k| k == i), Some(i));
         }
 
         assert!(map.is_empty());
         assert_eq!(map.len(), 0);
 
         for i in 0..MAX_VALUE {
-            assert_eq!(map.get(&i, map.hash(&i)), None);
+            assert_eq!(map.get(map.hash(&i), |&k| k == i), None);
         }
 
         run_deferred();
@@ -961,8 +875,7 @@ mod tests {
         let map = HashMap::with_capacity(MAX_INSERTED_VALUE as usize);
 
         for i in 0..MAX_INSERTED_VALUE {
-            let key = Arc::new(i);
-            assert_eq!(map.insert_entry_and(key, map.hash(&i), i, |_, v| *v), None);
+            assert_eq!(map.insert_entry_and(i, map.hash(&i), i, |_, v| *v), None);
         }
 
         let map = Arc::new(map);
@@ -978,7 +891,7 @@ mod tests {
                     barrier.wait();
 
                     for j in (0..MAX_VALUE).map(|j| j + (i as i32 * MAX_VALUE)) {
-                        assert_eq!(map.remove(&j, map.hash(&j)), Some(j));
+                        assert_eq!(map.remove(map.hash(&j), |&k| k == j), Some(j));
                     }
                 })
             })
@@ -991,7 +904,7 @@ mod tests {
         assert_eq!(map.len(), 0);
 
         for i in 0..MAX_INSERTED_VALUE {
-            assert_eq!(map.get(&i, map.hash(&i)), None);
+            assert_eq!(map.get(map.hash(&i), |&k| k == i), None);
         }
 
         run_deferred();
@@ -1008,8 +921,7 @@ mod tests {
         let map = HashMap::with_capacity(MAX_INSERTED_VALUE as usize);
 
         for i in INSERTED_MIDPOINT..MAX_INSERTED_VALUE {
-            let key = Arc::new(i);
-            assert_eq!(map.insert_entry_and(key, map.hash(&i), i, |_, v| *v), None);
+            assert_eq!(map.insert_entry_and(i, map.hash(&i), i, |_, v| *v), None);
         }
 
         let map = Arc::new(map);
@@ -1025,8 +937,7 @@ mod tests {
                     barrier.wait();
 
                     for j in (0..MAX_VALUE).map(|j| j + (i as i32 * MAX_VALUE)) {
-                        let key = Arc::new(j);
-                        assert_eq!(map.insert_entry_and(key, map.hash(&j), j, |_, v| *v), None);
+                        assert_eq!(map.insert_entry_and(j, map.hash(&j), j, |_, v| *v), None);
                     }
                 })
             })
@@ -1043,7 +954,7 @@ mod tests {
 
                     for j in (0..MAX_VALUE).map(|j| INSERTED_MIDPOINT + j + (i as i32 * MAX_VALUE))
                     {
-                        assert_eq!(map.remove(&j, map.hash(&j)), Some(j));
+                        assert_eq!(map.remove(map.hash(&j), |&k| k == j), Some(j));
                     }
                 })
             })
@@ -1061,11 +972,11 @@ mod tests {
         assert_eq!(map.len(), INSERTED_MIDPOINT as usize);
 
         for i in 0..INSERTED_MIDPOINT {
-            assert_eq!(map.get(&i, map.hash(&i)), Some(i));
+            assert_eq!(map.get(map.hash(&i), |&k| k == i), Some(i));
         }
 
         for i in INSERTED_MIDPOINT..MAX_INSERTED_VALUE {
-            assert_eq!(map.get(&i, map.hash(&i)), None);
+            assert_eq!(map.get(map.hash(&i), |&k| k == i), None);
         }
 
         run_deferred();
@@ -1082,8 +993,7 @@ mod tests {
         let map = HashMap::with_capacity(INSERTED_MIDPOINT as usize);
 
         for i in INSERTED_MIDPOINT..MAX_INSERTED_VALUE {
-            let key = Arc::new(i);
-            assert_eq!(map.insert_entry_and(key, map.hash(&i), i, |_, v| *v), None);
+            assert_eq!(map.insert_entry_and(i, map.hash(&i), i, |_, v| *v), None);
         }
 
         let map = Arc::new(map);
@@ -1099,8 +1009,7 @@ mod tests {
                     barrier.wait();
 
                     for j in (0..MAX_VALUE).map(|j| j + (i as i32 * MAX_VALUE)) {
-                        let key = Arc::new(j);
-                        assert_eq!(map.insert_entry_and(key, map.hash(&j), j, |_, v| *v), None);
+                        assert_eq!(map.insert_entry_and(j, map.hash(&j), j, |_, v| *v), None);
                     }
                 })
             })
@@ -1117,7 +1026,7 @@ mod tests {
 
                     for j in (0..MAX_VALUE).map(|j| INSERTED_MIDPOINT + j + (i as i32 * MAX_VALUE))
                     {
-                        assert_eq!(map.remove(&j, map.hash(&j)), Some(j));
+                        assert_eq!(map.remove(map.hash(&j), |&k| k == j), Some(j));
                     }
                 })
             })
@@ -1135,11 +1044,11 @@ mod tests {
         assert_eq!(map.len(), INSERTED_MIDPOINT as usize);
 
         for i in 0..INSERTED_MIDPOINT {
-            assert_eq!(map.get(&i, map.hash(&i)), Some(i));
+            assert_eq!(map.get(map.hash(&i), |&k| k == i), Some(i));
         }
 
         for i in INSERTED_MIDPOINT..MAX_INSERTED_VALUE {
-            assert_eq!(map.get(&i, map.hash(&i)), None);
+            assert_eq!(map.get(map.hash(&i), |&k| k == i), None);
         }
 
         run_deferred();
@@ -1153,16 +1062,16 @@ mod tests {
         let hash = map.hash(&key);
 
         assert_eq!(
-            map.insert_with_or_modify(Arc::new(key), hash, || 1, |_, x| x + 1),
+            map.insert_with_or_modify(key, hash, || 1, |_, x| x + 1),
             None
         );
-        assert_eq!(map.get(key, hash), Some(1));
+        assert_eq!(map.get(hash, |&k| k == key), Some(1));
 
         assert_eq!(
-            map.insert_with_or_modify(Arc::new(key), hash, || 1, |_, x| x + 1),
+            map.insert_with_or_modify(key, hash, || 1, |_, x| x + 1),
             Some(1)
         );
-        assert_eq!(map.get(key, hash), Some(2));
+        assert_eq!(map.get(hash, |&k| k == key), Some(2));
 
         run_deferred();
     }
@@ -1186,8 +1095,7 @@ mod tests {
                     barrier.wait();
 
                     for j in 0..MAX_VALUE {
-                        let key = Arc::new(j);
-                        map.insert_with_or_modify(key, map.hash(&j), || 1, |_, x| x + 1);
+                        map.insert_with_or_modify(j, map.hash(&j), || 1, |_, x| x + 1);
                     }
                 })
             })
@@ -1200,7 +1108,7 @@ mod tests {
         assert_eq!(map.len(), MAX_VALUE as usize);
 
         for i in 0..MAX_VALUE {
-            assert_eq!(map.get(&i, map.hash(&i)), Some(NUM_THREADS as i32));
+            assert_eq!(map.get(map.hash(&i), |&k| k == i), Some(NUM_THREADS as i32));
         }
 
         run_deferred();
@@ -1225,8 +1133,7 @@ mod tests {
                     barrier.wait();
 
                     for j in 0..MAX_VALUE {
-                        let key = Arc::new(j);
-                        map.insert_entry_and(key, map.hash(&j), j, |_, v| *v);
+                        map.insert_entry_and(j, map.hash(&j), j, |_, v| *v);
                     }
                 })
             })
@@ -1239,7 +1146,7 @@ mod tests {
         assert_eq!(map.len(), MAX_VALUE as usize);
 
         for i in 0..MAX_VALUE {
-            assert_eq!(map.get(&i, map.hash(&i)), Some(i));
+            assert_eq!(map.get(map.hash(&i), |&k| k == i), Some(i));
         }
 
         run_deferred();
@@ -1274,8 +1181,7 @@ mod tests {
                     barrier.wait();
 
                     for j in 0..MAX_VALUE {
-                        let key = Arc::new(j);
-                        map.insert_entry_and(key, map.hash(&j), j, |_, v| *v);
+                        map.insert_entry_and(j, map.hash(&j), j, |_, v| *v);
                     }
                 })
             })
@@ -1288,7 +1194,7 @@ mod tests {
         assert_eq!(map.len(), MAX_VALUE as usize);
 
         for i in 0..MAX_VALUE {
-            assert_eq!(map.get(&i, map.hash(&i)), Some(i));
+            assert_eq!(map.get(map.hash(&i), |&k| k == i), Some(i));
         }
 
         run_deferred();
@@ -1303,8 +1209,7 @@ mod tests {
         let map = HashMap::with_capacity(MAX_VALUE as usize);
 
         for i in 0..MAX_VALUE {
-            let key = Arc::new(i);
-            map.insert_entry_and(key, map.hash(&i), i, |_, v| *v);
+            map.insert_entry_and(i, map.hash(&i), i, |_, v| *v);
         }
 
         let map = Arc::new(map);
@@ -1320,7 +1225,7 @@ mod tests {
                     barrier.wait();
 
                     for j in 0..MAX_VALUE {
-                        let prev_value = map.remove(&j, map.hash(&j));
+                        let prev_value = map.remove(map.hash(&j), |&k| k == j);
 
                         if let Some(v) = prev_value {
                             assert_eq!(v, j);
@@ -1338,7 +1243,7 @@ mod tests {
         assert_eq!(map.len(), 0);
 
         for i in 0..MAX_VALUE {
-            assert_eq!(map.get(&i, map.hash(&i)), None);
+            assert_eq!(map.get(map.hash(&i), |&k| k == i), None);
         }
 
         run_deferred();
@@ -1355,7 +1260,7 @@ mod tests {
 
             assert_eq!(
                 map.insert_entry_and(
-                    Arc::new(NoisyDropper::new(Arc::clone(&key_parent), 0)),
+                    NoisyDropper::new(Arc::clone(&key_parent), 0),
                     hash,
                     NoisyDropper::new(Arc::clone(&value_parent), 0),
                     |_, _| ()
@@ -1364,12 +1269,12 @@ mod tests {
             );
             assert!(!map.is_empty());
             assert_eq!(map.len(), 1);
-            map.get_key_value_and(&0, hash, |_k, v| assert_eq!(v, &0));
+            map.get_key_value_and(hash, |k| k == &0, |_k, v| assert_eq!(v, &0));
 
-            map.remove_entry_if_and(&0, hash, |_, _| true, |_k, v| assert_eq!(v, &0));
+            map.remove_entry_if_and(hash, |k| k == &0, |_, _| true, |_k, v| assert_eq!(v, &0));
             assert!(map.is_empty());
             assert_eq!(map.len(), 0);
-            assert_eq!(map.get_key_value_and(&0, hash, |_, _| ()), None);
+            assert_eq!(map.get_key_value_and(hash, |k| k == &0, |_, _| ()), None);
 
             run_deferred();
 
@@ -1404,7 +1309,7 @@ mod tests {
             {
                 assert_eq!(
                     map.insert_entry_and(
-                        Arc::new(NoisyDropper::new(Arc::clone(this_key_parent), i)),
+                        NoisyDropper::new(Arc::clone(this_key_parent), i),
                         map.hash(&i),
                         NoisyDropper::new(Arc::clone(this_value_parent), i),
                         |_, _| ()
@@ -1418,10 +1323,14 @@ mod tests {
 
             for i in 0..NUM_VALUES {
                 assert_eq!(
-                    map.get_key_value_and(&i, map.hash(&i), |k, v| {
-                        assert_eq!(**k, i);
-                        assert_eq!(*v, i);
-                    }),
+                    map.get_key_value_and(
+                        map.hash(&i),
+                        |k| k == &i,
+                        |k, v| {
+                            assert_eq!(**k, i);
+                            assert_eq!(*v, i);
+                        }
+                    ),
                     Some(())
                 );
             }
@@ -1429,8 +1338,8 @@ mod tests {
             for i in 0..NUM_VALUES {
                 assert_eq!(
                     map.remove_entry_if_and(
-                        &i,
                         map.hash(&i),
+                        |k| k == &i,
                         |_, _| true,
                         |k, v| {
                             assert_eq!(**k, i);
@@ -1461,7 +1370,10 @@ mod tests {
             }
 
             for i in 0..NUM_VALUES {
-                assert_eq!(map.get_key_value_and(&i, map.hash(&i), |_, _| ()), None);
+                assert_eq!(
+                    map.get_key_value_and(map.hash(&i), |k| k == &i, |_, _| ()),
+                    None
+                );
             }
         }
 
@@ -1526,10 +1438,7 @@ mod tests {
 
                             assert_eq!(
                                 map.insert_entry_and(
-                                    Arc::new(NoisyDropper::new(
-                                        Arc::clone(this_key_parent),
-                                        key_value
-                                    )),
+                                    NoisyDropper::new(Arc::clone(this_key_parent), key_value),
                                     hash,
                                     NoisyDropper::new(Arc::clone(this_value_parent), key_value),
                                     |_, _| ()
@@ -1560,10 +1469,14 @@ mod tests {
 
             for i in (0..NUM_VALUES).map(|i| i as i32) {
                 assert_eq!(
-                    map.get_key_value_and(&i, map.hash(&i), |k, v| {
-                        assert_eq!(**k, i);
-                        assert_eq!(*v, i);
-                    }),
+                    map.get_key_value_and(
+                        map.hash(&i),
+                        |k| k == &i,
+                        |k, v| {
+                            assert_eq!(**k, i);
+                            assert_eq!(*v, i);
+                        }
+                    ),
                     Some(())
                 );
             }
@@ -1582,8 +1495,8 @@ mod tests {
 
                             assert_eq!(
                                 map.remove_entry_if_and(
-                                    &key_value,
                                     map.hash(&key_value),
+                                    |k| k == &key_value,
                                     |_, _| true,
                                     |k, v| {
                                         assert_eq!(**k, key_value);
@@ -1617,7 +1530,10 @@ mod tests {
             }
 
             for i in (0..NUM_VALUES).map(|i| i as i32) {
-                assert_eq!(map.get_key_value_and(&i, map.hash(&i), |_, _| ()), None);
+                assert_eq!(
+                    map.get_key_value_and(map.hash(&i), |k| k == &i, |_, _| ()),
+                    None
+                );
             }
         }
 
@@ -1641,24 +1557,23 @@ mod tests {
         let map = HashMap::with_capacity(0);
 
         for i in 0..NUM_VALUES {
-            let key = Arc::new(i);
-            assert_eq!(map.insert_entry_and(key, map.hash(&i), i, |_, v| *v), None);
+            assert_eq!(map.insert_entry_and(i, map.hash(&i), i, |_, v| *v), None);
         }
 
         for i in 0..NUM_VALUES {
             if is_even(&i, &i) {
-                assert_eq!(map.remove_if(&i, map.hash(&i), is_even), Some(i));
+                assert_eq!(map.remove_if(map.hash(&i), |&k| k == i, is_even), Some(i));
             } else {
-                assert_eq!(map.remove_if(&i, map.hash(&i), is_even), None);
+                assert_eq!(map.remove_if(map.hash(&i), |&k| k == i, is_even), None);
             }
         }
 
         for i in (0..NUM_VALUES).filter(|i| i % 2 == 0) {
-            assert_eq!(map.get(&i, map.hash(&i)), None);
+            assert_eq!(map.get(map.hash(&i), |&k| k == i), None);
         }
 
         for i in (0..NUM_VALUES).filter(|i| i % 2 != 0) {
-            assert_eq!(map.get(&i, map.hash(&i)), Some(i));
+            assert_eq!(map.get(map.hash(&i), |&k| k == i), Some(i));
         }
 
         run_deferred();
@@ -1676,34 +1591,33 @@ mod tests {
 
         for i in 0..NUM_KEYS {
             let hash = map.hash(&i);
-            let key = Arc::new(i);
-            assert_eq!(map.insert_entry_and(key, hash, i, |_, v| *v), None);
+            assert_eq!(map.insert_entry_and(i, hash, i, |_, v| *v), None);
         }
 
         assert!(!map.is_empty());
         assert_eq!(map.len(), NUM_KEYS);
 
-        let mut keys = map.keys(0, |k| Arc::clone(k)).unwrap();
+        let mut keys = map.keys(0, |k| *k).unwrap();
         assert_eq!(keys.len(), NUM_KEYS);
         keys.sort_unstable();
 
         for (i, key) in keys.into_iter().enumerate() {
-            assert_eq!(i, *key);
+            assert_eq!(i, key);
         }
 
         for i in (0..NUM_KEYS).step_by(2) {
-            assert_eq!(map.remove(&i, map.hash(&i)), Some(i));
+            assert_eq!(map.remove(map.hash(&i), |&k| k == i), Some(i));
         }
 
         assert!(!map.is_empty());
         assert_eq!(map.len(), NUM_KEYS / 2);
 
-        let mut keys = map.keys(0, |k| Arc::clone(k)).unwrap();
+        let mut keys = map.keys(0, |k| *k).unwrap();
         assert_eq!(keys.len(), NUM_KEYS / 2);
         keys.sort_unstable();
 
         for (i, key) in keys.into_iter().enumerate() {
-            assert_eq!(i, *key / 2);
+            assert_eq!(i, key / 2);
         }
 
         run_deferred();

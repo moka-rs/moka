@@ -241,7 +241,7 @@ where
     #[inline]
     pub(crate) fn remove_waiter(&self, key: &Arc<K>, type_id: TypeId) {
         let (cht_key, hash) = self.cht_key_hash(key, type_id);
-        self.waiters.remove(&cht_key, hash);
+        self.waiters.remove(hash, |k| k == &cht_key);
     }
 
     #[inline]
@@ -257,10 +257,10 @@ where
     }
 
     #[inline]
-    fn cht_key_hash(&self, key: &Arc<K>, type_id: TypeId) -> (Arc<(Arc<K>, TypeId)>, u64) {
+    fn cht_key_hash(&self, key: &Arc<K>, type_id: TypeId) -> ((Arc<K>, TypeId), u64) {
         let cht_key = (Arc::clone(key), type_id);
         let hash = self.waiters.hash(&cht_key);
-        (Arc::new(cht_key), hash)
+        (cht_key, hash)
     }
 }
 
