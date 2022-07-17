@@ -2,11 +2,12 @@
 
 ## Version 0.9.1
 
-### Fixed (Changed)
+### Fixed
 
-- Relax the too restrictive requirement `Arc<K>: Borrow<Q>` to `K: Borrow<Q>` for the
-  `contains_key`, `get` and `invalidate` methods of the following caches, so that
-  they will accept `&[u8]` as the key when `K` is `Vec<u8>`: ([#167][gh-pull-0167])
+- Relax a too restrictive requirement `Arc<K>: Borrow<Q>` for the key `&Q` of the
+  `contains_key`, `get` and `invalidate` methods in the following caches (with `K` as
+  the key type) ([#167][gh-pull-0167]). The requirement is now `K: Borrow<Q>` so these
+  methods will accept `&[u8]` for the key `&Q` when the stored key `K` is `Vec<u8>`.
     - `sync::Cache`
     - `sync::SegmentedCache`
     - `future::Cache`
