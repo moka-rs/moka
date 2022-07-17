@@ -28,7 +28,7 @@ pub(crate) struct ValueInitializer<K, V, S> {
 
 impl<K, V, S> ValueInitializer<K, V, S>
 where
-    Arc<K>: Eq + Hash,
+    K: Eq + Hash,
     V: Clone,
     S: BuildHasher,
 {
@@ -152,7 +152,7 @@ where
     #[inline]
     pub(crate) fn remove_waiter(&self, key: &Arc<K>, type_id: TypeId) {
         let (cht_key, hash) = self.cht_key_hash(key, type_id);
-        self.waiters.remove(&cht_key, hash);
+        self.waiters.remove(hash, |k| k == &cht_key);
     }
 
     #[inline]

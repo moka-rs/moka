@@ -1,5 +1,8 @@
 use super::{Cache, SegmentedCache};
-use crate::common::{builder_utils, concurrent::Weigher};
+use crate::{
+    common::{builder_utils, concurrent::Weigher},
+    notification::{self, EvictionListener, RemovalCause},
+};
 
 use std::{
     collections::hash_map::RandomState,
@@ -15,7 +18,7 @@ use std::{
 /// [cache-struct]: ./struct.Cache.html
 /// [seg-cache-struct]: ./struct.SegmentedCache.html
 ///
-/// # Examples
+/// # Example: Expirations
 ///
 /// ```rust
 /// use moka::sync::Cache;
@@ -43,10 +46,13 @@ use std::{
 ///
 #[must_use]
 pub struct CacheBuilder<K, V, C> {
+    name: Option<String>,
     max_capacity: Option<u64>,
     initial_capacity: Option<usize>,
     num_segments: Option<usize>,
     weigher: Option<Weigher<K, V>>,
+    eviction_listener: Option<EvictionListener<K, V>>,
+    eviction_listener_conf: Option<notification::Configuration>,
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     invalidator_enabled: bool,
@@ -60,10 +66,13 @@ where
 {
     fn default() -> Self {
         Self {
+            name: None,
             max_capacity: None,
             initial_capacity: None,
             num_segments: None,
             weigher: None,
+            eviction_listener: None,
+            eviction_listener_conf: None,
             time_to_live: None,
             time_to_idle: None,
             invalidator_enabled: false,
@@ -98,10 +107,13 @@ where
         assert!(num_segments != 0);
 
         CacheBuilder {
+            name: self.name,
             max_capacity: self.max_capacity,
             initial_capacity: self.initial_capacity,
             num_segments: Some(num_segments),
             weigher: None,
+            eviction_listener: None,
+            eviction_listener_conf: None,
             time_to_live: self.time_to_live,
             time_to_idle: self.time_to_idle,
             invalidator_enabled: self.invalidator_enabled,
@@ -123,10 +135,13 @@ where
         let build_hasher = RandomState::default();
         builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
         Cache::with_everything(
+            self.name,
             self.max_capacity,
             self.initial_capacity,
             build_hasher,
             self.weigher,
+            self.eviction_listener,
+            self.eviction_listener_conf,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -149,10 +164,13 @@ where
     {
         builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
         Cache::with_everything(
+            self.name,
             self.max_capacity,
             self.initial_capacity,
             hasher,
             self.weigher,
+            self.eviction_listener,
+            self.eviction_listener_conf,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -179,11 +197,14 @@ where
         let build_hasher = RandomState::default();
         builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
         SegmentedCache::with_everything(
+            self.name,
             self.max_capacity,
             self.initial_capacity,
             self.num_segments.unwrap(),
             build_hasher,
             self.weigher,
+            self.eviction_listener,
+            self.eviction_listener_conf,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -206,11 +227,14 @@ where
     {
         builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
         SegmentedCache::with_everything(
+            self.name,
             self.max_capacity,
             self.initial_capacity,
             self.num_segments.unwrap(),
             hasher,
             self.weigher,
+            self.eviction_listener,
+            self.eviction_listener_conf,
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
@@ -219,6 +243,15 @@ where
 }
 
 impl<K, V, C> CacheBuilder<K, V, C> {
+    /// Sets the name of the cache. Currently the name is used for identification
+    /// only in logging messages.
+    pub fn name(self, name: &str) -> Self {
+        Self {
+            name: Some(name.to_string()),
+            ..self
+        }
+    }
+
     /// Sets the max capacity of the cache.
     pub fn max_capacity(self, max_capacity: u64) -> Self {
         Self {
@@ -235,13 +268,67 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
-    /// Sets the weigher closure of the cache.
+    /// Sets the weigher closure to the cache.
     ///
     /// The closure should take `&K` and `&V` as the arguments and returns a `u32`
     /// representing the relative size of the entry.
     pub fn weigher(self, weigher: impl Fn(&K, &V) -> u32 + Send + Sync + 'static) -> Self {
         Self {
             weigher: Some(Arc::new(weigher)),
+            ..self
+        }
+    }
+
+    /// Sets the eviction listener closure to the cache.
+    ///
+    /// The closure should take `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as
+    /// the arguments. The [immediate delivery mode][immediate-mode] is used for the
+    /// listener.
+    ///
+    /// # Panics
+    ///
+    /// It is very important to make the listener closure not to panic. Otherwise,
+    /// the cache will stop calling the listener after a panic. This is an intended
+    /// behavior because the cache cannot know whether is is memory safe or not to
+    /// call the panicked lister again.
+    ///
+    /// [removal-cause]: ../notification/enum.RemovalCause.html
+    /// [immediate-mode]: ../notification/enum.DeliveryMode.html#variant.Immediate
+    pub fn eviction_listener(
+        self,
+        listener: impl Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            eviction_listener: Some(Arc::new(listener)),
+            eviction_listener_conf: Some(Default::default()),
+            ..self
+        }
+    }
+
+    /// Sets the eviction listener closure to the cache with a custom
+    /// [`Configuration`][conf]. Use this method if you want to change the delivery
+    /// mode to the queued mode.
+    ///
+    /// The closure should take `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as
+    /// the arguments.
+    ///
+    /// # Panics
+    ///
+    /// It is very important to make the listener closure not to panic. Otherwise,
+    /// the cache will stop calling the listener after a panic. This is an intended
+    /// behavior because the cache cannot know whether is is memory safe or not to
+    /// call the panicked lister again.
+    ///
+    /// [removal-cause]: ../notification/enum.RemovalCause.html
+    /// [conf]: ../notification/struct.Configuration.html
+    pub fn eviction_listener_with_conf(
+        self,
+        listener: impl Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
+        conf: notification::Configuration,
+    ) -> Self {
+        Self {
+            eviction_listener: Some(Arc::new(listener)),
+            eviction_listener_conf: Some(conf),
             ..self
         }
     }

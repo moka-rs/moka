@@ -32,14 +32,15 @@ pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 
 pub(crate) trait GetOrRemoveEntry<K, V> {
     fn get_value_entry(&self, key: &Arc<K>, hash: u64) -> Option<TrioArc<ValueEntry<K, V>>>;
 
-    fn remove_key_value_if<F>(
+    fn remove_key_value_if(
         &self,
         key: &Arc<K>,
         hash: u64,
-        condition: F,
+        condition: impl FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool,
     ) -> Option<TrioArc<ValueEntry<K, V>>>
     where
-        F: FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool;
+        K: Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static;
 }
 
 pub(crate) struct KeyDateLite<K> {
@@ -189,7 +190,7 @@ impl<K, V, S> Invalidator<K, V, S> {
     pub(crate) fn submit_task(&self, candidates: Vec<KeyDateLite<K>>, is_truncated: bool)
     where
         K: Hash + Eq + Send + Sync + 'static,
-        V: Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
         S: BuildHasher + Send + Sync + 'static,
     {
         let ctx = &self.scan_context;
@@ -372,7 +373,11 @@ where
         }
     }
 
-    fn execute(&self) {
+    fn execute(&self)
+    where
+        K: Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+    {
         let cache_lock = self.scan_context.cache.lock();
 
         // Restore the Weak pointer to Inner<K, V, S>.
@@ -399,6 +404,8 @@ where
     fn do_execute<C>(&self, cache: &Arc<C>) -> ScanResult<K, V>
     where
         Arc<C>: GetOrRemoveEntry<K, V>,
+        K: Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
     {
         let predicates = self.scan_context.predicates.lock();
         let mut invalidated = Vec::default();
@@ -460,6 +467,8 @@ where
     ) -> Option<TrioArc<ValueEntry<K, V>>>
     where
         Arc<C>: GetOrRemoveEntry<K, V>,
+        K: Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
     {
         cache.remove_key_value_if(key, hash, |_, v| {
             if let Some(lm) = v.last_modified() {

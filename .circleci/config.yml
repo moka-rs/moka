@@ -12,7 +12,7 @@ jobs:
               --env RUSTFLAGS='--cfg circleci' \
               xd009642/tarpaulin \
               cargo tarpaulin -v \
-                --features 'future, dash' \
+                --features 'sync, future, dash' \
                 --ciserver circle-ci \
                 --coveralls ${COVERALLS_TOKEN} \
                 --timeout 600 \

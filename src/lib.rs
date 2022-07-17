@@ -37,6 +37,8 @@
 //! - Supports expiration policies:
 //!     - Time to live
 //!     - Time to idle
+//! - Supports eviction listener, a callback function that will be called when an entry
+//!   is removed from the cache.
 //!
 //! # Examples
 //!
@@ -162,7 +164,7 @@ pub(crate) mod common;
 pub(crate) mod policy;
 pub mod unsync;
 
-// #[cfg(any(feature = "sync", feature = "future"))]
+#[cfg(any(feature = "sync", feature = "future"))]
 pub(crate) mod cht;
 
 #[cfg(feature = "dash")]
@@ -173,13 +175,18 @@ pub mod dash;
 #[cfg_attr(docsrs, doc(cfg(feature = "future")))]
 pub mod future;
 
-// #[cfg(feature = "sync")]
+#[cfg(any(feature = "sync", feature = "future"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
+pub mod notification;
+
+#[cfg(feature = "sync")]
+#[cfg_attr(docsrs, doc(cfg(feature = "sync")))]
 pub mod sync;
 
-// #[cfg(any(feature = "sync", feature = "future"))]
+#[cfg(any(feature = "sync", feature = "future"))]
 pub(crate) mod sync_base;
 
-// #[cfg(any(feature = "sync", feature = "future"))]
+#[cfg(any(feature = "sync", feature = "future"))]
 pub use common::error::PredicateError;
 
 pub use policy::Policy;

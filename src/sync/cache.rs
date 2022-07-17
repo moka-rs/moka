@@ -8,6 +8,7 @@ use crate::{
         housekeeper::InnerSync,
         Weigher, WriteOp,
     },
+    notification::{self, EvictionListener},
     sync::{Iter, PredicateId},
     sync_base::{
         base_cache::{BaseCache, HouseKeeperArc},
@@ -37,11 +38,27 @@ use std::{
 /// replacement algorithm to determine which entries to evict when the capacity is
 /// exceeded.
 ///
-/// # Examples
+/// # Table of Contents
+///
+/// - [Example: `insert`, `get` and `invalidate`](#example-insert-get-and-invalidate)
+/// - [Avoiding to clone the value at `get`](#avoiding-to-clone-the-value-at-get)
+/// - [Example: Size-based Eviction](#example-size-based-eviction)
+/// - [Example: Time-based Expirations](#example-time-based-expirations)
+/// - [Example: Eviction Listener](#example-eviction-listener)
+///     - [You should avoid eviction listener to panic](#you-should-avoid-eviction-listener-to-panic)
+///     - [Delivery Modes for Eviction Listener](#delivery-modes-for-eviction-listener)
+///         - [`Immediate` Mode](#immediate-mode)
+///         - [`Queued` Mode](#queued-mode)
+///     - [Example: `Queued` Delivery Mode](#example-queued-delivery-mode)
+/// - [Thread Safety](#thread-safety)
+/// - [Sharing a cache across threads](#sharing-a-cache-across-threads)
+/// - [Hashing Algorithm](#hashing-algorithm)
+///
+/// # Example: `insert`, `get` and `invalidate`
 ///
 /// Cache entries are manually added using [`insert`](#method.insert) or
-/// [`get_with`](#method.get_with) methods, and are stored in
-/// the cache until either evicted or manually invalidated.
+/// [`get_with`](#method.get_with) methods, and are stored in the cache until either
+/// evicted or manually invalidated.
 ///
 /// Here's an example of reading and updating a cache by using multiple threads:
 ///
@@ -100,8 +117,7 @@ use std::{
 ///
 /// If you want to atomically initialize and insert a value when the key is not
 /// present, you might want to check other insertion methods
-/// [`get_with`](#method.get_with) and
-/// [`try_get_with`](#method.try_get_with).
+/// [`get_with`](#method.get_with) and [`try_get_with`](#method.try_get_with).
 ///
 /// # Avoiding to clone the value at `get`
 ///
@@ -118,7 +134,7 @@ use std::{
 ///
 /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
 ///
-/// # Size-based Eviction
+/// # Example: Size-based Eviction
 ///
 /// ```rust
 /// use std::convert::TryInto;
@@ -163,7 +179,7 @@ use std::{
 ///
 /// [builder-struct]: ./struct.CacheBuilder.html
 ///
-/// # Time-based Expirations
+/// # Example: Time-based Expirations
 ///
 /// `Cache` supports the following expiration policies:
 ///
@@ -193,6 +209,425 @@ use std::{
 /// // Even though we keep calling get(), the entry will expire
 /// // after 30 minutes (TTL) from the insert().
 /// ```
+///
+/// # Example: Eviction Listener
+///
+/// A `Cache` can be configured with an eviction listener, a closure that is called
+/// every time there is a cache eviction. The listener takes three parameters: the
+/// key and value of the evicted entry, and the
+/// [`RemovalCause`](../notification/enum.RemovalCause.html) to indicate why the
+/// entry was evicted.
+///
+/// An eviction listener can be used to keep other data structures in sync with the
+/// cache, for example.
+///
+/// The following example demonstrates how to use an eviction listener with
+/// time-to-live expiration to manage the lifecycle of temporary files on a
+/// filesystem. The cache stores the paths of the files, and when one of them has
+/// expired, the eviction lister will be called with the path, so it can remove the
+/// file from the filesystem.
+///
+/// ```rust
+/// // Cargo.toml
+/// //
+/// // [dependencies]
+/// // anyhow = "1.0"
+///
+/// use moka::{sync::Cache, notification};
+///
+/// use anyhow::{anyhow, Context};
+/// use std::{
+///     fs, io,
+///     path::{Path, PathBuf},
+///     sync::{Arc, RwLock},
+///     time::Duration,
+/// };
+///
+/// /// The DataFileManager writes, reads and removes data files.
+/// struct DataFileManager {
+///     base_dir: PathBuf,
+///     file_count: usize,
+/// }
+///
+/// impl DataFileManager {
+///     fn new(base_dir: PathBuf) -> Self {
+///         Self {
+///             base_dir,
+///             file_count: 0,
+///         }
+///     }
+///
+///     fn write_data_file(
+///         &mut self,
+///         key: impl AsRef<str>,
+///         contents: String
+///     ) -> io::Result<PathBuf> {
+///         // Use the key as a part of the filename.
+///         let mut path = self.base_dir.to_path_buf();
+///         path.push(key.as_ref());
+///
+///         assert!(!path.exists(), "Path already exists: {:?}", path);
+///
+///         // create the file at the path and write the contents to the file.
+///         fs::write(&path, contents)?;
+///         self.file_count += 1;
+///         println!("Created a data file at {:?} (file count: {})", path, self.file_count);
+///         Ok(path)
+///     }
+///
+///     fn read_data_file(&self, path: impl AsRef<Path>) -> io::Result<String> {
+///         // Reads the contents of the file at the path, and return the contents.
+///         fs::read_to_string(path)
+///     }
+///
+///     fn remove_data_file(&mut self, path: impl AsRef<Path>) -> io::Result<()> {
+///         // Remove the file at the path.
+///         fs::remove_file(path.as_ref())?;
+///         self.file_count -= 1;
+///         println!(
+///             "Removed a data file at {:?} (file count: {})",
+///             path.as_ref(),
+///             self.file_count
+///         );
+///
+///         Ok(())
+///     }
+/// }
+///
+/// fn main() -> anyhow::Result<()> {
+///     // Create an instance of the DataFileManager and wrap it with
+///     // Arc<RwLock<_>> so it can be shared across threads.
+///     let file_mgr = DataFileManager::new(std::env::temp_dir());
+///     let file_mgr = Arc::new(RwLock::new(file_mgr));
+///
+///     let file_mgr1 = Arc::clone(&file_mgr);
+///
+///     // Create an eviction lister closure.
+///     let listener = move |k, v: PathBuf, cause| {
+///         // Try to remove the data file at the path `v`.
+///         println!(
+///             "\n== An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
+///             k, v, cause
+///         );
+///
+///         // Acquire the write lock of the DataFileManager. We must handle
+///         // error cases here to prevent the listener from panicking.
+///         match file_mgr1.write() {
+///             Err(_e) => {
+///                 eprintln!("The lock has been poisoned");
+///             }
+///             Ok(mut mgr) => {
+///                 // Remove the data file using the DataFileManager.
+///                 if let Err(_e) = mgr.remove_data_file(v.as_path()) {
+///                     eprintln!("Failed to remove a data file at {:?}", v);
+///                 }
+///             }
+///         }
+///     };
+///
+///     // Create the cache. Set time to live for two seconds and set the
+///     // eviction listener.
+///     let cache = Cache::builder()
+///         .max_capacity(100)
+///         .time_to_live(Duration::from_secs(2))
+///         .eviction_listener(listener)
+///         .build();
+///
+///     // Insert an entry to the cache.
+///     // This will create and write a data file for the key "user1", store the
+///     // path of the file to the cache, and return it.
+///     println!("== try_get_with()");
+///     let key = "user1";
+///     let path = cache
+///         .try_get_with(key, || -> anyhow::Result<_> {
+///             let mut mgr = file_mgr
+///                 .write()
+///                 .map_err(|_e| anyhow::anyhow!("The lock has been poisoned"))?;
+///             let path = mgr
+///                 .write_data_file(key, "user data".into())
+///                 .with_context(|| format!("Failed to create a data file"))?;
+///             Ok(path)
+///         })
+///         .map_err(|e| anyhow!("{}", e))?;
+///
+///     // Read the data file at the path and print the contents.
+///     println!("\n== read_data_file()");
+///     {
+///         let mgr = file_mgr
+///             .read()
+///             .map_err(|_e| anyhow::anyhow!("The lock has been poisoned"))?;
+///         let contents = mgr
+///             .read_data_file(path.as_path())
+///             .with_context(|| format!("Failed to read data from {:?}", path))?;
+///         println!("contents: {}", contents);
+///     }
+///
+///     // Sleep for five seconds. While sleeping, the cache entry for key "user1"
+///     // will be expired and evicted, so the eviction lister will be called to
+///     // remove the file.
+///     std::thread::sleep(Duration::from_secs(5));
+///
+///     Ok(())
+/// }
+/// ```
+///
+/// ## You should avoid eviction listener to panic
+///
+/// It is very important to make an eviction listener closure not to panic.
+/// Otherwise, the cache will stop calling the listener after a panic. This is an
+/// intended behavior because the cache cannot know whether it is memory safe or not
+/// to call the panicked lister again.
+///
+/// When a listener panics, the cache will swallow the panic and disable the
+/// listener. If you want to know when a listener panics and the reason of the panic,
+/// you can enable an optional `logging` feature of Moka and check error-level logs.
+///
+/// To enable the `logging`, do the followings:
+///
+/// 1. In `Cargo.toml`, add the crate feature `logging` for `moka`.
+/// 2. Set the logging level for `moka` to `error` or any lower levels (`warn`,
+///    `info`, ...):
+///     - If you are using the `env_logger` crate, you can achieve this by setting
+///       `RUST_LOG` environment variable to `moka=error`.
+/// 3. If you have more than one caches, you may want to set a distinct name for each
+///    cache by using cache builder's [`name`][builder-name-method] method. The name
+///    will appear in the log.
+///
+/// [builder-name-method]: ./struct.CacheBuilder.html#method.name
+///
+/// ## Delivery Modes for Eviction Listener
+///
+/// The [`DeliveryMode`][delivery-mode] specifies how and when an eviction
+/// notifications should be delivered to an eviction listener. The `sync` caches
+/// (`Cache` and `SegmentedCache`) support two delivery modes: `Immediate` and
+/// `Queued` modes.
+///
+/// [delivery-mode]: ../notification/enum.DeliveryMode.html
+///
+/// ### `Immediate` Mode
+///
+/// Tne `Immediate` mode is the default delivery mode for the `sync` caches. Use this
+/// mode when it is import to keep the order of write operations and eviction
+/// notifications.
+///
+/// This mode has the following characteristics:
+///
+/// - The listener is called immediately after an entry was evicted.
+/// - The listener is called by the thread who evicted the entry:
+///    - The calling thread can be a background eviction thread or a user thread
+///      invoking a cache write operation such as `insert`, `get_with` or
+///      `invalidate`.
+///    - The calling thread is blocked until the listener returns.
+/// - This mode guarantees that write operations and eviction notifications for a
+///   given cache key are ordered by the time when they occurred.
+/// - This mode adds some performance overhead to cache write operations as it uses
+///   internal per-key lock to guarantee the ordering.
+///
+/// ### `Queued` Mode
+///
+/// Use this mode when write performance is more important than preserving the order
+/// of write operations and eviction notifications.
+///
+/// - The listener will be called some time after an entry was evicted.
+/// - A notification will be stashed in a queue. The queue will be processed by
+///   dedicated notification thread(s) and that thread will call the listener.
+/// - This mode does not preserve the order of write operations and eviction
+///   notifications.
+/// - This mode adds almost no performance overhead to cache write operations as it
+///   does not use the per-key lock.
+///
+/// ### Example: `Queued` Delivery Mode
+///
+/// Because the `Immediate` mode is the default mode for `sync` caches, the previous
+/// example was using it implicitly.
+///
+/// The following is the same example but modified for the `Queued` delivery mode.
+/// (Showing changed lines only)
+///
+/// ```rust
+/// // Cargo.toml
+/// //
+/// // [dependencies]
+/// // anyhow = "1.0"
+/// // uuid = { version = "1.1", features = ["v4"] }
+///
+/// use moka::{sync::Cache, notification};
+///
+/// # use anyhow::{anyhow, Context};
+/// # use std::{
+/// #     fs, io,
+/// #     path::{Path, PathBuf},
+/// #     sync::{Arc, RwLock},
+/// #     time::Duration,
+/// # };
+/// // Use UUID crate to generate a random file name.
+/// use uuid::Uuid;
+///
+/// # struct DataFileManager {
+/// #     base_dir: PathBuf,
+/// #     file_count: usize,
+/// # }
+/// #
+/// impl DataFileManager {
+/// #   fn new(base_dir: PathBuf) -> Self {
+/// #       Self {
+/// #           base_dir,
+/// #           file_count: 0,
+/// #       }
+/// #   }
+/// #
+///     fn write_data_file(
+///         &mut self,
+///         _key: impl AsRef<str>,
+///         contents: String
+///     ) -> io::Result<PathBuf> {
+///         // We do not use the key for the filename anymore. Instead, we
+///         // use UUID to generate a unique filename for each call.
+///         loop {
+///             // Generate a file path with unique file name.
+///             let mut path = self.base_dir.to_path_buf();
+///             path.push(Uuid::new_v4().as_hyphenated().to_string());
+///
+///             if path.exists() {
+///                 continue; // This path is already taken by others. Retry.
+///             }
+///
+///             // We have got a unique file path, so create the file at
+///             // the path and write the contents to the file.
+///             fs::write(&path, contents)?;
+///             self.file_count += 1;
+///             println!("Created a data file at {:?} (file count: {})", path, self.file_count);
+///
+///             // Return the path.
+///             return Ok(path);
+///         }
+///     }
+///
+///     // Other associate functions and methods are unchanged.
+/// #
+/// #   fn read_data_file(&self, path: impl AsRef<Path>) -> io::Result<String> {
+/// #       fs::read_to_string(path)
+/// #   }
+/// #
+/// #   fn remove_data_file(&mut self, path: impl AsRef<Path>) -> io::Result<()> {
+/// #       fs::remove_file(path.as_ref())?;
+/// #       self.file_count -= 1;
+/// #       println!(
+/// #           "Removed a data file at {:?} (file count: {})",
+/// #           path.as_ref(),
+/// #           self.file_count
+/// #       );
+/// #
+/// #       Ok(())
+/// #   }
+/// }
+///
+/// fn main() -> anyhow::Result<()> {
+///     // (Omitted unchanged lines)
+///
+/// #   let file_mgr = DataFileManager::new(std::env::temp_dir());
+/// #   let file_mgr = Arc::new(RwLock::new(file_mgr));
+/// #
+/// #   let file_mgr1 = Arc::clone(&file_mgr);
+/// #
+///     // Create an eviction lister closure.
+///     // let listener = ...
+///
+/// #   let listener = move |k, v: PathBuf, cause| {
+/// #       println!(
+/// #           "\n== An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
+/// #           k, v, cause
+/// #       );
+/// #
+/// #       match file_mgr1.write() {
+/// #           Err(_e) => {
+/// #               eprintln!("The lock has been poisoned");
+/// #           }
+/// #           Ok(mut mgr) => {
+/// #               if let Err(_e) = mgr.remove_data_file(v.as_path()) {
+/// #                   eprintln!("Failed to remove a data file at {:?}", v);
+/// #               }
+/// #           }
+/// #       }
+/// #   };
+/// #
+///     // Create a listener configuration with Queued delivery mode.
+///     let listener_conf = notification::Configuration::builder()
+///         .delivery_mode(notification::DeliveryMode::Queued)
+///         .build();
+///
+///     // Create the cache.
+///     let cache = Cache::builder()
+///         .max_capacity(100)
+///         .time_to_live(Duration::from_secs(2))
+///         // Set the eviction listener with the configuration.
+///         .eviction_listener_with_conf(listener, listener_conf)
+///         .build();
+///
+///     // Insert an entry to the cache.
+///     // ...
+/// #   println!("== try_get_with()");
+/// #   let key = "user1";
+/// #   let path = cache
+/// #       .try_get_with(key, || -> anyhow::Result<_> {
+/// #           let mut mgr = file_mgr
+/// #               .write()
+/// #               .map_err(|_e| anyhow::anyhow!("The lock has been poisoned"))?;
+/// #           let path = mgr
+/// #               .write_data_file(key, "user data".into())
+/// #               .with_context(|| format!("Failed to create a data file"))?;
+/// #           Ok(path)
+/// #       })
+/// #       .map_err(|e| anyhow!("{}", e))?;
+/// #
+///     // Read the data file at the path and print the contents.
+///     // ...
+/// #   println!("\n== read_data_file()");
+/// #   {
+/// #       let mgr = file_mgr
+/// #           .read()
+/// #           .map_err(|_e| anyhow::anyhow!("The lock has been poisoned"))?;
+/// #       let contents = mgr
+/// #           .read_data_file(path.as_path())
+/// #           .with_context(|| format!("Failed to read data from {:?}", path))?;
+/// #       println!("contents: {}", contents);
+/// #   }
+/// #
+///     // Sleep for five seconds.
+///     // ...
+/// #   std::thread::sleep(Duration::from_secs(5));
+///
+///     Ok(())
+/// }
+/// ```
+///
+/// As you can see, `DataFileManager::write_data_file` method no longer uses the
+/// cache key for the file name. Instead, it generates a UUID-based unique file name
+/// on each call. This kind of treatment will be needed for `Queued` mode because
+/// notifications will be delivered with some delay.
+///
+/// For example, a user thread could do the followings:
+///
+/// 1. `insert` an entry, and create a file.
+/// 2. The entry is evicted due to size constraint:
+///     - This will trigger an eviction notification but it will be fired some time
+///       later.
+///     - The notification listener will remove the file when it is called, but we
+///       cannot predict when the call would be made.
+/// 3. `insert` the entry again, and create the file again.
+///
+/// In `Queued` mode, the notification of the eviction at step 2 can be delivered
+/// either before or after the re-`insert` at step 3. If the `write_data_file` method
+/// does not generate unique file name on each call and the notification has not been
+/// delivered before step 3, the user thread could overwrite the file created at
+/// step 1. And then the notification will be delivered and the eviction listener
+/// will remove a wrong file created at step 3 (instead of the correct one created at
+/// step 1). This will cause the cache entires and the files on the filesystem to
+/// become out of sync.
+///
+/// Generating unique file names prevents this problem, as the user thread will never
+/// overwrite the file created at step 1 and the eviction lister will never remove a
+/// wrong file.
 ///
 /// # Thread Safety
 ///
@@ -229,9 +664,9 @@ use std::{
 /// protect against attacks such as HashDoS.
 ///
 /// The hashing algorithm can be replaced on a per-`Cache` basis using the
-/// [`build_with_hasher`][build-with-hasher-method] method of the
-/// `CacheBuilder`. Many alternative algorithms are available on crates.io, such
-/// as the [aHash][ahash-crate] crate.
+/// [`build_with_hasher`][build-with-hasher-method] method of the `CacheBuilder`.
+/// Many alternative algorithms are available on crates.io, such as the
+/// [aHash][ahash-crate] crate.
 ///
 /// [build-with-hasher-method]: ./struct.CacheBuilder.html#method.build_with_hasher
 /// [ahash-crate]: https://crates.io/crates/ahash
@@ -292,6 +727,11 @@ where
 }
 
 impl<K, V, S> Cache<K, V, S> {
+    /// Returns cache’s name.
+    pub fn name(&self) -> Option<&str> {
+        self.base.name()
+    }
+
     /// Returns a read-only cache policy of this cache.
     ///
     /// At this time, cache policy cannot be modified after cache creation.
@@ -364,9 +804,12 @@ where
     pub fn new(max_capacity: u64) -> Self {
         let build_hasher = RandomState::default();
         Self::with_everything(
+            None,
             Some(max_capacity),
             None,
             build_hasher,
+            None,
+            None,
             None,
             None,
             None,
@@ -389,21 +832,29 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
+    // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn with_everything(
+        name: Option<String>,
         max_capacity: Option<u64>,
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        eviction_listener: Option<EvictionListener<K, V>>,
+        eviction_listener_conf: Option<notification::Configuration>,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
     ) -> Self {
         Self {
             base: BaseCache::new(
+                name,
                 max_capacity,
                 initial_capacity,
                 build_hasher.clone(),
                 weigher,
+                eviction_listener,
+                eviction_listener_conf,
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
@@ -422,7 +873,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.base.contains_key_with_hash(key, self.base.hash(key))
@@ -430,7 +881,7 @@ where
 
     pub(crate) fn contains_key_with_hash<Q>(&self, key: &Q, hash: u64) -> bool
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.base.contains_key_with_hash(key, hash)
@@ -448,7 +899,7 @@ where
     /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.base.get_with_hash(key, self.base.hash(key))
@@ -456,7 +907,7 @@ where
 
     pub(crate) fn get_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<V>
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         self.base.get_with_hash(key, hash)
@@ -749,7 +1200,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn invalidate<Q>(&self, key: &Q)
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.base.hash(key);
@@ -758,10 +1209,39 @@ where
 
     pub(crate) fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64)
     where
-        Arc<K>: Borrow<Q>,
+        K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
+        // Lock the key for removal if blocking removal notification is enabled.
+        let mut kl = None;
+        let mut klg = None;
+        if self.base.is_removal_notifier_enabled() && self.base.is_blocking_removal_notification() {
+            // To lock the key, we have to get Arc<K> for key (&Q).
+            //
+            // TODO: Enhance this if possible. This is rather hack now because
+            // it cannot prevent race conditions like this:
+            //
+            // 1. We miss the key because it does not exist. So we do not lock
+            //    the key.
+            // 2. Somebody else (other thread) inserts the key.
+            // 3. We remove the entry for the key, but without the key lock!
+            //
+            if let Some(arc_key) = self.base.get_key_with_hash(key, hash) {
+                kl = self.base.maybe_key_lock(&arc_key);
+                klg = kl.as_ref().map(|kl| kl.lock());
+            }
+        }
+
         if let Some(kv) = self.base.remove_entry(key, hash) {
+            if self.base.is_removal_notifier_enabled() {
+                self.base.notify_invalidate(&kv.key, &kv.entry)
+            }
+            // Drop the locks before scheduling write op to avoid a potential dead lock.
+            // (Scheduling write can do spin lock when the queue is full, and queue will
+            // be drained by the housekeeping thread that can lock the same key)
+            std::mem::drop(klg);
+            std::mem::drop(kl);
+
             let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
             Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to remove");
@@ -894,7 +1374,7 @@ where
 impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    V: Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn sync(&self) {
@@ -989,165 +1469,232 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Cache, ConcurrentCacheExt};
-    use crate::common::time::Clock;
+    use crate::{
+        common::time::Clock,
+        notification::{
+            self,
+            macros::{assert_eq_with_mode, assert_with_mode},
+            DeliveryMode, RemovalCause,
+        },
+    };
 
+    use parking_lot::Mutex;
     use std::{convert::Infallible, sync::Arc, time::Duration};
 
     #[test]
     fn basic_single_thread() {
-        let mut cache = Cache::new(3);
-        cache.reconfigure_for_testing();
+        run_test(DeliveryMode::Immediate);
+        run_test(DeliveryMode::Queued);
 
-        // Make the cache exterior immutable.
-        let cache = cache;
+        fn run_test(delivery_mode: DeliveryMode) {
+            // The following `Vec`s will hold actual and expected notifications.
+            let actual = Arc::new(Mutex::new(Vec::new()));
+            let mut expected = Vec::new();
 
-        cache.insert("a", "alice");
-        cache.insert("b", "bob");
-        assert_eq!(cache.get(&"a"), Some("alice"));
-        assert!(cache.contains_key(&"a"));
-        assert!(cache.contains_key(&"b"));
-        assert_eq!(cache.get(&"b"), Some("bob"));
-        cache.sync();
-        // counts: a -> 1, b -> 1
+            // Create an eviction listener.
+            let a1 = Arc::clone(&actual);
+            let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(delivery_mode)
+                .build();
 
-        cache.insert("c", "cindy");
-        assert_eq!(cache.get(&"c"), Some("cindy"));
-        assert!(cache.contains_key(&"c"));
-        // counts: a -> 1, b -> 1, c -> 1
-        cache.sync();
+            // Create a cache with the eviction listener.
+            let mut cache = Cache::builder()
+                .max_capacity(3)
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.reconfigure_for_testing();
 
-        assert!(cache.contains_key(&"a"));
-        assert_eq!(cache.get(&"a"), Some("alice"));
-        assert_eq!(cache.get(&"b"), Some("bob"));
-        assert!(cache.contains_key(&"b"));
-        cache.sync();
-        // counts: a -> 2, b -> 2, c -> 1
+            // Make the cache exterior immutable.
+            let cache = cache;
 
-        // "d" should not be admitted because its frequency is too low.
-        cache.insert("d", "david"); //   count: d -> 0
-        cache.sync();
-        assert_eq!(cache.get(&"d"), None); //   d -> 1
-        assert!(!cache.contains_key(&"d"));
+            cache.insert("a", "alice");
+            cache.insert("b", "bob");
+            assert_eq_with_mode!(cache.get(&"a"), Some("alice"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), Some("bob"), delivery_mode);
+            cache.sync();
+            // counts: a -> 1, b -> 1
 
-        cache.insert("d", "david");
-        cache.sync();
-        assert!(!cache.contains_key(&"d"));
-        assert_eq!(cache.get(&"d"), None); //   d -> 2
+            cache.insert("c", "cindy");
+            assert_eq_with_mode!(cache.get(&"c"), Some("cindy"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"c"), delivery_mode);
+            // counts: a -> 1, b -> 1, c -> 1
+            cache.sync();
 
-        // "d" should be admitted and "c" should be evicted
-        // because d's frequency is higher than c's.
-        cache.insert("d", "dennis");
-        cache.sync();
-        assert_eq!(cache.get(&"a"), Some("alice"));
-        assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.get(&"c"), None);
-        assert_eq!(cache.get(&"d"), Some("dennis"));
-        assert!(cache.contains_key(&"a"));
-        assert!(cache.contains_key(&"b"));
-        assert!(!cache.contains_key(&"c"));
-        assert!(cache.contains_key(&"d"));
+            assert_with_mode!(cache.contains_key(&"a"), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"a"), Some("alice"), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), Some("bob"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            cache.sync();
+            // counts: a -> 2, b -> 2, c -> 1
 
-        cache.invalidate(&"b");
-        assert_eq!(cache.get(&"b"), None);
-        assert!(!cache.contains_key(&"b"));
+            // "d" should not be admitted because its frequency is too low.
+            cache.insert("d", "david"); //   count: d -> 0
+            expected.push((Arc::new("d"), "david", RemovalCause::Size));
+            cache.sync();
+            assert_eq_with_mode!(cache.get(&"d"), None, delivery_mode); //   d -> 1
+            assert_with_mode!(!cache.contains_key(&"d"), delivery_mode);
+
+            cache.insert("d", "david");
+            expected.push((Arc::new("d"), "david", RemovalCause::Size));
+            cache.sync();
+            assert_with_mode!(!cache.contains_key(&"d"), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"d"), None, delivery_mode); //   d -> 2
+
+            // "d" should be admitted and "c" should be evicted
+            // because d's frequency is higher than c's.
+            cache.insert("d", "dennis");
+            expected.push((Arc::new("c"), "cindy", RemovalCause::Size));
+            cache.sync();
+            assert_eq_with_mode!(cache.get(&"a"), Some("alice"), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), Some("bob"), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"c"), None, delivery_mode);
+            assert_eq_with_mode!(cache.get(&"d"), Some("dennis"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"c"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"d"), delivery_mode);
+
+            cache.invalidate(&"b");
+            expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
+            cache.sync();
+            assert_eq_with_mode!(cache.get(&"b"), None, delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
+
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
+        }
     }
 
     #[test]
     fn size_aware_eviction() {
-        let weigher = |_k: &&str, v: &(&str, u32)| v.1;
+        run_test(DeliveryMode::Immediate);
+        run_test(DeliveryMode::Queued);
 
-        let alice = ("alice", 10);
-        let bob = ("bob", 15);
-        let bill = ("bill", 20);
-        let cindy = ("cindy", 5);
-        let david = ("david", 15);
-        let dennis = ("dennis", 15);
+        fn run_test(delivery_mode: DeliveryMode) {
+            let weigher = |_k: &&str, v: &(&str, u32)| v.1;
 
-        let mut cache = Cache::builder().max_capacity(31).weigher(weigher).build();
-        cache.reconfigure_for_testing();
+            let alice = ("alice", 10);
+            let bob = ("bob", 15);
+            let bill = ("bill", 20);
+            let cindy = ("cindy", 5);
+            let david = ("david", 15);
+            let dennis = ("dennis", 15);
 
-        // Make the cache exterior immutable.
-        let cache = cache;
+            // The following `Vec`s will hold actual and expected notifications.
+            let actual = Arc::new(Mutex::new(Vec::new()));
+            let mut expected = Vec::new();
 
-        cache.insert("a", alice);
-        cache.insert("b", bob);
-        assert_eq!(cache.get(&"a"), Some(alice));
-        assert!(cache.contains_key(&"a"));
-        assert!(cache.contains_key(&"b"));
-        assert_eq!(cache.get(&"b"), Some(bob));
-        cache.sync();
-        // order (LRU -> MRU) and counts: a -> 1, b -> 1
+            // Create an eviction listener.
+            let a1 = Arc::clone(&actual);
+            let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(delivery_mode)
+                .build();
 
-        cache.insert("c", cindy);
-        assert_eq!(cache.get(&"c"), Some(cindy));
-        assert!(cache.contains_key(&"c"));
-        // order and counts: a -> 1, b -> 1, c -> 1
-        cache.sync();
+            // Create a cache with the eviction listener.
+            let mut cache = Cache::builder()
+                .max_capacity(31)
+                .weigher(weigher)
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.reconfigure_for_testing();
 
-        assert!(cache.contains_key(&"a"));
-        assert_eq!(cache.get(&"a"), Some(alice));
-        assert_eq!(cache.get(&"b"), Some(bob));
-        assert!(cache.contains_key(&"b"));
-        cache.sync();
-        // order and counts: c -> 1, a -> 2, b -> 2
+            // Make the cache exterior immutable.
+            let cache = cache;
 
-        // To enter "d" (weight: 15), it needs to evict "c" (w: 5) and "a" (w: 10).
-        // "d" must have higher count than 3, which is the aggregated count
-        // of "a" and "c".
-        cache.insert("d", david); //   count: d -> 0
-        cache.sync();
-        assert_eq!(cache.get(&"d"), None); //   d -> 1
-        assert!(!cache.contains_key(&"d"));
+            cache.insert("a", alice);
+            cache.insert("b", bob);
+            assert_eq_with_mode!(cache.get(&"a"), Some(alice), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), Some(bob), delivery_mode);
+            cache.sync();
+            // order (LRU -> MRU) and counts: a -> 1, b -> 1
 
-        cache.insert("d", david);
-        cache.sync();
-        assert!(!cache.contains_key(&"d"));
-        assert_eq!(cache.get(&"d"), None); //   d -> 2
+            cache.insert("c", cindy);
+            assert_eq_with_mode!(cache.get(&"c"), Some(cindy), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"c"), delivery_mode);
+            // order and counts: a -> 1, b -> 1, c -> 1
+            cache.sync();
 
-        cache.insert("d", david);
-        cache.sync();
-        assert_eq!(cache.get(&"d"), None); //   d -> 3
-        assert!(!cache.contains_key(&"d"));
+            assert_with_mode!(cache.contains_key(&"a"), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"a"), Some(alice), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), Some(bob), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            cache.sync();
+            // order and counts: c -> 1, a -> 2, b -> 2
 
-        cache.insert("d", david);
-        cache.sync();
-        assert!(!cache.contains_key(&"d"));
-        assert_eq!(cache.get(&"d"), None); //   d -> 4
+            // To enter "d" (weight: 15), it needs to evict "c" (w: 5) and "a" (w: 10).
+            // "d" must have higher count than 3, which is the aggregated count
+            // of "a" and "c".
+            cache.insert("d", david); //   count: d -> 0
+            expected.push((Arc::new("d"), david, RemovalCause::Size));
+            cache.sync();
+            assert_eq_with_mode!(cache.get(&"d"), None, delivery_mode); //   d -> 1
+            assert_with_mode!(!cache.contains_key(&"d"), delivery_mode);
 
-        // Finally "d" should be admitted by evicting "c" and "a".
-        cache.insert("d", dennis);
-        cache.sync();
-        assert_eq!(cache.get(&"a"), None);
-        assert_eq!(cache.get(&"b"), Some(bob));
-        assert_eq!(cache.get(&"c"), None);
-        assert_eq!(cache.get(&"d"), Some(dennis));
-        assert!(!cache.contains_key(&"a"));
-        assert!(cache.contains_key(&"b"));
-        assert!(!cache.contains_key(&"c"));
-        assert!(cache.contains_key(&"d"));
+            cache.insert("d", david);
+            expected.push((Arc::new("d"), david, RemovalCause::Size));
+            cache.sync();
+            assert_with_mode!(!cache.contains_key(&"d"), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"d"), None, delivery_mode); //   d -> 2
 
-        // Update "b" with "bill" (w: 15 -> 20). This should evict "d" (w: 15).
-        cache.insert("b", bill);
-        cache.sync();
-        assert_eq!(cache.get(&"b"), Some(bill));
-        assert_eq!(cache.get(&"d"), None);
-        assert!(cache.contains_key(&"b"));
-        assert!(!cache.contains_key(&"d"));
+            cache.insert("d", david);
+            expected.push((Arc::new("d"), david, RemovalCause::Size));
+            cache.sync();
+            assert_eq_with_mode!(cache.get(&"d"), None, delivery_mode); //   d -> 3
+            assert_with_mode!(!cache.contains_key(&"d"), delivery_mode);
 
-        // Re-add "a" (w: 10) and update "b" with "bob" (w: 20 -> 15).
-        cache.insert("a", alice);
-        cache.insert("b", bob);
-        cache.sync();
-        assert_eq!(cache.get(&"a"), Some(alice));
-        assert_eq!(cache.get(&"b"), Some(bob));
-        assert_eq!(cache.get(&"d"), None);
-        assert!(cache.contains_key(&"a"));
-        assert!(cache.contains_key(&"b"));
-        assert!(!cache.contains_key(&"d"));
+            cache.insert("d", david);
+            expected.push((Arc::new("d"), david, RemovalCause::Size));
+            cache.sync();
+            assert_with_mode!(!cache.contains_key(&"d"), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"d"), None, delivery_mode); //   d -> 4
 
-        // Verify the sizes.
-        assert_eq!(cache.entry_count(), 2);
-        assert_eq!(cache.weighted_size(), 25);
+            // Finally "d" should be admitted by evicting "c" and "a".
+            cache.insert("d", dennis);
+            expected.push((Arc::new("c"), cindy, RemovalCause::Size));
+            expected.push((Arc::new("a"), alice, RemovalCause::Size));
+            cache.sync();
+            assert_eq_with_mode!(cache.get(&"a"), None, delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), Some(bob), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"c"), None, delivery_mode);
+            assert_eq_with_mode!(cache.get(&"d"), Some(dennis), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"c"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"d"), delivery_mode);
+
+            // Update "b" with "bill" (w: 15 -> 20). This should evict "d" (w: 15).
+            cache.insert("b", bill);
+            expected.push((Arc::new("b"), bob, RemovalCause::Replaced));
+            expected.push((Arc::new("d"), dennis, RemovalCause::Size));
+            cache.sync();
+            assert_eq_with_mode!(cache.get(&"b"), Some(bill), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"d"), None, delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"d"), delivery_mode);
+
+            // Re-add "a" (w: 10) and update "b" with "bob" (w: 20 -> 15).
+            cache.insert("a", alice);
+            cache.insert("b", bob);
+            expected.push((Arc::new("b"), bill, RemovalCause::Replaced));
+            cache.sync();
+            assert_eq_with_mode!(cache.get(&"a"), Some(alice), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), Some(bob), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"d"), None, delivery_mode);
+            assert_with_mode!(cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"d"), delivery_mode);
+
+            // Verify the sizes.
+            assert_eq_with_mode!(cache.entry_count(), 2, delivery_mode);
+            assert_eq_with_mode!(cache.weighted_size(), 25, delivery_mode);
+
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
+        }
     }
 
     #[test]
@@ -1179,255 +1726,352 @@ mod tests {
 
     #[test]
     fn invalidate_all() {
-        let mut cache = Cache::new(100);
-        cache.reconfigure_for_testing();
+        run_test(DeliveryMode::Immediate);
+        run_test(DeliveryMode::Queued);
 
-        // Make the cache exterior immutable.
-        let cache = cache;
+        fn run_test(delivery_mode: DeliveryMode) {
+            // The following `Vec`s will hold actual and expected notifications.
+            let actual = Arc::new(Mutex::new(Vec::new()));
+            let mut expected = Vec::new();
 
-        cache.insert("a", "alice");
-        cache.insert("b", "bob");
-        cache.insert("c", "cindy");
-        assert_eq!(cache.get(&"a"), Some("alice"));
-        assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.get(&"c"), Some("cindy"));
-        assert!(cache.contains_key(&"a"));
-        assert!(cache.contains_key(&"b"));
-        assert!(cache.contains_key(&"c"));
+            // Create an eviction listener.
+            let a1 = Arc::clone(&actual);
+            let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(delivery_mode)
+                .build();
 
-        // `cache.sync()` is no longer needed here before invalidating. The last
-        // modified timestamp of the entries were updated when they were inserted.
-        // https://github.com/moka-rs/moka/issues/155
+            // Create a cache with the eviction listener.
+            let mut cache = Cache::builder()
+                .max_capacity(100)
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.reconfigure_for_testing();
 
-        cache.invalidate_all();
-        cache.sync();
+            // Make the cache exterior immutable.
+            let cache = cache;
 
-        cache.insert("d", "david");
-        cache.sync();
+            cache.insert("a", "alice");
+            cache.insert("b", "bob");
+            cache.insert("c", "cindy");
+            assert_eq_with_mode!(cache.get(&"a"), Some("alice"), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), Some("bob"), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"c"), Some("cindy"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"c"), delivery_mode);
 
-        assert!(cache.get(&"a").is_none());
-        assert!(cache.get(&"b").is_none());
-        assert!(cache.get(&"c").is_none());
-        assert_eq!(cache.get(&"d"), Some("david"));
-        assert!(!cache.contains_key(&"a"));
-        assert!(!cache.contains_key(&"b"));
-        assert!(!cache.contains_key(&"c"));
-        assert!(cache.contains_key(&"d"));
+            // `cache.sync()` is no longer needed here before invalidating. The last
+            // modified timestamp of the entries were updated when they were inserted.
+            // https://github.com/moka-rs/moka/issues/155
+
+            cache.invalidate_all();
+            expected.push((Arc::new("a"), "alice", RemovalCause::Explicit));
+            expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
+            expected.push((Arc::new("c"), "cindy", RemovalCause::Explicit));
+            cache.sync();
+
+            cache.insert("d", "david");
+            cache.sync();
+
+            assert_with_mode!(cache.get(&"a").is_none(), delivery_mode);
+            assert_with_mode!(cache.get(&"b").is_none(), delivery_mode);
+            assert_with_mode!(cache.get(&"c").is_none(), delivery_mode);
+            assert_eq_with_mode!(cache.get(&"d"), Some("david"), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"c"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"d"), delivery_mode);
+
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
+        }
     }
 
     #[test]
     fn invalidate_entries_if() -> Result<(), Box<dyn std::error::Error>> {
-        use std::collections::HashSet;
+        run_test(DeliveryMode::Immediate)?;
+        run_test(DeliveryMode::Queued)?;
 
-        let mut cache = Cache::builder()
-            .max_capacity(100)
-            .support_invalidation_closures()
-            .build();
-        cache.reconfigure_for_testing();
+        fn run_test(delivery_mode: DeliveryMode) -> Result<(), Box<dyn std::error::Error>> {
+            use std::collections::HashSet;
 
-        let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
+            // The following `Vec`s will hold actual and expected notifications.
+            let actual = Arc::new(Mutex::new(Vec::new()));
+            let mut expected = Vec::new();
 
-        // Make the cache exterior immutable.
-        let cache = cache;
+            // Create an eviction listener.
+            let a1 = Arc::clone(&actual);
+            let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(delivery_mode)
+                .build();
 
-        cache.insert(0, "alice");
-        cache.insert(1, "bob");
-        cache.insert(2, "alex");
-        cache.sync();
+            // Create a cache with the eviction listener.
+            let mut cache = Cache::builder()
+                .max_capacity(100)
+                .support_invalidation_closures()
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.reconfigure_for_testing();
 
-        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
-        cache.sync();
+            let (clock, mock) = Clock::mock();
+            cache.set_expiration_clock(Some(clock));
 
-        assert_eq!(cache.get(&0), Some("alice"));
-        assert_eq!(cache.get(&1), Some("bob"));
-        assert_eq!(cache.get(&2), Some("alex"));
-        assert!(cache.contains_key(&0));
-        assert!(cache.contains_key(&1));
-        assert!(cache.contains_key(&2));
+            // Make the cache exterior immutable.
+            let cache = cache;
 
-        let names = ["alice", "alex"].iter().cloned().collect::<HashSet<_>>();
-        cache.invalidate_entries_if(move |_k, &v| names.contains(v))?;
-        assert_eq!(cache.base.invalidation_predicate_count(), 1);
+            cache.insert(0, "alice");
+            cache.insert(1, "bob");
+            cache.insert(2, "alex");
+            cache.sync();
 
-        mock.increment(Duration::from_secs(5)); // 10 secs from the start.
+            mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+            cache.sync();
 
-        cache.insert(3, "alice");
+            assert_eq_with_mode!(cache.get(&0), Some("alice"), delivery_mode);
+            assert_eq_with_mode!(cache.get(&1), Some("bob"), delivery_mode);
+            assert_eq_with_mode!(cache.get(&2), Some("alex"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&0), delivery_mode);
+            assert_with_mode!(cache.contains_key(&1), delivery_mode);
+            assert_with_mode!(cache.contains_key(&2), delivery_mode);
 
-        // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
-        cache.sync(); // To submit the invalidation task.
-        std::thread::sleep(Duration::from_millis(200));
-        cache.sync(); // To process the task result.
-        std::thread::sleep(Duration::from_millis(200));
+            let names = ["alice", "alex"].iter().cloned().collect::<HashSet<_>>();
+            cache.invalidate_entries_if(move |_k, &v| names.contains(v))?;
+            assert_eq_with_mode!(cache.base.invalidation_predicate_count(), 1, delivery_mode);
+            expected.push((Arc::new(0), "alice", RemovalCause::Explicit));
+            expected.push((Arc::new(2), "alex", RemovalCause::Explicit));
 
-        assert!(cache.get(&0).is_none());
-        assert!(cache.get(&2).is_none());
-        assert_eq!(cache.get(&1), Some("bob"));
-        // This should survive as it was inserted after calling invalidate_entries_if.
-        assert_eq!(cache.get(&3), Some("alice"));
+            mock.increment(Duration::from_secs(5)); // 10 secs from the start.
 
-        assert!(!cache.contains_key(&0));
-        assert!(cache.contains_key(&1));
-        assert!(!cache.contains_key(&2));
-        assert!(cache.contains_key(&3));
+            cache.insert(3, "alice");
 
-        assert_eq!(cache.entry_count(), 2);
-        assert_eq!(cache.invalidation_predicate_count(), 0);
+            // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
+            cache.sync(); // To submit the invalidation task.
+            std::thread::sleep(Duration::from_millis(200));
+            cache.sync(); // To process the task result.
+            std::thread::sleep(Duration::from_millis(200));
 
-        mock.increment(Duration::from_secs(5)); // 15 secs from the start.
+            assert_with_mode!(cache.get(&0).is_none(), delivery_mode);
+            assert_with_mode!(cache.get(&2).is_none(), delivery_mode);
+            assert_eq_with_mode!(cache.get(&1), Some("bob"), delivery_mode);
+            // This should survive as it was inserted after calling invalidate_entries_if.
+            assert_eq_with_mode!(cache.get(&3), Some("alice"), delivery_mode);
 
-        cache.invalidate_entries_if(|_k, &v| v == "alice")?;
-        cache.invalidate_entries_if(|_k, &v| v == "bob")?;
-        assert_eq!(cache.invalidation_predicate_count(), 2);
+            assert_with_mode!(!cache.contains_key(&0), delivery_mode);
+            assert_with_mode!(cache.contains_key(&1), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&2), delivery_mode);
+            assert_with_mode!(cache.contains_key(&3), delivery_mode);
 
-        // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
-        cache.sync(); // To submit the invalidation task.
-        std::thread::sleep(Duration::from_millis(200));
-        cache.sync(); // To process the task result.
-        std::thread::sleep(Duration::from_millis(200));
+            assert_eq_with_mode!(cache.entry_count(), 2, delivery_mode);
+            assert_eq_with_mode!(cache.invalidation_predicate_count(), 0, delivery_mode);
 
-        assert!(cache.get(&1).is_none());
-        assert!(cache.get(&3).is_none());
+            mock.increment(Duration::from_secs(5)); // 15 secs from the start.
 
-        assert!(!cache.contains_key(&1));
-        assert!(!cache.contains_key(&3));
+            cache.invalidate_entries_if(|_k, &v| v == "alice")?;
+            cache.invalidate_entries_if(|_k, &v| v == "bob")?;
+            assert_eq_with_mode!(cache.invalidation_predicate_count(), 2, delivery_mode);
+            // key 1 was inserted before key 3.
+            expected.push((Arc::new(1), "bob", RemovalCause::Explicit));
+            expected.push((Arc::new(3), "alice", RemovalCause::Explicit));
 
-        assert_eq!(cache.entry_count(), 0);
-        assert_eq!(cache.invalidation_predicate_count(), 0);
+            // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
+            cache.sync(); // To submit the invalidation task.
+            std::thread::sleep(Duration::from_millis(200));
+            cache.sync(); // To process the task result.
+            std::thread::sleep(Duration::from_millis(200));
+
+            assert_with_mode!(cache.get(&1).is_none(), delivery_mode);
+            assert_with_mode!(cache.get(&3).is_none(), delivery_mode);
+
+            assert_with_mode!(!cache.contains_key(&1), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&3), delivery_mode);
+
+            assert_eq_with_mode!(cache.entry_count(), 0, delivery_mode);
+            assert_eq_with_mode!(cache.invalidation_predicate_count(), 0, delivery_mode);
+
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
+
+            Ok(())
+        }
 
         Ok(())
     }
 
     #[test]
     fn time_to_live() {
-        let mut cache = Cache::builder()
-            .max_capacity(100)
-            .time_to_live(Duration::from_secs(10))
-            .build();
+        run_test(DeliveryMode::Immediate);
+        run_test(DeliveryMode::Queued);
 
-        cache.reconfigure_for_testing();
+        fn run_test(delivery_mode: DeliveryMode) {
+            // The following `Vec`s will hold actual and expected notifications.
+            let actual = Arc::new(Mutex::new(Vec::new()));
+            let mut expected = Vec::new();
 
-        let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
+            // Create an eviction listener.
+            let a1 = Arc::clone(&actual);
+            let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(delivery_mode)
+                .build();
 
-        // Make the cache exterior immutable.
-        let cache = cache;
+            // Create a cache with the eviction listener.
+            let mut cache = Cache::builder()
+                .max_capacity(100)
+                .time_to_live(Duration::from_secs(10))
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.reconfigure_for_testing();
 
-        cache.insert("a", "alice");
-        cache.sync();
+            let (clock, mock) = Clock::mock();
+            cache.set_expiration_clock(Some(clock));
 
-        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
-        cache.sync();
+            // Make the cache exterior immutable.
+            let cache = cache;
 
-        assert_eq!(cache.get(&"a"), Some("alice"));
-        assert!(cache.contains_key(&"a"));
+            cache.insert("a", "alice");
+            cache.sync();
 
-        mock.increment(Duration::from_secs(5)); // 10 secs.
-        assert_eq!(cache.get(&"a"), None);
-        assert!(!cache.contains_key(&"a"));
+            mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+            cache.sync();
 
-        assert_eq!(cache.iter().count(), 0);
+            assert_eq_with_mode!(cache.get(&"a"), Some("alice"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"a"), delivery_mode);
 
-        cache.sync();
-        assert!(cache.is_table_empty());
+            mock.increment(Duration::from_secs(5)); // 10 secs.
+            expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
+            assert_eq_with_mode!(cache.get(&"a"), None, delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"a"), delivery_mode);
 
-        cache.insert("b", "bob");
-        cache.sync();
+            assert_eq_with_mode!(cache.iter().count(), 0, delivery_mode);
 
-        assert_eq!(cache.entry_count(), 1);
+            cache.sync();
+            assert_with_mode!(cache.is_table_empty(), delivery_mode);
 
-        mock.increment(Duration::from_secs(5)); // 15 secs.
-        cache.sync();
+            cache.insert("b", "bob");
+            cache.sync();
 
-        assert_eq!(cache.get(&"b"), Some("bob"));
-        assert!(cache.contains_key(&"b"));
-        assert_eq!(cache.entry_count(), 1);
+            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
 
-        cache.insert("b", "bill");
-        cache.sync();
+            mock.increment(Duration::from_secs(5)); // 15 secs.
+            cache.sync();
 
-        mock.increment(Duration::from_secs(5)); // 20 secs
-        cache.sync();
+            assert_eq_with_mode!(cache.get(&"b"), Some("bob"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
 
-        assert_eq!(cache.get(&"b"), Some("bill"));
-        assert!(cache.contains_key(&"b"));
-        assert_eq!(cache.entry_count(), 1);
+            cache.insert("b", "bill");
+            expected.push((Arc::new("b"), "bob", RemovalCause::Replaced));
+            cache.sync();
 
-        mock.increment(Duration::from_secs(5)); // 25 secs
+            mock.increment(Duration::from_secs(5)); // 20 secs
+            cache.sync();
 
-        assert_eq!(cache.get(&"a"), None);
-        assert_eq!(cache.get(&"b"), None);
-        assert!(!cache.contains_key(&"a"));
-        assert!(!cache.contains_key(&"b"));
+            assert_eq_with_mode!(cache.get(&"b"), Some("bill"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
 
-        assert_eq!(cache.iter().count(), 0);
+            mock.increment(Duration::from_secs(5)); // 25 secs
+            expected.push((Arc::new("b"), "bill", RemovalCause::Expired));
 
-        cache.sync();
-        assert!(cache.is_table_empty());
+            assert_eq_with_mode!(cache.get(&"a"), None, delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), None, delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
+
+            assert_eq_with_mode!(cache.iter().count(), 0, delivery_mode);
+
+            cache.sync();
+            assert_with_mode!(cache.is_table_empty(), delivery_mode);
+
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
+        }
     }
 
     #[test]
     fn time_to_idle() {
-        let mut cache = Cache::builder()
-            .max_capacity(100)
-            .time_to_idle(Duration::from_secs(10))
-            .build();
+        run_test(DeliveryMode::Immediate);
+        run_test(DeliveryMode::Queued);
 
-        cache.reconfigure_for_testing();
+        fn run_test(delivery_mode: DeliveryMode) {
+            // The following `Vec`s will hold actual and expected notifications.
+            let actual = Arc::new(Mutex::new(Vec::new()));
+            let mut expected = Vec::new();
 
-        let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
+            // Create an eviction listener.
+            let a1 = Arc::clone(&actual);
+            let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(delivery_mode)
+                .build();
 
-        // Make the cache exterior immutable.
-        let cache = cache;
+            // Create a cache with the eviction listener.
+            let mut cache = Cache::builder()
+                .max_capacity(100)
+                .time_to_idle(Duration::from_secs(10))
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.reconfigure_for_testing();
 
-        cache.insert("a", "alice");
-        cache.sync();
+            let (clock, mock) = Clock::mock();
+            cache.set_expiration_clock(Some(clock));
 
-        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
-        cache.sync();
+            // Make the cache exterior immutable.
+            let cache = cache;
 
-        assert_eq!(cache.get(&"a"), Some("alice"));
+            cache.insert("a", "alice");
+            cache.sync();
 
-        mock.increment(Duration::from_secs(5)); // 10 secs.
-        cache.sync();
+            mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+            cache.sync();
 
-        cache.insert("b", "bob");
-        cache.sync();
+            assert_eq_with_mode!(cache.get(&"a"), Some("alice"), delivery_mode);
 
-        assert_eq!(cache.entry_count(), 2);
+            mock.increment(Duration::from_secs(5)); // 10 secs.
+            cache.sync();
 
-        mock.increment(Duration::from_secs(2)); // 12 secs.
-        cache.sync();
+            cache.insert("b", "bob");
+            cache.sync();
 
-        // contains_key does not reset the idle timer for the key.
-        assert!(cache.contains_key(&"a"));
-        assert!(cache.contains_key(&"b"));
-        cache.sync();
+            assert_eq_with_mode!(cache.entry_count(), 2, delivery_mode);
 
-        assert_eq!(cache.entry_count(), 2);
+            mock.increment(Duration::from_secs(2)); // 12 secs.
+            cache.sync();
 
-        mock.increment(Duration::from_secs(3)); // 15 secs.
-        assert_eq!(cache.get(&"a"), None);
-        assert_eq!(cache.get(&"b"), Some("bob"));
-        assert!(!cache.contains_key(&"a"));
-        assert!(cache.contains_key(&"b"));
+            // contains_key does not reset the idle timer for the key.
+            assert_with_mode!(cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            cache.sync();
 
-        assert_eq!(cache.iter().count(), 1);
+            assert_eq_with_mode!(cache.entry_count(), 2, delivery_mode);
 
-        cache.sync();
-        assert_eq!(cache.entry_count(), 1);
+            mock.increment(Duration::from_secs(3)); // 15 secs.
+            expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
 
-        mock.increment(Duration::from_secs(10)); // 25 secs
-        assert_eq!(cache.get(&"a"), None);
-        assert_eq!(cache.get(&"b"), None);
-        assert!(!cache.contains_key(&"a"));
-        assert!(!cache.contains_key(&"b"));
+            assert_eq_with_mode!(cache.get(&"a"), None, delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), Some("bob"), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
 
-        assert_eq!(cache.iter().count(), 0);
+            assert_eq_with_mode!(cache.iter().count(), 1, delivery_mode);
 
-        cache.sync();
-        assert!(cache.is_table_empty());
+            cache.sync();
+            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
+
+            mock.increment(Duration::from_secs(10)); // 25 secs
+            expected.push((Arc::new("b"), "bob", RemovalCause::Expired));
+
+            assert_eq_with_mode!(cache.get(&"a"), None, delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), None, delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
+
+            assert_eq_with_mode!(cache.iter().count(), 0, delivery_mode);
+
+            cache.sync();
+            assert_with_mode!(cache.is_table_empty(), delivery_mode);
+
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
+        }
     }
 
     #[test]
@@ -1932,6 +2576,401 @@ mod tests {
     }
 
     #[test]
+    fn test_removal_notifications() {
+        run_test(DeliveryMode::Immediate);
+        run_test(DeliveryMode::Queued);
+
+        fn run_test(delivery_mode: DeliveryMode) {
+            // The following `Vec`s will hold actual and expected notifications.
+            let actual = Arc::new(Mutex::new(Vec::new()));
+            let mut expected = Vec::new();
+
+            // Create an eviction listener.
+            let a1 = Arc::clone(&actual);
+            let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(delivery_mode)
+                .build();
+
+            // Create a cache with the eviction listener.
+            let mut cache = Cache::builder()
+                .max_capacity(3)
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.reconfigure_for_testing();
+
+            // Make the cache exterior immutable.
+            let cache = cache;
+
+            cache.insert('a', "alice");
+            cache.invalidate(&'a');
+            expected.push((Arc::new('a'), "alice", RemovalCause::Explicit));
+
+            cache.sync();
+            assert_eq_with_mode!(cache.entry_count(), 0, delivery_mode);
+
+            cache.insert('b', "bob");
+            cache.insert('c', "cathy");
+            cache.insert('d', "david");
+            cache.sync();
+            assert_eq_with_mode!(cache.entry_count(), 3, delivery_mode);
+
+            // This will be rejected due to the size constraint.
+            cache.insert('e', "emily");
+            expected.push((Arc::new('e'), "emily", RemovalCause::Size));
+            cache.sync();
+            assert_eq_with_mode!(cache.entry_count(), 3, delivery_mode);
+
+            // Raise the popularity of 'e' so it will be accepted next time.
+            cache.get(&'e');
+            cache.sync();
+
+            // Retry.
+            cache.insert('e', "eliza");
+            // and the LRU entry will be evicted.
+            expected.push((Arc::new('b'), "bob", RemovalCause::Size));
+            cache.sync();
+            assert_eq_with_mode!(cache.entry_count(), 3, delivery_mode);
+
+            // Replace an existing entry.
+            cache.insert('d', "dennis");
+            expected.push((Arc::new('d'), "david", RemovalCause::Replaced));
+            cache.sync();
+            assert_eq_with_mode!(cache.entry_count(), 3, delivery_mode);
+
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
+        }
+    }
+
+    #[test]
+    fn test_immediate_removal_notifications_with_updates() {
+        // The following `Vec` will hold actual notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+        let listener_conf = notification::Configuration::builder()
+            .delivery_mode(DeliveryMode::Immediate)
+            .build();
+
+        // Create a cache with the eviction listener and also TTL and TTI.
+        let mut cache = Cache::builder()
+            .eviction_listener_with_conf(listener, listener_conf)
+            .time_to_live(Duration::from_secs(7))
+            .time_to_idle(Duration::from_secs(5))
+            .build();
+        cache.reconfigure_for_testing();
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("alice", "a0");
+        cache.sync();
+
+        // Now alice (a0) has been expired by the idle timeout (TTI).
+        mock.increment(Duration::from_secs(6));
+        assert_eq!(cache.get(&"alice"), None);
+
+        // We have not ran sync after the expiration of alice (a0), so it is
+        // still in the cache.
+        assert_eq!(cache.entry_count(), 1);
+
+        // Re-insert alice with a different value. Since alice (a0) is still
+        // in the cache, this is actually a replace operation rather than an
+        // insert operation. We want to verify that the RemovalCause of a0 is
+        // Expired, not Replaced.
+        cache.insert("alice", "a1");
+        {
+            let mut a = actual.lock();
+            assert_eq!(a.len(), 1);
+            assert_eq!(a[0], (Arc::new("alice"), "a0", RemovalCause::Expired));
+            a.clear();
+        }
+
+        cache.sync();
+
+        mock.increment(Duration::from_secs(4));
+        assert_eq!(cache.get(&"alice"), Some("a1"));
+        cache.sync();
+
+        // Now alice has been expired by time-to-live (TTL).
+        mock.increment(Duration::from_secs(4));
+        assert_eq!(cache.get(&"alice"), None);
+
+        // But, again, it is still in the cache.
+        assert_eq!(cache.entry_count(), 1);
+
+        // Re-insert alice with a different value and verify that the
+        // RemovalCause of a1 is Expired (not Replaced).
+        cache.insert("alice", "a2");
+        {
+            let mut a = actual.lock();
+            assert_eq!(a.len(), 1);
+            assert_eq!(a[0], (Arc::new("alice"), "a1", RemovalCause::Expired));
+            a.clear();
+        }
+
+        cache.sync();
+
+        assert_eq!(cache.entry_count(), 1);
+
+        // Now alice (a2) has been expired by the idle timeout.
+        mock.increment(Duration::from_secs(6));
+        assert_eq!(cache.get(&"alice"), None);
+        assert_eq!(cache.entry_count(), 1);
+
+        // This invalidate will internally remove alice (a2).
+        cache.invalidate(&"alice");
+        cache.sync();
+        assert_eq!(cache.entry_count(), 0);
+
+        {
+            let mut a = actual.lock();
+            assert_eq!(a.len(), 1);
+            assert_eq!(a[0], (Arc::new("alice"), "a2", RemovalCause::Expired));
+            a.clear();
+        }
+
+        // Re-insert, and this time, make it expired by the TTL.
+        cache.insert("alice", "a3");
+        cache.sync();
+        mock.increment(Duration::from_secs(4));
+        assert_eq!(cache.get(&"alice"), Some("a3"));
+        cache.sync();
+        mock.increment(Duration::from_secs(4));
+        assert_eq!(cache.get(&"alice"), None);
+        assert_eq!(cache.entry_count(), 1);
+
+        // This invalidate will internally remove alice (a2).
+        cache.invalidate(&"alice");
+        cache.sync();
+
+        assert_eq!(cache.entry_count(), 0);
+
+        {
+            let mut a = actual.lock();
+            assert_eq!(a.len(), 1);
+            assert_eq!(a[0], (Arc::new("alice"), "a3", RemovalCause::Expired));
+            a.clear();
+        }
+    }
+
+    // This test ensures the key-level lock for the immediate notification
+    // delivery mode is working so that the notifications for a given key
+    // should always be ordered. This is true even if multiple client threads
+    // try to modify the entries for the key at the same time. (This test will
+    // run three client threads)
+    #[test]
+    fn test_key_lock_used_by_immediate_removal_notifications() {
+        use std::thread::{sleep, spawn};
+
+        const KEY: &str = "alice";
+
+        type Val = &'static str;
+
+        #[derive(PartialEq, Eq, Debug)]
+        enum Event {
+            Insert(Val),
+            Invalidate(Val),
+            BeginNotify(Val, RemovalCause),
+            EndNotify(Val, RemovalCause),
+        }
+
+        // The following `Vec will hold actual notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+
+        // Create an eviction listener.
+        // Note that this listener is slow and will take ~100 ms to complete.
+        let a0 = Arc::clone(&actual);
+        let listener = move |_k, v, cause| {
+            a0.lock().push(Event::BeginNotify(v, cause));
+            sleep(Duration::from_millis(100));
+            a0.lock().push(Event::EndNotify(v, cause));
+        };
+        let listener_conf = notification::Configuration::builder()
+            .delivery_mode(DeliveryMode::Immediate)
+            .build();
+
+        // Create a cache with the eviction listener and also TTL.
+        let cache = Cache::builder()
+            .eviction_listener_with_conf(listener, listener_conf)
+            .time_to_live(Duration::from_millis(200))
+            .build();
+
+        // - Notifications for the same key must not overlap.
+
+        // Time  Event
+        // ----- -------------------------------------
+        // 0000: Insert value a0
+        // 0200: a0 expired
+        // 0210: Insert value a1 -> expired a0 (N-A0)
+        // 0220: Insert value a2 (waiting) (A-A2)
+        // 0310: N-A0 processed
+        //       A-A2 finished waiting -> replace a1 (N-A1)
+        // 0320: Invalidate (waiting) (R-A2)
+        // 0410: N-A1 processed
+        //       R-A2 finished waiting -> explicit a2 (N-A2)
+        // 0510: N-A2 processed
+
+        let expected = vec![
+            Event::Insert("a0"),
+            Event::Insert("a1"),
+            Event::BeginNotify("a0", RemovalCause::Expired),
+            Event::Insert("a2"),
+            Event::EndNotify("a0", RemovalCause::Expired),
+            Event::BeginNotify("a1", RemovalCause::Replaced),
+            Event::Invalidate("a2"),
+            Event::EndNotify("a1", RemovalCause::Replaced),
+            Event::BeginNotify("a2", RemovalCause::Explicit),
+            Event::EndNotify("a2", RemovalCause::Explicit),
+        ];
+
+        // 0000: Insert value a0
+        actual.lock().push(Event::Insert("a0"));
+        cache.insert(KEY, "a0");
+        // Call `sync` to set the last modified for the KEY immediately so that
+        // this entry should expire in 200 ms from now.
+        cache.sync();
+
+        // 0210: Insert value a1 -> expired a0 (N-A0)
+        let thread1 = {
+            let a1 = Arc::clone(&actual);
+            let c1 = cache.clone();
+            spawn(move || {
+                sleep(Duration::from_millis(210));
+                a1.lock().push(Event::Insert("a1"));
+                c1.insert(KEY, "a1");
+            })
+        };
+
+        // 0220: Insert value a2 (waiting) (A-A2)
+        let thread2 = {
+            let a2 = Arc::clone(&actual);
+            let c2 = cache.clone();
+            spawn(move || {
+                sleep(Duration::from_millis(220));
+                a2.lock().push(Event::Insert("a2"));
+                c2.insert(KEY, "a2");
+            })
+        };
+
+        // 0320: Invalidate (waiting) (R-A2)
+        let thread3 = {
+            let a3 = Arc::clone(&actual);
+            let c3 = cache.clone();
+            spawn(move || {
+                sleep(Duration::from_millis(320));
+                a3.lock().push(Event::Invalidate("a2"));
+                c3.invalidate(&KEY);
+            })
+        };
+
+        for t in vec![thread1, thread2, thread3] {
+            t.join().expect("Failed to join");
+        }
+
+        let actual = actual.lock();
+        assert_eq!(actual.len(), expected.len());
+
+        for (i, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
+            assert_eq!(actual, expected, "expected[{}]", i);
+        }
+    }
+
+    // NOTE: To enable the panic logging, run the following command:
+    //
+    // RUST_LOG=moka=info cargo test --features 'logging' -- \
+    //   sync::cache::tests::recover_from_panicking_eviction_listener --exact --nocapture
+    //
+    #[test]
+    fn recover_from_panicking_eviction_listener() {
+        #[cfg(feature = "logging")]
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        run_test(DeliveryMode::Immediate);
+        run_test(DeliveryMode::Queued);
+
+        fn run_test(delivery_mode: DeliveryMode) {
+            // The following `Vec`s will hold actual and expected notifications.
+            let actual = Arc::new(Mutex::new(Vec::new()));
+            let mut expected = Vec::new();
+
+            // Create an eviction listener that panics when it see
+            // a value "panic now!".
+            let a1 = Arc::clone(&actual);
+            let listener = move |k, v, cause| {
+                if v == "panic now!" {
+                    panic!("Panic now!");
+                }
+                a1.lock().push((k, v, cause))
+            };
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(delivery_mode)
+                .build();
+
+            // Create a cache with the eviction listener.
+            let mut cache = Cache::builder()
+                .name("My Sync Cache")
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.reconfigure_for_testing();
+
+            // Make the cache exterior immutable.
+            let cache = cache;
+
+            // Insert an okay value.
+            cache.insert("alice", "a0");
+            cache.sync();
+
+            // Insert a value that will cause the eviction listener to panic.
+            cache.insert("alice", "panic now!");
+            expected.push((Arc::new("alice"), "a0", RemovalCause::Replaced));
+            cache.sync();
+
+            // Insert an okay value. This will replace the previous
+            // value "panic now!" so the eviction listener will panic.
+            cache.insert("alice", "a2");
+            cache.sync();
+            // No more removal notification should be sent.
+
+            // Invalidate the okay value.
+            cache.invalidate(&"alice");
+            cache.sync();
+
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
+        }
+    }
+
+    // This test ensures that the `contains_key`, `get` and `invalidate` can use
+    // borrowed form `&[u8]` for key with type `Vec<u8>`.
+    // https://github.com/moka-rs/moka/issues/166
+    #[test]
+    fn borrowed_forms_of_key() {
+        let cache: Cache<Vec<u8>, ()> = Cache::new(1);
+
+        let key = vec![1_u8];
+        cache.insert(key.clone(), ());
+
+        // key as &Vec<u8>
+        let key_v: &Vec<u8> = &key;
+        assert!(cache.contains_key(key_v));
+        assert_eq!(cache.get(key_v), Some(()));
+        cache.invalidate(key_v);
+
+        cache.insert(key, ());
+
+        // key as &[u8]
+        let key_s: &[u8] = &[1_u8];
+        assert!(cache.contains_key(key_s));
+        assert_eq!(cache.get(key_s), Some(()));
+        cache.invalidate(key_s);
+    }
+
+    #[test]
     fn test_debug_format() {
         let cache = Cache::new(10);
         cache.insert('a', "alice");
@@ -1944,5 +2983,52 @@ mod tests {
         assert!(debug_str.contains(r#"'b': "bob""#));
         assert!(debug_str.contains(r#"'c': "cindy""#));
         assert!(debug_str.ends_with('}'));
+    }
+
+    type NotificationTuple<K, V> = (Arc<K>, V, RemovalCause);
+
+    fn verify_notification_vec<K, V, S>(
+        cache: &Cache<K, V, S>,
+        actual: Arc<Mutex<Vec<NotificationTuple<K, V>>>>,
+        expected: &[NotificationTuple<K, V>],
+        delivery_mode: DeliveryMode,
+    ) where
+        K: std::hash::Hash + Eq + std::fmt::Debug + Send + Sync + 'static,
+        V: Eq + std::fmt::Debug + Clone + Send + Sync + 'static,
+        S: std::hash::BuildHasher + Clone + Send + Sync + 'static,
+    {
+        // Retries will be needed when testing in a QEMU VM.
+        const MAX_RETRIES: usize = 5;
+        let mut retries = 0;
+        loop {
+            // Ensure all scheduled notifications have been processed.
+            cache.sync();
+            std::thread::sleep(Duration::from_millis(500));
+
+            let actual = &*actual.lock();
+            if actual.len() != expected.len() {
+                if retries <= MAX_RETRIES {
+                    retries += 1;
+                    continue;
+                } else {
+                    assert_eq!(
+                        actual.len(),
+                        expected.len(),
+                        "Retries exhausted (delivery mode: {:?})",
+                        delivery_mode
+                    );
+                }
+            }
+
+            for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
+                assert_eq!(
+                    actual, expected,
+                    "expected[{}] (delivery mode: {:?})",
+                    i, delivery_mode
+                );
+            }
+
+            break;
+        }
     }
 }

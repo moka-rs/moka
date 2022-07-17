@@ -40,7 +40,7 @@ impl<'i, K, V> Iter<'i, K, V> {
         }
     }
 
-    // #[cfg(feature = "sync")]
+    #[cfg(feature = "sync")]
     pub(crate) fn with_multiple_cache_segments(
         cache_segments: Box<[&'i dyn ScanningGet<K, V>]>,
         num_cht_segments: usize,
