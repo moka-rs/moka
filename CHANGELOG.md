@@ -1,5 +1,21 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.9.2
+
+### Fixed
+
+- Fix segmentation faults in `sync` and `future` caches under heavy loads on
+  many-core machine ([#34][gh-issue-0034]):
+    - NOTE: Although this issue was found in our testing environment 10 months ago
+      (v0.5.1), no user reported that they had the same issue.
+    - NOTE: In [v0.8.4](#version-084), we added a mitigation to reduce the chance of
+      the segfaults occurring.
+
+### Changed
+
+- Upgrade crossbeam-epoch from v0.8.2 to v0.9.9 ([#157][gh-pull-0157]).
+
+
 ## Version 0.9.1
 
 ### Fixed
@@ -427,6 +443,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 
 [gh-pull-0167]: https://github.com/moka-rs/moka/pull/167/
 [gh-pull-0159]: https://github.com/moka-rs/moka/pull/159/
+[gh-pull-0157]: https://github.com/moka-rs/moka/pull/157/
 [gh-pull-0145]: https://github.com/moka-rs/moka/pull/145/
 [gh-pull-0143]: https://github.com/moka-rs/moka/pull/143/
 [gh-pull-0138]: https://github.com/moka-rs/moka/pull/138/
