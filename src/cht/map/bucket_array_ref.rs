@@ -47,8 +47,11 @@ where
                     break;
                 }
                 Err(_) => {
-                    bucket_array_ref =
-                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
+                    if let Some(r) =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand)
+                    {
+                        bucket_array_ref = r;
+                    }
                 }
             }
         }
@@ -81,7 +84,9 @@ where
                 if rehash_op.is_skip() {
                     break;
                 }
-                bucket_array_ref = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op);
+                if let Some(r) = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op) {
+                    bucket_array_ref = r;
+                }
             }
 
             match bucket_array_ref.remove_if(guard, hash, &mut eq, condition) {
@@ -106,8 +111,11 @@ where
                 }
                 Err(c) => {
                     condition = c;
-                    bucket_array_ref =
-                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
+                    if let Some(r) =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand)
+                    {
+                        bucket_array_ref = r;
+                    }
                 }
             }
         }
@@ -143,7 +151,9 @@ where
                 if rehash_op.is_skip() {
                     break;
                 }
-                bucket_array_ref = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op);
+                if let Some(r) = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op) {
+                    bucket_array_ref = r;
+                }
             }
 
             match bucket_array_ref.insert_if_not_present(guard, hash, state) {
@@ -171,8 +181,11 @@ where
                 }
                 Err(s) => {
                     state = s;
-                    bucket_array_ref =
-                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
+                    if let Some(r) =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand)
+                    {
+                        bucket_array_ref = r;
+                    }
                 }
             }
         }
@@ -207,7 +220,9 @@ where
                 if rehash_op.is_skip() {
                     break;
                 }
-                bucket_array_ref = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op);
+                if let Some(r) = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op) {
+                    bucket_array_ref = r;
+                }
             }
 
             match bucket_array_ref.insert_or_modify(guard, hash, state, on_modify) {
@@ -235,8 +250,11 @@ where
                 Err((s, f)) => {
                     state = s;
                     on_modify = f;
-                    bucket_array_ref =
-                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
+                    if let Some(r) =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand)
+                    {
+                        bucket_array_ref = r;
+                    }
                 }
             }
         }
@@ -260,8 +278,11 @@ where
                     break;
                 }
                 Err(_) => {
-                    bucket_array_ref =
-                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
+                    if let Some(r) =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand)
+                    {
+                        bucket_array_ref = r;
+                    }
                 }
             }
         }
@@ -286,10 +307,10 @@ impl<'a, 'g, K, V, S> BucketArrayRef<'a, K, V, S> {
             let new_bucket_array =
                 maybe_new_bucket_array.unwrap_or_else(|| Owned::new(BucketArray::default()));
 
-            match self.bucket_array.compare_exchange(
+            match self.bucket_array.compare_exchange_weak(
                 Shared::null(),
                 new_bucket_array,
-                Ordering::Release,
+                Ordering::AcqRel,
                 Ordering::Relaxed,
                 guard,
             ) {
@@ -315,10 +336,10 @@ impl<'a, 'g, K, V, S> BucketArrayRef<'a, K, V, S> {
                 return;
             }
 
-            match self.bucket_array.compare_exchange(
+            match self.bucket_array.compare_exchange_weak(
                 current_ptr,
                 min_ptr,
-                Ordering::Release,
+                Ordering::AcqRel,
                 Ordering::Relaxed,
                 guard,
             ) {
