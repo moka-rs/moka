@@ -1,12 +1,11 @@
 use super::bucket::{self, Bucket, BucketArray, InsertOrModifyState, RehashOp};
 
 use std::{
-    borrow::Borrow,
     hash::{BuildHasher, Hash},
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use crossbeam_epoch::{Atomic, CompareAndSetError, Guard, Owned, Shared};
+use crossbeam_epoch::{Atomic, CompareExchangeError, Guard, Owned, Shared};
 
 pub(crate) struct BucketArrayRef<'a, K, V, S> {
     pub(crate) bucket_array: &'a Atomic<BucketArray<K, V>>,
@@ -19,17 +18,12 @@ where
     K: Hash + Eq,
     S: BuildHasher,
 {
-    pub(crate) fn get_key_value_and_then<Q, F, T>(
+    pub(crate) fn get_key_value_and_then<T>(
         &self,
-        key: &Q,
         hash: u64,
-        with_entry: F,
-    ) -> Option<T>
-    where
-        Q: Hash + Eq + ?Sized,
-        K: Borrow<Q>,
-        F: FnOnce(&K, &V) -> Option<T>,
-    {
+        mut eq: impl FnMut(&K) -> bool,
+        with_entry: impl FnOnce(&K, &V) -> Option<T>,
+    ) -> Option<T> {
         let guard = &crossbeam_epoch::pin();
         let current_ref = self.get(guard);
         let mut bucket_array_ref = current_ref;
@@ -38,7 +32,7 @@ where
 
         loop {
             match bucket_array_ref
-                .get(guard, hash, key)
+                .get(guard, hash, &mut eq)
                 .map(|p| unsafe { p.as_ref() })
             {
                 Ok(Some(Bucket {
@@ -53,8 +47,11 @@ where
                     break;
                 }
                 Err(_) => {
-                    bucket_array_ref =
-                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
+                    if let Some(r) =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand)
+                    {
+                        bucket_array_ref = r;
+                    }
                 }
             }
         }
@@ -64,19 +61,13 @@ where
         result
     }
 
-    pub(crate) fn remove_entry_if_and<Q, F, G, T>(
+    pub(crate) fn remove_entry_if_and<T>(
         &self,
-        key: &Q,
         hash: u64,
-        mut condition: F,
-        with_previous_entry: G,
-    ) -> Option<T>
-    where
-        Q: Hash + Eq + ?Sized,
-        K: Borrow<Q>,
-        F: FnMut(&K, &V) -> bool,
-        G: FnOnce(&K, &V) -> T,
-    {
+        mut eq: impl FnMut(&K) -> bool,
+        mut condition: impl FnMut(&K, &V) -> bool,
+        with_previous_entry: impl FnOnce(&K, &V) -> T,
+    ) -> Option<T> {
         let guard = &crossbeam_epoch::pin();
         let current_ref = self.get(guard);
         let mut bucket_array_ref = current_ref;
@@ -93,10 +84,12 @@ where
                 if rehash_op.is_skip() {
                     break;
                 }
-                bucket_array_ref = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op);
+                if let Some(r) = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op) {
+                    bucket_array_ref = r;
+                }
             }
 
-            match bucket_array_ref.remove_if(guard, hash, key, condition) {
+            match bucket_array_ref.remove_if(guard, hash, &mut eq, condition) {
                 Ok(previous_bucket_ptr) => {
                     if let Some(previous_bucket_ref) = unsafe { previous_bucket_ptr.as_ref() } {
                         let Bucket {
@@ -118,8 +111,11 @@ where
                 }
                 Err(c) => {
                     condition = c;
-                    bucket_array_ref =
-                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
+                    if let Some(r) =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand)
+                    {
+                        bucket_array_ref = r;
+                    }
                 }
             }
         }
@@ -129,17 +125,13 @@ where
         result
     }
 
-    pub(crate) fn insert_if_not_present_and<F, G, T>(
+    pub(crate) fn insert_if_not_present_and<T>(
         &self,
         key: K,
         hash: u64,
-        on_insert: F,
-        with_existing_entry: G,
-    ) -> Option<T>
-    where
-        F: FnOnce() -> V,
-        G: FnOnce(&K, &V) -> T,
-    {
+        on_insert: impl FnOnce() -> V,
+        with_existing_entry: impl FnOnce(&K, &V) -> T,
+    ) -> Option<T> {
         use bucket::InsertionResult;
 
         let guard = &crossbeam_epoch::pin();
@@ -159,7 +151,9 @@ where
                 if rehash_op.is_skip() {
                     break;
                 }
-                bucket_array_ref = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op);
+                if let Some(r) = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op) {
+                    bucket_array_ref = r;
+                }
             }
 
             match bucket_array_ref.insert_if_not_present(guard, hash, state) {
@@ -187,8 +181,11 @@ where
                 }
                 Err(s) => {
                     state = s;
-                    bucket_array_ref =
-                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
+                    if let Some(r) =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand)
+                    {
+                        bucket_array_ref = r;
+                    }
                 }
             }
         }
@@ -198,19 +195,14 @@ where
         result
     }
 
-    pub(crate) fn insert_with_or_modify_entry_and<T, F, G, H>(
+    pub(crate) fn insert_with_or_modify_entry_and<T>(
         &self,
         key: K,
         hash: u64,
-        on_insert: F,
-        mut on_modify: G,
-        with_old_entry: H,
-    ) -> Option<T>
-    where
-        F: FnOnce() -> V,
-        G: FnMut(&K, &V) -> V,
-        H: FnOnce(&K, &V) -> T,
-    {
+        on_insert: impl FnOnce() -> V,
+        mut on_modify: impl FnMut(&K, &V) -> V,
+        with_old_entry: impl FnOnce(&K, &V) -> T,
+    ) -> Option<T> {
         let guard = &crossbeam_epoch::pin();
         let current_ref = self.get(guard);
         let mut bucket_array_ref = current_ref;
@@ -228,7 +220,9 @@ where
                 if rehash_op.is_skip() {
                     break;
                 }
-                bucket_array_ref = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op);
+                if let Some(r) = bucket_array_ref.rehash(guard, self.build_hasher, rehash_op) {
+                    bucket_array_ref = r;
+                }
             }
 
             match bucket_array_ref.insert_or_modify(guard, hash, state, on_modify) {
@@ -256,8 +250,11 @@ where
                 Err((s, f)) => {
                     state = s;
                     on_modify = f;
-                    bucket_array_ref =
-                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
+                    if let Some(r) =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand)
+                    {
+                        bucket_array_ref = r;
+                    }
                 }
             }
         }
@@ -267,10 +264,7 @@ where
         result
     }
 
-    pub(crate) fn keys<F, T>(&self, mut with_key: F) -> Vec<T>
-    where
-        F: FnMut(&K) -> T,
-    {
+    pub(crate) fn keys<T>(&self, mut with_key: impl FnMut(&K) -> T) -> Vec<T> {
         let guard = &crossbeam_epoch::pin();
         let current_ref = self.get(guard);
         let mut bucket_array_ref = current_ref;
@@ -284,8 +278,11 @@ where
                     break;
                 }
                 Err(_) => {
-                    bucket_array_ref =
-                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand);
+                    if let Some(r) =
+                        bucket_array_ref.rehash(guard, self.build_hasher, RehashOp::Expand)
+                    {
+                        bucket_array_ref = r;
+                    }
                 }
             }
         }
@@ -310,14 +307,15 @@ impl<'a, 'g, K, V, S> BucketArrayRef<'a, K, V, S> {
             let new_bucket_array =
                 maybe_new_bucket_array.unwrap_or_else(|| Owned::new(BucketArray::default()));
 
-            match self.bucket_array.compare_and_set_weak(
+            match self.bucket_array.compare_exchange_weak(
                 Shared::null(),
                 new_bucket_array,
-                (Ordering::Release, Ordering::Relaxed),
+                Ordering::AcqRel,
+                Ordering::Relaxed,
                 guard,
             ) {
                 Ok(b) => return unsafe { b.as_ref() }.unwrap(),
-                Err(CompareAndSetError { new, .. }) => maybe_new_bucket_array = Some(new),
+                Err(CompareExchangeError { new, .. }) => maybe_new_bucket_array = Some(new),
             }
         }
     }
@@ -338,10 +336,11 @@ impl<'a, 'g, K, V, S> BucketArrayRef<'a, K, V, S> {
                 return;
             }
 
-            match self.bucket_array.compare_and_set_weak(
+            match self.bucket_array.compare_exchange_weak(
                 current_ptr,
                 min_ptr,
-                (Ordering::Release, Ordering::Relaxed),
+                Ordering::AcqRel,
+                Ordering::Relaxed,
                 guard,
             ) {
                 Ok(_) => unsafe { bucket::defer_acquire_destroy(guard, current_ptr) },

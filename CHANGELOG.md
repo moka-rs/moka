@@ -1,12 +1,47 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.9.2
+
+### Fixed
+
+- Fix segmentation faults in `sync` and `future` caches under heavy loads on
+  many-core machine ([#34][gh-issue-0034]):
+    - NOTE: Although this issue was found in our testing environment ten months ago
+      (v0.5.1), no user reported that they had the same issue.
+    - NOTE: In [v0.8.4](#version-084), we added a mitigation to reduce the chance of
+      the segfaults occurring.
+
+### Changed
+
+- Upgrade crossbeam-epoch from v0.8.2 to v0.9.9 ([#157][gh-pull-0157]):
+    - This will make GitHub Dependabot to stop alerting about a security advisory
+      [CVE-2022-23639][ghsa-qc84-gqf4-9926] for crossbeam-utils versions < 0.8.7.
+    - Moka v0.9.1 or older was _not_ vulnerable to the CVE:
+        - Although the older crossbeam-epoch v0.8.2 depends on an affected version of
+          crossbeam-utils, epoch v0.8.2 does not use the affected _functions_ of
+          utils. ([#162][gh-issue-0162])
+
+
+## Version 0.9.1
+
+### Fixed
+
+- Relax a too restrictive requirement `Arc<K>: Borrow<Q>` for the key `&Q` of the
+  `contains_key`, `get` and `invalidate` methods in the following caches (with `K` as
+  the key type) ([#167][gh-pull-0167]). The requirement is now `K: Borrow<Q>` so these
+  methods will accept `&[u8]` for the key `&Q` when the stored key `K` is `Vec<u8>`.
+    - `sync::Cache`
+    - `sync::SegmentedCache`
+    - `future::Cache`
+
+
 ## Version 0.9.0
 
 ### Added
 
 - Add support for eviction listener to the following caches ([#145][gh-pull-0145]).
   Eviction listener is a callback function that will be called when an entry is
-  removed from the cache.
+  removed from the cache:
     - `sync::Cache`
     - `sync::SegmentedCache`
     - `future::Cache`
@@ -401,6 +436,9 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [panic_in_quanta]: https://github.com/moka-rs/moka#integer-overflow-in-quanta-crate-on-some-x86_64-machines
 [resolving-error-on-32bit]: https://github.com/moka-rs/moka#compile-errors-on-some-32-bit-platforms
 
+[ghsa-qc84-gqf4-9926]: https://github.com/advisories/GHSA-qc84-gqf4-9926
+
+[gh-issue-0162]: https://github.com/moka-rs/moka/issues/162/
 [gh-issue-0155]: https://github.com/moka-rs/moka/issues/155/
 [gh-issue-0123]: https://github.com/moka-rs/moka/issues/123/
 [gh-issue-0119]: https://github.com/moka-rs/moka/issues/119/
@@ -412,7 +450,9 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0167]: https://github.com/moka-rs/moka/pull/167/
 [gh-pull-0159]: https://github.com/moka-rs/moka/pull/159/
+[gh-pull-0157]: https://github.com/moka-rs/moka/pull/157/
 [gh-pull-0145]: https://github.com/moka-rs/moka/pull/145/
 [gh-pull-0143]: https://github.com/moka-rs/moka/pull/143/
 [gh-pull-0138]: https://github.com/moka-rs/moka/pull/138/

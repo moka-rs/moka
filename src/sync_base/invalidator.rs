@@ -32,16 +32,15 @@ pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 
 pub(crate) trait GetOrRemoveEntry<K, V> {
     fn get_value_entry(&self, key: &Arc<K>, hash: u64) -> Option<TrioArc<ValueEntry<K, V>>>;
 
-    fn remove_key_value_if<F>(
+    fn remove_key_value_if(
         &self,
         key: &Arc<K>,
         hash: u64,
-        condition: F,
+        condition: impl FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool,
     ) -> Option<TrioArc<ValueEntry<K, V>>>
     where
         K: Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static,
-        F: FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool;
+        V: Clone + Send + Sync + 'static;
 }
 
 pub(crate) struct KeyDateLite<K> {
