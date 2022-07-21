@@ -1,5 +1,7 @@
+#![cfg(feature = "sync")]
+
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicU32, Ordering},
     Arc,
 };
 
@@ -11,20 +13,20 @@ use moka::{
 // Currently Rust does not allow to create a static value using Default::default.
 // So we manually construct a Counters struct here.
 static COUNTERS: Counters = Counters {
-    inserted: AtomicU64::new(0),
-    evicted: AtomicU64::new(0),
-    invalidated: AtomicU64::new(0),
-    value_created: AtomicU64::new(0),
-    value_dropped: AtomicU64::new(0),
+    inserted: AtomicU32::new(0),
+    evicted: AtomicU32::new(0),
+    invalidated: AtomicU32::new(0),
+    value_created: AtomicU32::new(0),
+    value_dropped: AtomicU32::new(0),
 };
 
 #[derive(Debug)]
 struct Counters {
-    pub inserted: AtomicU64,
-    pub evicted: AtomicU64,
-    pub invalidated: AtomicU64,
-    pub value_created: AtomicU64,
-    pub value_dropped: AtomicU64,
+    pub inserted: AtomicU32,
+    pub evicted: AtomicU32,
+    pub invalidated: AtomicU32,
+    pub value_created: AtomicU32,
+    pub value_dropped: AtomicU32,
 }
 
 impl Counters {
