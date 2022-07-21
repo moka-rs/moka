@@ -484,6 +484,10 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
                 }
             }
         }
+
+        #[cfg(feature = "flush")]
+        crossbeam_epoch::pin().flush();
+
         std::mem::drop(lock);
 
         Some(next_array)

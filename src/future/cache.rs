@@ -1005,6 +1005,9 @@ where
             Self::schedule_write_op(&self.base.write_op_ch, op, hk)
                 .await
                 .expect("Failed to remove");
+
+            #[cfg(feature = "flush")]
+            crossbeam_epoch::pin().flush();
         }
     }
 
@@ -1201,6 +1204,10 @@ where
                     .await;
                 self.value_initializer
                     .remove_waiter(&key, TypeId::of::<()>());
+
+                #[cfg(feature = "flush")]
+                crossbeam_epoch::pin().flush();
+
                 v
             }
             InitResult::ReadExisting(v) => v,
@@ -1233,6 +1240,10 @@ where
                     .await;
                 self.value_initializer
                     .remove_waiter(&key, TypeId::of::<E>());
+
+                #[cfg(feature = "flush")]
+                crossbeam_epoch::pin().flush();
+
                 Ok(v)
             }
             InitResult::ReadExisting(v) => Ok(v),
