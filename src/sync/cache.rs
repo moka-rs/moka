@@ -1183,7 +1183,12 @@ where
                 Ok(v)
             }
             InitResult::ReadExisting(v) => Ok(v),
-            InitResult::InitErr(e) => Err(e),
+            InitResult::InitErr(e) => {
+                #[cfg(feature = "flush")]
+                crossbeam_epoch::pin().flush();
+
+                Err(e)
+            }
         }
     }
 
