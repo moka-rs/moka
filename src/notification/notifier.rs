@@ -298,6 +298,9 @@ impl<K, V> NotificationTask<K, V> {
 
         // Safety: It is safe to assert unwind safety here because we will not
         // call the listener again if it has been panicked.
+        //
+        #[allow(clippy::let_and_return)]
+        // https://rust-lang.github.io/rust-clippy/master/index.html#let_and_return
         let result = catch_unwind(AssertUnwindSafe(listener_clo));
         #[cfg(feature = "logging")]
         {
