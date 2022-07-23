@@ -11,6 +11,9 @@ pub(crate) mod deque;
 pub(crate) mod frequency_sketch;
 pub(crate) mod time;
 
+#[cfg(all(test, feature = "flush", any(feature = "sync", feature = "future")))]
+pub(crate) mod test_utils;
+
 // Note: `CacheRegion` cannot have more than four enum variants. This is because
 // `crate::{sync,unsync}::DeqNodes` uses a `tagptr::TagNonNull<DeqNode<T>, 2>`
 // pointer, where the 2-bit tag is `CacheRegion`.

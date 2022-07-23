@@ -48,11 +48,11 @@ mod lifecycle {
         }
 
         pub fn incl_value_created(&self) {
-            COUNTERS.value_created.fetch_add(1, Ordering::AcqRel);
+            self.value_created.fetch_add(1, Ordering::AcqRel);
         }
 
         pub fn incl_value_dropped(&self) {
-            COUNTERS.value_dropped.fetch_add(1, Ordering::AcqRel);
+            self.value_dropped.fetch_add(1, Ordering::AcqRel);
         }
     }
 
