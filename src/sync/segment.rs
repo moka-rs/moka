@@ -1605,7 +1605,6 @@ mod tests {
         cache.invalidate(key_s);
     }
 
-    #[cfg(feature = "flush")]
     #[test]
     fn drop_value_immediately_after_eviction() {
         use crate::common::test_utils::{Counters, Value};

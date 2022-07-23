@@ -11,7 +11,7 @@ pub(crate) mod deque;
 pub(crate) mod frequency_sketch;
 pub(crate) mod time;
 
-#[cfg(all(test, feature = "flush", any(feature = "sync", feature = "future")))]
+#[cfg(all(test, any(feature = "sync", feature = "future")))]
 pub(crate) mod test_utils;
 
 // Note: `CacheRegion` cannot have more than four enum variants. This is because

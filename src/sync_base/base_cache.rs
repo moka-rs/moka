@@ -427,10 +427,7 @@ where
                     self.inner
                         .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified);
                 }
-
-                #[cfg(feature = "flush")]
                 crossbeam_epoch::pin().flush();
-
                 upd_op
             }
             (
@@ -449,10 +446,7 @@ where
                             old_last_modified,
                         );
                     }
-
-                    #[cfg(feature = "flush")]
                     crossbeam_epoch::pin().flush();
-
                     upd_op
                 }
             }
@@ -1096,7 +1090,6 @@ where
         self.weighted_size
             .store(eviction_state.counters.weighted_size);
 
-        #[cfg(feature = "flush")]
         crossbeam_epoch::pin().flush();
 
         if should_sync {

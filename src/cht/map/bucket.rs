@@ -485,9 +485,7 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
             }
         }
 
-        #[cfg(feature = "flush")]
         guard.flush();
-
         std::mem::drop(lock);
 
         Some(next_array)

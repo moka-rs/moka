@@ -1050,10 +1050,7 @@ where
                 self.insert_with_hash(Arc::clone(&key), hash, v.clone());
                 self.value_initializer
                     .remove_waiter(&key, TypeId::of::<()>());
-
-                #[cfg(feature = "flush")]
                 crossbeam_epoch::pin().flush();
-
                 v
             }
             InitResult::ReadExisting(v) => v,
@@ -1176,17 +1173,12 @@ where
                 self.insert_with_hash(Arc::clone(&key), hash, v.clone());
                 self.value_initializer
                     .remove_waiter(&key, TypeId::of::<E>());
-
-                #[cfg(feature = "flush")]
                 crossbeam_epoch::pin().flush();
-
                 Ok(v)
             }
             InitResult::ReadExisting(v) => Ok(v),
             InitResult::InitErr(e) => {
-                #[cfg(feature = "flush")]
                 crossbeam_epoch::pin().flush();
-
                 Err(e)
             }
         }
@@ -1258,8 +1250,6 @@ where
             let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
             Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to remove");
-
-            #[cfg(feature = "flush")]
             crossbeam_epoch::pin().flush();
         }
     }
@@ -2986,7 +2976,6 @@ mod tests {
         cache.invalidate(key_s);
     }
 
-    #[cfg(feature = "flush")]
     #[test]
     fn drop_value_immediately_after_eviction() {
         use crate::common::test_utils::{Counters, Value};
