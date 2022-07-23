@@ -277,9 +277,9 @@ where
     ) {
         let w_len = ch.len();
 
-        if Self::should_apply_writes(w_len) {
-            if let Some(h) = housekeeper {
-                h.try_sync(inner);
+        if let Some(hk) = housekeeper {
+            if Self::should_apply_writes(hk, w_len) {
+                hk.try_sync(inner);
             }
         }
     }
@@ -487,21 +487,21 @@ where
     fn apply_reads_if_needed(&self, inner: &Inner<K, V, S>) {
         let len = self.read_op_ch.len();
 
-        if Self::should_apply_reads(len) {
-            if let Some(h) = &self.housekeeper {
-                h.try_sync(inner);
+        if let Some(hk) = &self.housekeeper {
+            if Self::should_apply_reads(hk, len) {
+                hk.try_sync(inner);
             }
         }
     }
 
     #[inline]
-    fn should_apply_reads(ch_len: usize) -> bool {
-        ch_len >= READ_LOG_FLUSH_POINT / 8
+    fn should_apply_reads(hk: &HouseKeeperArc<K, V, S>, ch_len: usize) -> bool {
+        hk.should_apply_reads(ch_len)
     }
 
     #[inline]
-    fn should_apply_writes(ch_len: usize) -> bool {
-        ch_len >= WRITE_LOG_FLUSH_POINT / 8
+    fn should_apply_writes(hk: &HouseKeeperArc<K, V, S>, ch_len: usize) -> bool {
+        hk.should_apply_writes(ch_len)
     }
 }
 

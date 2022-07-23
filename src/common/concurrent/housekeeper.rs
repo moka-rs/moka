@@ -1,6 +1,9 @@
+use crate::common::time::{CheckedTimeOps, Instant};
+
+use super::atomic_time::AtomicInstant;
 use super::constants::{
     MAX_SYNC_REPEATS, PERIODICAL_SYNC_FAST_PACE_NANOS, PERIODICAL_SYNC_INITIAL_DELAY_MILLIS,
-    PERIODICAL_SYNC_NORMAL_PACE_MILLIS,
+    PERIODICAL_SYNC_NORMAL_PACE_MILLIS, READ_LOG_FLUSH_POINT, WRITE_LOG_FLUSH_POINT,
 };
 use super::{
     thread_pool::{ThreadPool, ThreadPoolRegistry},
@@ -37,10 +40,10 @@ impl Configuration {
         }
     }
 
-    pub(crate) fn new_thread_pool(periodical_sync_enable: bool) -> Self {
+    pub(crate) fn new_thread_pool(periodical_sync_enabled: bool) -> Self {
         Self {
             is_blocking: false,
-            periodical_sync_enabled: periodical_sync_enable,
+            periodical_sync_enabled,
         }
     }
 }
@@ -65,6 +68,20 @@ where
         }
     }
 
+    pub(crate) fn should_apply_reads(&self, ch_len: usize) -> bool {
+        match self {
+            Housekeeper::Blocking(h) => h.should_apply_reads(ch_len),
+            Housekeeper::ThreadPool(h) => h.should_apply_reads(ch_len),
+        }
+    }
+
+    pub(crate) fn should_apply_writes(&self, ch_len: usize) -> bool {
+        match self {
+            Housekeeper::Blocking(h) => h.should_apply_writes(ch_len),
+            Housekeeper::ThreadPool(h) => h.should_apply_writes(ch_len),
+        }
+    }
+
     pub(crate) fn try_sync(&self, cache: &impl InnerSync) -> bool {
         match self {
             Housekeeper::Blocking(h) => h.try_sync(cache),
@@ -81,12 +98,47 @@ where
     }
 }
 
-#[derive(Default)]
 pub(crate) struct BlockingHousekeeper {
     is_sync_running: AtomicBool,
+    sync_after: AtomicInstant,
+}
+
+impl Default for BlockingHousekeeper {
+    fn default() -> Self {
+        Self {
+            is_sync_running: Default::default(),
+            sync_after: AtomicInstant::new(Self::sync_after(Instant::now())),
+        }
+    }
 }
 
 impl BlockingHousekeeper {
+    // NOTE: This method may update the `sync_after` field.
+    fn should_apply_reads(&self, ch_len: usize) -> bool {
+        self.should_apply(ch_len, READ_LOG_FLUSH_POINT / 8)
+    }
+
+    // NOTE: This method may update the `sync_after` field.
+    fn should_apply_writes(&self, ch_len: usize) -> bool {
+        self.should_apply(ch_len, WRITE_LOG_FLUSH_POINT / 8)
+    }
+
+    // NOTE: This method may update the `sync_after` field.
+    #[inline]
+    fn should_apply(&self, ch_len: usize, ch_flush_point: usize) -> bool {
+        if ch_len >= ch_flush_point {
+            true
+        } else {
+            let now = Instant::now();
+            if self.sync_after.instant().unwrap() >= now {
+                self.sync_after.set_instant(Self::sync_after(now));
+                true
+            } else {
+                false
+            }
+        }
+    }
+
     fn try_sync<T: InnerSync>(&self, cache: &T) -> bool {
         // Try to flip the value of sync_scheduled from false to true.
         match self.is_sync_running.compare_exchange(
@@ -102,6 +154,14 @@ impl BlockingHousekeeper {
             }
             Err(_) => false,
         }
+    }
+
+    fn sync_after(now: Instant) -> Instant {
+        let dur = Duration::from_millis(PERIODICAL_SYNC_INITIAL_DELAY_MILLIS);
+        let ts = now.checked_add(dur);
+        // Assuming that `now` is current wall clock time, this should never fail at
+        // least next millions of years.
+        ts.expect("Timestamp overflow")
     }
 }
 
@@ -224,6 +284,14 @@ where
         thread_pool
             .pool
             .execute_with_dynamic_delay(initial_delay, housekeeper_closure)
+    }
+
+    fn should_apply_reads(&self, ch_len: usize) -> bool {
+        ch_len >= READ_LOG_FLUSH_POINT
+    }
+
+    fn should_apply_writes(&self, ch_len: usize) -> bool {
+        ch_len >= WRITE_LOG_FLUSH_POINT
     }
 
     fn try_schedule_sync(&self) -> bool {
