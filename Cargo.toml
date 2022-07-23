@@ -46,11 +46,6 @@ atomic64 = []
 # performance impacts and is intended for debugging purpose.
 unstable-debug-counters = ["future"]
 
-# This is a temporary feature to make it easier to compare performance differences
-# before/after adding `crossbeam_epoch::Guard::flash`. It will be removed before
-# publishing the next release.
-flush = []
-
 [dependencies]
 crossbeam-channel = "0.5.5"
 crossbeam-utils = "0.8"
