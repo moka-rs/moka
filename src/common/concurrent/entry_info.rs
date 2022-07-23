@@ -96,26 +96,34 @@ mod test {
     use super::EntryInfo;
 
     // Note: the size of the struct may change in a future version of Rust.
-    // #[ignore]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), ignore)]
     #[test]
     fn check_struct_size() {
         use std::mem::size_of;
 
         // Rust 1.62:
         //
-        // | pointer width | quanta | no quanta |
-        // | ------------- | ------ | --------- |
-        // | 64-bit        |   24   |     72    |
-        // | 32-bit        |   24   |     72    |
+        // | pointer width | quanta | no quanta (Linux) | no quanta (macOS) |
+        // | ------------- | ------ | ----------------- | ----------------- |
+        // | 64-bit        |   24   |     72            |     56            |
+        // | 32-bit        |   24   |     72            |     n/a           |
 
-        let size = if cfg!(feature = "quanta") { 24 } else { 72 };
+        let size = if cfg!(feature = "quanta") {
+            24
+        } else if cfg!(target_os = "linux") {
+            72
+        } else if cfg!(target_os = "macos") {
+            56
+        } else {
+            unreachable!();
+        };
 
         // Rust 1.61 or older:
         //
-        // | pointer width | quanta | no quanta |
-        // | ------------- | ------ | --------- |
-        // | 64-bit        |   24   |     72    |
-        // | 32-bit        |   24   |     40    |
+        // | pointer width | quanta | no quanta (Linux) |
+        // | ------------- | ------ | ----------------- |
+        // | 64-bit        |   24   |     72            |
+        // | 32-bit        |   24   |     40            |
         //
         // let size = if cfg!(target_pointer_width = "64") {
         //     if cfg!(feature = "quanta") {
