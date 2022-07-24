@@ -427,6 +427,7 @@ where
                     self.inner
                         .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified);
                 }
+                crossbeam_epoch::pin().flush();
                 upd_op
             }
             (
@@ -445,6 +446,7 @@ where
                             old_last_modified,
                         );
                     }
+                    crossbeam_epoch::pin().flush();
                     upd_op
                 }
             }
@@ -825,7 +827,7 @@ where
         invalidator_enabled: bool,
     ) -> Self {
         let initial_capacity = initial_capacity
-            .map(|cap| cap + WRITE_LOG_SIZE * 4)
+            .map(|cap| cap + WRITE_LOG_SIZE)
             .unwrap_or_default();
         const NUM_SEGMENTS: usize = 64;
         let cache = crate::cht::SegmentedHashMap::with_num_segments_capacity_and_hasher(
@@ -1087,6 +1089,8 @@ where
         self.entry_count.store(eviction_state.counters.entry_count);
         self.weighted_size
             .store(eviction_state.counters.weighted_size);
+
+        crossbeam_epoch::pin().flush();
 
         if should_sync {
             Some(SyncPace::Fast)
