@@ -1609,7 +1609,8 @@ mod tests {
     fn drop_value_immediately_after_eviction() {
         use crate::common::test_utils::{Counters, Value};
 
-        const MAX_CAPACITY: u32 = 500;
+        const NUM_SEGMENTS: usize = 4;
+        const MAX_CAPACITY: u32 = NUM_SEGMENTS as u32 * 100;
         const KEYS: u32 = ((MAX_CAPACITY as f64) * 1.2) as u32;
 
         let counters = Arc::new(Counters::default());
@@ -1621,10 +1622,14 @@ mod tests {
             _ => (),
         };
 
-        let cache = SegmentedCache::builder(4)
+        let mut cache = SegmentedCache::builder(NUM_SEGMENTS)
             .max_capacity(MAX_CAPACITY as u64)
             .eviction_listener(listener)
             .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
 
         for key in 0..KEYS {
             let value = Arc::new(Value::new(vec![0u8; 1024], &counters));

@@ -2802,10 +2802,14 @@ mod tests {
             .build();
 
         // Create a cache with the eviction listener and also TTL.
-        let cache = Cache::builder()
+        let mut cache = Cache::builder()
             .eviction_listener_with_conf(listener, listener_conf)
             .time_to_live(Duration::from_millis(200))
             .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
 
         // - Notifications for the same key must not overlap.
 
@@ -2992,10 +2996,14 @@ mod tests {
             _ => (),
         };
 
-        let cache = Cache::builder()
+        let mut cache = Cache::builder()
             .max_capacity(MAX_CAPACITY as u64)
             .eviction_listener(listener)
             .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
 
         for key in 0..KEYS {
             let value = Arc::new(Value::new(vec![0u8; 1024], &counters));
