@@ -1611,6 +1611,64 @@ mod tests {
     }
 
     #[test]
+    fn drop_value_immediately_after_eviction() {
+        use crate::common::test_utils::{Counters, Value};
+
+        const NUM_SEGMENTS: usize = 1;
+        const MAX_CAPACITY: u32 = 500;
+        const KEYS: u32 = ((MAX_CAPACITY as f64) * 1.2) as u32;
+
+        let counters = Arc::new(Counters::default());
+        let counters1 = Arc::clone(&counters);
+
+        let listener = move |_k, _v, cause| match cause {
+            RemovalCause::Size => counters1.incl_evicted(),
+            RemovalCause::Explicit => counters1.incl_invalidated(),
+            _ => (),
+        };
+
+        let mut cache = SegmentedCache::builder(NUM_SEGMENTS)
+            .max_capacity(MAX_CAPACITY as u64)
+            .eviction_listener(listener)
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        for key in 0..KEYS {
+            let value = Arc::new(Value::new(vec![0u8; 1024], &counters));
+            cache.insert(key, value);
+            counters.incl_inserted();
+            cache.sync();
+        }
+
+        let eviction_count = KEYS - MAX_CAPACITY;
+
+        cache.sync();
+        assert_eq!(counters.inserted(), KEYS, "inserted");
+        assert_eq!(counters.value_created(), KEYS, "value_created");
+        assert_eq!(counters.evicted(), eviction_count, "evicted");
+        assert_eq!(counters.invalidated(), 0, "invalidated");
+        assert_eq!(counters.value_dropped(), eviction_count, "value_dropped");
+
+        for key in 0..KEYS {
+            cache.invalidate(&key);
+            cache.sync();
+        }
+
+        cache.sync();
+        assert_eq!(counters.inserted(), KEYS, "inserted");
+        assert_eq!(counters.value_created(), KEYS, "value_created");
+        assert_eq!(counters.evicted(), eviction_count, "evicted");
+        assert_eq!(counters.invalidated(), MAX_CAPACITY, "invalidated");
+        assert_eq!(counters.value_dropped(), KEYS, "value_dropped");
+
+        std::mem::drop(cache);
+        assert_eq!(counters.value_dropped(), KEYS, "value_dropped");
+    }
+
+    #[test]
     fn test_debug_format() {
         let cache = SegmentedCache::new(10, 4);
         cache.insert('a', "alice");

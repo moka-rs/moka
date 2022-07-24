@@ -1009,6 +1009,7 @@ where
             Self::schedule_write_op(self.base.inner.as_ref(), &self.base.write_op_ch, op, hk)
                 .await
                 .expect("Failed to remove");
+            crossbeam_epoch::pin().flush();
         }
     }
 
@@ -1210,6 +1211,7 @@ where
                     .await;
                 self.value_initializer
                     .remove_waiter(&key, TypeId::of::<()>());
+                crossbeam_epoch::pin().flush();
                 v
             }
             InitResult::ReadExisting(v) => v,
@@ -1242,10 +1244,14 @@ where
                     .await;
                 self.value_initializer
                     .remove_waiter(&key, TypeId::of::<E>());
+                crossbeam_epoch::pin().flush();
                 Ok(v)
             }
             InitResult::ReadExisting(v) => Ok(v),
-            InitResult::InitErr(e) => Err(e),
+            InitResult::InitErr(e) => {
+                crossbeam_epoch::pin().flush();
+                Err(e)
+            }
         }
     }
 
@@ -2771,6 +2777,105 @@ mod tests {
         assert!(cache.contains_key(key_s));
         assert_eq!(cache.get(key_s), Some(()));
         cache.invalidate(key_s).await;
+    }
+
+    #[tokio::test]
+    async fn drop_value_immediately_after_eviction() {
+        use crate::common::test_utils::{Counters, Value};
+
+        const MAX_CAPACITY: u32 = 500;
+        const KEYS: u32 = ((MAX_CAPACITY as f64) * 1.2) as u32;
+
+        let counters = Arc::new(Counters::default());
+        let counters1 = Arc::clone(&counters);
+
+        let listener = move |_k, _v, cause| match cause {
+            RemovalCause::Size => counters1.incl_evicted(),
+            RemovalCause::Explicit => counters1.incl_invalidated(),
+            _ => (),
+        };
+
+        let mut cache = Cache::builder()
+            .max_capacity(MAX_CAPACITY as u64)
+            .eviction_listener_with_queued_delivery_mode(listener)
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        for key in 0..KEYS {
+            let value = Arc::new(Value::new(vec![0u8; 1024], &counters));
+            cache.insert(key, value).await;
+            counters.incl_inserted();
+            cache.sync();
+        }
+
+        let eviction_count = KEYS - MAX_CAPACITY;
+
+        // Retries will be needed when testing in a QEMU VM.
+        const MAX_RETRIES: usize = 5;
+        let mut retries = 0;
+        loop {
+            // Ensure all scheduled notifications have been processed.
+            std::thread::sleep(Duration::from_millis(500));
+
+            if counters.evicted() != eviction_count || counters.value_dropped() != eviction_count {
+                if retries <= MAX_RETRIES {
+                    retries += 1;
+                    cache.sync();
+                    continue;
+                } else {
+                    assert_eq!(counters.evicted(), eviction_count, "Retries exhausted");
+                    assert_eq!(
+                        counters.value_dropped(),
+                        eviction_count,
+                        "Retries exhausted"
+                    );
+                }
+            }
+
+            assert_eq!(counters.inserted(), KEYS, "inserted");
+            assert_eq!(counters.value_created(), KEYS, "value_created");
+            assert_eq!(counters.evicted(), eviction_count, "evicted");
+            assert_eq!(counters.invalidated(), 0, "invalidated");
+            assert_eq!(counters.value_dropped(), eviction_count, "value_dropped");
+
+            break;
+        }
+
+        for key in 0..KEYS {
+            cache.invalidate(&key).await;
+            cache.sync();
+        }
+
+        let mut retries = 0;
+        loop {
+            // Ensure all scheduled notifications have been processed.
+            std::thread::sleep(Duration::from_millis(500));
+
+            if counters.invalidated() != MAX_CAPACITY || counters.value_dropped() != KEYS {
+                if retries <= MAX_RETRIES {
+                    retries += 1;
+                    cache.sync();
+                    continue;
+                } else {
+                    assert_eq!(counters.invalidated(), MAX_CAPACITY, "Retries exhausted");
+                    assert_eq!(counters.value_dropped(), KEYS, "Retries exhausted");
+                }
+            }
+
+            assert_eq!(counters.inserted(), KEYS, "inserted");
+            assert_eq!(counters.value_created(), KEYS, "value_created");
+            assert_eq!(counters.evicted(), eviction_count, "evicted");
+            assert_eq!(counters.invalidated(), MAX_CAPACITY, "invalidated");
+            assert_eq!(counters.value_dropped(), KEYS, "value_dropped");
+
+            break;
+        }
+
+        std::mem::drop(cache);
+        assert_eq!(counters.value_dropped(), KEYS, "value_dropped");
     }
 
     #[tokio::test]

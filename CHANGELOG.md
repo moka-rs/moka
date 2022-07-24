@@ -1,5 +1,16 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.9.3
+
+### Fixed
+
+- Ensure that the following caches will drop the value of evicted entries immediately
+  after eviction ([#169][gh-pull-0169]):
+    - `sync::Cache`
+    - `sync::SegmentedCache`
+    - `future::Cache`
+
+
 ## Version 0.9.2
 
 ### Fixed
@@ -450,6 +461,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0169]: https://github.com/moka-rs/moka/pull/169/
 [gh-pull-0167]: https://github.com/moka-rs/moka/pull/167/
 [gh-pull-0159]: https://github.com/moka-rs/moka/pull/159/
 [gh-pull-0157]: https://github.com/moka-rs/moka/pull/157/

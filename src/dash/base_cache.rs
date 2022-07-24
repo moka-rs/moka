@@ -491,7 +491,7 @@ where
         time_to_idle: Option<Duration>,
     ) -> Self {
         let initial_capacity = initial_capacity
-            .map(|cap| cap + WRITE_LOG_SIZE * 4)
+            .map(|cap| cap + WRITE_LOG_SIZE)
             .unwrap_or_default();
         let cache =
             dashmap::DashMap::with_capacity_and_hasher(initial_capacity, build_hasher.clone());
