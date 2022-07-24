@@ -2809,13 +2809,18 @@ mod tests {
             // Ensure all scheduled notifications have been processed.
             std::thread::sleep(Duration::from_millis(500));
 
-            if counters.evicted() != eviction_count {
+            if counters.evicted() != eviction_count || counters.value_dropped() != eviction_count {
                 if retries <= MAX_RETRIES {
                     retries += 1;
                     cache.sync();
                     continue;
                 } else {
                     assert_eq!(counters.evicted(), eviction_count, "Retries exhausted");
+                    assert_eq!(
+                        counters.value_dropped(),
+                        eviction_count,
+                        "Retries exhausted"
+                    );
                 }
             }
 
@@ -2838,13 +2843,14 @@ mod tests {
             // Ensure all scheduled notifications have been processed.
             std::thread::sleep(Duration::from_millis(500));
 
-            if counters.invalidated() != MAX_CAPACITY {
+            if counters.invalidated() != MAX_CAPACITY || counters.value_dropped() != KEYS {
                 if retries <= MAX_RETRIES {
                     retries += 1;
                     cache.sync();
                     continue;
                 } else {
                     assert_eq!(counters.invalidated(), MAX_CAPACITY, "Retries exhausted");
+                    assert_eq!(counters.value_dropped(), KEYS, "Retries exhausted");
                 }
             }
 
