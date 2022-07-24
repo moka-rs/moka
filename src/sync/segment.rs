@@ -1609,8 +1609,8 @@ mod tests {
     fn drop_value_immediately_after_eviction() {
         use crate::common::test_utils::{Counters, Value};
 
-        const NUM_SEGMENTS: usize = 4;
-        const MAX_CAPACITY: u32 = NUM_SEGMENTS as u32 * 100;
+        const NUM_SEGMENTS: usize = 1;
+        const MAX_CAPACITY: u32 = 500;
         const KEYS: u32 = ((MAX_CAPACITY as f64) * 1.2) as u32;
 
         let counters = Arc::new(Counters::default());
