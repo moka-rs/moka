@@ -75,18 +75,18 @@ where
     }
 
     #[cfg(any(feature = "sync", feature = "future"))]
-    pub(crate) fn should_apply_reads(&self, ch_len: usize) -> bool {
+    pub(crate) fn should_apply_reads(&self, ch_len: usize, now: Instant) -> bool {
         match self {
-            Housekeeper::Blocking(h) => h.should_apply_reads(ch_len),
-            Housekeeper::ThreadPool(h) => h.should_apply_reads(ch_len),
+            Housekeeper::Blocking(h) => h.should_apply_reads(ch_len, now),
+            Housekeeper::ThreadPool(h) => h.should_apply_reads(ch_len, now),
         }
     }
 
     #[cfg(any(feature = "sync", feature = "future"))]
-    pub(crate) fn should_apply_writes(&self, ch_len: usize) -> bool {
+    pub(crate) fn should_apply_writes(&self, ch_len: usize, now: Instant) -> bool {
         match self {
-            Housekeeper::Blocking(h) => h.should_apply_writes(ch_len),
-            Housekeeper::ThreadPool(h) => h.should_apply_writes(ch_len),
+            Housekeeper::Blocking(h) => h.should_apply_writes(ch_len, now),
+            Housekeeper::ThreadPool(h) => h.should_apply_writes(ch_len, now),
         }
     }
 
@@ -125,30 +125,27 @@ impl Default for BlockingHousekeeper {
 impl BlockingHousekeeper {
     #[cfg(any(feature = "sync", feature = "future"))]
     // NOTE: This method may update the `sync_after` field.
-    fn should_apply_reads(&self, ch_len: usize) -> bool {
-        self.should_apply(ch_len, READ_LOG_FLUSH_POINT / 8)
+    fn should_apply_reads(&self, ch_len: usize, now: Instant) -> bool {
+        self.should_apply(ch_len, READ_LOG_FLUSH_POINT / 8, now)
     }
 
     #[cfg(any(feature = "sync", feature = "future"))]
     // NOTE: This method may update the `sync_after` field.
-    fn should_apply_writes(&self, ch_len: usize) -> bool {
-        self.should_apply(ch_len, WRITE_LOG_FLUSH_POINT / 8)
+    fn should_apply_writes(&self, ch_len: usize, now: Instant) -> bool {
+        self.should_apply(ch_len, WRITE_LOG_FLUSH_POINT / 8, now)
     }
 
     #[cfg(any(feature = "sync", feature = "future"))]
     // NOTE: This method may update the `sync_after` field.
     #[inline]
-    fn should_apply(&self, ch_len: usize, ch_flush_point: usize) -> bool {
+    fn should_apply(&self, ch_len: usize, ch_flush_point: usize, now: Instant) -> bool {
         if ch_len >= ch_flush_point {
             true
+        } else if self.sync_after.instant().unwrap() >= now {
+            self.sync_after.set_instant(Self::sync_after(now));
+            true
         } else {
-            let now = Instant::now();
-            if self.sync_after.instant().unwrap() >= now {
-                self.sync_after.set_instant(Self::sync_after(now));
-                true
-            } else {
-                false
-            }
+            false
         }
     }
 
@@ -301,12 +298,12 @@ where
     }
 
     #[cfg(any(feature = "sync", feature = "future"))]
-    fn should_apply_reads(&self, ch_len: usize) -> bool {
+    fn should_apply_reads(&self, ch_len: usize, _now: Instant) -> bool {
         ch_len >= READ_LOG_FLUSH_POINT
     }
 
     #[cfg(any(feature = "sync", feature = "future"))]
-    fn should_apply_writes(&self, ch_len: usize) -> bool {
+    fn should_apply_writes(&self, ch_len: usize, _now: Instant) -> bool {
         ch_len >= WRITE_LOG_FLUSH_POINT
     }
 

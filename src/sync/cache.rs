@@ -3,10 +3,13 @@ use super::{
     CacheBuilder, ConcurrentCacheExt,
 };
 use crate::{
-    common::concurrent::{
-        constants::{MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
-        housekeeper::{self, InnerSync},
-        Weigher, WriteOp,
+    common::{
+        concurrent::{
+            constants::{MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
+            housekeeper::{self, InnerSync},
+            Weigher, WriteOp,
+        },
+        time::Instant,
     },
     notification::{self, EvictionListener},
     sync::{Iter, PredicateId},
@@ -1198,10 +1201,16 @@ where
     }
 
     pub(crate) fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
-        let op = self.base.do_insert_with_hash(key, hash, value);
+        let (op, now) = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
-        Self::schedule_write_op(self.base.inner.as_ref(), &self.base.write_op_ch, op, hk)
-            .expect("Failed to insert");
+        Self::schedule_write_op(
+            self.base.inner.as_ref(),
+            &self.base.write_op_ch,
+            op,
+            now,
+            hk,
+        )
+        .expect("Failed to insert");
     }
 
     /// Discards any cached value for the key.
@@ -1253,9 +1262,16 @@ where
             std::mem::drop(kl);
 
             let op = WriteOp::Remove(kv);
+            let now = self.base.current_time_from_expiration_clock();
             let hk = self.base.housekeeper.as_ref();
-            Self::schedule_write_op(self.base.inner.as_ref(), &self.base.write_op_ch, op, hk)
-                .expect("Failed to remove");
+            Self::schedule_write_op(
+                self.base.inner.as_ref(),
+                &self.base.write_op_ch,
+                op,
+                now,
+                hk,
+            )
+            .expect("Failed to remove");
             crossbeam_epoch::pin().flush();
         }
     }
@@ -1430,6 +1446,7 @@ where
         inner: &impl InnerSync,
         ch: &Sender<WriteOp<K, V>>,
         op: WriteOp<K, V>,
+        now: Instant,
         housekeeper: Option<&HouseKeeperArc<K, V, S>>,
     ) -> Result<(), TrySendError<WriteOp<K, V>>> {
         let mut op = op;
@@ -1439,7 +1456,7 @@ where
         // - We are doing a busy-loop here. We were originally calling `ch.send(op)?`,
         //   but we got a notable performance degradation.
         loop {
-            BaseCache::apply_reads_writes_if_needed(inner, ch, housekeeper);
+            BaseCache::apply_reads_writes_if_needed(inner, ch, now, housekeeper);
             match ch.try_send(op) {
                 Ok(()) => break,
                 Err(TrySendError::Full(op1)) => {
