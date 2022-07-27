@@ -1116,6 +1116,10 @@ where
             None
         }
     }
+
+    fn now(&self) -> Instant {
+        self.current_time_from_expiration_clock()
+    }
 }
 
 //

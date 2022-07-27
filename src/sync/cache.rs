@@ -3061,6 +3061,70 @@ mod tests {
         assert_eq!(counters.value_dropped(), KEYS, "value_dropped");
     }
 
+    // Ignored by default. This test cannot run in parallel with other tests.
+    #[test]
+    #[ignore]
+    fn enabled_thread_pools() {
+        use crate::common::concurrent::thread_pool::{PoolName::*, ThreadPoolRegistry};
+
+        // Enable the housekeeper pool.
+        {
+            let cache = Cache::builder().thread_pool_enabled(true).build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert_eq!(enabled_pools, &[Housekeeper]);
+        }
+
+        // Enable the housekeeper and invalidator pools.
+        {
+            let cache = Cache::builder()
+                .thread_pool_enabled(true)
+                .support_invalidation_closures()
+                .build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert_eq!(enabled_pools, &[Housekeeper, Invalidator]);
+        }
+
+        // Queued delivery mode: Enable the housekeeper and removal notifier pools.
+        {
+            let listener = |_k, _v, _cause| {};
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(DeliveryMode::Queued)
+                .build();
+            let cache = Cache::builder()
+                .thread_pool_enabled(true)
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert_eq!(enabled_pools, &[Housekeeper, RemovalNotifier]);
+        }
+
+        // Immediate delivery mode: Enable only the housekeeper pool.
+        {
+            let listener = |_k, _v, _cause| {};
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(DeliveryMode::Immediate)
+                .build();
+            let cache = Cache::builder()
+                .thread_pool_enabled(true)
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert_eq!(enabled_pools, &[Housekeeper]);
+        }
+
+        // Disable all pools.
+        {
+            let cache = Cache::builder().thread_pool_enabled(false).build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert!(enabled_pools.is_empty());
+        }
+    }
+
     #[test]
     fn test_debug_format() {
         let cache = Cache::new(10);

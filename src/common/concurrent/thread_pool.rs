@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 
 static REGISTRY: Lazy<ThreadPoolRegistry> = Lazy::new(ThreadPoolRegistry::default);
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
 #[cfg_attr(any(feature = "sync", feature = "future"), derive(Debug))]
 pub(crate) enum PoolName {
     Housekeeper,
@@ -101,5 +101,12 @@ impl ThreadPoolRegistry {
                 }
             }
         }
+    }
+
+    #[cfg(all(test, feature = "sync"))]
+    pub(crate) fn enabled_pools() -> Vec<PoolName> {
+        let mut names: Vec<_> = REGISTRY.pools.read().keys().cloned().collect();
+        names.sort_unstable();
+        names
     }
 }

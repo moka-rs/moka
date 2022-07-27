@@ -705,6 +705,10 @@ where
             None
         }
     }
+
+    fn now(&self) -> Instant {
+        unreachable!()
+    }
 }
 
 //

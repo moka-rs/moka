@@ -29,6 +29,8 @@ use std::{
 
 pub(crate) trait InnerSync {
     fn sync(&self, max_sync_repeats: usize) -> Option<SyncPace>;
+
+    fn now(&self) -> Instant;
 }
 
 #[derive(Clone, Debug)]
@@ -124,29 +126,19 @@ impl Default for BlockingHousekeeper {
 
 impl BlockingHousekeeper {
     #[cfg(any(feature = "sync", feature = "future"))]
-    // NOTE: This method may update the `sync_after` field.
     fn should_apply_reads(&self, ch_len: usize, now: Instant) -> bool {
         self.should_apply(ch_len, READ_LOG_FLUSH_POINT / 8, now)
     }
 
     #[cfg(any(feature = "sync", feature = "future"))]
-    // NOTE: This method may update the `sync_after` field.
     fn should_apply_writes(&self, ch_len: usize, now: Instant) -> bool {
         self.should_apply(ch_len, WRITE_LOG_FLUSH_POINT / 8, now)
     }
 
     #[cfg(any(feature = "sync", feature = "future"))]
-    // NOTE: This method may update the `sync_after` field.
     #[inline]
     fn should_apply(&self, ch_len: usize, ch_flush_point: usize, now: Instant) -> bool {
-        if ch_len >= ch_flush_point {
-            true
-        } else if self.sync_after.instant().unwrap() >= now {
-            self.sync_after.set_instant(Self::sync_after(now));
-            true
-        } else {
-            false
-        }
+        ch_len >= ch_flush_point || self.sync_after.instant().unwrap() >= now
     }
 
     fn try_sync<T: InnerSync>(&self, cache: &T) -> bool {
@@ -158,7 +150,11 @@ impl BlockingHousekeeper {
             Ordering::Relaxed,
         ) {
             Ok(_) => {
+                let now = cache.now();
+                self.sync_after.set_instant(Self::sync_after(now));
+
                 cache.sync(MAX_SYNC_REPEATS);
+
                 self.is_sync_running.store(false, Ordering::Release);
                 true
             }
