@@ -57,12 +57,14 @@ jobs:
         # hashbrown >= v0.12 requires Rust 2021 edition.
         # native-tls >= v0.2.9 requires more recent Rust version.
         # async-global-executor >= 2.1 requires Rust 2021 edition.
+        # pull-down-cmark >= 0.9.2 requires Rust 2021 edition.
         run: |
           cargo update -p dashmap --precise 5.2.0
           cargo update -p indexmap --precise 1.8.2
           cargo update -p hashbrown --precise 0.11.2
           cargo update -p native-tls --precise 0.2.8
           cargo update -p async-global-executor --precise 2.0.4
+          cargo update -p pulldown-cmark --precise 0.9.1
 
       - name: Run tests (debug, but no quanta feature)
         uses: actions-rs/cargo@v1
