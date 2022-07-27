@@ -1117,6 +1117,7 @@ where
         }
     }
 
+    #[cfg(any(feature = "sync", feature = "future"))]
     fn now(&self) -> Instant {
         self.current_time_from_expiration_clock()
     }

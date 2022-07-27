@@ -30,6 +30,7 @@ use std::{
 pub(crate) trait InnerSync {
     fn sync(&self, max_sync_repeats: usize) -> Option<SyncPace>;
 
+    #[cfg(any(feature = "sync", feature = "future"))]
     fn now(&self) -> Instant;
 }
 
@@ -150,8 +151,11 @@ impl BlockingHousekeeper {
             Ordering::Relaxed,
         ) {
             Ok(_) => {
-                let now = cache.now();
-                self.sync_after.set_instant(Self::sync_after(now));
+                #[cfg(any(feature = "sync", feature = "future"))]
+                {
+                    let now = cache.now();
+                    self.sync_after.set_instant(Self::sync_after(now));
+                }
 
                 cache.sync(MAX_SYNC_REPEATS);
 

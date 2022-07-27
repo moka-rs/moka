@@ -706,6 +706,7 @@ where
         }
     }
 
+    #[cfg(any(feature = "sync", feature = "future"))]
     fn now(&self) -> Instant {
         unreachable!()
     }
