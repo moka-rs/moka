@@ -349,12 +349,12 @@ where
 
     #[inline]
     fn should_apply_reads(ch_len: usize) -> bool {
-        ch_len >= READ_LOG_FLUSH_POINT / 8
+        ch_len >= READ_LOG_FLUSH_POINT
     }
 
     #[inline]
     fn should_apply_writes(ch_len: usize) -> bool {
-        ch_len >= WRITE_LOG_FLUSH_POINT / 8
+        ch_len >= WRITE_LOG_FLUSH_POINT
     }
 }
 
