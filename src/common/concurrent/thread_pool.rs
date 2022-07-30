@@ -35,7 +35,6 @@ pub(crate) struct ThreadPool {
 
 impl ThreadPool {
     fn new(name: PoolName, num_threads: usize) -> Self {
-        // println!("Created pool: {:?}", name);
         let pool = ScheduledThreadPool::with_name(name.thread_name_template(), num_threads);
         Self {
             name,
@@ -44,12 +43,6 @@ impl ThreadPool {
         }
     }
 }
-
-// impl Drop for ThreadPool {
-//     fn drop(&mut self) {
-//         println!("Dropped pool: {:?}", self.name)
-//     }
-// }
 
 pub(crate) struct ThreadPoolRegistry {
     pools: RwLock<HashMap<PoolName, Arc<ThreadPool>>>,
