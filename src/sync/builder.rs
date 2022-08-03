@@ -392,7 +392,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     /// Specify whether or not to enable the thread pool for housekeeping tasks.
     /// These tasks include removing expired entries and updating the LRU queue and
     /// LFU filter. `true` to enable and `false` to disable. (Default: `true`)
-    /// 
+    ///
     /// If disabled, the housekeeping tasks will be executed by a client thread when
     /// necessary.
     ///
