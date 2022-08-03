@@ -2,6 +2,13 @@
 
 ## Version 0.9.3
 
+### Added
+
+- Add a configuration option to the following caches to avoid to start the global
+  thread pools ([#165][gh-pull-0165]):
+    - `sync::Cache`
+    - `sync::SegmentedCache`
+
 ### Fixed
 
 - Ensure that the following caches will drop the value of evicted entries immediately
@@ -463,6 +470,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 
 [gh-pull-0169]: https://github.com/moka-rs/moka/pull/169/
 [gh-pull-0167]: https://github.com/moka-rs/moka/pull/167/
+[gh-pull-0165]: https://github.com/moka-rs/moka/pull/165/
 [gh-pull-0159]: https://github.com/moka-rs/moka/pull/159/
 [gh-pull-0157]: https://github.com/moka-rs/moka/pull/157/
 [gh-pull-0145]: https://github.com/moka-rs/moka/pull/145/

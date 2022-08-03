@@ -1,6 +1,6 @@
 use super::{cache::Cache, CacheBuilder, ConcurrentCacheExt};
 use crate::{
-    common::concurrent::Weigher,
+    common::concurrent::{housekeeper, Weigher},
     notification::{self, EvictionListener},
     sync_base::iter::{Iter, ScanningGet},
     Policy, PredicateError,
@@ -107,6 +107,7 @@ where
             None,
             None,
             false,
+            housekeeper::Configuration::new_thread_pool(true),
         )
     }
 
@@ -216,6 +217,7 @@ where
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
+        housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
         Self {
             inner: Arc::new(Inner::new(
@@ -230,6 +232,7 @@ where
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
+                housekeeper_conf,
             )),
         }
     }
@@ -597,6 +600,7 @@ where
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
+        housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
         assert!(num_segments > 0);
 
@@ -620,6 +624,7 @@ where
                     time_to_live,
                     time_to_idle,
                     invalidator_enabled,
+                    housekeeper_conf.clone(),
                 )
             })
             .collect::<Vec<_>>();
@@ -1661,6 +1666,76 @@ mod tests {
 
         std::mem::drop(cache);
         assert_eq!(counters.value_dropped(), KEYS, "value_dropped");
+    }
+
+    // Ignored by default. This test cannot run in parallel with other tests.
+    #[test]
+    #[ignore]
+    fn enabling_and_disabling_thread_pools() {
+        use crate::common::concurrent::thread_pool::{PoolName::*, ThreadPoolRegistry};
+
+        const NUM_SEGMENTS: usize = 4;
+
+        // Enable the housekeeper pool.
+        {
+            let cache = SegmentedCache::builder(NUM_SEGMENTS)
+                .thread_pool_enabled(true)
+                .build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert_eq!(enabled_pools, &[Housekeeper]);
+        }
+
+        // Enable the housekeeper and invalidator pools.
+        {
+            let cache = SegmentedCache::builder(NUM_SEGMENTS)
+                .thread_pool_enabled(true)
+                .support_invalidation_closures()
+                .build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert_eq!(enabled_pools, &[Housekeeper, Invalidator]);
+        }
+
+        // Queued delivery mode: Enable the housekeeper and removal notifier pools.
+        {
+            let listener = |_k, _v, _cause| {};
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(DeliveryMode::Queued)
+                .build();
+            let cache = SegmentedCache::builder(NUM_SEGMENTS)
+                .thread_pool_enabled(true)
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert_eq!(enabled_pools, &[Housekeeper, RemovalNotifier]);
+        }
+
+        // Immediate delivery mode: Enable only the housekeeper pool.
+        {
+            let listener = |_k, _v, _cause| {};
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(DeliveryMode::Immediate)
+                .build();
+            let cache = SegmentedCache::builder(NUM_SEGMENTS)
+                .thread_pool_enabled(true)
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert_eq!(enabled_pools, &[Housekeeper]);
+        }
+
+        // Disable all pools.
+        {
+            let cache = SegmentedCache::builder(NUM_SEGMENTS)
+                .thread_pool_enabled(false)
+                .build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert!(enabled_pools.is_empty());
+        }
     }
 
     #[test]

@@ -3,10 +3,13 @@ use super::{
     CacheBuilder, ConcurrentCacheExt,
 };
 use crate::{
-    common::concurrent::{
-        constants::{MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
-        housekeeper::InnerSync,
-        Weigher, WriteOp,
+    common::{
+        concurrent::{
+            constants::{MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
+            housekeeper::{self, InnerSync},
+            Weigher, WriteOp,
+        },
+        time::Instant,
     },
     notification::{self, EvictionListener},
     sync::{Iter, PredicateId},
@@ -803,6 +806,7 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: u64) -> Self {
         let build_hasher = RandomState::default();
+        let housekeeper_conf = housekeeper::Configuration::new_thread_pool(true);
         Self::with_everything(
             None,
             Some(max_capacity),
@@ -814,6 +818,7 @@ where
             None,
             None,
             false,
+            housekeeper_conf,
         )
     }
 
@@ -845,6 +850,7 @@ where
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
+        housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
         Self {
             base: BaseCache::new(
@@ -858,6 +864,7 @@ where
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
+                housekeeper_conf,
             ),
             value_initializer: Arc::new(ValueInitializer::with_hasher(build_hasher)),
         }
@@ -996,11 +1003,11 @@ where
     ///
     /// # Panics
     ///
-    /// This method panics when the `init` closure has been panicked. When it
-    /// happens, only the caller whose `init` closure panicked will get the panic
-    /// (e.g. only thread 1 in the above sample). If there are other calls in
-    /// progress (e.g. thread 0, 2 and 3 above), this method will restart and resolve
-    /// one of the remaining `init` closure.
+    /// This method panics when the `init` closure has panicked. When it happens,
+    /// only the caller whose `init` closure panicked will get the panic (e.g. only
+    /// thread 1 in the above sample). If there are other calls in progress (e.g.
+    /// thread 0, 2 and 3 above), this method will restart and resolve one of the
+    /// remaining `init` closure.
     ///
     pub fn get_with(&self, key: K, init: impl FnOnce() -> V) -> V {
         let hash = self.base.hash(&key);
@@ -1135,11 +1142,11 @@ where
     ///
     /// # Panics
     ///
-    /// This method panics when the `init` closure has been panicked. When it
-    /// happens, only the caller whose `init` closure panicked will get the panic
-    /// (e.g. only thread 1 in the above sample). If there are other calls in
-    /// progress (e.g. thread 0, 2 and 3 above), this method will restart and resolve
-    /// one of the remaining `init` closure.
+    /// This method panics when the `init` closure has panicked. When it happens,
+    /// only the caller whose `init` closure panicked will get the panic (e.g. only
+    /// thread 1 in the above sample). If there are other calls in progress (e.g.
+    /// thread 0, 2 and 3 above), this method will restart and resolve one of the
+    /// remaining `init` closure.
     ///
     pub fn try_get_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
@@ -1194,9 +1201,16 @@ where
     }
 
     pub(crate) fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
-        let op = self.base.do_insert_with_hash(key, hash, value);
+        let (op, now) = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
-        Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to insert");
+        Self::schedule_write_op(
+            self.base.inner.as_ref(),
+            &self.base.write_op_ch,
+            op,
+            now,
+            hk,
+        )
+        .expect("Failed to insert");
     }
 
     /// Discards any cached value for the key.
@@ -1248,8 +1262,16 @@ where
             std::mem::drop(kl);
 
             let op = WriteOp::Remove(kv);
+            let now = self.base.current_time_from_expiration_clock();
             let hk = self.base.housekeeper.as_ref();
-            Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to remove");
+            Self::schedule_write_op(
+                self.base.inner.as_ref(),
+                &self.base.write_op_ch,
+                op,
+                now,
+                hk,
+            )
+            .expect("Failed to remove");
             crossbeam_epoch::pin().flush();
         }
     }
@@ -1421,8 +1443,10 @@ where
 {
     #[inline]
     fn schedule_write_op(
+        inner: &impl InnerSync,
         ch: &Sender<WriteOp<K, V>>,
         op: WriteOp<K, V>,
+        now: Instant,
         housekeeper: Option<&HouseKeeperArc<K, V, S>>,
     ) -> Result<(), TrySendError<WriteOp<K, V>>> {
         let mut op = op;
@@ -1432,7 +1456,7 @@ where
         // - We are doing a busy-loop here. We were originally calling `ch.send(op)?`,
         //   but we got a notable performance degradation.
         loop {
-            BaseCache::apply_reads_writes_if_needed(ch, housekeeper);
+            BaseCache::apply_reads_writes_if_needed(inner, ch, now, housekeeper);
             match ch.try_send(op) {
                 Ok(()) => break,
                 Err(TrySendError::Full(op1)) => {
@@ -3035,6 +3059,70 @@ mod tests {
 
         std::mem::drop(cache);
         assert_eq!(counters.value_dropped(), KEYS, "value_dropped");
+    }
+
+    // Ignored by default. This test cannot run in parallel with other tests.
+    #[test]
+    #[ignore]
+    fn enabling_and_disabling_thread_pools() {
+        use crate::common::concurrent::thread_pool::{PoolName::*, ThreadPoolRegistry};
+
+        // Enable the housekeeper pool.
+        {
+            let cache = Cache::builder().thread_pool_enabled(true).build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert_eq!(enabled_pools, &[Housekeeper]);
+        }
+
+        // Enable the housekeeper and invalidator pools.
+        {
+            let cache = Cache::builder()
+                .thread_pool_enabled(true)
+                .support_invalidation_closures()
+                .build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert_eq!(enabled_pools, &[Housekeeper, Invalidator]);
+        }
+
+        // Queued delivery mode: Enable the housekeeper and removal notifier pools.
+        {
+            let listener = |_k, _v, _cause| {};
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(DeliveryMode::Queued)
+                .build();
+            let cache = Cache::builder()
+                .thread_pool_enabled(true)
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert_eq!(enabled_pools, &[Housekeeper, RemovalNotifier]);
+        }
+
+        // Immediate delivery mode: Enable only the housekeeper pool.
+        {
+            let listener = |_k, _v, _cause| {};
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(DeliveryMode::Immediate)
+                .build();
+            let cache = Cache::builder()
+                .thread_pool_enabled(true)
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert_eq!(enabled_pools, &[Housekeeper]);
+        }
+
+        // Disable all pools.
+        {
+            let cache = Cache::builder().thread_pool_enabled(false).build();
+            cache.insert('a', "a");
+            let enabled_pools = ThreadPoolRegistry::enabled_pools();
+            assert!(enabled_pools.is_empty());
+        }
     }
 
     #[test]

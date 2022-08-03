@@ -3,10 +3,13 @@ use super::{
     CacheBuilder, ConcurrentCacheExt, Iter, PredicateId,
 };
 use crate::{
-    common::concurrent::{
-        constants::{MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
-        housekeeper::InnerSync,
-        Weigher, WriteOp,
+    common::{
+        concurrent::{
+            constants::{MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
+            housekeeper::{self, InnerSync},
+            Weigher, WriteOp,
+        },
+        time::Instant,
     },
     notification::{self, EvictionListener},
     sync_base::base_cache::{BaseCache, HouseKeeperArc},
@@ -660,6 +663,7 @@ where
             None,
             None,
             false,
+            housekeeper::Configuration::new_thread_pool(true),
         )
     }
 
@@ -691,6 +695,7 @@ where
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
+        housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
         Self {
             base: BaseCache::new(
@@ -704,6 +709,7 @@ where
                 time_to_live,
                 time_to_idle,
                 invalidator_enabled,
+                housekeeper_conf,
             ),
             value_initializer: Arc::new(ValueInitializer::with_hasher(build_hasher)),
         }
@@ -834,10 +840,10 @@ where
     ///
     /// # Panics
     ///
-    /// This method panics when the `init` future has been panicked. When it happens,
-    /// only the caller whose `init` future panicked will get the panic (e.g. only
-    /// task 3 in the above sample). If there are other calls in progress (e.g. task
-    /// 0, 1 and 2 above), this method will restart and resolve one of the remaining
+    /// This method panics when the `init` future has panicked. When it happens, only
+    /// the caller whose `init` future panicked will get the panic (e.g. only task 3
+    /// in the above sample). If there are other calls in progress (e.g. task 0, 1
+    /// and 2 above), this method will restart and resolve one of the remaining
     /// `init` futures.
     ///
     pub async fn get_with(&self, key: K, init: impl Future<Output = V>) -> V {
@@ -952,10 +958,10 @@ where
     ///
     /// # Panics
     ///
-    /// This method panics when the `init` future has been panicked. When it happens,
-    /// only the caller whose `init` future panicked will get the panic (e.g. only
-    /// task 2 in the above sample). If there are other calls in progress (e.g. task
-    /// 0, 1 and 3 above), this method will restart and resolve one of the remaining
+    /// This method panics when the `init` future has panicked. When it happens, only
+    /// the caller whose `init` future panicked will get the panic (e.g. only task 2
+    /// in the above sample). If there are other calls in progress (e.g. task 0, 1
+    /// and 3 above), this method will restart and resolve one of the remaining
     /// `init` futures.
     ///
     pub async fn try_get_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
@@ -981,9 +987,16 @@ where
     fn do_blocking_insert(&self, key: K, value: V) {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
-        let op = self.base.do_insert_with_hash(key, hash, value);
+        let (op, now) = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
-        Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to insert");
+        Self::blocking_schedule_write_op(
+            self.base.inner.as_ref(),
+            &self.base.write_op_ch,
+            op,
+            now,
+            hk,
+        )
+        .expect("Failed to insert");
     }
 
     /// Discards any cached value for the key.
@@ -1001,10 +1014,17 @@ where
                 self.base.notify_invalidate(&kv.key, &kv.entry)
             }
             let op = WriteOp::Remove(kv);
+            let now = self.base.current_time_from_expiration_clock();
             let hk = self.base.housekeeper.as_ref();
-            Self::schedule_write_op(&self.base.write_op_ch, op, hk)
-                .await
-                .expect("Failed to remove");
+            Self::schedule_write_op(
+                self.base.inner.as_ref(),
+                &self.base.write_op_ch,
+                op,
+                now,
+                hk,
+            )
+            .await
+            .expect("Failed to remove");
             crossbeam_epoch::pin().flush();
         }
     }
@@ -1017,9 +1037,16 @@ where
         let hash = self.base.hash(key);
         if let Some(kv) = self.base.remove_entry(key, hash) {
             let op = WriteOp::Remove(kv);
+            let now = self.base.current_time_from_expiration_clock();
             let hk = self.base.housekeeper.as_ref();
-            Self::blocking_schedule_write_op(&self.base.write_op_ch, op, hk)
-                .expect("Failed to remove");
+            Self::blocking_schedule_write_op(
+                self.base.inner.as_ref(),
+                &self.base.write_op_ch,
+                op,
+                now,
+                hk,
+            )
+            .expect("Failed to remove");
         }
     }
 
@@ -1247,17 +1274,25 @@ where
     }
 
     async fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
-        let op = self.base.do_insert_with_hash(key, hash, value);
+        let (op, now) = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
-        Self::schedule_write_op(&self.base.write_op_ch, op, hk)
-            .await
-            .expect("Failed to insert");
+        Self::schedule_write_op(
+            self.base.inner.as_ref(),
+            &self.base.write_op_ch,
+            op,
+            now,
+            hk,
+        )
+        .await
+        .expect("Failed to insert");
     }
 
     #[inline]
     async fn schedule_write_op(
+        inner: &impl InnerSync,
         ch: &Sender<WriteOp<K, V>>,
         op: WriteOp<K, V>,
+        now: Instant,
         housekeeper: Option<&HouseKeeperArc<K, V, S>>,
     ) -> Result<(), TrySendError<WriteOp<K, V>>> {
         let mut op = op;
@@ -1265,7 +1300,7 @@ where
         // TODO: Try to replace the timer with an async event listener to see if it
         // can provide better performance.
         loop {
-            BaseCache::apply_reads_writes_if_needed(ch, housekeeper);
+            BaseCache::apply_reads_writes_if_needed(inner, ch, now, housekeeper);
             match ch.try_send(op) {
                 Ok(()) => break,
                 Err(TrySendError::Full(op1)) => {
@@ -1281,14 +1316,16 @@ where
 
     #[inline]
     fn blocking_schedule_write_op(
+        inner: &impl InnerSync,
         ch: &Sender<WriteOp<K, V>>,
         op: WriteOp<K, V>,
+        now: Instant,
         housekeeper: Option<&HouseKeeperArc<K, V, S>>,
     ) -> Result<(), TrySendError<WriteOp<K, V>>> {
         let mut op = op;
 
         loop {
-            BaseCache::apply_reads_writes_if_needed(ch, housekeeper);
+            BaseCache::apply_reads_writes_if_needed(inner, ch, now, housekeeper);
             match ch.try_send(op) {
                 Ok(()) => break,
                 Err(TrySendError::Full(op1)) => {

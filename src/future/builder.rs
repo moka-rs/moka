@@ -122,6 +122,7 @@ where
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
+            builder_utils::housekeeper_conf(true),
         )
     }
 
@@ -148,6 +149,7 @@ where
             self.time_to_live,
             self.time_to_idle,
             self.invalidator_enabled,
+            builder_utils::housekeeper_conf(true),
         )
     }
 }

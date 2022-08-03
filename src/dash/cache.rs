@@ -450,7 +450,8 @@ where
     pub(crate) fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
         let op = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
-        Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to insert");
+        Self::schedule_write_op(self.base.inner.as_ref(), &self.base.write_op_ch, op, hk)
+            .expect("Failed to insert");
     }
 
     /// Discards any cached value for the key.
@@ -465,7 +466,8 @@ where
         if let Some(kv) = self.base.remove_entry(key) {
             let op = WriteOp::Remove(kv);
             let hk = self.base.housekeeper.as_ref();
-            Self::schedule_write_op(&self.base.write_op_ch, op, hk).expect("Failed to remove");
+            Self::schedule_write_op(self.base.inner.as_ref(), &self.base.write_op_ch, op, hk)
+                .expect("Failed to remove");
         }
     }
 
@@ -563,6 +565,7 @@ where
 {
     #[inline]
     fn schedule_write_op(
+        inner: &impl InnerSync,
         ch: &Sender<WriteOp<K, V>>,
         op: WriteOp<K, V>,
         housekeeper: Option<&HouseKeeperArc<K, V, S>>,
@@ -574,7 +577,7 @@ where
         // - We are doing a busy-loop here. We were originally calling `ch.send(op)?`,
         //   but we got a notable performance degradation.
         loop {
-            BaseCache::apply_reads_writes_if_needed(ch, housekeeper);
+            BaseCache::apply_reads_writes_if_needed(inner, ch, housekeeper);
             match ch.try_send(op) {
                 Ok(()) => break,
                 Err(TrySendError::Full(op1)) => {

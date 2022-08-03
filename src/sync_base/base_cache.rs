@@ -16,7 +16,7 @@ use crate::{
             },
             deques::Deques,
             entry_info::EntryInfo,
-            housekeeper::{Housekeeper, InnerSync, SyncPace},
+            housekeeper::{self, Housekeeper, InnerSync, SyncPace},
             AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, ReadOp, ValueEntry, Weigher,
             WriteOp,
         },
@@ -113,6 +113,11 @@ impl<K, V, S> BaseCache<K, V, S> {
         self.inner.is_blocking_removal_notification()
     }
 
+    #[inline]
+    pub(crate) fn current_time_from_expiration_clock(&self) -> Instant {
+        self.inner.current_time_from_expiration_clock()
+    }
+
     pub(crate) fn notify_invalidate(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>)
     where
         K: Send + Sync + 'static,
@@ -156,6 +161,7 @@ where
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
+        housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
         let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
@@ -176,7 +182,7 @@ where
         if invalidator_enabled {
             inner.set_invalidator(&inner);
         }
-        let housekeeper = Housekeeper::new(Arc::downgrade(&inner));
+        let housekeeper = Housekeeper::new(Arc::downgrade(&inner), housekeeper_conf);
         Self {
             inner,
             read_op_ch: r_snd,
@@ -203,7 +209,7 @@ where
             .get_key_value_and(key, hash, |k, entry| {
                 let i = &self.inner;
                 let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
-                let now = i.current_time_from_expiration_clock();
+                let now = self.current_time_from_expiration_clock();
 
                 !is_expired_entry_wo(ttl, va, entry, now)
                     && !is_expired_entry_ao(tti, va, entry, now)
@@ -218,14 +224,15 @@ where
         Q: Hash + Eq + ?Sized,
     {
         // Define a closure to record a read op.
-        let record = |op| {
-            self.record_read_op(op).expect("Failed to record a get op");
+        let record = |op, now| {
+            self.record_read_op(op, now)
+                .expect("Failed to record a get op");
         };
 
         let maybe_entry = self.inner.get_key_value_and_then(key, hash, |k, entry| {
             let i = &self.inner;
             let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
-            let now = i.current_time_from_expiration_clock();
+            let now = self.current_time_from_expiration_clock();
 
             if is_expired_entry_wo(ttl, va, entry, now)
                 || is_expired_entry_ao(tti, va, entry, now)
@@ -241,10 +248,11 @@ where
 
         if let Some((entry, now)) = maybe_entry {
             let v = entry.value.clone();
-            record(ReadOp::Hit(hash, entry, now));
+            record(ReadOp::Hit(hash, entry, now), now);
             Some(v)
         } else {
-            record(ReadOp::Miss(hash));
+            let now = self.current_time_from_expiration_clock();
+            record(ReadOp::Miss(hash), now);
             None
         }
     }
@@ -270,20 +278,22 @@ where
 
     #[inline]
     pub(crate) fn apply_reads_writes_if_needed(
+        inner: &impl InnerSync,
         ch: &Sender<WriteOp<K, V>>,
+        now: Instant,
         housekeeper: Option<&HouseKeeperArc<K, V, S>>,
     ) {
         let w_len = ch.len();
 
-        if Self::should_apply_writes(w_len) {
-            if let Some(h) = housekeeper {
-                h.try_schedule_sync();
+        if let Some(hk) = housekeeper {
+            if Self::should_apply_writes(hk, w_len, now) {
+                hk.try_sync(inner);
             }
         }
     }
 
     pub(crate) fn invalidate_all(&self) {
-        let now = self.inner.current_time_from_expiration_clock();
+        let now = self.current_time_from_expiration_clock();
         self.inner.set_valid_after(now);
     }
 
@@ -291,7 +301,7 @@ where
         &self,
         predicate: PredicateFun<K, V>,
     ) -> Result<PredicateId, PredicateError> {
-        let now = self.inner.current_time_from_expiration_clock();
+        let now = self.current_time_from_expiration_clock();
         self.inner.register_invalidation_predicate(predicate, now)
     }
 }
@@ -314,7 +324,7 @@ where
         self.inner.get_key_value_and_then(key, hash, |k, entry| {
             let i = &self.inner;
             let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
-            let now = i.current_time_from_expiration_clock();
+            let now = self.current_time_from_expiration_clock();
 
             if is_expired_entry_wo(ttl, va, entry, now)
                 || is_expired_entry_ao(tti, va, entry, now)
@@ -344,8 +354,12 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     #[inline]
-    fn record_read_op(&self, op: ReadOp<K, V>) -> Result<(), TrySendError<ReadOp<K, V>>> {
-        self.apply_reads_if_needed();
+    fn record_read_op(
+        &self,
+        op: ReadOp<K, V>,
+        now: Instant,
+    ) -> Result<(), TrySendError<ReadOp<K, V>>> {
+        self.apply_reads_if_needed(&self.inner, now);
         let ch = &self.read_op_ch;
         match ch.try_send(op) {
             // Discard the ReadOp when the channel is full.
@@ -355,8 +369,13 @@ where
     }
 
     #[inline]
-    pub(crate) fn do_insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) -> WriteOp<K, V> {
-        let ts = self.inner.current_time_from_expiration_clock();
+    pub(crate) fn do_insert_with_hash(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        value: V,
+    ) -> (WriteOp<K, V>, Instant) {
+        let ts = self.current_time_from_expiration_clock();
         let weight = self.inner.weigh(&key, &value);
         let op_cnt1 = Rc::new(AtomicU8::new(0));
         let op_cnt2 = Rc::clone(&op_cnt1);
@@ -420,7 +439,7 @@ where
         );
 
         match (op1, op2) {
-            (Some((_cnt, ins_op)), None) => ins_op,
+            (Some((_cnt, ins_op)), None) => (ins_op, ts),
             (None, Some((_cnt, old_entry, (old_last_accessed, old_last_modified), upd_op))) => {
                 old_entry.unset_q_nodes();
                 if self.is_removal_notifier_enabled() {
@@ -428,14 +447,14 @@ where
                         .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified);
                 }
                 crossbeam_epoch::pin().flush();
-                upd_op
+                (upd_op, ts)
             }
             (
                 Some((cnt1, ins_op)),
                 Some((cnt2, old_entry, (old_last_accessed, old_last_modified), upd_op)),
             ) => {
                 if cnt1 > cnt2 {
-                    ins_op
+                    (ins_op, ts)
                 } else {
                     old_entry.unset_q_nodes();
                     if self.is_removal_notifier_enabled() {
@@ -447,7 +466,7 @@ where
                         );
                     }
                     crossbeam_epoch::pin().flush();
-                    upd_op
+                    (upd_op, ts)
                 }
             }
             (None, None) => unreachable!(),
@@ -484,24 +503,24 @@ where
     }
 
     #[inline]
-    fn apply_reads_if_needed(&self) {
+    fn apply_reads_if_needed(&self, inner: &Inner<K, V, S>, now: Instant) {
         let len = self.read_op_ch.len();
 
-        if Self::should_apply_reads(len) {
-            if let Some(h) = &self.housekeeper {
-                h.try_schedule_sync();
+        if let Some(hk) = &self.housekeeper {
+            if Self::should_apply_reads(hk, len, now) {
+                hk.try_sync(inner);
             }
         }
     }
 
     #[inline]
-    fn should_apply_reads(ch_len: usize) -> bool {
-        ch_len >= READ_LOG_FLUSH_POINT
+    fn should_apply_reads(hk: &HouseKeeperArc<K, V, S>, ch_len: usize, now: Instant) -> bool {
+        hk.should_apply_reads(ch_len, now)
     }
 
     #[inline]
-    fn should_apply_writes(ch_len: usize) -> bool {
-        ch_len >= WRITE_LOG_FLUSH_POINT
+    fn should_apply_writes(hk: &HouseKeeperArc<K, V, S>, ch_len: usize, now: Instant) -> bool {
+        hk.should_apply_writes(ch_len, now)
     }
 }
 
@@ -522,11 +541,7 @@ where
     pub(crate) fn reconfigure_for_testing(&mut self) {
         // Stop the housekeeping job that may cause sync() method to return earlier.
         if let Some(housekeeper) = &self.housekeeper {
-            // TODO: Extract this into a housekeeper method.
-            let mut job = housekeeper.periodical_sync_job().lock();
-            if let Some(job) = job.take() {
-                job.cancel();
-            }
+            housekeeper.stop_periodical_sync_job();
         }
         // Enable the frequency sketch.
         self.inner.enable_frequency_sketch_for_testing();
@@ -1100,6 +1115,11 @@ where
             // Keep the current pace.
             None
         }
+    }
+
+    #[cfg(any(feature = "sync", feature = "future"))]
+    fn now(&self) -> Instant {
+        self.current_time_from_expiration_clock()
     }
 }
 
@@ -2031,6 +2051,8 @@ fn is_expired_by_ttl(
 
 #[cfg(test)]
 mod tests {
+    use crate::common::concurrent::housekeeper;
+
     use super::BaseCache;
 
     #[cfg_attr(target_pointer_width = "16", ignore)]
@@ -2053,6 +2075,7 @@ mod tests {
                 None,
                 None,
                 false,
+                housekeeper::Configuration::new_thread_pool(true),
             );
             cache.inner.enable_frequency_sketch_for_testing();
             assert_eq!(
