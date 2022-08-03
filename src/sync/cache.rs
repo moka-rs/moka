@@ -3064,7 +3064,7 @@ mod tests {
     // Ignored by default. This test cannot run in parallel with other tests.
     #[test]
     #[ignore]
-    fn enabled_thread_pools() {
+    fn enabling_and_disabling_thread_pools() {
         use crate::common::concurrent::thread_pool::{PoolName::*, ThreadPoolRegistry};
 
         // Enable the housekeeper pool.

@@ -78,6 +78,18 @@ jobs:
           command: test
           args: --features sync
 
+      - name: Run tests (debug, sync feature, thread-pool test for sync::Cache)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --lib --features sync sync::cache::tests::enabling_and_disabling_thread_pools -- --exact --ignored
+
+      - name: Run tests (debug, sync feature, thread-pool test for sync::SegmentCache)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --lib --features sync sync::segment::tests::enabling_and_disabling_thread_pools -- --exact --ignored
+
       - name: Run tests (release, sync feature)
         uses: actions-rs/cargo@v1
         with:
