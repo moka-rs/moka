@@ -389,11 +389,15 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
-    /// Specify whether or not to enable thread pool for housekeeping tasks, such as
-    /// ... `true` to enable and `false` to disable.
+    /// Specify whether or not to enable the thread pool for housekeeping tasks.
+    /// These tasks include removing expired entries and updating the LRU queue and
+    /// LFU filter. `true` to enable and `false` to disable. (Default: `true`)
+    /// 
+    /// If disabled, the housekeeping tasks will be executed by a client thread when
+    /// necessary.
     ///
-    /// The thread pool is enabled by default in current version of Moka but the
-    /// default will be changed to disabled in future version.
+    /// NOTE: The default value will be changed to `false` in a future release
+    /// (v0.10.0 or v0.11.0).
     pub fn thread_pool_enabled(self, v: bool) -> Self {
         Self {
             thread_pool_enabled: v,
