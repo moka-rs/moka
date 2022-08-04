@@ -4,8 +4,8 @@
 
 ### Added
 
-- Add a configuration option to the following caches to avoid to start the global
-  thread pools ([#165][gh-pull-0165]):
+- Add an option to the cache builder of the following caches not to start and use the
+  global thread pools for housekeeping tasks ([#165][gh-pull-0165]):
     - `sync::Cache`
     - `sync::SegmentedCache`
 
