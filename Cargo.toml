@@ -46,6 +46,7 @@ atomic64 = []
 # performance impacts and is intended for debugging purpose.
 unstable-debug-counters = ["future"]
 
+# js = ["getrandom?/js","uuid/js"]
 js = ["getrandom/js","uuid/js"]
 
 [dependencies]
@@ -79,12 +80,15 @@ futures-util = { version = "0.3", optional = true }
 # Optional dependencies (logging)
 log = { version = "0.4", optional = true }
 
+# Required for testing (can not reside in dev-dependencies 
+# on stable due to platform compatibility issues
+getrandom = { version = "0.2", optional = true }
+
 [dev-dependencies]
 actix-rt = { version = "2.7", default-features = false }
 anyhow = "1.0.19"
 async-std = { version = "1.11", features = ["attributes"] }
 env_logger = "0.9"
-getrandom = "0.2"
 reqwest = "0.11.11"
 skeptic = "0.13"
 tokio = { version = "1.19", features = ["fs", "macros", "rt-multi-thread", "sync", "time" ] }
