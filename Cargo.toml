@@ -46,6 +46,8 @@ atomic64 = []
 # performance impacts and is intended for debugging purpose.
 unstable-debug-counters = ["future"]
 
+js = ["getrandom/js","uuid/js"]
+
 [dependencies]
 crossbeam-channel = "0.5.5"
 crossbeam-utils = "0.8"
