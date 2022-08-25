@@ -189,8 +189,8 @@ mod tests {
 
     use std::time::Duration;
 
-    #[tokio::test]
-    async fn build_cache() {
+    #[test]
+    fn build_cache() {
         // Cache<char, String>
         let mut cache = CacheBuilder::new(100).build();
         let policy = cache.policy();
