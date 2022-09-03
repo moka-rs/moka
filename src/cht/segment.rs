@@ -522,10 +522,10 @@ impl<K, V, S> Drop for HashMap<K, V, S> {
                         // The only way this becomes a memory leak is if there was a
                         // panic during a rehash, in which case we are going to say
                         // that running destructors and freeing memory is
-                        // best-effort, and my best effort is to not do it
+                        // best-effort, and our best effort is to not do it
                         if next_ptr.is_null() {
                             // Since this bucket is a tombstone, its value should have
-                            // been dropped. So, here, we only drop the key.
+                            // been dropped already. So, here, we only drop the key.
                             unsafe { bucket::defer_acquire_destroy(guard, this_bucket_ptr) };
                         }
                     } else {
@@ -1386,7 +1386,7 @@ mod tests {
                     None
                 );
             }
-        }
+        } // The map should be dropped here.
 
         run_deferred();
 
@@ -1546,7 +1546,150 @@ mod tests {
                     None
                 );
             }
+        } // The map should be dropped here.
+
+        run_deferred();
+
+        for this_key_parent in key_parents.iter() {
+            assert!(this_key_parent.was_dropped());
         }
+
+        for this_value_parent in value_parents.iter() {
+            assert!(this_value_parent.was_dropped());
+        }
+    }
+
+    #[test]
+    fn drop_map_after_concurrent_updates() {
+        const NUM_THREADS: usize = 64;
+        const NUM_VALUES_PER_THREAD: usize = 512;
+        const NUM_VALUES: usize = NUM_THREADS * NUM_VALUES_PER_THREAD;
+
+        let key_parents: Arc<Vec<_>> = Arc::new(
+            std::iter::repeat_with(|| Arc::new(DropNotifier::new()))
+                .take(NUM_VALUES)
+                .collect(),
+        );
+        let value_parents: Arc<Vec<_>> = Arc::new(
+            std::iter::repeat_with(|| Arc::new(DropNotifier::new()))
+                .take(NUM_VALUES)
+                .collect(),
+        );
+
+        {
+            let map = Arc::new(HashMap::with_capacity(0));
+            assert!(map.is_empty());
+            assert_eq!(map.len(), 0);
+
+            let barrier = Arc::new(Barrier::new(NUM_THREADS));
+
+            #[allow(clippy::needless_collect)]
+            let handles: Vec<_> = (0..NUM_THREADS)
+                .map(|i| {
+                    let map = Arc::clone(&map);
+                    let barrier = Arc::clone(&barrier);
+                    let key_parents = Arc::clone(&key_parents);
+                    let value_parents = Arc::clone(&value_parents);
+
+                    spawn(move || {
+                        barrier.wait();
+
+                        let these_key_parents = &key_parents
+                            [i * NUM_VALUES_PER_THREAD..(i + 1) * NUM_VALUES_PER_THREAD];
+                        let these_value_parents = &value_parents
+                            [i * NUM_VALUES_PER_THREAD..(i + 1) * NUM_VALUES_PER_THREAD];
+
+                        for (j, (this_key_parent, this_value_parent)) in these_key_parents
+                            .iter()
+                            .zip(these_value_parents.iter())
+                            .enumerate()
+                        {
+                            let key_value = (i * NUM_VALUES_PER_THREAD + j) as i32;
+                            let hash = map.hash(&key_value);
+
+                            assert_eq!(
+                                map.insert_entry_and(
+                                    NoisyDropper::new(Arc::clone(this_key_parent), key_value),
+                                    hash,
+                                    NoisyDropper::new(Arc::clone(this_value_parent), key_value),
+                                    |_, _| ()
+                                ),
+                                None
+                            );
+                        }
+                    })
+                })
+                .collect();
+
+            for result in handles.into_iter().map(JoinHandle::join) {
+                assert!(result.is_ok());
+            }
+
+            assert!(!map.is_empty());
+            assert_eq!(map.len(), NUM_VALUES);
+
+            run_deferred();
+
+            for this_key_parent in key_parents.iter() {
+                assert!(!this_key_parent.was_dropped());
+            }
+
+            for this_value_parent in value_parents.iter() {
+                assert!(!this_value_parent.was_dropped());
+            }
+
+            for i in (0..NUM_VALUES).map(|i| i as i32) {
+                assert_eq!(
+                    map.get_key_value_and(
+                        map.hash(&i),
+                        |k| k == &i,
+                        |k, v| {
+                            assert_eq!(**k, i);
+                            assert_eq!(*v, i);
+                        }
+                    ),
+                    Some(())
+                );
+            }
+
+            #[allow(clippy::needless_collect)]
+            let handles: Vec<_> = (0..NUM_THREADS)
+                .map(|i| {
+                    let map = Arc::clone(&map);
+                    let barrier = Arc::clone(&barrier);
+
+                    spawn(move || {
+                        barrier.wait();
+
+                        for j in 0..NUM_VALUES_PER_THREAD {
+                            let key_value = (i * NUM_VALUES_PER_THREAD + j) as i32;
+
+                            if key_value % 4 == 0 {
+                                assert_eq!(
+                                    map.remove_entry_if_and(
+                                        map.hash(&key_value),
+                                        |k| k == &key_value,
+                                        |_, _| true,
+                                        |k, v| {
+                                            assert_eq!(**k, key_value);
+                                            assert_eq!(*v, key_value);
+                                        }
+                                    ),
+                                    Some(())
+                                );
+                            }
+                        }
+                    })
+                })
+                .collect();
+
+            for result in handles.into_iter().map(JoinHandle::join) {
+                assert!(result.is_ok());
+            }
+
+            assert!(!map.is_empty());
+            assert_eq!(map.len(), NUM_VALUES / 4 * 3);
+        } // The map should be dropped here.
 
         run_deferred();
 
