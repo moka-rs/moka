@@ -1,5 +1,13 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.9.4
+
+### Fixed
+
+- Fix memory leak after dropping a `sync` or `future` cache ([#177][gh-pull-0177]):
+    - This leaked the value part of the cache entries.
+
+
 ## Version 0.9.3
 
 ### Added
@@ -468,6 +476,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0177]: https://github.com/moka-rs/moka/pull/177/
 [gh-pull-0169]: https://github.com/moka-rs/moka/pull/169/
 [gh-pull-0167]: https://github.com/moka-rs/moka/pull/167/
 [gh-pull-0165]: https://github.com/moka-rs/moka/pull/165/
