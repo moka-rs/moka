@@ -496,6 +496,8 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
 
 impl<K, V, S> Drop for HashMap<K, V, S> {
     fn drop(&mut self) {
+        // Important: Since we are using a dummy guard returned by `unprotected`,
+        // those `defer_*` functions will be executed immediately.
         let guard = unsafe { &crossbeam_epoch::unprotected() };
         atomic::fence(Ordering::Acquire);
 
@@ -514,13 +516,22 @@ impl<K, V, S> Drop for HashMap<K, V, S> {
                     .iter()
                     .map(|b| b.load(Ordering::Relaxed, guard))
                     .filter(|p| !p.is_null())
-                    .filter(|p| next_ptr.is_null() || p.tag() & bucket::TOMBSTONE_TAG == 0)
                 {
-                    // only delete tombstones from the newest bucket array
-                    // the only way this becomes a memory leak is if there was a panic during a rehash,
-                    // in which case I am going to say that running destructors and freeing memory is
-                    // best-effort, and my best effort is to not do it
-                    unsafe { bucket::defer_acquire_destroy(guard, this_bucket_ptr) };
+                    if bucket::is_tombstone(this_bucket_ptr) {
+                        // Only delete tombstones from the newest bucket array.
+                        // The only way this becomes a memory leak is if there was a
+                        // panic during a rehash, in which case we are going to say
+                        // that running destructors and freeing memory is
+                        // best-effort, and my best effort is to not do it
+                        if next_ptr.is_null() {
+                            // Since this bucket is a tombstone, its value should have
+                            // been dropped. So, here, we only drop the key.
+                            unsafe { bucket::defer_acquire_destroy(guard, this_bucket_ptr) };
+                        }
+                    } else {
+                        // This bucket is live. Drop its key and value. (Fixes #176)
+                        unsafe { bucket::defer_destroy_bucket(guard, this_bucket_ptr) };
+                    }
                 }
 
                 unsafe { bucket::defer_acquire_destroy(guard, current_ptr) };
