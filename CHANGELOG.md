@@ -5,7 +5,7 @@
 ### Fixed
 
 - Fix memory leak after dropping a `sync` or `future` cache ([#177][gh-pull-0177]):
-    - This leaked the value part of the cache entries.
+    - This leaked the value part of cache entries.
 
 
 ## Version 0.9.3
