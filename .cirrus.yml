@@ -1,0 +1,66 @@
+nightly_dependency_task:
+  only_if: $RUST_VERSION == 'nightly'
+  script:
+    - cargo update -Z minimal-versions
+
+msrv_dependency_task:
+  only_if: $RUST_VERSION == 'msrv'
+  script:
+    - cargo update -p dashmap --precise 5.2.0
+    - cargo update -p indexmap --precise 1.8.2
+    - cargo update -p hashbrown --precise 0.11.2
+    - cargo update -p native-tls --precise 0.2.8
+    - cargo update -p async-global-executor --precise 2.0.4
+    - cargo update -p pulldown-cmark --precise 0.9.1
+
+arm64_test:
+  arm_container:
+    matrix:
+      - image: rust:slim  # docker's official latest rust stable version
+        env:
+          RUST_VERSION: stable
+      - image: rustlang/rust:nightly-slim # nightly hosted by rustlang
+        env:
+          RUST_VERSION: nightly
+      - image: rust:1.51.0-slim # MSRV
+        env:
+          RUST_VERSION: msrv
+      # no rust-beta image found in dockerhub, won't be tested
+
+  registry_cache:
+    folder: $CARGO_HOME/registry
+    fingerprint_script: cat Cargo.lock
+  target_cache:
+    folder: target
+    fingerprint_script:
+      - rustc --version
+      - cat Cargo.lock
+
+  depends_on:
+    - nightly_dependency_task
+    - msrv_dependency_task
+
+  matrix:
+    - name: Run tests (debug, sync feature)
+      test_script: cargo test --lib --features sync
+
+    - name: Run tests (debug, sync feature, thread-pool test for sync::Cache)
+      test_script: cargo test --lib --features sync sync::cache::tests::enabling_and_disabling_thread_pools -- --exact --ignored
+
+    - name: Run tests (debug, sync feature, thread-pool test for sync::SegmentCache)
+      test_script: cargo test --lib --features sync sync::segment::tests::enabling_and_disabling_thread_pools -- --exact --ignored
+
+    - name: Run tests (release, sync feature)
+      test_script: cargo test --release --features sync
+
+    - name: Run tests (future feature, but no sync feature)
+      test_script: cargo test --no-default-features --features 'future, atomic64, quanta'
+
+    - name: Run tests (future, sync and logging features)
+      test_script: cargo test --features 'future, sync, logging'
+
+    - name: Run tests (dash feature, but no sync feature)
+      test_script: --no-default-features --features 'dash, atomic64, quanta'
+
+  before_cache_script:
+    - rm -rf $CARGO_HOME/registry/index

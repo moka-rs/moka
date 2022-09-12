@@ -3,3 +3,6 @@
 .DS_Store
 /target/
 Cargo.lock
+
+# intellij cache
+.idea
