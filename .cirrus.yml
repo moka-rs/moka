@@ -1,0 +1,84 @@
+env:
+  # This cfg will prevent to run tests requiring large memory (~8GiB)
+  RUSTFLAGS: --cfg circleci
+  NUM_CPUS: "2"
+
+linux_arm64_task:
+  arm_container:
+    cpu: $NUM_CPUS
+    matrix:
+      - image: rust:slim  # docker's official latest rust stable version
+      - image: rustlang/rust:nightly-slim # nightly hosted by rustlang
+      - image: rust:1.51.0-slim # MSRV
+      # no rust-beta image found in docker hub, won't be tested
+
+  ## Disable caching as there is no Cargo.lock file in Moka repository.
+  # registry_cache:
+  #   folder: $CARGO_HOME/registry
+  #   fingerprint_script: cat Cargo.lock
+  # target_cache:
+  #   folder: target
+  #   fingerprint_script:
+  #     - rustc --version
+  #     - cat Cargo.lock
+
+  # Install dependencies (native libraries)
+  setup_script:
+    - apt-get update
+    - apt-get install -y libssl-dev pkg-config
+
+  show_cpu_info_script: |
+    nproc
+    lscpu
+
+  # Show Rust version
+  check_version_script: rustc -Vv
+
+  # Downgrade dependencies to minimal versions (Nightly only)
+  downgrade_deps_script: |
+    # The nightly image has no RUST_VERSION set
+    if [ -z "$RUST_VERSION" ]; then
+      echo 'Downgrading dependencies to minimal versions'
+      cargo update -Z minimal-versions
+    else
+      echo 'Skipped'
+    fi
+
+  # Pin some dependencies to specific versions (MSRV only)
+  pin_deps_script: |
+    if [ "v$RUST_VERSION" == "v1.51.0" ]; then
+      echo 'Pinning some dependencies to specific versions'
+      cargo update -p dashmap --precise 5.2.0
+      cargo update -p indexmap --precise 1.8.2
+      cargo update -p hashbrown --precise 0.11.2
+      cargo update -p native-tls --precise 0.2.8
+      cargo update -p async-global-executor --precise 2.0.4
+      cargo update -p pulldown-cmark --precise 0.9.1
+    else
+      echo 'Skipped'
+    fi
+
+  test_script:
+    # Run tests (debug, sync feature)
+    - cargo test -j 1 --lib --features sync -- --test-threads=$NUM_CPUS
+
+    # Run tests (debug, sync feature, thread-pool test for sync::Cache)
+    - cargo test -j 1  --lib --features sync sync::cache::tests::enabling_and_disabling_thread_pools -- --exact --ignored --test-threads=$NUM_CPUS
+
+    # Run tests (debug, sync feature, thread-pool test for sync::SegmentCache)
+    - cargo test -j 1  --lib --features sync sync::segment::tests::enabling_and_disabling_thread_pools -- --exact --ignored --test-threads=$NUM_CPUS
+
+    # Run tests (release, sync feature)
+    - cargo test -j 1  --release --features sync -- --test-threads=$NUM_CPUS
+
+    # Run tests (future feature, but no sync feature)
+    - cargo test -j 1  --no-default-features --features 'future, atomic64, quanta' -- --test-threads=$NUM_CPUS
+
+    # Run tests (future, sync and logging features)
+    - cargo test -j 1  --features 'future, sync, logging' -- --test-threads=$NUM_CPUS
+
+    # Run tests (dash feature, but no sync feature)
+    - cargo test -j 1  --no-default-features --features 'dash, atomic64, quanta' -- --test-threads=$NUM_CPUS
+
+  # before_cache_script:
+  #   - rm -rf $CARGO_HOME/registry/index
