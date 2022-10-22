@@ -118,7 +118,7 @@ mod test {
         use TargetArch::*;
 
         // e.g. "1.64"
-        let ver = option_env!("RUSTC_SEMVER").expect("Please run with RUSTFLAGS='--cfg rustver'");
+        let ver = option_env!("RUSTC_SEMVER").expect("RUSTC_SEMVER env var not set");
         let is_quanta_enabled = cfg!(feature = "quanta");
         let arch = if cfg!(target_os = "linux") {
             if cfg!(target_pointer_width = "64") {
