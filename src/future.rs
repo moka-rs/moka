@@ -22,6 +22,9 @@ pub use {
 /// [invalidate-if]: ./struct.Cache.html#method.invalidate_entries_if
 pub type PredicateId = String;
 
+// Empty struct to be used in InitResult::InitErr to represent the Option None.
+struct OptionallyNone;
+
 pub struct Iter<'i, K, V>(crate::sync_base::iter::Iter<'i, K, V>);
 
 impl<'i, K, V> Iter<'i, K, V> {
