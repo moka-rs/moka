@@ -65,6 +65,8 @@ jobs:
           use-cross: true
           command: test
           args: --release --features sync --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
+        env:
+          RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (future feature)
         uses: actions-rs/cargo@v1

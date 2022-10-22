@@ -98,6 +98,9 @@ trybuild = "1.0"
 [target.'cfg(skeptic)'.build-dependencies]
 skeptic = "0.13.5"
 
+[target.'cfg(rustver)'.build-dependencies]
+rustc_version = "0.4.0"
+
 # https://docs.rs/about/metadata
 [package.metadata.docs.rs]
 # Build the doc with some features enabled.

@@ -73,12 +73,16 @@ jobs:
         with:
           command: test
           args: --no-default-features --features 'sync, atomic64'
+        env:
+          RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (release, but no quanta feature)
         uses: actions-rs/cargo@v1
         with:
           command: test
           args: --release --no-default-features --features 'sync, atomic64'
+        env:
+          RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (future feature, but no quanta and sync features)
         uses: actions-rs/cargo@v1
