@@ -2597,7 +2597,6 @@ mod tests {
 
     #[tokio::test]
     async fn optionally_get_with() {
-
         let cache = Cache::new(100);
         const KEY: u32 = 0;
 
@@ -2665,7 +2664,9 @@ mod tests {
             async move {
                 // Wait for 500 ms before calling `try_get_with`.
                 Timer::after(Duration::from_millis(500)).await;
-                let v = cache4.optionally_get_with(KEY, async { unreachable!() }).await;
+                let v = cache4
+                    .optionally_get_with(KEY, async { unreachable!() })
+                    .await;
                 assert_eq!(v.unwrap(), "task3");
             }
         };

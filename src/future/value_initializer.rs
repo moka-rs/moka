@@ -172,8 +172,7 @@ where
 
         // This closure will be called after the init closure has returned a value.
         // It will convert the returned value (from init) into an InitResult.
-        let post_init = |key, value: Option<V>, mut guard: WaiterGuard<'_, K, V, S>| match value
-        {
+        let post_init = |key, value: Option<V>, mut guard: WaiterGuard<'_, K, V, S>| match value {
             Some(value) => {
                 guard.set_waiter_value(WaiterValue::Ready(Ok(value.clone())));
                 InitResult::Initialized(value)
@@ -182,7 +181,7 @@ where
                 // `value` can be either `Some` or `None`. For `None` case, without
                 // change the existing API too much, we will need to convert `None`
                 // to Arc<E> here. `Infalliable` could not be instantiated. So it
-                // might be good to use an empty struct to indicate the error type. 
+                // might be good to use an empty struct to indicate the error type.
                 let err: ErrorObject = Arc::new(OptionallyNone);
                 guard.set_waiter_value(WaiterValue::Ready(Err(Arc::clone(&err))));
                 self.remove_waiter(key, type_id);
