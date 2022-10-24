@@ -7,6 +7,8 @@ use std::{
 };
 use triomphe::Arc as TrioArc;
 
+use super::OptionallyNone;
+
 const WAITER_MAP_NUM_SEGMENTS: usize = 64;
 
 type ErrorObject = Arc<dyn Any + Send + Sync + 'static>;
@@ -147,6 +149,40 @@ where
             }
             Err(e) => {
                 let err: ErrorObject = Arc::new(e);
+                guard.set_waiter_value(WaiterValue::Ready(Err(Arc::clone(&err))));
+                self.remove_waiter(key, type_id);
+                InitResult::InitErr(err.downcast().unwrap())
+            }
+        };
+
+        self.do_try_init(&key, type_id, init, post_init).await
+    }
+
+    /// # Panics
+    /// Panics if the `init` future has been panicked.
+    pub(super) async fn optionally_init_or_read<F>(
+        &self,
+        key: Arc<K>,
+        init: F,
+    ) -> InitResult<V, OptionallyNone>
+    where
+        F: Future<Output = Option<V>>,
+    {
+        let type_id = TypeId::of::<OptionallyNone>();
+
+        // This closure will be called after the init closure has returned a value.
+        // It will convert the returned value (from init) into an InitResult.
+        let post_init = |key, value: Option<V>, mut guard: WaiterGuard<'_, K, V, S>| match value {
+            Some(value) => {
+                guard.set_waiter_value(WaiterValue::Ready(Ok(value.clone())));
+                InitResult::Initialized(value)
+            }
+            None => {
+                // `value` can be either `Some` or `None`. For `None` case, without
+                // change the existing API too much, we will need to convert `None`
+                // to Arc<E> here. `Infalliable` could not be instantiated. So it
+                // might be good to use an empty struct to indicate the error type.
+                let err: ErrorObject = Arc::new(OptionallyNone);
                 guard.set_waiter_value(WaiterValue::Ready(Err(Arc::clone(&err))));
                 self.remove_waiter(key, type_id);
                 InitResult::InitErr(err.downcast().unwrap())

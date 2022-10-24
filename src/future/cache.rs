@@ -31,6 +31,8 @@ use std::{
     time::Duration,
 };
 
+use super::OptionallyNone;
+
 /// A thread-safe, futures-aware concurrent in-memory cache.
 ///
 /// `Cache` supports full concurrency of retrievals and a high expected concurrency
@@ -975,6 +977,106 @@ where
             .await
     }
 
+    /// Try to ensure the value of the key exists by inserting an `Some` output of
+    /// the init future. If not exist, returns a _clone_ of the value or `None`
+    /// produced by the future.
+    ///
+    /// This method prevents to resolve the init future multiple times on the same
+    /// key even if the method is concurrently called by many async tasks; only one
+    /// of the calls resolves its future (as long as these futures return the value),
+    /// and other calls wait for that future to complete.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.9", features = ["future"] }
+    /// // futures-util = "0.3"
+    /// // reqwest = "0.11"
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    /// use moka::future::Cache;
+    ///
+    /// // This async function tries to get HTML from the given URI.
+    /// async fn get_html(task_id: u8, uri: &str) -> Option<String> {
+    ///     println!("get_html() called by task {}.", task_id);
+    ///     reqwest::get(uri).await.ok()?.text().await.ok()
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let cache = Cache::new(100);
+    ///
+    ///     // Spawn four async tasks.
+    ///     let tasks: Vec<_> = (0..4_u8)
+    ///         .map(|task_id| {
+    ///             let my_cache = cache.clone();
+    ///             tokio::spawn(async move {
+    ///                 println!("Task {} started.", task_id);
+    ///
+    ///                 // Try to insert and get the value for key1. Although
+    ///                 // all four async tasks will call `try_get_with`
+    ///                 // at the same time, get_html() must be called only once.
+    ///                 let value = my_cache
+    ///                     .optionally_get_with(
+    ///                         "key1",
+    ///                         get_html(task_id, "https://www.rust-lang.org"),
+    ///                     ).await;
+    ///
+    ///                 // Ensure the value exists now.
+    ///                 assert!(value.is_some());
+    ///                 assert!(my_cache.get(&"key1").is_some());
+    ///
+    ///                 println!(
+    ///                     "Task {} got the value. (len: {})",
+    ///                     task_id,
+    ///                     value.unwrap().len()
+    ///                 );
+    ///             })
+    ///         })
+    ///         .collect();
+    ///
+    ///     // Run all tasks concurrently and wait for them to complete.
+    ///     futures_util::future::join_all(tasks).await;
+    /// }
+    /// ```
+    ///
+    /// **A Sample Result**
+    ///
+    /// - `get_html()` was called exactly once by task 2.
+    /// - Other tasks were blocked until task 2 inserted the value.
+    ///
+    /// ```console
+    /// Task 1 started.
+    /// Task 0 started.
+    /// Task 2 started.
+    /// Task 3 started.
+    /// get_html() called by task 2.
+    /// Task 2 got the value. (len: 19419)
+    /// Task 1 got the value. (len: 19419)
+    /// Task 0 got the value. (len: 19419)
+    /// Task 3 got the value. (len: 19419)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` future has panicked. When it happens, only
+    /// the caller whose `init` future panicked will get the panic (e.g. only task 2
+    /// in the above sample). If there are other calls in progress (e.g. task 0, 1
+    /// and 3 above), this method will restart and resolve one of the remaining
+    /// `init` futures.
+    ///
+    pub async fn optionally_get_with<F>(&self, key: K, init: F) -> Option<V>
+    where
+        F: Future<Output = Option<V>>,
+    {
+        let hash = self.base.hash(&key);
+        let key = Arc::new(key);
+        self.optionally_insert_with_hash_and_fun(key, hash, init)
+            .await
+    }
+
     /// Inserts a key-value pair into the cache.
     ///
     /// If the cache has this key present, the value is updated.
@@ -1270,6 +1372,40 @@ where
                 crossbeam_epoch::pin().flush();
                 Err(e)
             }
+        }
+    }
+
+    async fn optionally_insert_with_hash_and_fun<F>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        init: F,
+    ) -> Option<V>
+    where
+        F: Future<Output = Option<V>>,
+    {
+        let res = self.base.get_with_hash(&key, hash);
+
+        if res.is_some() {
+            return res;
+        }
+
+        match self
+            .value_initializer
+            .optionally_init_or_read(Arc::clone(&key), init)
+            .await
+        {
+            InitResult::Initialized(v) => {
+                let hash = self.base.hash(&key);
+                self.insert_with_hash(Arc::clone(&key), hash, v.clone())
+                    .await;
+                self.value_initializer
+                    .remove_waiter(&key, TypeId::of::<OptionallyNone>());
+                crossbeam_epoch::pin().flush();
+                Some(v)
+            }
+            InitResult::ReadExisting(v) => Some(v),
+            InitResult::InitErr(_) => None,
         }
     }
 
@@ -2416,6 +2552,138 @@ mod tests {
                 // Wait for 800 ms before calling `try_get_with`.
                 Timer::after(Duration::from_millis(800)).await;
                 let v: MyResult<_> = cache5.try_get_with(KEY, async { unreachable!() }).await;
+                assert_eq!(v.unwrap(), "task3");
+            }
+        };
+
+        // Task6 will call `get` for the same key. It will call when task1's async
+        // block is still running, so it will get none for the key.
+        let task6 = {
+            let cache6 = cache.clone();
+            async move {
+                // Wait for 200 ms before calling `get`.
+                Timer::after(Duration::from_millis(200)).await;
+                let maybe_v = cache6.get(&KEY);
+                assert!(maybe_v.is_none());
+            }
+        };
+
+        // Task7 will call `get` for the same key. It will call after task1's async
+        // block finished with an error. So it will get none for the key.
+        let task7 = {
+            let cache7 = cache.clone();
+            async move {
+                // Wait for 400 ms before calling `get`.
+                Timer::after(Duration::from_millis(400)).await;
+                let maybe_v = cache7.get(&KEY);
+                assert!(maybe_v.is_none());
+            }
+        };
+
+        // Task8 will call `get` for the same key. It will call after task3's async
+        // block finished, so it will get the value insert by task3's async block.
+        let task8 = {
+            let cache8 = cache.clone();
+            async move {
+                // Wait for 800 ms before calling `get`.
+                Timer::after(Duration::from_millis(800)).await;
+                let maybe_v = cache8.get(&KEY);
+                assert_eq!(maybe_v, Some("task3"));
+            }
+        };
+
+        futures_util::join!(task1, task2, task3, task4, task5, task6, task7, task8);
+    }
+
+    #[tokio::test]
+    async fn optionally_get_with() {
+        let cache = Cache::new(100);
+        const KEY: u32 = 0;
+
+        // This test will run eight async tasks:
+        //
+        // Task1 will be the first task to call `optionally_get_with` for a key,
+        // so its async block will be evaluated and then an None will be
+        // returned. Nothing will be inserted to the cache.
+        let task1 = {
+            let cache1 = cache.clone();
+            async move {
+                // Call `try_get_with` immediately.
+                let v = cache1
+                    .optionally_get_with(KEY, async {
+                        // Wait for 300 ms and return an None.
+                        Timer::after(Duration::from_millis(300)).await;
+                        None
+                    })
+                    .await;
+                assert!(v.is_none());
+            }
+        };
+
+        // Task2 will be the second task to call `optionally_get_with` for the same key, so its
+        // async block will not be evaluated. Once task1's async block finishes, it
+        // will get the same error value returned by task1's async block.
+        let task2 = {
+            let cache2 = cache.clone();
+            async move {
+                // Wait for 100 ms before calling `optionally_get_with`.
+                Timer::after(Duration::from_millis(100)).await;
+                let v = cache2
+                    .optionally_get_with(KEY, async { unreachable!() })
+                    .await;
+                assert!(v.is_none());
+            }
+        };
+
+        // Task3 will be the third task to call `optionally_get_with` for the
+        // same key. By the time it calls, task1's async block should have
+        // finished already, but the key still does not exist in the cache. So
+        // its async block will be evaluated and then an okay &str value will be
+        // returned. That value will be inserted to the cache.
+        let task3 = {
+            let cache3 = cache.clone();
+            async move {
+                // Wait for 400 ms before calling `optionally_get_with`.
+                Timer::after(Duration::from_millis(400)).await;
+                let v = cache3
+                    .optionally_get_with(KEY, async {
+                        // Wait for 300 ms and return an Some(&str) value.
+                        Timer::after(Duration::from_millis(300)).await;
+                        Some("task3")
+                    })
+                    .await;
+                assert_eq!(v.unwrap(), "task3");
+            }
+        };
+
+        // Task4 will be the fourth task to call `optionally_get_with` for the
+        // same key. So its async block will not be evaluated. Once task3's
+        // async block finishes, it will get the same okay &str value.
+        let task4 = {
+            let cache4 = cache.clone();
+            async move {
+                // Wait for 500 ms before calling `try_get_with`.
+                Timer::after(Duration::from_millis(500)).await;
+                let v = cache4
+                    .optionally_get_with(KEY, async { unreachable!() })
+                    .await;
+                assert_eq!(v.unwrap(), "task3");
+            }
+        };
+
+        // Task5 will be the fifth task to call `optionally_get_with` for the
+        // same key. So its async block will not be evaluated. By the time it
+        // calls, task3's async block should have finished already, so its async
+        // block will not be evaluated and will get the value insert by task3's
+        // async block immediately.
+        let task5 = {
+            let cache5 = cache.clone();
+            async move {
+                // Wait for 800 ms before calling `optionally_get_with`.
+                Timer::after(Duration::from_millis(800)).await;
+                let v = cache5
+                    .optionally_get_with(KEY, async { unreachable!() })
+                    .await;
                 assert_eq!(v.unwrap(), "task3");
             }
         };

@@ -13,3 +13,7 @@ pub trait ConcurrentCacheExt<K, V> {
     /// Performs any pending maintenance operations needed by the cache.
     fn sync(&self);
 }
+
+// Empty internal struct to be used in optionally_get_with to represent the None
+// results.
+struct OptionallyNone;
