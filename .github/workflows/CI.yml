@@ -79,6 +79,8 @@ jobs:
         with:
           command: test
           args: --features sync
+        env:
+          RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (debug, sync feature, thread-pool test for sync::Cache)
         uses: actions-rs/cargo@v1
@@ -97,6 +99,8 @@ jobs:
         with:
           command: test
           args: --release --features sync
+        env:
+          RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (future feature, but no sync feature)
         uses: actions-rs/cargo@v1

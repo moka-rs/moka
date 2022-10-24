@@ -46,10 +46,12 @@ jobs:
           target: ${{ matrix.platform.target }}
           override: true
 
-      - name: Remove integration tests
+      - name: Remove integration tests and force enable rustc_version crate
         run: |
           rm -rf tests
           sed -i '/actix-rt\|async-std\|reqwest\|skeptic/d' Cargo.toml
+          sed -i 's/target.*rustver.*\.//' Cargo.toml
+          sed -i 's/build = "build.rs"/build = ".ci_extras\/build_linux_cross.rs"/' Cargo.toml
           cat Cargo.toml
 
       - uses: Swatinem/rust-cache@v1
@@ -65,6 +67,8 @@ jobs:
           use-cross: true
           command: test
           args: --release --features sync --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
+        env:
+          RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (future feature)
         uses: actions-rs/cargo@v1

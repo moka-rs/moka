@@ -95,53 +95,66 @@ impl AccessTime for EntryInfo {
 mod test {
     use super::EntryInfo;
 
+    // Run with:
+    //   RUSTFLAGS='--cfg rustver' cargo test --lib --features sync -- common::concurrent::entry_info::test --nocapture
+    //   RUSTFLAGS='--cfg rustver' cargo test --lib --no-default-features --features sync -- common::concurrent::entry_info::test --nocapture
+    //
     // Note: the size of the struct may change in a future version of Rust.
-    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), ignore)]
+    #[cfg_attr(
+        not(all(rustver, any(target_os = "linux", target_os = "macos"))),
+        ignore
+    )]
     #[test]
     fn check_struct_size() {
         use std::mem::size_of;
 
-        // Rust 1.62:
-        //
-        // | pointer width | quanta | no quanta (Linux) | no quanta (macOS) |
-        // | ------------- | ------ | ----------------- | ----------------- |
-        // | 64-bit        |   24   |     72            |     56            |
-        // | 32-bit        |   24   |     72            |     n/a           |
+        #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
+        enum TargetArch {
+            Linux64,
+            Linux32,
+            MacOS64,
+        }
 
-        let size = if cfg!(feature = "quanta") {
-            24
-        } else if cfg!(target_os = "linux") {
-            72
+        use TargetArch::*;
+
+        // e.g. "1.64"
+        let ver = option_env!("RUSTC_SEMVER").expect("RUSTC_SEMVER env var not set");
+        let is_quanta_enabled = cfg!(feature = "quanta");
+        let arch = if cfg!(target_os = "linux") {
+            if cfg!(target_pointer_width = "64") {
+                Linux64
+            } else if cfg!(target_pointer_width = "32") {
+                Linux32
+            } else {
+                panic!("Unsupported pointer width for Linux");
+            }
         } else if cfg!(target_os = "macos") {
-            56
+            MacOS64
         } else {
-            unreachable!();
+            panic!("Unsupported target architecture");
         };
 
-        // Rust 1.61 or older:
-        //
-        // | pointer width | quanta | no quanta (Linux) |
-        // | ------------- | ------ | ----------------- |
-        // | 64-bit        |   24   |     72            |
-        // | 32-bit        |   24   |     40            |
-        //
-        // let size = if cfg!(target_pointer_width = "64") {
-        //     if cfg!(feature = "quanta") {
-        //         24
-        //     } else {
-        //         72
-        //     }
-        // } else if cfg!(target_pointer_width = "32") {
-        //     if cfg!(feature = "quanta") {
-        //         24
-        //     } else {
-        //         40
-        //     }
-        // } else {
-        //     // ignore
-        //     return;
-        // };
+        let expected_sizes = match (arch, is_quanta_enabled) {
+            (Linux64, true) => vec![("1.51", 24)],
+            (Linux32, true) => vec![("1.51", 24)],
+            (MacOS64, true) => vec![("1.62", 24)],
+            (Linux64, false) => vec![("1.66", 56), ("1.51", 72)],
+            (Linux32, false) => vec![("1.66", 56), ("1.62", 72), ("1.51", 40)],
+            (MacOS64, false) => vec![("1.62", 56)],
+        };
 
-        assert_eq!(size_of::<EntryInfo>(), size);
+        let mut expected = None;
+        for (ver_str, size) in expected_sizes {
+            expected = Some(size);
+            if ver >= ver_str {
+                break;
+            }
+        }
+
+        if let Some(size) = expected {
+            assert_eq!(size_of::<EntryInfo>(), size);
+        } else {
+            panic!("No expected size for {:?} with Rust version {}", arch, ver);
+        }
     }
 }
