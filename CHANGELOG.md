@@ -1,5 +1,14 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.9.5
+
+### Added
+
+- Add `optional_get_with` method to `sync` and `future` caches ([#187][gh-pull-0187]):
+    - It is similar to `try_get_with` but takes an init closure/future returning an
+      `Option<V>` instead of `Result<V, E>`.
+
+
 ## Version 0.9.4
 
 ### Fixed
@@ -476,6 +485,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0187]: https://github.com/moka-rs/moka/pull/187/
 [gh-pull-0177]: https://github.com/moka-rs/moka/pull/177/
 [gh-pull-0169]: https://github.com/moka-rs/moka/pull/169/
 [gh-pull-0167]: https://github.com/moka-rs/moka/pull/167/
