@@ -859,7 +859,7 @@ where
     /// Works like [`get_with`](#method.get_with), but takes an additional
     /// `replace_if` closure.
     ///
-    /// This method will resolve the `init` feature and insert the output to the
+    /// This method will resolve the `init` future and insert the output to the
     /// cache when:
     ///
     /// - The key does not exist.
