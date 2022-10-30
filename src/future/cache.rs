@@ -856,6 +856,21 @@ where
             .await
     }
 
+    /// Similar to [`get_with`](#method.get_with), but instead of passing an owned
+    /// key, you can pass a reference to the key. If the key does not exist in the
+    /// cache, the key will be cloned to create new entry in the cache.
+    pub async fn get_with_by_ref<Q>(&self, key: &Q, init: impl Future<Output = V>) -> V
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        let hash = self.base.hash(&key);
+        let replace_if = None as Option<fn(&V) -> bool>;
+
+        self.get_or_insert_with_hash_by_ref_and_fun(key, hash, init, replace_if)
+            .await
+    }
+
     /// Works like [`get_with`](#method.get_with), but takes an additional
     /// `replace_if` closure.
     ///
@@ -873,6 +888,24 @@ where
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         self.get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if))
+            .await
+    }
+
+    /// Similar to [`get_with_if`](#method.get_with_if), but instead of passing an
+    /// owned key, you can pass a reference to the key. If the key does not exist in
+    /// the cache, the key will be cloned to create new entry in the cache.
+    pub async fn get_with_if_by_ref<Q>(
+        &self,
+        key: &Q,
+        init: impl Future<Output = V>,
+        replace_if: impl FnMut(&V) -> bool,
+    ) -> V
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        let hash = self.base.hash(&key);
+        self.get_or_insert_with_hash_by_ref_and_fun(key, hash, init, Some(replace_if))
             .await
     }
 
@@ -977,6 +1010,21 @@ where
             .await
     }
 
+    /// Similar to [`try_get_with`](#method.try_get_with), but instead of passing an
+    /// owned key, you can pass a reference to the key. If the key does not exist in
+    /// the cache, the key will be cloned to create new entry in the cache.
+    pub async fn try_get_with_by_ref<F, E, Q>(&self, key: &Q, init: F) -> Result<V, Arc<E>>
+    where
+        F: Future<Output = Result<V, E>>,
+        E: Send + Sync + 'static,
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        let hash = self.base.hash(&key);
+        self.get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init)
+            .await
+    }
+
     /// Try to ensure the value of the key exists by inserting an `Some` output of
     /// the init future. If not exist, returns a _clone_ of the value or `None`
     /// produced by the future.
@@ -1073,7 +1121,22 @@ where
     {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
-        self.optionally_insert_with_hash_and_fun(key, hash, init)
+        self.get_or_optionally_insert_with_hash_and_fun(key, hash, init)
+            .await
+    }
+
+    /// Similar to [`optionally_get_with`](#method.optionally_get_with), but instead
+    /// of passing an owned key, you can pass a reference to the key. If the key does
+    /// not exist in the cache, the key will be cloned to create new entry in the
+    /// cache.
+    pub async fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
+    where
+        F: Future<Output = Option<V>>,
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        let hash = self.base.hash(&key);
+        self.get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init)
             .await
     }
 
@@ -1321,6 +1384,39 @@ where
             _ => (),
         }
 
+        self.insert_with_hash_and_fun(key, hash, init).await
+    }
+
+    async fn get_or_insert_with_hash_by_ref_and_fun<Q>(
+        &self,
+        key: &Q,
+        hash: u64,
+        init: impl Future<Output = V>,
+        mut replace_if: Option<impl FnMut(&V) -> bool>,
+    ) -> V
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        match (self.base.get_with_hash(&key, hash), &mut replace_if) {
+            (Some(v), None) => return v,
+            (Some(v), Some(cond)) => {
+                if !cond(&v) {
+                    return v;
+                };
+            }
+            _ => (),
+        }
+        let key = Arc::new(key.to_owned());
+        self.insert_with_hash_and_fun(key, hash, init).await
+    }
+
+    async fn insert_with_hash_and_fun(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        init: impl Future<Output = V>,
+    ) -> V {
         match self
             .value_initializer
             .init_or_read(Arc::clone(&key), init)
@@ -1353,13 +1449,44 @@ where
             return Ok(v);
         }
 
+        self.try_insert_with_hash_and_fun(key, hash, init).await
+    }
+
+    async fn get_or_try_insert_with_hash_by_ref_and_fun<F, E, Q>(
+        &self,
+        key: &Q,
+        hash: u64,
+        init: F,
+    ) -> Result<V, Arc<E>>
+    where
+        F: Future<Output = Result<V, E>>,
+        E: Send + Sync + 'static,
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        if let Some(v) = self.base.get_with_hash(key, hash) {
+            return Ok(v);
+        }
+        let key = Arc::new(key.to_owned());
+        self.try_insert_with_hash_and_fun(key, hash, init).await
+    }
+
+    async fn try_insert_with_hash_and_fun<F, E>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        init: F,
+    ) -> Result<V, Arc<E>>
+    where
+        F: Future<Output = Result<V, E>>,
+        E: Send + Sync + 'static,
+    {
         match self
             .value_initializer
             .try_init_or_read(Arc::clone(&key), init)
             .await
         {
             InitResult::Initialized(v) => {
-                let hash = self.base.hash(&key);
                 self.insert_with_hash(Arc::clone(&key), hash, v.clone())
                     .await;
                 self.value_initializer
@@ -1375,7 +1502,7 @@ where
         }
     }
 
-    async fn optionally_insert_with_hash_and_fun<F>(
+    async fn get_or_optionally_insert_with_hash_and_fun<F>(
         &self,
         key: Arc<K>,
         hash: u64,
@@ -1390,13 +1517,46 @@ where
             return res;
         }
 
+        self.optionally_insert_with_hash_and_fun(key, hash, init)
+            .await
+    }
+
+    async fn get_or_optionally_insert_with_hash_by_ref_and_fun<F, Q>(
+        &self,
+        key: &Q,
+        hash: u64,
+        init: F,
+    ) -> Option<V>
+    where
+        F: Future<Output = Option<V>>,
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        let res = self.base.get_with_hash(&key, hash);
+
+        if res.is_some() {
+            return res;
+        }
+        let key = Arc::new(key.to_owned());
+        self.optionally_insert_with_hash_and_fun(key, hash, init)
+            .await
+    }
+
+    async fn optionally_insert_with_hash_and_fun<F>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        init: F,
+    ) -> Option<V>
+    where
+        F: Future<Output = Option<V>>,
+    {
         match self
             .value_initializer
             .optionally_init_or_read(Arc::clone(&key), init)
             .await
         {
             InitResult::Initialized(v) => {
-                let hash = self.base.hash(&key);
                 self.insert_with_hash(Arc::clone(&key), hash, v.clone())
                     .await;
                 self.value_initializer
@@ -2338,6 +2498,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn get_with_by_ref() {
+        let cache = Cache::new(100);
+        const KEY: &u32 = &0;
+
+        // This test will run five async tasks:
+        //
+        // Task1 will be the first task to call `get_with_by_ref` for a key, so its async
+        // block will be evaluated and then a &str value "task1" will be inserted to
+        // the cache.
+        let task1 = {
+            let cache1 = cache.clone();
+            async move {
+                // Call `get_with_by_ref` immediately.
+                let v = cache1
+                    .get_with_by_ref(KEY, async {
+                        // Wait for 300 ms and return a &str value.
+                        Timer::after(Duration::from_millis(300)).await;
+                        "task1"
+                    })
+                    .await;
+                assert_eq!(v, "task1");
+            }
+        };
+
+        // Task2 will be the second task to call `get_with_by_ref` for the same key, so its
+        // async block will not be evaluated. Once task1's async block finishes, it
+        // will get the value inserted by task1's async block.
+        let task2 = {
+            let cache2 = cache.clone();
+            async move {
+                // Wait for 100 ms before calling `get_with_by_ref`.
+                Timer::after(Duration::from_millis(100)).await;
+                let v = cache2.get_with_by_ref(KEY, async { unreachable!() }).await;
+                assert_eq!(v, "task1");
+            }
+        };
+
+        // Task3 will be the third task to call `get_with_by_ref` for the same key. By the
+        // time it calls, task1's async block should have finished already and the
+        // value should be already inserted to the cache. So its async block will not
+        // be evaluated and will get the value inserted by task1's async block
+        // immediately.
+        let task3 = {
+            let cache3 = cache.clone();
+            async move {
+                // Wait for 400 ms before calling `get_with_by_ref`.
+                Timer::after(Duration::from_millis(400)).await;
+                let v = cache3.get_with_by_ref(KEY, async { unreachable!() }).await;
+                assert_eq!(v, "task1");
+            }
+        };
+
+        // Task4 will call `get` for the same key. It will call when task1's async
+        // block is still running, so it will get none for the key.
+        let task4 = {
+            let cache4 = cache.clone();
+            async move {
+                // Wait for 200 ms before calling `get`.
+                Timer::after(Duration::from_millis(200)).await;
+                let maybe_v = cache4.get(&KEY);
+                assert!(maybe_v.is_none());
+            }
+        };
+
+        // Task5 will call `get` for the same key. It will call after task1's async
+        // block finished, so it will get the value insert by task1's async block.
+        let task5 = {
+            let cache5 = cache.clone();
+            async move {
+                // Wait for 400 ms before calling `get`.
+                Timer::after(Duration::from_millis(400)).await;
+                let maybe_v = cache5.get(&KEY);
+                assert_eq!(maybe_v, Some("task1"));
+            }
+        };
+
+        futures_util::join!(task1, task2, task3, task4, task5);
+    }
+
+    #[tokio::test]
     async fn get_with_if() {
         let cache = Cache::new(100);
         const KEY: u32 = 0;
@@ -2413,6 +2653,129 @@ mod tests {
                 Timer::after(Duration::from_millis(400)).await;
                 let v = cache4
                     .get_with_if(KEY, async { "task4" }, |v| {
+                        assert_eq!(v, &"task1");
+                        true
+                    })
+                    .await;
+                assert_eq!(v, "task4");
+            }
+        };
+
+        // Task5 will call `get` for the same key. It will call when task1's async
+        // block is still running, so it will get none for the key.
+        let task5 = {
+            let cache5 = cache.clone();
+            async move {
+                // Wait for 200 ms before calling `get`.
+                Timer::after(Duration::from_millis(200)).await;
+                let maybe_v = cache5.get(&KEY);
+                assert!(maybe_v.is_none());
+            }
+        };
+
+        // Task6 will call `get` for the same key. It will call after task1's async
+        // block finished, so it will get the value insert by task1's async block.
+        let task6 = {
+            let cache6 = cache.clone();
+            async move {
+                // Wait for 350 ms before calling `get`.
+                Timer::after(Duration::from_millis(350)).await;
+                let maybe_v = cache6.get(&KEY);
+                assert_eq!(maybe_v, Some("task1"));
+            }
+        };
+
+        // Task7 will call `get` for the same key. It will call after task4's async
+        // block finished, so it will get the value insert by task4's async block.
+        let task7 = {
+            let cache7 = cache.clone();
+            async move {
+                // Wait for 450 ms before calling `get`.
+                Timer::after(Duration::from_millis(450)).await;
+                let maybe_v = cache7.get(&KEY);
+                assert_eq!(maybe_v, Some("task4"));
+            }
+        };
+
+        futures_util::join!(task1, task2, task3, task4, task5, task6, task7);
+    }
+
+    #[tokio::test]
+    async fn get_with_if_by_ref() {
+        let cache = Cache::new(100);
+        const KEY: &u32 = &0;
+
+        // This test will run seven async tasks:
+        //
+        // Task1 will be the first task to call `get_with_if_by_ref` for a key, so its async
+        // block will be evaluated and then a &str value "task1" will be inserted to
+        // the cache.
+        let task1 = {
+            let cache1 = cache.clone();
+            async move {
+                // Call `get_with_if_by_ref` immediately.
+                let v = cache1
+                    .get_with_if_by_ref(
+                        KEY,
+                        async {
+                            // Wait for 300 ms and return a &str value.
+                            Timer::after(Duration::from_millis(300)).await;
+                            "task1"
+                        },
+                        |_v| unreachable!(),
+                    )
+                    .await;
+                assert_eq!(v, "task1");
+            }
+        };
+
+        // Task2 will be the second task to call `get_with_if_by_ref` for the same key, so
+        // its async block will not be evaluated. Once task1's async block finishes,
+        // it will get the value inserted by task1's async block.
+        let task2 = {
+            let cache2 = cache.clone();
+            async move {
+                // Wait for 100 ms before calling `get_with_if_by_ref`.
+                Timer::after(Duration::from_millis(100)).await;
+                let v = cache2
+                    .get_with_if_by_ref(KEY, async { unreachable!() }, |_v| unreachable!())
+                    .await;
+                assert_eq!(v, "task1");
+            }
+        };
+
+        // Task3 will be the third task to call `get_with_if_by_ref` for the same key. By
+        // the time it calls, task1's async block should have finished already and
+        // the value should be already inserted to the cache. Also task3's
+        // `replace_if` closure returns `false`. So its async block will not be
+        // evaluated and will get the value inserted by task1's async block
+        // immediately.
+        let task3 = {
+            let cache3 = cache.clone();
+            async move {
+                // Wait for 350 ms before calling `get_with_if_by_ref`.
+                Timer::after(Duration::from_millis(350)).await;
+                let v = cache3
+                    .get_with_if_by_ref(KEY, async { unreachable!() }, |v| {
+                        assert_eq!(v, &"task1");
+                        false
+                    })
+                    .await;
+                assert_eq!(v, "task1");
+            }
+        };
+
+        // Task4 will be the fourth task to call `get_with_if_by_ref` for the same key. The
+        // value should have been already inserted to the cache by task1. However
+        // task4's `replace_if` closure returns `true`. So its async block will be
+        // evaluated to replace the current value.
+        let task4 = {
+            let cache4 = cache.clone();
+            async move {
+                // Wait for 400 ms before calling `get_with_if_by_ref`.
+                Timer::after(Duration::from_millis(400)).await;
+                let v = cache4
+                    .get_with_if_by_ref(KEY, async { "task4" }, |v| {
                         assert_eq!(v, &"task1");
                         true
                     })
@@ -2596,6 +2959,147 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn try_get_with_by_ref() {
+        use std::sync::Arc;
+
+        // Note that MyError does not implement std::error::Error trait
+        // like anyhow::Error.
+        #[derive(Debug)]
+        pub struct MyError(String);
+
+        type MyResult<T> = Result<T, Arc<MyError>>;
+
+        let cache = Cache::new(100);
+        const KEY: &u32 = &0;
+
+        // This test will run eight async tasks:
+        //
+        // Task1 will be the first task to call `try_get_with_by_ref` for a key, so its async
+        // block will be evaluated and then an error will be returned. Nothing will
+        // be inserted to the cache.
+        let task1 = {
+            let cache1 = cache.clone();
+            async move {
+                // Call `try_get_with_by_ref` immediately.
+                let v = cache1
+                    .try_get_with_by_ref(KEY, async {
+                        // Wait for 300 ms and return an error.
+                        Timer::after(Duration::from_millis(300)).await;
+                        Err(MyError("task1 error".into()))
+                    })
+                    .await;
+                assert!(v.is_err());
+            }
+        };
+
+        // Task2 will be the second task to call `get_with` for the same key, so its
+        // async block will not be evaluated. Once task1's async block finishes, it
+        // will get the same error value returned by task1's async block.
+        let task2 = {
+            let cache2 = cache.clone();
+            async move {
+                // Wait for 100 ms before calling `try_get_with_by_ref`.
+                Timer::after(Duration::from_millis(100)).await;
+                let v: MyResult<_> = cache2
+                    .try_get_with_by_ref(KEY, async { unreachable!() })
+                    .await;
+                assert!(v.is_err());
+            }
+        };
+
+        // Task3 will be the third task to call `get_with` for the same key. By the
+        // time it calls, task1's async block should have finished already, but the
+        // key still does not exist in the cache. So its async block will be
+        // evaluated and then an okay &str value will be returned. That value will be
+        // inserted to the cache.
+        let task3 = {
+            let cache3 = cache.clone();
+            async move {
+                // Wait for 400 ms before calling `try_get_with_by_ref`.
+                Timer::after(Duration::from_millis(400)).await;
+                let v: MyResult<_> = cache3
+                    .try_get_with_by_ref(KEY, async {
+                        // Wait for 300 ms and return an Ok(&str) value.
+                        Timer::after(Duration::from_millis(300)).await;
+                        Ok("task3")
+                    })
+                    .await;
+                assert_eq!(v.unwrap(), "task3");
+            }
+        };
+
+        // Task4 will be the fourth task to call `get_with` for the same key. So its
+        // async block will not be evaluated. Once task3's async block finishes, it
+        // will get the same okay &str value.
+        let task4 = {
+            let cache4 = cache.clone();
+            async move {
+                // Wait for 500 ms before calling `try_get_with_by_ref`.
+                Timer::after(Duration::from_millis(500)).await;
+                let v: MyResult<_> = cache4
+                    .try_get_with_by_ref(KEY, async { unreachable!() })
+                    .await;
+                assert_eq!(v.unwrap(), "task3");
+            }
+        };
+
+        // Task5 will be the fifth task to call `get_with` for the same key. So its
+        // async block will not be evaluated. By the time it calls, task3's async
+        // block should have finished already, so its async block will not be
+        // evaluated and will get the value insert by task3's async block
+        // immediately.
+        let task5 = {
+            let cache5 = cache.clone();
+            async move {
+                // Wait for 800 ms before calling `try_get_with_by_ref`.
+                Timer::after(Duration::from_millis(800)).await;
+                let v: MyResult<_> = cache5
+                    .try_get_with_by_ref(KEY, async { unreachable!() })
+                    .await;
+                assert_eq!(v.unwrap(), "task3");
+            }
+        };
+
+        // Task6 will call `get` for the same key. It will call when task1's async
+        // block is still running, so it will get none for the key.
+        let task6 = {
+            let cache6 = cache.clone();
+            async move {
+                // Wait for 200 ms before calling `get`.
+                Timer::after(Duration::from_millis(200)).await;
+                let maybe_v = cache6.get(&KEY);
+                assert!(maybe_v.is_none());
+            }
+        };
+
+        // Task7 will call `get` for the same key. It will call after task1's async
+        // block finished with an error. So it will get none for the key.
+        let task7 = {
+            let cache7 = cache.clone();
+            async move {
+                // Wait for 400 ms before calling `get`.
+                Timer::after(Duration::from_millis(400)).await;
+                let maybe_v = cache7.get(&KEY);
+                assert!(maybe_v.is_none());
+            }
+        };
+
+        // Task8 will call `get` for the same key. It will call after task3's async
+        // block finished, so it will get the value insert by task3's async block.
+        let task8 = {
+            let cache8 = cache.clone();
+            async move {
+                // Wait for 800 ms before calling `get`.
+                Timer::after(Duration::from_millis(800)).await;
+                let maybe_v = cache8.get(&KEY);
+                assert_eq!(maybe_v, Some("task3"));
+            }
+        };
+
+        futures_util::join!(task1, task2, task3, task4, task5, task6, task7, task8);
+    }
+
+    #[tokio::test]
     async fn optionally_get_with() {
         let cache = Cache::new(100);
         const KEY: u32 = 0;
@@ -2683,6 +3187,138 @@ mod tests {
                 Timer::after(Duration::from_millis(800)).await;
                 let v = cache5
                     .optionally_get_with(KEY, async { unreachable!() })
+                    .await;
+                assert_eq!(v.unwrap(), "task3");
+            }
+        };
+
+        // Task6 will call `get` for the same key. It will call when task1's async
+        // block is still running, so it will get none for the key.
+        let task6 = {
+            let cache6 = cache.clone();
+            async move {
+                // Wait for 200 ms before calling `get`.
+                Timer::after(Duration::from_millis(200)).await;
+                let maybe_v = cache6.get(&KEY);
+                assert!(maybe_v.is_none());
+            }
+        };
+
+        // Task7 will call `get` for the same key. It will call after task1's async
+        // block finished with an error. So it will get none for the key.
+        let task7 = {
+            let cache7 = cache.clone();
+            async move {
+                // Wait for 400 ms before calling `get`.
+                Timer::after(Duration::from_millis(400)).await;
+                let maybe_v = cache7.get(&KEY);
+                assert!(maybe_v.is_none());
+            }
+        };
+
+        // Task8 will call `get` for the same key. It will call after task3's async
+        // block finished, so it will get the value insert by task3's async block.
+        let task8 = {
+            let cache8 = cache.clone();
+            async move {
+                // Wait for 800 ms before calling `get`.
+                Timer::after(Duration::from_millis(800)).await;
+                let maybe_v = cache8.get(&KEY);
+                assert_eq!(maybe_v, Some("task3"));
+            }
+        };
+
+        futures_util::join!(task1, task2, task3, task4, task5, task6, task7, task8);
+    }
+
+    #[tokio::test]
+    async fn optionally_get_with_by_ref() {
+        let cache = Cache::new(100);
+        const KEY: &u32 = &0;
+
+        // This test will run eight async tasks:
+        //
+        // Task1 will be the first task to call `optionally_get_with_by_ref` for a key,
+        // so its async block will be evaluated and then an None will be
+        // returned. Nothing will be inserted to the cache.
+        let task1 = {
+            let cache1 = cache.clone();
+            async move {
+                // Call `try_get_with` immediately.
+                let v = cache1
+                    .optionally_get_with_by_ref(KEY, async {
+                        // Wait for 300 ms and return an None.
+                        Timer::after(Duration::from_millis(300)).await;
+                        None
+                    })
+                    .await;
+                assert!(v.is_none());
+            }
+        };
+
+        // Task2 will be the second task to call `optionally_get_with_by_ref` for the same key, so its
+        // async block will not be evaluated. Once task1's async block finishes, it
+        // will get the same error value returned by task1's async block.
+        let task2 = {
+            let cache2 = cache.clone();
+            async move {
+                // Wait for 100 ms before calling `optionally_get_with_by_ref`.
+                Timer::after(Duration::from_millis(100)).await;
+                let v = cache2
+                    .optionally_get_with_by_ref(KEY, async { unreachable!() })
+                    .await;
+                assert!(v.is_none());
+            }
+        };
+
+        // Task3 will be the third task to call `optionally_get_with_by_ref` for the
+        // same key. By the time it calls, task1's async block should have
+        // finished already, but the key still does not exist in the cache. So
+        // its async block will be evaluated and then an okay &str value will be
+        // returned. That value will be inserted to the cache.
+        let task3 = {
+            let cache3 = cache.clone();
+            async move {
+                // Wait for 400 ms before calling `optionally_get_with_by_ref`.
+                Timer::after(Duration::from_millis(400)).await;
+                let v = cache3
+                    .optionally_get_with_by_ref(KEY, async {
+                        // Wait for 300 ms and return an Some(&str) value.
+                        Timer::after(Duration::from_millis(300)).await;
+                        Some("task3")
+                    })
+                    .await;
+                assert_eq!(v.unwrap(), "task3");
+            }
+        };
+
+        // Task4 will be the fourth task to call `optionally_get_with_by_ref` for the
+        // same key. So its async block will not be evaluated. Once task3's
+        // async block finishes, it will get the same okay &str value.
+        let task4 = {
+            let cache4 = cache.clone();
+            async move {
+                // Wait for 500 ms before calling `try_get_with`.
+                Timer::after(Duration::from_millis(500)).await;
+                let v = cache4
+                    .optionally_get_with_by_ref(KEY, async { unreachable!() })
+                    .await;
+                assert_eq!(v.unwrap(), "task3");
+            }
+        };
+
+        // Task5 will be the fifth task to call `optionally_get_with_by_ref` for the
+        // same key. So its async block will not be evaluated. By the time it
+        // calls, task3's async block should have finished already, so its async
+        // block will not be evaluated and will get the value insert by task3's
+        // async block immediately.
+        let task5 = {
+            let cache5 = cache.clone();
+            async move {
+                // Wait for 800 ms before calling `optionally_get_with_by_ref`.
+                Timer::after(Duration::from_millis(800)).await;
+                let v = cache5
+                    .optionally_get_with_by_ref(KEY, async { unreachable!() })
                     .await;
                 assert_eq!(v.unwrap(), "task3");
             }

@@ -305,6 +305,21 @@ where
             .get_or_insert_with_hash_and_fun(key, hash, init, replace_if)
     }
 
+    /// Similar to [`get_with`](#method.get_with), but instead of passing an owned
+    /// key, you can pass a reference to the key. If the key does not exist in the
+    /// cache, the key will be cloned to create new entry in the cache.
+    pub fn get_with_by_ref<Q>(&self, key: &Q, init: impl FnOnce() -> V) -> V
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        let hash = self.inner.hash(&key);
+        let replace_if = None as Option<fn(&V) -> bool>;
+        self.inner
+            .select(hash)
+            .get_or_insert_with_hash_by_ref_and_fun(key, hash, init, replace_if)
+    }
+
     /// Works like [`get_with`](#method.get_with), but takes an additional
     /// `replace_if` closure.
     ///
@@ -324,6 +339,25 @@ where
         self.inner
             .select(hash)
             .get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if))
+    }
+
+    /// Similar to [`get_with_if`](#method.get_with_if), but instead of passing an
+    /// owned key, you can pass a reference to the key. If the key does not exist in
+    /// the cache, the key will be cloned to create new entry in the cache.
+    pub fn get_with_if_by_ref<Q>(
+        &self,
+        key: &Q,
+        init: impl FnOnce() -> V,
+        replace_if: impl FnMut(&V) -> bool,
+    ) -> V
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        let hash = self.inner.hash(&key);
+        self.inner
+            .select(hash)
+            .get_or_insert_with_hash_by_ref_and_fun(key, hash, init, Some(replace_if))
     }
 
     /// Try to ensure the value of the key exists by inserting an `Ok` result of the
