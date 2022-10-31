@@ -56,8 +56,15 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 - Supports eviction listener, a callback function that will be called when an entry
   is removed from the cache.
 
+Moka provides a rich and flexible feature set while maintaining high hit ratio and a
+high level of concurrency for concurrent access. However, it may not be as fast as
+other caches, especially those that focus on much smaller feature sets.
+
+If you do not need features like: time to live, size aware eviction, and eviction
+listener, you may want to take a look at the [Quick Cache][quick-cache] crate.
 
 [tiny-lfu]: https://github.com/moka-rs/moka/wiki#admission-and-eviction-policies
+[quick-cache]: https://crates.io/crates/quick_cache
 
 ## Moka in Production
 
@@ -414,20 +421,17 @@ available on crates.io, such as the [aHash][ahash-crate] crate.
 
 ## Minimum Supported Rust Versions
 
-This crate's minimum supported Rust versions (MSRV) are the followings:
+Moka's minimum supported Rust versions (MSRV) are the followings:
 
-| Feature    | Enabled by default? | MSRV        |
-|:-----------|:-------------------:|:-----------:|
-| no feature |                     | Rust 1.51.0 |
-| `atomic64` |       yes           | Rust 1.51.0 |
-| `quanta`   |       yes           | Rust 1.51.0 |
-| `future`   |                     | Rust 1.51.0 |
-| `dash`     |                     | Rust 1.51.0 |
+| Feature          | MSRV                     |
+|:-----------------|:------------------------:|
+| default features | Rust 1.51.0 (2021-03-25) |
+| `future`         | Rust 1.51.0 (2021-03-25) |
 
-If only the default features are enabled, MSRV will be updated conservatively. When
-using other features, like `future`, MSRV might be updated more frequently, up to the
-latest stable. In both cases, increasing MSRV is _not_ considered a semver-breaking
-change.
+It will keep a rolling MSRV policy of at least 6 months. If only the default features
+are enabled, MSRV will be updated conservatively. When using other features, like
+`future`, MSRV might be updated more frequently, up to the latest stable. In both
+cases, increasing MSRV is _not_ considered a semver-breaking change.
 
 <!--
 - tagptr 0.2.0 requires 1.51.

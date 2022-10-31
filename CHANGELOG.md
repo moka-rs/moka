@@ -4,9 +4,25 @@
 
 ### Added
 
-- Add `optional_get_with` method to `sync` and `future` caches ([#187][gh-pull-0187]):
+- Add `optionally_get_with` method to `sync` and `future` caches
+  ([#187][gh-pull-0187], by [@LMJW][gh-LMJW]):
     - It is similar to `try_get_with` but takes an init closure/future returning an
       `Option<V>` instead of `Result<V, E>`.
+- Add `by_ref` version of API for `get_with`, `optionally_get_with`, and
+  `try_get_with` of `sync` and `future` caches ([#190][gh-pull-0190], by
+  [@LMJW][gh-LMJW]):
+    - They are similar to the non-`by_ref` versions but take a reference of the key
+      instead of an owned key. If the key does not exist in the cache, the key will
+      be cloned to create new entry in the cache.
+
+### Changed
+
+- Changed the CI to run Linux AArch64 tests on real hardware using Cirrus CI.
+  ([#180][gh-pull-0180], by [@ClSlaid][gh-ClSlaid])
+
+### Fixed
+
+- Fix a typo in the documentation. ([#189][gh-pull-0189], by [@Swatinem][gh-Swatinem])
 
 
 ## Version 0.9.4
@@ -15,6 +31,13 @@
 
 - Fix memory leak after dropping a `sync` or `future` cache ([#177][gh-pull-0177]):
     - This leaked the value part of cache entries.
+
+### Added
+
+- Add an experimental `js` feature to make `unsync` and `sync` caches to compile for
+  `wasm32-unknown-unknown` target ([#173](gh-pull-0173), by [@aspect][gh-aspect]):
+    - Note that we have not tested if these caches work correctly in wasm32
+      environment.
 
 
 ## Version 0.9.3
@@ -81,7 +104,7 @@
     - `sync::SegmentedCache`
     - `future::Cache`
 - Add a crate feature `sync` for enabling and disabling `sync` caches.
-  ([#143][gh-pull-0143])
+  ([#141][gh-pull-0141] by [@Milo123459][gh-Milo123459], and [#143][gh-pull-0143])
     - This feature is enabled by default.
     - When using experimental `dash` cache, opting out of `sync` will reduce the
       number of dependencies.
@@ -148,7 +171,7 @@ The followings are internal changes to improve memory safety in unsafe Rust usag
 in Moka:
 
 - Remove pointer-to-integer transmute by converting `UnsafeWeakPointer` from `usize`
-  to `*mut T`. ([#127][gh-pull-0127])
+  to `*mut T`. ([#127][gh-pull-0127], by [saethlin][gh-saethlin])
 - Increase the num segments of the waiters hash table from 16 to 64
   ([#129][gh-pull-0129]) to reduce the chance of the following issue occurring:
     - Segfaults under heavy workloads on a many-core machine. ([#34][gh-issue-0034])
@@ -224,7 +247,8 @@ Please see [#105][gh-pull-0105] for the complete list of the affected methods.
       `invalidate`, etc. ([#90][gh-pull-0090])
 - Update the minimum versions of dependencies:
     - crossbeam-channel to v0.5.4. ([#100][gh-pull-0100])
-    - scheduled-thread-pool to v0.2.5. ([#103][gh-pull-0103])
+    - scheduled-thread-pool to v0.2.5. ([#103][gh-pull-0103], by
+      [@Milo123459][gh-Milo123459])
     - (dev-dependency) skeptic to v0.13.5. ([#104][gh-pull-0104])
 
 ### Added
@@ -268,6 +292,8 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 
 - Import (include) cht source files for better integration. ([#77][gh-pull-0077],
   [#86](gh-pull-0086))
+- Improve the CI coverage for Clippy lints and fix some Clippy warnings in unit
+  tests. ([#73][gh-pull-0073], by [@06chaynes][gh-06chaynes])
 
 
 ## Version 0.7.1
@@ -314,18 +340,21 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 ### Removed
 
 - Remove `Send` and `'static` bounds from `get_or_insert_with` and
-  `get_or_try_insert_with` methods of `future::Cache`. ([#53][gh-pull-0053])
+  `get_or_try_insert_with` methods of `future::Cache`. ([#53][gh-pull-0053], by
+  [@tinou98][gh-tinou98])
 
 ### Fixed
 
-- Protect overflow when computing expiration. ([#56][gh-pull-0056])
+- Protect overflow when computing expiration. ([#56][gh-pull-0056], by
+  [@barkanido][gh-barkanido])
 
 
 ## Version 0.6.1
 
 ### Changed
 
-- Replace futures with futures-util. ([#47][gh-pull-0047])
+- Replace futures crate with futures-util. ([#47][gh-pull-0047], by
+  [@messense][gh-messense]))
 
 
 ## Version 0.6.0
@@ -349,7 +378,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 
 -  Restore quanta dependency on some 32-bit platforms such as
    `armv5te-unknown-linux-musleabi` or `mips-unknown-linux-musl`.
-   ([#42][gh-pull-0042])
+   ([#42][gh-pull-0042], by [@messense][gh-messense])
 
 
 ## Version 0.5.3
@@ -421,7 +450,8 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 
 ### Changed
 
-- Stop skeptic from having to be compiled by all downstream users. ([#16][gh-pull-0016])
+- Stop skeptic from having to be compiled by all downstream users.
+  ([#16][gh-pull-0016], by [@paolobarbolini][gh-paolobarbolini])
 
 
 ## Version 0.3.0
@@ -473,6 +503,18 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 
 [ghsa-qc84-gqf4-9926]: https://github.com/advisories/GHSA-qc84-gqf4-9926
 
+[gh-06chaynes]: https://github.com/06chaynes
+[gh-aspect]: https://github.com/aspect
+[gh-barkanido]: https://github.com/barkanido
+[gh-ClSlaid]: https://github.com/ClSlaid
+[gh-LMJW]: https://github.com/LMJW
+[gh-Milo123459]: https://github.com/Milo123459
+[gh-messense]: https://github.com/messense
+[gh-paolobarbolini]: https://github.com/paolobarbolini
+[gh-saethlin]: https://github.com/saethlin
+[gh-Swatinem]: https://github.com/Swatinem
+[gh-tinou98]: https://github.com/tinou98
+
 [gh-issue-0162]: https://github.com/moka-rs/moka/issues/162/
 [gh-issue-0155]: https://github.com/moka-rs/moka/issues/155/
 [gh-issue-0123]: https://github.com/moka-rs/moka/issues/123/
@@ -485,8 +527,12 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0190]: https://github.com/moka-rs/moka/pull/190/
+[gh-pull-0189]: https://github.com/moka-rs/moka/pull/189/
 [gh-pull-0187]: https://github.com/moka-rs/moka/pull/187/
+[gh-pull-0180]: https://github.com/moka-rs/moka/pull/180/
 [gh-pull-0177]: https://github.com/moka-rs/moka/pull/177/
+[gh-pull-0173]: https://github.com/moka-rs/moka/pull/173/
 [gh-pull-0169]: https://github.com/moka-rs/moka/pull/169/
 [gh-pull-0167]: https://github.com/moka-rs/moka/pull/167/
 [gh-pull-0165]: https://github.com/moka-rs/moka/pull/165/
@@ -494,6 +540,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-pull-0157]: https://github.com/moka-rs/moka/pull/157/
 [gh-pull-0145]: https://github.com/moka-rs/moka/pull/145/
 [gh-pull-0143]: https://github.com/moka-rs/moka/pull/143/
+[gh-pull-0141]: https://github.com/moka-rs/moka/pull/141/
 [gh-pull-0138]: https://github.com/moka-rs/moka/pull/138/
 [gh-pull-0137]: https://github.com/moka-rs/moka/pull/137/
 [gh-pull-0133]: https://github.com/moka-rs/moka/pull/133/
@@ -521,6 +568,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-pull-0077]: https://github.com/moka-rs/moka/pull/77/
 [gh-pull-0076]: https://github.com/moka-rs/moka/pull/76/
 [gh-pull-0075]: https://github.com/moka-rs/moka/pull/75/
+[gh-pull-0073]: https://github.com/moka-rs/moka/pull/73/
 [gh-pull-0067]: https://github.com/moka-rs/moka/pull/67/
 [gh-pull-0065]: https://github.com/moka-rs/moka/pull/65/
 [gh-pull-0056]: https://github.com/moka-rs/moka/pull/56/
