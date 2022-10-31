@@ -313,7 +313,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        let hash = self.inner.hash(&key);
+        let hash = self.inner.hash(key);
         let replace_if = None as Option<fn(&V) -> bool>;
         self.inner
             .select(hash)
@@ -354,7 +354,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        let hash = self.inner.hash(&key);
+        let hash = self.inner.hash(key);
         self.inner
             .select(hash)
             .get_or_insert_with_hash_by_ref_and_fun(key, hash, init, Some(replace_if))

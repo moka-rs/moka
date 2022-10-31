@@ -864,7 +864,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        let hash = self.base.hash(&key);
+        let hash = self.base.hash(key);
         let replace_if = None as Option<fn(&V) -> bool>;
 
         self.get_or_insert_with_hash_by_ref_and_fun(key, hash, init, replace_if)
@@ -904,7 +904,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        let hash = self.base.hash(&key);
+        let hash = self.base.hash(key);
         self.get_or_insert_with_hash_by_ref_and_fun(key, hash, init, Some(replace_if))
             .await
     }
@@ -1020,7 +1020,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        let hash = self.base.hash(&key);
+        let hash = self.base.hash(key);
         self.get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init)
             .await
     }
@@ -1135,7 +1135,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        let hash = self.base.hash(&key);
+        let hash = self.base.hash(key);
         self.get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init)
             .await
     }
@@ -1398,7 +1398,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        match (self.base.get_with_hash(&key, hash), &mut replace_if) {
+        match (self.base.get_with_hash(key, hash), &mut replace_if) {
             (Some(v), None) => return v,
             (Some(v), Some(cond)) => {
                 if !cond(&v) {
@@ -1532,7 +1532,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        let res = self.base.get_with_hash(&key, hash);
+        let res = self.base.get_with_hash(key, hash);
 
         if res.is_some() {
             return res;
@@ -2557,7 +2557,7 @@ mod tests {
             async move {
                 // Wait for 200 ms before calling `get`.
                 Timer::after(Duration::from_millis(200)).await;
-                let maybe_v = cache4.get(&KEY);
+                let maybe_v = cache4.get(KEY);
                 assert!(maybe_v.is_none());
             }
         };
@@ -2569,7 +2569,7 @@ mod tests {
             async move {
                 // Wait for 400 ms before calling `get`.
                 Timer::after(Duration::from_millis(400)).await;
-                let maybe_v = cache5.get(&KEY);
+                let maybe_v = cache5.get(KEY);
                 assert_eq!(maybe_v, Some("task1"));
             }
         };
@@ -2791,7 +2791,7 @@ mod tests {
             async move {
                 // Wait for 200 ms before calling `get`.
                 Timer::after(Duration::from_millis(200)).await;
-                let maybe_v = cache5.get(&KEY);
+                let maybe_v = cache5.get(KEY);
                 assert!(maybe_v.is_none());
             }
         };
@@ -2803,7 +2803,7 @@ mod tests {
             async move {
                 // Wait for 350 ms before calling `get`.
                 Timer::after(Duration::from_millis(350)).await;
-                let maybe_v = cache6.get(&KEY);
+                let maybe_v = cache6.get(KEY);
                 assert_eq!(maybe_v, Some("task1"));
             }
         };
@@ -2815,7 +2815,7 @@ mod tests {
             async move {
                 // Wait for 450 ms before calling `get`.
                 Timer::after(Duration::from_millis(450)).await;
-                let maybe_v = cache7.get(&KEY);
+                let maybe_v = cache7.get(KEY);
                 assert_eq!(maybe_v, Some("task4"));
             }
         };
@@ -3067,7 +3067,7 @@ mod tests {
             async move {
                 // Wait for 200 ms before calling `get`.
                 Timer::after(Duration::from_millis(200)).await;
-                let maybe_v = cache6.get(&KEY);
+                let maybe_v = cache6.get(KEY);
                 assert!(maybe_v.is_none());
             }
         };
@@ -3079,7 +3079,7 @@ mod tests {
             async move {
                 // Wait for 400 ms before calling `get`.
                 Timer::after(Duration::from_millis(400)).await;
-                let maybe_v = cache7.get(&KEY);
+                let maybe_v = cache7.get(KEY);
                 assert!(maybe_v.is_none());
             }
         };
@@ -3091,7 +3091,7 @@ mod tests {
             async move {
                 // Wait for 800 ms before calling `get`.
                 Timer::after(Duration::from_millis(800)).await;
-                let maybe_v = cache8.get(&KEY);
+                let maybe_v = cache8.get(KEY);
                 assert_eq!(maybe_v, Some("task3"));
             }
         };
@@ -3331,7 +3331,7 @@ mod tests {
             async move {
                 // Wait for 200 ms before calling `get`.
                 Timer::after(Duration::from_millis(200)).await;
-                let maybe_v = cache6.get(&KEY);
+                let maybe_v = cache6.get(KEY);
                 assert!(maybe_v.is_none());
             }
         };
@@ -3343,7 +3343,7 @@ mod tests {
             async move {
                 // Wait for 400 ms before calling `get`.
                 Timer::after(Duration::from_millis(400)).await;
-                let maybe_v = cache7.get(&KEY);
+                let maybe_v = cache7.get(KEY);
                 assert!(maybe_v.is_none());
             }
         };
@@ -3355,7 +3355,7 @@ mod tests {
             async move {
                 // Wait for 800 ms before calling `get`.
                 Timer::after(Duration::from_millis(800)).await;
-                let maybe_v = cache8.get(&KEY);
+                let maybe_v = cache8.get(KEY);
                 assert_eq!(maybe_v, Some("task3"));
             }
         };
