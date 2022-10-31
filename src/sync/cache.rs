@@ -1049,22 +1049,24 @@ where
         self.get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if))
     }
 
-    /// Similar to [`get_with_if`](#method.get_with_if), but instead of passing an
-    /// owned key, you can pass a reference to the key. If the key does not exist in
-    /// the cache, the key will be cloned to create new entry in the cache.
-    pub fn get_with_if_by_ref<Q>(
-        &self,
-        key: &Q,
-        init: impl FnOnce() -> V,
-        replace_if: impl FnMut(&V) -> bool,
-    ) -> V
-    where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
-    {
-        let hash = self.base.hash(key);
-        self.get_or_insert_with_hash_by_ref_and_fun(key, hash, init, Some(replace_if))
-    }
+    // We will provide this API under the new `entry` API.
+    //
+    // /// Similar to [`get_with_if`](#method.get_with_if), but instead of passing an
+    // /// owned key, you can pass a reference to the key. If the key does not exist in
+    // /// the cache, the key will be cloned to create new entry in the cache.
+    // pub fn get_with_if_by_ref<Q>(
+    //     &self,
+    //     key: &Q,
+    //     init: impl FnOnce() -> V,
+    //     replace_if: impl FnMut(&V) -> bool,
+    // ) -> V
+    // where
+    //     K: Borrow<Q>,
+    //     Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    // {
+    //     let hash = self.base.hash(key);
+    //     self.get_or_insert_with_hash_by_ref_and_fun(key, hash, init, Some(replace_if))
+    // }
 
     pub(crate) fn get_or_insert_with_hash_and_fun(
         &self,
@@ -2788,134 +2790,134 @@ mod tests {
         }
     }
 
-    #[test]
-    fn get_with_if_by_ref() {
-        use std::thread::{sleep, spawn};
+    // #[test]
+    // fn get_with_if_by_ref() {
+    //     use std::thread::{sleep, spawn};
 
-        let cache: Cache<u32, &str> = Cache::new(100);
-        const KEY: &u32 = &0;
+    //     let cache: Cache<u32, &str> = Cache::new(100);
+    //     const KEY: &u32 = &0;
 
-        // This test will run seven threads:
-        //
-        // Thread1 will be the first thread to call `get_with_if_by_ref` for a key, so its
-        // init closure will be evaluated and then a &str value "thread1" will be
-        // inserted to the cache.
-        let thread1 = {
-            let cache1 = cache.clone();
-            spawn(move || {
-                // Call `get_with` immediately.
-                let v = cache1.get_with_if_by_ref(
-                    KEY,
-                    || {
-                        // Wait for 300 ms and return a &str value.
-                        sleep(Duration::from_millis(300));
-                        "thread1"
-                    },
-                    |_v| unreachable!(),
-                );
-                assert_eq!(v, "thread1");
-            })
-        };
+    //     // This test will run seven threads:
+    //     //
+    //     // Thread1 will be the first thread to call `get_with_if_by_ref` for a key, so its
+    //     // init closure will be evaluated and then a &str value "thread1" will be
+    //     // inserted to the cache.
+    //     let thread1 = {
+    //         let cache1 = cache.clone();
+    //         spawn(move || {
+    //             // Call `get_with` immediately.
+    //             let v = cache1.get_with_if_by_ref(
+    //                 KEY,
+    //                 || {
+    //                     // Wait for 300 ms and return a &str value.
+    //                     sleep(Duration::from_millis(300));
+    //                     "thread1"
+    //                 },
+    //                 |_v| unreachable!(),
+    //             );
+    //             assert_eq!(v, "thread1");
+    //         })
+    //     };
 
-        // Thread2 will be the second thread to call `get_with_if_by_ref` for the same key,
-        // so its init closure will not be evaluated. Once thread1's init closure
-        // finishes, it will get the value inserted by thread1's init closure.
-        let thread2 = {
-            let cache2 = cache.clone();
-            spawn(move || {
-                // Wait for 100 ms before calling `get_with`.
-                sleep(Duration::from_millis(100));
-                let v = cache2.get_with_if_by_ref(KEY, || unreachable!(), |_v| unreachable!());
-                assert_eq!(v, "thread1");
-            })
-        };
+    //     // Thread2 will be the second thread to call `get_with_if_by_ref` for the same key,
+    //     // so its init closure will not be evaluated. Once thread1's init closure
+    //     // finishes, it will get the value inserted by thread1's init closure.
+    //     let thread2 = {
+    //         let cache2 = cache.clone();
+    //         spawn(move || {
+    //             // Wait for 100 ms before calling `get_with`.
+    //             sleep(Duration::from_millis(100));
+    //             let v = cache2.get_with_if_by_ref(KEY, || unreachable!(), |_v| unreachable!());
+    //             assert_eq!(v, "thread1");
+    //         })
+    //     };
 
-        // Thread3 will be the third thread to call `get_with_if_by_ref` for the same
-        // key. By the time it calls, thread1's init closure should have finished
-        // already and the value should be already inserted to the cache. Also
-        // thread3's `replace_if` closure returns `false`. So its init closure will
-        // not be evaluated and will get the value inserted by thread1's init closure
-        // immediately.
-        let thread3 = {
-            let cache3 = cache.clone();
-            spawn(move || {
-                // Wait for 350 ms before calling `get_with_if_by_ref`.
-                sleep(Duration::from_millis(350));
-                let v = cache3.get_with_if_by_ref(
-                    KEY,
-                    || unreachable!(),
-                    |v| {
-                        assert_eq!(v, &"thread1");
-                        false
-                    },
-                );
-                assert_eq!(v, "thread1");
-            })
-        };
+    //     // Thread3 will be the third thread to call `get_with_if_by_ref` for the same
+    //     // key. By the time it calls, thread1's init closure should have finished
+    //     // already and the value should be already inserted to the cache. Also
+    //     // thread3's `replace_if` closure returns `false`. So its init closure will
+    //     // not be evaluated and will get the value inserted by thread1's init closure
+    //     // immediately.
+    //     let thread3 = {
+    //         let cache3 = cache.clone();
+    //         spawn(move || {
+    //             // Wait for 350 ms before calling `get_with_if_by_ref`.
+    //             sleep(Duration::from_millis(350));
+    //             let v = cache3.get_with_if_by_ref(
+    //                 KEY,
+    //                 || unreachable!(),
+    //                 |v| {
+    //                     assert_eq!(v, &"thread1");
+    //                     false
+    //                 },
+    //             );
+    //             assert_eq!(v, "thread1");
+    //         })
+    //     };
 
-        // Thread4 will be the fourth thread to call `get_with_if_by_ref` for the same
-        // key. The value should have been already inserted to the cache by
-        // thread1. However thread4's `replace_if` closure returns `true`. So its
-        // init closure will be evaluated to replace the current value.
-        let thread4 = {
-            let cache4 = cache.clone();
-            spawn(move || {
-                // Wait for 400 ms before calling `get_with_if_by_ref`.
-                sleep(Duration::from_millis(400));
-                let v = cache4.get_with_if_by_ref(
-                    KEY,
-                    || "thread4",
-                    |v| {
-                        assert_eq!(v, &"thread1");
-                        true
-                    },
-                );
-                assert_eq!(v, "thread4");
-            })
-        };
+    //     // Thread4 will be the fourth thread to call `get_with_if_by_ref` for the same
+    //     // key. The value should have been already inserted to the cache by
+    //     // thread1. However thread4's `replace_if` closure returns `true`. So its
+    //     // init closure will be evaluated to replace the current value.
+    //     let thread4 = {
+    //         let cache4 = cache.clone();
+    //         spawn(move || {
+    //             // Wait for 400 ms before calling `get_with_if_by_ref`.
+    //             sleep(Duration::from_millis(400));
+    //             let v = cache4.get_with_if_by_ref(
+    //                 KEY,
+    //                 || "thread4",
+    //                 |v| {
+    //                     assert_eq!(v, &"thread1");
+    //                     true
+    //                 },
+    //             );
+    //             assert_eq!(v, "thread4");
+    //         })
+    //     };
 
-        // Thread5 will call `get` for the same key. It will call when thread1's init
-        // closure is still running, so it will get none for the key.
-        let thread5 = {
-            let cache5 = cache.clone();
-            spawn(move || {
-                // Wait for 200 ms before calling `get`.
-                sleep(Duration::from_millis(200));
-                let maybe_v = cache5.get(KEY);
-                assert!(maybe_v.is_none());
-            })
-        };
+    //     // Thread5 will call `get` for the same key. It will call when thread1's init
+    //     // closure is still running, so it will get none for the key.
+    //     let thread5 = {
+    //         let cache5 = cache.clone();
+    //         spawn(move || {
+    //             // Wait for 200 ms before calling `get`.
+    //             sleep(Duration::from_millis(200));
+    //             let maybe_v = cache5.get(KEY);
+    //             assert!(maybe_v.is_none());
+    //         })
+    //     };
 
-        // Thread6 will call `get` for the same key. It will call when thread1's init
-        // closure is still running, so it will get none for the key.
-        let thread6 = {
-            let cache6 = cache.clone();
-            spawn(move || {
-                // Wait for 350 ms before calling `get`.
-                sleep(Duration::from_millis(350));
-                let maybe_v = cache6.get(KEY);
-                assert_eq!(maybe_v, Some("thread1"));
-            })
-        };
+    //     // Thread6 will call `get` for the same key. It will call when thread1's init
+    //     // closure is still running, so it will get none for the key.
+    //     let thread6 = {
+    //         let cache6 = cache.clone();
+    //         spawn(move || {
+    //             // Wait for 350 ms before calling `get`.
+    //             sleep(Duration::from_millis(350));
+    //             let maybe_v = cache6.get(KEY);
+    //             assert_eq!(maybe_v, Some("thread1"));
+    //         })
+    //     };
 
-        // Thread7 will call `get` for the same key. It will call after thread1's init
-        // closure finished, so it will get the value insert by thread1's init closure.
-        let thread7 = {
-            let cache7 = cache.clone();
-            spawn(move || {
-                // Wait for 450 ms before calling `get`.
-                sleep(Duration::from_millis(450));
-                let maybe_v = cache7.get(KEY);
-                assert_eq!(maybe_v, Some("thread4"));
-            })
-        };
+    //     // Thread7 will call `get` for the same key. It will call after thread1's init
+    //     // closure finished, so it will get the value insert by thread1's init closure.
+    //     let thread7 = {
+    //         let cache7 = cache.clone();
+    //         spawn(move || {
+    //             // Wait for 450 ms before calling `get`.
+    //             sleep(Duration::from_millis(450));
+    //             let maybe_v = cache7.get(KEY);
+    //             assert_eq!(maybe_v, Some("thread4"));
+    //         })
+    //     };
 
-        for t in vec![
-            thread1, thread2, thread3, thread4, thread5, thread6, thread7,
-        ] {
-            t.join().expect("Failed to join");
-        }
-    }
+    //     for t in vec![
+    //         thread1, thread2, thread3, thread4, thread5, thread6, thread7,
+    //     ] {
+    //         t.join().expect("Failed to join");
+    //     }
+    // }
 
     #[test]
     fn try_get_with() {

@@ -341,24 +341,26 @@ where
             .get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if))
     }
 
-    /// Similar to [`get_with_if`](#method.get_with_if), but instead of passing an
-    /// owned key, you can pass a reference to the key. If the key does not exist in
-    /// the cache, the key will be cloned to create new entry in the cache.
-    pub fn get_with_if_by_ref<Q>(
-        &self,
-        key: &Q,
-        init: impl FnOnce() -> V,
-        replace_if: impl FnMut(&V) -> bool,
-    ) -> V
-    where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
-    {
-        let hash = self.inner.hash(key);
-        self.inner
-            .select(hash)
-            .get_or_insert_with_hash_by_ref_and_fun(key, hash, init, Some(replace_if))
-    }
+    // We will provide this API under the new `entry` API.
+    //
+    // /// Similar to [`get_with_if`](#method.get_with_if), but instead of passing an
+    // /// owned key, you can pass a reference to the key. If the key does not exist in
+    // /// the cache, the key will be cloned to create new entry in the cache.
+    // pub fn get_with_if_by_ref<Q>(
+    //     &self,
+    //     key: &Q,
+    //     init: impl FnOnce() -> V,
+    //     replace_if: impl FnMut(&V) -> bool,
+    // ) -> V
+    // where
+    //     K: Borrow<Q>,
+    //     Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    // {
+    //     let hash = self.inner.hash(key);
+    //     self.inner
+    //         .select(hash)
+    //         .get_or_insert_with_hash_by_ref_and_fun(key, hash, init, Some(replace_if))
+    // }
 
     /// Try to ensure the value of the key exists by inserting an `Ok` result of the
     /// init closure if not exist, and returns a _clone_ of the value or the `Err`
@@ -380,6 +382,30 @@ where
             .get_or_try_insert_with_hash_and_fun(key, hash, init)
     }
 
+    /// Similar to [`try_get_with`](#method.try_get_with), but instead of passing an
+    /// owned key, you can pass a reference to the key. If the key does not exist in
+    /// the cache, the key will be cloned to create new entry in the cache.
+    pub fn try_get_with_by_ref<F, E, Q>(&self, key: &Q, init: F) -> Result<V, Arc<E>>
+    where
+        F: FnOnce() -> Result<V, E>,
+        E: Send + Sync + 'static,
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        let hash = self.inner.hash(key);
+        self.inner
+            .select(hash)
+            .get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init)
+    }
+
+    /// Try to ensure the value of the key exists by inserting an `Some` result of
+    /// the init closure if not exist, and returns a _clone_ of the value or `None`
+    /// returned by the closure.
+    ///
+    /// This method prevents to evaluate the init closure multiple times on the same
+    /// key even if the method is concurrently called by many threads; only one of
+    /// the calls evaluates its closure (as long as these closures return the same
+    /// Option type), and other calls wait for that closure to complete.
     pub fn optionally_get_with<F>(&self, key: K, init: F) -> Option<V>
     where
         F: FnOnce() -> Option<V>,
@@ -389,6 +415,22 @@ where
         self.inner
             .select(hash)
             .get_or_optionally_insert_with_hash_and_fun(key, hash, init)
+    }
+
+    /// Similar to [`optionally_get_with`](#method.optionally_get_with), but instead
+    /// of passing an owned key, you can pass a reference to the key. If the key does
+    /// not exist in the cache, the key will be cloned to create new entry in the
+    /// cache.
+    pub fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
+    where
+        F: FnOnce() -> Option<V>,
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        let hash = self.inner.hash(key);
+        self.inner
+            .select(hash)
+            .get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init)
     }
 
     /// Inserts a key-value pair into the cache.
