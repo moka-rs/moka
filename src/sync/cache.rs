@@ -2637,7 +2637,7 @@ mod tests {
             spawn(move || {
                 // Wait for 200 ms before calling `get`.
                 sleep(Duration::from_millis(200));
-                let maybe_v = cache4.get(&KEY);
+                let maybe_v = cache4.get(KEY);
                 assert!(maybe_v.is_none());
             })
         };
@@ -2649,7 +2649,7 @@ mod tests {
             spawn(move || {
                 // Wait for 400 ms before calling `get`.
                 sleep(Duration::from_millis(400));
-                let maybe_v = cache5.get(&KEY);
+                let maybe_v = cache5.get(KEY);
                 assert_eq!(maybe_v, Some("thread1"));
             })
         };
@@ -2881,7 +2881,7 @@ mod tests {
             spawn(move || {
                 // Wait for 200 ms before calling `get`.
                 sleep(Duration::from_millis(200));
-                let maybe_v = cache5.get(&KEY);
+                let maybe_v = cache5.get(KEY);
                 assert!(maybe_v.is_none());
             })
         };
@@ -2893,7 +2893,7 @@ mod tests {
             spawn(move || {
                 // Wait for 350 ms before calling `get`.
                 sleep(Duration::from_millis(350));
-                let maybe_v = cache6.get(&KEY);
+                let maybe_v = cache6.get(KEY);
                 assert_eq!(maybe_v, Some("thread1"));
             })
         };
@@ -2905,7 +2905,7 @@ mod tests {
             spawn(move || {
                 // Wait for 450 ms before calling `get`.
                 sleep(Duration::from_millis(450));
-                let maybe_v = cache7.get(&KEY);
+                let maybe_v = cache7.get(KEY);
                 assert_eq!(maybe_v, Some("thread4"));
             })
         };
@@ -3159,7 +3159,7 @@ mod tests {
             spawn(move || {
                 // Wait for 200 ms before calling `get`.
                 sleep(Duration::from_millis(200));
-                let maybe_v = cache6.get(&KEY);
+                let maybe_v = cache6.get(KEY);
                 assert!(maybe_v.is_none());
             })
         };
@@ -3171,7 +3171,7 @@ mod tests {
             spawn(move || {
                 // Wait for 400 ms before calling `get`.
                 sleep(Duration::from_millis(400));
-                let maybe_v = cache7.get(&KEY);
+                let maybe_v = cache7.get(KEY);
                 assert!(maybe_v.is_none());
             })
         };
@@ -3183,7 +3183,7 @@ mod tests {
             spawn(move || {
                 // Wait for 800 ms before calling `get`.
                 sleep(Duration::from_millis(800));
-                let maybe_v = cache8.get(&KEY);
+                let maybe_v = cache8.get(KEY);
                 assert_eq!(maybe_v, Some("thread3"));
             })
         };
@@ -3417,7 +3417,7 @@ mod tests {
             spawn(move || {
                 // Wait for 200 ms before calling `get`.
                 sleep(Duration::from_millis(200));
-                let maybe_v = cache6.get(&KEY);
+                let maybe_v = cache6.get(KEY);
                 assert!(maybe_v.is_none());
             })
         };
@@ -3429,7 +3429,7 @@ mod tests {
             spawn(move || {
                 // Wait for 400 ms before calling `get`.
                 sleep(Duration::from_millis(400));
-                let maybe_v = cache7.get(&KEY);
+                let maybe_v = cache7.get(KEY);
                 assert!(maybe_v.is_none());
             })
         };
@@ -3441,7 +3441,7 @@ mod tests {
             spawn(move || {
                 // Wait for 800 ms before calling `get`.
                 sleep(Duration::from_millis(800));
-                let maybe_v = cache8.get(&KEY);
+                let maybe_v = cache8.get(KEY);
                 assert_eq!(maybe_v, Some("thread3"));
             })
         };
