@@ -30,7 +30,7 @@ use crate::{
         notifier::{RemovalNotifier, RemovedEntry},
         EvictionListener, RemovalCause,
     },
-    Policy, PredicateError,
+    Entry, Policy, PredicateError,
 };
 
 #[cfg(feature = "unstable-debug-counters")]
@@ -218,7 +218,7 @@ where
             .unwrap_or_default() // `false` is the default for `bool` type.
     }
 
-    pub(crate) fn get_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<V>
+    pub(crate) fn get_with_hash<Q>(&self, key: &Q, hash: u64, need_key: bool) -> Option<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -242,14 +242,15 @@ where
                 None
             } else {
                 // Valid entry.
-                Some((TrioArc::clone(entry), now))
+                let maybe_key = if need_key { Some(Arc::clone(k)) } else { None };
+                Some((maybe_key, TrioArc::clone(entry), now))
             }
         });
 
-        if let Some((entry, now)) = maybe_entry {
+        if let Some((maybe_key, entry, now)) = maybe_entry {
             let v = entry.value.clone();
             record(ReadOp::Hit(hash, entry, now), now);
-            Some(v)
+            Some(Entry::new(maybe_key, v, false))
         } else {
             let now = self.current_time_from_expiration_clock();
             record(ReadOp::Miss(hash), now);

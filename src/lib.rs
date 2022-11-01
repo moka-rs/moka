@@ -64,18 +64,16 @@
 //!
 //! This crate's minimum supported Rust versions (MSRV) are the followings:
 //!
-//! | Feature    | Enabled by default? | MSRV        |
-//! |:-----------|:-------------------:|:-----------:|
-//! | no feature |                     | Rust 1.51.0 |
-//! | `atomic64` |       yes           | Rust 1.51.0 |
-//! | `quanta`   |       yes           | Rust 1.51.0 |
-//! | `future`   |                     | Rust 1.51.0 |
-//! | `dash`     |                     | Rust 1.51.0 |
+//! | Feature          | MSRV                     |
+//! |:-----------------|:------------------------:|
+//! | default features | Rust 1.51.0 (2021-03-25) |
+//! | `future`         | Rust 1.51.0 (2021-03-25) |
 //!
-//! If only the default features are enabled, MSRV will be updated conservatively.
-//! When using other features, like `future`, MSRV might be updated more frequently,
-//! up to the latest stable. In both cases, increasing MSRV is _not_ considered a
-//! semver-breaking change.
+//! It will keep a rolling MSRV policy of at least 6 months. If only the default
+//! features are enabled, MSRV will be updated conservatively. When using other
+//! features, like `future`, MSRV might be updated more frequently, up to the latest
+//! stable. In both cases, increasing MSRV is _not_ considered a semver-breaking
+//! change.
 //!
 //! # Implementation Details
 //!
@@ -188,6 +186,9 @@ pub(crate) mod sync_base;
 
 #[cfg(any(feature = "sync", feature = "future"))]
 pub use common::error::PredicateError;
+
+#[cfg(any(feature = "sync", feature = "future"))]
+pub use common::entry::Entry;
 
 pub use policy::Policy;
 

@@ -1,9 +1,11 @@
-use super::{cache::Cache, CacheBuilder, ConcurrentCacheExt};
+use super::{
+    cache::Cache, CacheBuilder, ConcurrentCacheExt, OwnedKeyEntrySelector, RefKeyEntrySelector,
+};
 use crate::{
     common::concurrent::{housekeeper, Weigher},
     notification::{self, EvictionListener},
     sync_base::iter::{Iter, ScanningGet},
-    Policy, PredicateError,
+    Entry, Policy, PredicateError,
 };
 
 use std::{
@@ -270,7 +272,29 @@ where
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.inner.hash(key);
-        self.inner.select(hash).get_with_hash(key, hash)
+        self.inner
+            .select(hash)
+            .get_with_hash(key, hash, false)
+            .map(Entry::into_value)
+    }
+
+    pub fn entry(&self, key: K) -> OwnedKeyEntrySelector<'_, K, V, S>
+    where
+        K: Hash + Eq,
+    {
+        let hash = self.inner.hash(&key);
+        let cache = self.inner.select(hash);
+        OwnedKeyEntrySelector::new(key, hash, cache)
+    }
+
+    pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        let hash = self.inner.hash(key);
+        let cache = self.inner.select(hash);
+        RefKeyEntrySelector::new(key, hash, cache)
     }
 
     /// Deprecated, replaced with [`get_with`](#method.get_with)
@@ -302,7 +326,8 @@ where
         let replace_if = None as Option<fn(&V) -> bool>;
         self.inner
             .select(hash)
-            .get_or_insert_with_hash_and_fun(key, hash, init, replace_if)
+            .get_or_insert_with_hash_and_fun(key, hash, init, replace_if, false)
+            .into_value()
     }
 
     /// Similar to [`get_with`](#method.get_with), but instead of passing an owned
@@ -317,7 +342,8 @@ where
         let replace_if = None as Option<fn(&V) -> bool>;
         self.inner
             .select(hash)
-            .get_or_insert_with_hash_by_ref_and_fun(key, hash, init, replace_if)
+            .get_or_insert_with_hash_by_ref_and_fun(key, hash, init, replace_if, false)
+            .into_value()
     }
 
     /// Works like [`get_with`](#method.get_with), but takes an additional
@@ -338,7 +364,8 @@ where
         let key = Arc::new(key);
         self.inner
             .select(hash)
-            .get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if))
+            .get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if), false)
+            .into_value()
     }
 
     // We will provide this API under the new `entry` API.
