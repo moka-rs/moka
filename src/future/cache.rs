@@ -754,6 +754,38 @@ where
             .map(Entry::into_value)
     }
 
+    /// Takes a key `K` and returns an [`OwnedKeyEntrySelector`] that can be used to
+    /// select or insert an entry.
+    ///
+    /// [`OwnedKeyEntrySelector`]: ./struct.OwnedKeyEntrySelector.html
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.10", features = ["future"] }
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    ///
+    /// use moka::future::Cache;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let cache: Cache<String, u32> = Cache::new(100);
+    ///     let key = "key1".to_string();
+    ///
+    ///     let entry = cache.entry(key.clone()).or_insert(3).await;
+    ///     assert!(entry.is_fresh());
+    ///     assert_eq!(entry.key(), &key);
+    ///     assert_eq!(entry.into_value(), 3);
+    ///
+    ///     let entry = cache.entry(key).or_insert(6).await;
+    ///     // Not fresh because the value was already in the cache.
+    ///     assert!(!entry.is_fresh());
+    ///     assert_eq!(entry.into_value(), 3);
+    /// }
+    /// ```
     pub fn entry(&self, key: K) -> OwnedKeyEntrySelector<'_, K, V, S>
     where
         K: Hash + Eq,
@@ -762,6 +794,38 @@ where
         OwnedKeyEntrySelector::new(key, hash, self)
     }
 
+    /// Takes a reference `&Q` of a key and returns an [`RefKeyEntrySelector`] that
+    /// can be used to select or insert an entry.
+    ///
+    /// [`RefKeyEntrySelector`]: ./struct.RefKeyEntrySelector.html
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.10", features = ["future"] }
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    ///
+    /// use moka::future::Cache;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let cache: Cache<String, u32> = Cache::new(100);
+    ///     let key = "key1".to_string();
+    ///
+    ///     let entry = cache.entry_by_ref(&key).or_insert(3).await;
+    ///     assert!(entry.is_fresh());
+    ///     assert_eq!(entry.key(), &key);
+    ///     assert_eq!(entry.into_value(), 3);
+    ///
+    ///     let entry = cache.entry_by_ref(&key).or_insert(6).await;
+    ///     // Not fresh because the value was already in the cache.
+    ///     assert!(!entry.is_fresh());
+    ///     assert_eq!(entry.into_value(), 3);
+    /// }
+    /// ```
     pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
     where
         K: Borrow<Q>,

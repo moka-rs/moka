@@ -9,6 +9,16 @@ use std::{
     sync::Arc,
 };
 
+/// Provides advanced methods to select or insert an entry of the cache.
+///
+/// Many methods here return an [`Entry`], a snapshot of a single key-value pair in
+/// the cache, carrying additional information like `is_fresh`.
+///
+/// `OwnedKeyEntrySelector` is constructed from the [`entry`][entry-method] method on
+/// the cache.
+///
+/// [`Entry`]: ../struct.Entry.html
+/// [entry-method]: ./struct.Cache.html#method.entry
 pub struct OwnedKeyEntrySelector<'a, K, V, S> {
     owned_key: K,
     hash: u64,
@@ -51,7 +61,7 @@ where
     ///     assert_eq!(entry.into_value(), None);
     ///
     ///     let entry = cache.entry(key).or_default().await;
-    ///     // Not fresh because the value is already in the cache.
+    ///     // Not fresh because the value was already in the cache.
     ///     assert!(!entry.is_fresh());
     /// }
     /// ```
@@ -87,7 +97,7 @@ where
     ///     assert_eq!(entry.into_value(), 3);
     ///
     ///     let entry = cache.entry(key).or_insert(6).await;
-    ///     // Not fresh because the value is already in the cache.
+    ///     // Not fresh because the value was already in the cache.
     ///     assert!(!entry.is_fresh());
     ///     assert_eq!(entry.into_value(), 3);
     /// }
@@ -128,7 +138,7 @@ where
     ///         .entry(key)
     ///         .or_insert_with(async { "value2".to_string() })
     ///         .await;
-    ///     // Not fresh because the value is already in the cache.
+    ///     // Not fresh because the value was already in the cache.
     ///     assert!(!entry.is_fresh());
     ///     assert_eq!(entry.into_value(), "value1");
     /// }
@@ -197,7 +207,7 @@ where
     ///         .or_optionally_insert_with(async { Some(6) })
     ///         .await;
     ///     let entry = some_entry.unwrap();
-    ///     // Not fresh because the value is already in the cache.
+    ///     // Not fresh because the value was already in the cache.
     ///     assert!(!entry.is_fresh());
     ///     assert_eq!(entry.into_value(), 3);
     /// }
@@ -248,7 +258,7 @@ where
     ///         .or_try_insert_with(async { Ok::<u32, &str>(6) })
     ///         .await;
     ///     let entry = ok_entry.unwrap();
-    ///     // Not fresh because the value is already in the cache.
+    ///     // Not fresh because the value was already in the cache.
     ///     assert!(!entry.is_fresh());
     ///     assert_eq!(entry.into_value(), 3);
     /// }
@@ -265,6 +275,16 @@ where
     }
 }
 
+/// Provides advanced methods to select or insert an entry of the cache.
+///
+/// Many methods here return an [`Entry`], a snapshot of a single key-value pair in
+/// the cache, carrying additional information like `is_fresh`.
+///
+/// `RefKeyEntrySelector` is constructed from the
+/// [`entry_by_ref`][entry-by-ref-method] method on the cache.
+///
+/// [`Entry`]: ../struct.Entry.html
+/// [entry-by-ref-method]: ./struct.Cache.html#method.entry_by_ref
 pub struct RefKeyEntrySelector<'a, K, Q, V, S>
 where
     Q: ?Sized,
@@ -311,7 +331,7 @@ where
     ///     assert_eq!(entry.into_value(), None);
     ///
     ///     let entry = cache.entry_by_ref(&key).or_default().await;
-    ///     // Not fresh because the value is already in the cache.
+    ///     // Not fresh because the value was already in the cache.
     ///     assert!(!entry.is_fresh());
     /// }
     /// ```
@@ -346,7 +366,7 @@ where
     ///     assert_eq!(entry.into_value(), 3);
     ///
     ///     let entry = cache.entry_by_ref(&key).or_insert(6).await;
-    ///     // Not fresh because the value is already in the cache.
+    ///     // Not fresh because the value was already in the cache.
     ///     assert!(!entry.is_fresh());
     ///     assert_eq!(entry.into_value(), 3);
     /// }
@@ -386,7 +406,7 @@ where
     ///         .entry_by_ref(&key)
     ///         .or_insert_with(async { "value2".to_string() })
     ///         .await;
-    ///     // Not fresh because the value is already in the cache.
+    ///     // Not fresh because the value was already in the cache.
     ///     assert!(!entry.is_fresh());
     ///     assert_eq!(entry.into_value(), "value1");
     /// }
@@ -449,7 +469,7 @@ where
     ///         .or_optionally_insert_with(async { Some(6) })
     ///         .await;
     ///     let entry = some_entry.unwrap();
-    ///     // Not fresh because the value is already in the cache.
+    ///     // Not fresh because the value was already in the cache.
     ///     assert!(!entry.is_fresh());
     ///     assert_eq!(entry.into_value(), 3);
     /// }
@@ -499,7 +519,7 @@ where
     ///         .or_try_insert_with(async { Ok::<u32, &str>(6) })
     ///         .await;
     ///     let entry = ok_entry.unwrap();
-    ///     // Not fresh because the value is already in the cache.
+    ///     // Not fresh because the value was already in the cache.
     ///     assert!(!entry.is_fresh());
     ///     assert_eq!(entry.into_value(), 3);
     /// }
