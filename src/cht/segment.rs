@@ -683,13 +683,10 @@ mod tests {
             .collect::<Result<BTreeMap<_, _>, _>>()
             .expect("Got an error from a thread");
 
-        assert_eq!(hashmap.len(), MAX_VALUE as usize);
+        assert_eq!(hashmap.len(), MAX_VALUE);
 
         // Verify that the sum of success insertion counts should be MAX_VALUE.
-        let sum_of_insertions: usize = results1
-            .iter()
-            .map(|(_thread_id, success_count)| success_count)
-            .sum();
+        let sum_of_insertions: usize = results1.values().sum();
         assert_eq!(sum_of_insertions, MAX_VALUE);
 
         // Get all entries from the cht HashMap and turn them into the same format

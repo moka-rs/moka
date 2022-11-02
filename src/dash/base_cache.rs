@@ -497,7 +497,7 @@ where
             dashmap::DashMap::with_capacity_and_hasher(initial_capacity, build_hasher.clone());
 
         Self {
-            max_capacity: max_capacity.map(|n| n as u64),
+            max_capacity,
             entry_count: Default::default(),
             weighted_size: Default::default(),
             cache,
