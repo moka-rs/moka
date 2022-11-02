@@ -1458,7 +1458,8 @@ where
     {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
-        self.get_or_try_insert_with_hash_and_fun(key, hash, init)
+        self.get_or_try_insert_with_hash_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
     }
 
     /// Similar to [`try_get_with`](#method.try_get_with), but instead of passing an
@@ -1472,7 +1473,8 @@ where
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
         let hash = self.base.hash(key);
-        self.get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init)
+        self.get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
     }
 
     pub(crate) fn get_or_try_insert_with_hash_and_fun<F, E>(
@@ -1480,16 +1482,17 @@ where
         key: Arc<K>,
         hash: u64,
         init: F,
-    ) -> Result<V, Arc<E>>
+        need_key: bool,
+    ) -> Result<Entry<K, V>, Arc<E>>
     where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
     {
-        if let Some(entry) = self.get_with_hash(&key, hash, false) {
-            return Ok(entry.into_value());
+        if let Some(entry) = self.get_with_hash(&key, hash, need_key) {
+            return Ok(entry);
         }
 
-        self.try_insert_with_hash_and_fun(key, hash, init)
+        self.try_insert_with_hash_and_fun(key, hash, init, need_key)
     }
 
     pub(crate) fn get_or_try_insert_with_hash_by_ref_and_fun<F, Q, E>(
@@ -1497,7 +1500,8 @@ where
         key: &Q,
         hash: u64,
         init: F,
-    ) -> Result<V, Arc<E>>
+        need_key: bool,
+    ) -> Result<Entry<K, V>, Arc<E>>
     where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
@@ -1505,11 +1509,11 @@ where
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
         if let Some(entry) = self.get_with_hash(key, hash, false) {
-            return Ok(entry.into_value());
+            return Ok(entry);
         }
 
         let key = Arc::new(key.to_owned());
-        self.try_insert_with_hash_and_fun(key, hash, init)
+        self.try_insert_with_hash_and_fun(key, hash, init, need_key)
     }
 
     pub(crate) fn try_insert_with_hash_and_fun<F, E>(
@@ -1517,11 +1521,17 @@ where
         key: Arc<K>,
         hash: u64,
         init: F,
-    ) -> Result<V, Arc<E>>
+        need_key: bool,
+    ) -> Result<Entry<K, V>, Arc<E>>
     where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
     {
+        let k = if need_key {
+            Some(Arc::clone(&key))
+        } else {
+            None
+        };
         match self
             .value_initializer
             .try_init_or_read(Arc::clone(&key), init)
@@ -1531,9 +1541,9 @@ where
                 self.value_initializer
                     .remove_waiter(&key, TypeId::of::<E>());
                 crossbeam_epoch::pin().flush();
-                Ok(v)
+                Ok(Entry::new(k, v, true))
             }
-            InitResult::ReadExisting(v) => Ok(v),
+            InitResult::ReadExisting(v) => Ok(Entry::new(k, v, false)),
             InitResult::InitErr(e) => {
                 crossbeam_epoch::pin().flush();
                 Err(e)

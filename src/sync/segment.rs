@@ -406,7 +406,8 @@ where
         let key = Arc::new(key);
         self.inner
             .select(hash)
-            .get_or_try_insert_with_hash_and_fun(key, hash, init)
+            .get_or_try_insert_with_hash_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
     }
 
     /// Similar to [`try_get_with`](#method.try_get_with), but instead of passing an
@@ -422,7 +423,8 @@ where
         let hash = self.inner.hash(key);
         self.inner
             .select(hash)
-            .get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init)
+            .get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
     }
 
     /// Try to ensure the value of the key exists by inserting an `Some` result of
