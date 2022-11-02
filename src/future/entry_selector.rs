@@ -46,11 +46,12 @@ where
     ///     let key = "key1".to_string();
     ///
     ///     let entry = cache.entry(key.clone()).or_default().await;
-    ///     assert_eq!(entry.is_fresh(), true);
+    ///     assert!(entry.is_fresh());
     ///     assert_eq!(entry.into_value(), None);
     ///
     ///     let entry = cache.entry(key).or_default().await;
-    ///     assert_eq!(entry.is_fresh(), false);
+    ///     // Not fresh because the value is already in the cache.
+    ///     assert!(!entry.is_fresh());
     /// }
     /// ```
     pub async fn or_default(self) -> Entry<K, V>
@@ -80,11 +81,12 @@ where
     ///     let key = "key1".to_string();
     ///
     ///     let entry = cache.entry(key.clone()).or_insert(3).await;
-    ///     assert_eq!(entry.is_fresh(), true);
+    ///     assert!(entry.is_fresh());
     ///     assert_eq!(entry.into_value(), 3);
     ///
     ///     let entry = cache.entry(key).or_insert(6).await;
-    ///     assert_eq!(entry.is_fresh(), false);
+    ///     // Not fresh because the value is already in the cache.
+    ///     assert!(!entry.is_fresh());
     ///     assert_eq!(entry.into_value(), 3);
     /// }
     /// ```
@@ -116,14 +118,15 @@ where
     ///         .entry(key.clone())
     ///         .or_insert_with(async { "value1".to_string() })
     ///         .await;
-    ///     assert_eq!(entry.is_fresh(), true);
+    ///     assert!(entry.is_fresh());
     ///     assert_eq!(entry.into_value(), "value1");
     ///
     ///     let entry = cache
     ///         .entry(key)
     ///         .or_insert_with(async { "value2".to_string() })
     ///         .await;
-    ///     assert_eq!(entry.is_fresh(), false);
+    ///     // Not fresh because the value is already in the cache.
+    ///     assert!(!entry.is_fresh());
     ///     assert_eq!(entry.into_value(), "value1");
     /// }
     /// ```
@@ -151,6 +154,56 @@ where
         let key = Arc::new(self.owned_key);
         self.cache
             .get_or_insert_with_hash_and_fun(key, self.hash, init, Some(replace_if), true)
+            .await
+    }
+
+    /// # Example
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.10", features = ["future"] }
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    ///
+    /// use moka::future::Cache;
+    ///
+    /// #[tokio::main]
+    ///     async fn main() {
+    ///     let cache: Cache<String, u32> = Cache::new(100);
+    ///     let key = "key1".to_string();
+    ///
+    ///     let none_entry = cache
+    ///         .entry(key.clone())
+    ///         .or_optionally_insert_with(async { None })
+    ///         .await;
+    ///     assert!(none_entry.is_none());
+    ///
+    ///     let some_entry = cache
+    ///         .entry(key.clone())
+    ///         .or_optionally_insert_with(async { Some(3) })
+    ///         .await;
+    ///     assert!(some_entry.is_some());
+    ///     let entry = some_entry.unwrap();
+    ///     assert!(entry.is_fresh());
+    ///     assert_eq!(entry.into_value(), 3);
+    ///
+    ///     let some_entry = cache
+    ///         .entry(key)
+    ///         .or_optionally_insert_with(async { Some(6) })
+    ///         .await;
+    ///     let entry = some_entry.unwrap();
+    ///     // Not fresh because the value is already in the cache.
+    ///     assert!(!entry.is_fresh());
+    ///     assert_eq!(entry.into_value(), 3);
+    /// }
+    pub async fn or_optionally_insert_with(
+        self,
+        init: impl Future<Output = Option<V>>,
+    ) -> Option<Entry<K, V>> {
+        let key = Arc::new(self.owned_key);
+        self.cache
+            .get_or_optionally_insert_with_hash_and_fun(key, self.hash, init, true)
             .await
     }
 }
@@ -196,11 +249,12 @@ where
     ///     let key = "key1".to_string();
     ///
     ///     let entry = cache.entry_by_ref(&key).or_default().await;
-    ///     assert_eq!(entry.is_fresh(), true);
+    ///     assert!(entry.is_fresh());
     ///     assert_eq!(entry.into_value(), None);
     ///
     ///     let entry = cache.entry_by_ref(&key).or_default().await;
-    ///     assert_eq!(entry.is_fresh(), false);
+    ///     // Not fresh because the value is already in the cache.
+    ///     assert!(!entry.is_fresh());
     /// }
     /// ```
     pub async fn or_default(self) -> Entry<K, V>
@@ -229,11 +283,12 @@ where
     ///     let key = "key1".to_string();
     ///
     ///     let entry = cache.entry_by_ref(&key).or_insert(3).await;
-    ///     assert_eq!(entry.is_fresh(), true);
+    ///     assert!(entry.is_fresh());
     ///     assert_eq!(entry.into_value(), 3);
     ///
     ///     let entry = cache.entry_by_ref(&key).or_insert(6).await;
-    ///     assert_eq!(entry.is_fresh(), false);
+    ///     // Not fresh because the value is already in the cache.
+    ///     assert!(!entry.is_fresh());
     ///     assert_eq!(entry.into_value(), 3);
     /// }
     /// ```
@@ -264,14 +319,15 @@ where
     ///         .entry_by_ref(&key)
     ///         .or_insert_with(async { "value1".to_string() })
     ///         .await;
-    ///     assert_eq!(entry.is_fresh(), true);
+    ///     assert!(entry.is_fresh());
     ///     assert_eq!(entry.into_value(), "value1");
     ///
     ///     let entry = cache
     ///         .entry_by_ref(&key)
     ///         .or_insert_with(async { "value2".to_string() })
     ///         .await;
-    ///     assert_eq!(entry.is_fresh(), false);
+    ///     // Not fresh because the value is already in the cache.
+    ///     assert!(!entry.is_fresh());
     ///     assert_eq!(entry.into_value(), "value1");
     /// }
     /// ```
@@ -293,6 +349,55 @@ where
         let key = Arc::new(owned_key);
         self.cache
             .get_or_insert_with_hash_and_fun(key, self.hash, init, Some(replace_if), true)
+            .await
+    }
+
+    /// # Example
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.10", features = ["future"] }
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    ///
+    /// use moka::future::Cache;
+    ///
+    /// #[tokio::main]
+    ///     async fn main() {
+    ///     let cache: Cache<String, u32> = Cache::new(100);
+    ///     let key = "key1".to_string();
+    ///
+    ///     let none_entry = cache
+    ///         .entry_by_ref(&key)
+    ///         .or_optionally_insert_with(async { None })
+    ///         .await;
+    ///     assert!(none_entry.is_none());
+    ///
+    ///     let some_entry = cache
+    ///         .entry_by_ref(&key)
+    ///         .or_optionally_insert_with(async { Some(3) })
+    ///         .await;
+    ///     assert!(some_entry.is_some());
+    ///     let entry = some_entry.unwrap();
+    ///     assert!(entry.is_fresh());
+    ///     assert_eq!(entry.into_value(), 3);
+    ///
+    ///     let some_entry = cache
+    ///         .entry_by_ref(&key)
+    ///         .or_optionally_insert_with(async { Some(6) })
+    ///         .await;
+    ///     let entry = some_entry.unwrap();
+    ///     // Not fresh because the value is already in the cache.
+    ///     assert!(!entry.is_fresh());
+    ///     assert_eq!(entry.into_value(), 3);
+    /// }
+    pub async fn or_optionally_insert_with(
+        self,
+        init: impl Future<Output = Option<V>>,
+    ) -> Option<Entry<K, V>> {
+        self.cache
+            .get_or_optionally_insert_with_hash_by_ref_and_fun(self.ref_key, self.hash, init, true)
             .await
     }
 }

@@ -441,7 +441,8 @@ where
         let key = Arc::new(key);
         self.inner
             .select(hash)
-            .get_or_optionally_insert_with_hash_and_fun(key, hash, init)
+            .get_or_optionally_insert_with_hash_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
     }
 
     /// Similar to [`optionally_get_with`](#method.optionally_get_with), but instead
@@ -457,7 +458,8 @@ where
         let hash = self.inner.hash(key);
         self.inner
             .select(hash)
-            .get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init)
+            .get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
     }
 
     /// Inserts a key-value pair into the cache.

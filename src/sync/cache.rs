@@ -1186,6 +1186,188 @@ where
         }
     }
 
+    /// Try to ensure the value of the key exists by inserting an `Some` result of
+    /// the init closure if not exist, and returns a _clone_ of the value or `None`
+    /// returned by the closure.
+    ///
+    /// This method prevents to evaluate the init closure multiple times on the same
+    /// key even if the method is concurrently called by many threads; only one of
+    /// the calls evaluates its closure (as long as these closures return the same
+    /// Option type), and other calls wait for that closure to complete.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use moka::sync::Cache;
+    /// use std::{path::Path, time::Duration, thread};
+    ///
+    /// /// This function tries to get the file size in bytes.
+    /// fn get_file_size(thread_id: u8, path: impl AsRef<Path>) -> Option<u64> {
+    ///     println!("get_file_size() called by thread {}.", thread_id);
+    ///     std::fs::metadata(path).ok().and_then(|m|Some(m.len()))
+    /// }
+    ///
+    /// let cache = Cache::new(100);
+    ///
+    /// // Spawn four threads.
+    /// let threads: Vec<_> = (0..4_u8)
+    ///     .map(|thread_id| {
+    ///         let my_cache = cache.clone();
+    ///         thread::spawn(move || {
+    ///             println!("Thread {} started.", thread_id);
+    ///
+    ///             // Try to insert and get the value for key1. Although all four
+    ///             // threads will call `optionally_get_with` at the same time,
+    ///             // get_file_size() must be called only once.
+    ///             let value = my_cache.optionally_get_with(
+    ///                 "key1",
+    ///                 || get_file_size(thread_id, "./Cargo.toml"),
+    ///             );
+    ///
+    ///             // Ensure the value exists now.
+    ///             assert!(value.is_some());
+    ///             thread::sleep(Duration::from_millis(10));
+    ///             assert!(my_cache.get(&"key1").is_some());
+    ///
+    ///             println!(
+    ///                 "Thread {} got the value. (len: {})",
+    ///                 thread_id,
+    ///                 value.unwrap()
+    ///             );
+    ///         })
+    ///     })
+    ///     .collect();
+    ///
+    /// // Wait all threads to complete.
+    /// threads
+    ///     .into_iter()
+    ///     .for_each(|t| t.join().expect("Thread failed"));
+    /// ```
+    ///
+    /// **Result**
+    ///
+    /// - `get_file_size()` was called exactly once by thread 0.
+    /// - Other threads were blocked until thread 0 inserted the value.
+    ///
+    /// ```console
+    /// Thread 0 started.
+    /// Thread 1 started.
+    /// Thread 2 started.
+    /// get_file_size() called by thread 0.
+    /// Thread 3 started.
+    /// Thread 2 got the value. (len: 1466)
+    /// Thread 0 got the value. (len: 1466)
+    /// Thread 1 got the value. (len: 1466)
+    /// Thread 3 got the value. (len: 1466)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` closure has panicked. When it happens,
+    /// only the caller whose `init` closure panicked will get the panic (e.g. only
+    /// thread 1 in the above sample). If there are other calls in progress (e.g.
+    /// thread 0, 2 and 3 above), this method will restart and resolve one of the
+    /// remaining `init` closure.
+    ///
+    pub fn optionally_get_with<F>(&self, key: K, init: F) -> Option<V>
+    where
+        F: FnOnce() -> Option<V>,
+    {
+        let hash = self.base.hash(&key);
+        let key = Arc::new(key);
+
+        self.get_or_optionally_insert_with_hash_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
+    }
+
+    /// Similar to [`optionally_get_with`](#method.optionally_get_with), but instead
+    /// of passing an owned key, you can pass a reference to the key. If the key does
+    /// not exist in the cache, the key will be cloned to create new entry in the
+    /// cache.
+    pub fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
+    where
+        F: FnOnce() -> Option<V>,
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        let hash = self.base.hash(key);
+        self.get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
+    }
+
+    pub(super) fn get_or_optionally_insert_with_hash_and_fun<F>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        init: F,
+        need_key: bool,
+    ) -> Option<Entry<K, V>>
+    where
+        F: FnOnce() -> Option<V>,
+    {
+        let entry = self.get_with_hash(&key, hash, need_key);
+        if entry.is_some() {
+            return entry;
+        }
+
+        self.optionally_insert_with_hash_and_fun(key, hash, init, need_key)
+    }
+
+    pub(super) fn get_or_optionally_insert_with_hash_by_ref_and_fun<F, Q>(
+        &self,
+        key: &Q,
+        hash: u64,
+        init: F,
+        need_key: bool,
+    ) -> Option<Entry<K, V>>
+    where
+        F: FnOnce() -> Option<V>,
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        let entry = self.get_with_hash(key, hash, need_key);
+        if entry.is_some() {
+            return entry;
+        }
+
+        let key = Arc::new(key.to_owned());
+        self.optionally_insert_with_hash_and_fun(key, hash, init, need_key)
+    }
+
+    pub(super) fn optionally_insert_with_hash_and_fun<F>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        init: F,
+        need_key: bool,
+    ) -> Option<Entry<K, V>>
+    where
+        F: FnOnce() -> Option<V>,
+    {
+        let k = if need_key {
+            Some(Arc::clone(&key))
+        } else {
+            None
+        };
+        match self
+            .value_initializer
+            .optionally_init_or_read(Arc::clone(&key), init)
+        {
+            InitResult::Initialized(v) => {
+                self.insert_with_hash(Arc::clone(&key), hash, v.clone());
+                self.value_initializer
+                    .remove_waiter(&key, TypeId::of::<OptionallyNone>());
+                crossbeam_epoch::pin().flush();
+                Some(Entry::new(k, v, true))
+            }
+            InitResult::ReadExisting(v) => Some(Entry::new(k, v, false)),
+            InitResult::InitErr(_) => {
+                crossbeam_epoch::pin().flush();
+                None
+            }
+        }
+    }
+
     /// Try to ensure the value of the key exists by inserting an `Ok` result of the
     /// init closure if not exist, and returns a _clone_ of the value or the `Err`
     /// returned by the closure.
@@ -1355,176 +1537,6 @@ where
             InitResult::InitErr(e) => {
                 crossbeam_epoch::pin().flush();
                 Err(e)
-            }
-        }
-    }
-
-    /// Try to ensure the value of the key exists by inserting an `Some` result of
-    /// the init closure if not exist, and returns a _clone_ of the value or `None`
-    /// returned by the closure.
-    ///
-    /// This method prevents to evaluate the init closure multiple times on the same
-    /// key even if the method is concurrently called by many threads; only one of
-    /// the calls evaluates its closure (as long as these closures return the same
-    /// Option type), and other calls wait for that closure to complete.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use moka::sync::Cache;
-    /// use std::{path::Path, time::Duration, thread};
-    ///
-    /// /// This function tries to get the file size in bytes.
-    /// fn get_file_size(thread_id: u8, path: impl AsRef<Path>) -> Option<u64> {
-    ///     println!("get_file_size() called by thread {}.", thread_id);
-    ///     std::fs::metadata(path).ok().and_then(|m|Some(m.len()))
-    /// }
-    ///
-    /// let cache = Cache::new(100);
-    ///
-    /// // Spawn four threads.
-    /// let threads: Vec<_> = (0..4_u8)
-    ///     .map(|thread_id| {
-    ///         let my_cache = cache.clone();
-    ///         thread::spawn(move || {
-    ///             println!("Thread {} started.", thread_id);
-    ///
-    ///             // Try to insert and get the value for key1. Although all four
-    ///             // threads will call `optionally_get_with` at the same time,
-    ///             // get_file_size() must be called only once.
-    ///             let value = my_cache.optionally_get_with(
-    ///                 "key1",
-    ///                 || get_file_size(thread_id, "./Cargo.toml"),
-    ///             );
-    ///
-    ///             // Ensure the value exists now.
-    ///             assert!(value.is_some());
-    ///             thread::sleep(Duration::from_millis(10));
-    ///             assert!(my_cache.get(&"key1").is_some());
-    ///
-    ///             println!(
-    ///                 "Thread {} got the value. (len: {})",
-    ///                 thread_id,
-    ///                 value.unwrap()
-    ///             );
-    ///         })
-    ///     })
-    ///     .collect();
-    ///
-    /// // Wait all threads to complete.
-    /// threads
-    ///     .into_iter()
-    ///     .for_each(|t| t.join().expect("Thread failed"));
-    /// ```
-    ///
-    /// **Result**
-    ///
-    /// - `get_file_size()` was called exactly once by thread 0.
-    /// - Other threads were blocked until thread 0 inserted the value.
-    ///
-    /// ```console
-    /// Thread 0 started.
-    /// Thread 1 started.
-    /// Thread 2 started.
-    /// get_file_size() called by thread 0.
-    /// Thread 3 started.
-    /// Thread 2 got the value. (len: 1466)
-    /// Thread 0 got the value. (len: 1466)
-    /// Thread 1 got the value. (len: 1466)
-    /// Thread 3 got the value. (len: 1466)
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This method panics when the `init` closure has panicked. When it happens,
-    /// only the caller whose `init` closure panicked will get the panic (e.g. only
-    /// thread 1 in the above sample). If there are other calls in progress (e.g.
-    /// thread 0, 2 and 3 above), this method will restart and resolve one of the
-    /// remaining `init` closure.
-    ///
-    pub fn optionally_get_with<F>(&self, key: K, init: F) -> Option<V>
-    where
-        F: FnOnce() -> Option<V>,
-    {
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
-
-        self.get_or_optionally_insert_with_hash_and_fun(key, hash, init)
-    }
-
-    /// Similar to [`optionally_get_with`](#method.optionally_get_with), but instead
-    /// of passing an owned key, you can pass a reference to the key. If the key does
-    /// not exist in the cache, the key will be cloned to create new entry in the
-    /// cache.
-    pub fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
-    where
-        F: FnOnce() -> Option<V>,
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
-    {
-        let hash = self.base.hash(key);
-        self.get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init)
-    }
-
-    pub(super) fn get_or_optionally_insert_with_hash_and_fun<F>(
-        &self,
-        key: Arc<K>,
-        hash: u64,
-        init: F,
-    ) -> Option<V>
-    where
-        F: FnOnce() -> Option<V>,
-    {
-        if let Some(entry) = self.get_with_hash(&key, hash, false) {
-            return Some(entry.into_value());
-        }
-
-        self.optionally_insert_with_hash_and_fun(key, hash, init)
-    }
-
-    pub(super) fn get_or_optionally_insert_with_hash_by_ref_and_fun<F, Q>(
-        &self,
-        key: &Q,
-        hash: u64,
-        init: F,
-    ) -> Option<V>
-    where
-        F: FnOnce() -> Option<V>,
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
-    {
-        if let Some(entry) = self.get_with_hash(key, hash, false) {
-            return Some(entry.into_value());
-        }
-
-        let key = Arc::new(key.to_owned());
-        self.optionally_insert_with_hash_and_fun(key, hash, init)
-    }
-
-    pub(super) fn optionally_insert_with_hash_and_fun<F>(
-        &self,
-        key: Arc<K>,
-        hash: u64,
-        init: F,
-    ) -> Option<V>
-    where
-        F: FnOnce() -> Option<V>,
-    {
-        match self
-            .value_initializer
-            .optionally_init_or_read(Arc::clone(&key), init)
-        {
-            InitResult::Initialized(v) => {
-                self.insert_with_hash(Arc::clone(&key), hash, v.clone());
-                self.value_initializer
-                    .remove_waiter(&key, TypeId::of::<OptionallyNone>());
-                crossbeam_epoch::pin().flush();
-                Some(v)
-            }
-            InitResult::ReadExisting(v) => Some(v),
-            InitResult::InitErr(_) => {
-                crossbeam_epoch::pin().flush();
-                None
             }
         }
     }
