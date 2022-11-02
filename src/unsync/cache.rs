@@ -284,7 +284,7 @@ where
         );
 
         Self {
-            max_capacity: max_capacity.map(|n| n as u64),
+            max_capacity,
             entry_count: 0,
             weighted_size: 0,
             cache,
@@ -620,12 +620,12 @@ where
 
     fn saturating_add_to_total_weight(&mut self, weight: u64) {
         let total = &mut self.weighted_size;
-        *total = total.saturating_add(weight as u64);
+        *total = total.saturating_add(weight);
     }
 
     fn saturating_sub_from_total_weight(&mut self, weight: u64) {
         let total = &mut self.weighted_size;
-        *total = total.saturating_sub(weight as u64);
+        *total = total.saturating_sub(weight);
     }
 
     #[inline]
