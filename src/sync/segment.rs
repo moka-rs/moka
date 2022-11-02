@@ -313,13 +313,17 @@ where
         self.try_get_with(key, init)
     }
 
-    /// Ensures the value of the key exists by inserting the output of the `init`
-    /// closure if not exist, and returns a _clone_ of the value.
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, evaluates the `init` closure and inserts the output.
     ///
-    /// This method prevents to evaluate the `init` closure multiple times on the
-    /// same key even if the method is concurrently called by many threads; only one
-    /// of the calls evaluates its closure, and other calls wait for that closure to
-    /// complete.
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` closure. Only one of the calls
+    /// evaluates its closure, and other calls wait for that closure to complete. See
+    /// [`Cache::get_with`][get-with-method] for more details.
+    ///
+    /// [get-with-method]: ./struct.Cache.html#method.get_with
     pub fn get_with(&self, key: K, init: impl FnOnce() -> V) -> V {
         let hash = self.inner.hash(&key);
         let key = Arc::new(key);
@@ -368,35 +372,64 @@ where
             .into_value()
     }
 
-    // We will provide this API under the new `entry` API.
-    //
-    // /// Similar to [`get_with_if`](#method.get_with_if), but instead of passing an
-    // /// owned key, you can pass a reference to the key. If the key does not exist in
-    // /// the cache, the key will be cloned to create new entry in the cache.
-    // pub fn get_with_if_by_ref<Q>(
-    //     &self,
-    //     key: &Q,
-    //     init: impl FnOnce() -> V,
-    //     replace_if: impl FnMut(&V) -> bool,
-    // ) -> V
-    // where
-    //     K: Borrow<Q>,
-    //     Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
-    // {
-    //     let hash = self.inner.hash(key);
-    //     self.inner
-    //         .select(hash)
-    //         .get_or_insert_with_hash_by_ref_and_fun(key, hash, init, Some(replace_if))
-    // }
-
-    /// Try to ensure the value of the key exists by inserting an `Ok` result of the
-    /// init closure if not exist, and returns a _clone_ of the value or the `Err`
-    /// returned by the closure.
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, evaluates the `init` closure, and inserts the value if
+    /// `Some(value)` was returned. If `None` was returned from the closure, this
+    /// method does not insert a value and returns `None`.
     ///
-    /// This method prevents to evaluate the init closure multiple times on the same
-    /// key even if the method is concurrently called by many threads; only one of
-    /// the calls evaluates its closure (as long as these closures return the same
-    /// error type), and other calls wait for that closure to complete.
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` closure. Only one of the calls
+    /// evaluates its closure, and other calls wait for that closure to complete.
+    /// See [`Cache::optionally_get_with`][opt-get-with-method] for more details.
+    ///
+    /// [opt-get-with-method]: ./struct.Cache.html#method.optionally_get_with
+    pub fn optionally_get_with<F>(&self, key: K, init: F) -> Option<V>
+    where
+        F: FnOnce() -> Option<V>,
+    {
+        let hash = self.inner.hash(&key);
+        let key = Arc::new(key);
+        self.inner
+            .select(hash)
+            .get_or_optionally_insert_with_hash_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
+    }
+
+    /// Similar to [`optionally_get_with`](#method.optionally_get_with), but instead
+    /// of passing an owned key, you can pass a reference to the key. If the key does
+    /// not exist in the cache, the key will be cloned to create new entry in the
+    /// cache.
+    pub fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
+    where
+        F: FnOnce() -> Option<V>,
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        let hash = self.inner.hash(key);
+        self.inner
+            .select(hash)
+            .get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
+    }
+
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, evaluates the `init` closure, and inserts the value if `Ok(value)`
+    /// was returned. If `Err(_)` was returned from the closure, this method does not
+    /// insert a value and returns the `Err` wrapped by [`std::sync::Arc`][std-arc].
+    ///
+    /// [std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` closure (as long as these
+    /// closures return the same error type). Only one of the calls evaluates its
+    /// closure, and other calls wait for that closure to complete. See
+    /// [`Cache::try_get_with`][try-get-with-method] for more details.
+    ///
+    /// [try-get-with-method]: ./struct.Cache.html#method.try_get_with
     pub fn try_get_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
     where
         F: FnOnce() -> Result<V, E>,
@@ -424,43 +457,6 @@ where
         self.inner
             .select(hash)
             .get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init, false)
-            .map(Entry::into_value)
-    }
-
-    /// Try to ensure the value of the key exists by inserting an `Some` result of
-    /// the init closure if not exist, and returns a _clone_ of the value or `None`
-    /// returned by the closure.
-    ///
-    /// This method prevents to evaluate the init closure multiple times on the same
-    /// key even if the method is concurrently called by many threads; only one of
-    /// the calls evaluates its closure (as long as these closures return the same
-    /// Option type), and other calls wait for that closure to complete.
-    pub fn optionally_get_with<F>(&self, key: K, init: F) -> Option<V>
-    where
-        F: FnOnce() -> Option<V>,
-    {
-        let hash = self.inner.hash(&key);
-        let key = Arc::new(key);
-        self.inner
-            .select(hash)
-            .get_or_optionally_insert_with_hash_and_fun(key, hash, init, false)
-            .map(Entry::into_value)
-    }
-
-    /// Similar to [`optionally_get_with`](#method.optionally_get_with), but instead
-    /// of passing an owned key, you can pass a reference to the key. If the key does
-    /// not exist in the cache, the key will be cloned to create new entry in the
-    /// cache.
-    pub fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
-    where
-        F: FnOnce() -> Option<V>,
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
-    {
-        let hash = self.inner.hash(key);
-        self.inner
-            .select(hash)
-            .get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init, false)
             .map(Entry::into_value)
     }
 

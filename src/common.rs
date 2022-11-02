@@ -6,9 +6,11 @@ pub(crate) mod concurrent;
 #[cfg(any(feature = "sync", feature = "future"))]
 pub(crate) mod error;
 
+#[cfg(any(feature = "sync", feature = "future"))]
+pub(crate) mod entry;
+
 pub(crate) mod builder_utils;
 pub(crate) mod deque;
-pub(crate) mod entry;
 pub(crate) mod frequency_sketch;
 pub(crate) mod time;
 

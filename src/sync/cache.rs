@@ -1001,15 +1001,16 @@ where
         self.try_get_with(key, init)
     }
 
-    /// Ensures the value of the key exists by inserting the output of the `init`
-    /// closure if not exist, and returns a _clone_ of the value.
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, evaluates the `init` closure and inserts the output.
     ///
-    /// This method prevents to evaluate the `init` closure multiple times on the
-    /// same key even if the method is concurrently called by many threads; only one
-    /// of the calls evaluates its closure, and other calls wait for that closure to
-    /// complete.
+    /// # Concurrent calls on the same key
     ///
-    /// # Example
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` closure. Only one of the calls
+    /// evaluates its closure, and other calls wait for that closure to complete.
+    ///
+    /// The following code snippet demonstrates this behavior:
     ///
     /// ```rust
     /// use moka::sync::Cache;
@@ -1097,8 +1098,8 @@ where
             .into_value()
     }
 
-    /// Deprecated, replaced with [`entry()::or_insert_with_if()`]
-    /// (./struct.OwnedKeyEntrySelector.html#method.or_insert_with_if)
+    /// Deprecated, replaced with
+    /// [`entry()::or_insert_with_if()`](./struct.OwnedKeyEntrySelector.html#method.or_insert_with_if)
     #[deprecated(since = "0.10.0", note = "Replaced with `entry().or_insert_with_if()`")]
     pub fn get_with_if(
         &self,
@@ -1232,16 +1233,18 @@ where
         }
     }
 
-    /// Try to ensure the value of the key exists by inserting an `Some` result of
-    /// the init closure if not exist, and returns a _clone_ of the value or `None`
-    /// returned by the closure.
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, evaluates the `init` closure, and inserts the value if
+    /// `Some(value)` was returned. If `None` was returned from the closure, this
+    /// method does not insert a value and returns `None`.
     ///
-    /// This method prevents to evaluate the init closure multiple times on the same
-    /// key even if the method is concurrently called by many threads; only one of
-    /// the calls evaluates its closure (as long as these closures return the same
-    /// Option type), and other calls wait for that closure to complete.
+    /// # Concurrent calls on the same key
     ///
-    /// # Example
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` closure. Only one of the calls
+    /// evaluates its closure, and other calls wait for that closure to complete.
+    ///
+    /// The following code snippet demonstrates this behavior:
     ///
     /// ```rust
     /// use moka::sync::Cache;
@@ -1414,16 +1417,21 @@ where
         }
     }
 
-    /// Try to ensure the value of the key exists by inserting an `Ok` result of the
-    /// init closure if not exist, and returns a _clone_ of the value or the `Err`
-    /// returned by the closure.
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, evaluates the `init` closure, and inserts the value if `Ok(value)`
+    /// was returned. If `Err(_)` was returned from the closure, this method does not
+    /// insert a value and returns the `Err` wrapped by [`std::sync::Arc`][std-arc].
     ///
-    /// This method prevents to evaluate the init closure multiple times on the same
-    /// key even if the method is concurrently called by many threads; only one of
-    /// the calls evaluates its closure (as long as these closures return the same
-    /// error type), and other calls wait for that closure to complete.
+    /// [std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
     ///
-    /// # Example
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` closure (as long as these
+    /// closures return the same error type). Only one of the calls evaluates its
+    /// closure, and other calls wait for that closure to complete.
+    ///
+    /// The following code snippet demonstrates this behavior:
     ///
     /// ```rust
     /// use moka::sync::Cache;

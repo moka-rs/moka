@@ -851,15 +851,16 @@ where
         self.try_get_with(key, init).await
     }
 
-    /// Ensures the value of the key exists by inserting the output of the `init`
-    /// future if not exist, and returns a _clone_ of the value.
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, resolve the `init` future and inserts the output.
     ///
-    /// This method prevents to resolve the init future multiple times on the same
-    /// key even if the method is concurrently called by many async tasks; only one
-    /// of the calls resolves its future, and other calls wait for that future to
-    /// complete.
+    /// # Concurrent calls on the same key
     ///
-    /// # Example
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` future. Only one of the calls
+    /// evaluates its future, and other calls wait for that future to resolve.
+    ///
+    /// The following code snippet demonstrates this behavior:
     ///
     /// ```rust
     /// // Cargo.toml
@@ -957,8 +958,8 @@ where
             .into_value()
     }
 
-    /// Deprecated, replaced with [`entry()::or_insert_with_if()`]
-    /// (./struct.OwnedKeyEntrySelector.html#method.or_insert_with_if)
+    /// Deprecated, replaced with
+    /// [`entry()::or_insert_with_if()`](./struct.OwnedKeyEntrySelector.html#method.or_insert_with_if)
     #[deprecated(since = "0.10.0", note = "Replaced with `entry().or_insert_with_if()`")]
     pub async fn get_with_if(
         &self,
@@ -973,14 +974,18 @@ where
             .into_value()
     }
 
-    /// Try to ensure the value of the key exists by inserting an `Some` output of
-    /// the init future. If not exist, returns a _clone_ of the value or `None`
-    /// produced by the future.
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, resolves the `init` future, and inserts the value if `Some(value)`
+    /// was returned. If `None` was returned from the future, this method does not
+    /// insert a value and returns `None`.
     ///
-    /// This method prevents to resolve the init future multiple times on the same
-    /// key even if the method is concurrently called by many async tasks; only one
-    /// of the calls resolves its future (as long as these futures return the value),
-    /// and other calls wait for that future to complete.
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` future. Only one of the calls
+    /// evaluates its future, and other calls wait for that future to resolve.
+    ///
+    /// The following code snippet demonstrates this behavior:
     ///
     /// # Example
     ///
@@ -1090,14 +1095,21 @@ where
             .map(Entry::into_value)
     }
 
-    /// Try to ensure the value of the key exists by inserting an `Ok` output of the
-    /// init future if not exist, and returns a _clone_ of the value or the `Err`
-    /// produced by the future.
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, resolves the `init` future, and inserts the value if `Ok(value)`
+    /// was returned. If `Err(_)` was returned from the future, this method does not
+    /// insert a value and returns the `Err` wrapped by [`std::sync::Arc`][std-arc].
     ///
-    /// This method prevents to resolve the init future multiple times on the same
-    /// key even if the method is concurrently called by many async tasks; only one
-    /// of the calls resolves its future (as long as these futures return the same
-    /// error type), and other calls wait for that future to complete.
+    /// [std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` future (as long as these
+    /// futures return the same error type). Only one of the calls evaluates its
+    /// future, and other calls wait for that future to resolve.
+    ///
+    /// The following code snippet demonstrates this behavior:
     ///
     /// # Example
     ///

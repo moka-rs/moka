@@ -39,6 +39,13 @@ where
         }
     }
 
+    /// Returns the corresponding [`Entry`] for the key given when this entry
+    /// selector was constructed. If the entry does not exist, inserts one by calling
+    /// the [`default`][std-default-function] function of the value type `V`.
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    /// [std-default-function]: https://doc.rust-lang.org/stable/std/default/trait.Default.html#tymethod.default
+    ///
     /// # Example
     ///
     /// ```rust
@@ -75,6 +82,12 @@ where
             .await
     }
 
+    /// Returns the corresponding [`Entry`] for the key given when this entry
+    /// selector was constructed. If the entry does not exist, inserts one by using
+    /// the the given `default` value for `V`.
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    ///
     /// # Example
     ///
     /// ```rust
@@ -110,6 +123,12 @@ where
             .await
     }
 
+    /// Returns the corresponding [`Entry`] for the key given when this entry
+    /// selector was constructed. If the entry does not exist, resolves the `init`
+    /// future and inserts the output.
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    ///
     /// # Example
     ///
     /// ```rust
@@ -143,6 +162,15 @@ where
     ///     assert_eq!(entry.into_value(), "value1");
     /// }
     /// ```
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing entry
+    /// are coalesced into one evaluation of the `init` future. Only one of the calls
+    /// evaluates its future, and other calls wait for that future to resolve. See
+    /// [`Cache::get_with`][get-with-method] for more details.
+    ///
+    /// [get-with-method]: ./struct.Cache.html#method.get_with
     pub async fn or_insert_with(self, init: impl Future<Output = V>) -> Entry<K, V> {
         let key = Arc::new(self.owned_key);
         let replace_if = None as Option<fn(&V) -> bool>;
@@ -170,6 +198,14 @@ where
             .await
     }
 
+    /// Returns the corresponding [`Entry`] for the key given when this entry
+    /// selector was constructed. If the entry does not exist, resolves the `init`
+    /// future, and inserts an entry if `Some(value)` was returned. If `None` was
+    /// returned from the future, this method does not insert an entry and returns
+    /// `None`.
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    ///
     /// # Example
     ///
     /// ```rust
@@ -211,6 +247,17 @@ where
     ///     assert!(!entry.is_fresh());
     ///     assert_eq!(entry.into_value(), 3);
     /// }
+    /// ```
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing entry
+    /// are coalesced into one evaluation of the `init` future. Only one of the calls
+    /// evaluates its future, and other calls wait for that future to resolve.
+    ///
+    /// See [`Cache::optionally_get_with`][opt-get-with-method] for more details.
+    ///
+    /// [opt-get-with-method]: ./struct.Cache.html#method.optionally_get_with
     pub async fn or_optionally_insert_with(
         self,
         init: impl Future<Output = Option<V>>,
@@ -221,6 +268,15 @@ where
             .await
     }
 
+    /// Returns the corresponding [`Entry`] for the key given when this entry
+    /// selector was constructed. If the entry does not exist, resolves the `init`
+    /// future, and inserts an entry if `Ok(value)` was returned. If `Err(_)` was
+    /// returned from the future, this method does not insert an entry and returns
+    /// the `Err` wrapped by [`std::sync::Arc`][std-arc].
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    /// [std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
+    ///
     /// # Example
     ///
     /// ```rust
@@ -263,6 +319,17 @@ where
     ///     assert_eq!(entry.into_value(), 3);
     /// }
     /// ```
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing entry
+    /// are coalesced into one evaluation of the `init` future (as long as these
+    /// futures return the same error type). Only one of the calls evaluates its
+    /// future, and other calls wait for that future to resolve.
+    ///
+    /// See [`Cache::try_get_with`][try-get-with-method] for more details.
+    ///
+    /// [try-get-with-method]: ./struct.Cache.html#method.try_get_with
     pub async fn or_try_insert_with<F, E>(self, init: F) -> Result<Entry<K, V>, Arc<E>>
     where
         F: Future<Output = Result<V, E>>,
@@ -309,6 +376,14 @@ where
         }
     }
 
+    /// Returns the corresponding [`Entry`] for the reference of the key given when
+    /// this entry selector was constructed. If the entry does not exist, inserts one
+    /// by cloning the key and calling the [`default`][std-default-function] function
+    /// of the value type `V`.
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    /// [std-default-function]: https://doc.rust-lang.org/stable/std/default/trait.Default.html#tymethod.default
+    ///
     /// # Example
     ///
     /// ```rust
@@ -344,6 +419,12 @@ where
             .await
     }
 
+    /// Returns the corresponding [`Entry`] for the reference of the key given when
+    /// this entry selector was constructed. If the entry does not exist, inserts one
+    /// by cloning the key and using the given `default` value for `V`.
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    ///
     /// # Example
     ///
     /// ```rust
@@ -378,6 +459,12 @@ where
             .await
     }
 
+    /// Returns the corresponding [`Entry`] for the reference of the key given when
+    /// this entry selector was constructed. If the entry does not exist, inserts one
+    /// by cloning the key and resolving the `init` future for the value.
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    ///
     /// # Example
     ///
     /// ```rust
@@ -411,6 +498,15 @@ where
     ///     assert_eq!(entry.into_value(), "value1");
     /// }
     /// ```
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing entry
+    /// are coalesced into one evaluation of the `init` future. Only one of the calls
+    /// evaluates its future, and other calls wait for that future to resolve. See
+    /// [`Cache::get_with`][get-with-method] for more details.
+    ///
+    /// [get-with-method]: ./struct.Cache.html#method.get_with
     pub async fn or_insert_with(self, init: impl Future<Output = V>) -> Entry<K, V> {
         let owned_key: K = self.ref_key.to_owned();
         let key = Arc::new(owned_key);
@@ -420,6 +516,14 @@ where
             .await
     }
 
+    /// Works like [`or_insert_with`](#method.or_insert_with), but takes an additional
+    /// `replace_if` closure.
+    ///
+    /// This method will resolve the `init` future and insert the output to the
+    /// cache when:
+    ///
+    /// - The key does not exist.
+    /// - Or, `replace_if` closure returns `true`.
     pub async fn or_insert_with_if(
         self,
         init: impl Future<Output = V>,
@@ -432,6 +536,14 @@ where
             .await
     }
 
+    /// Returns the corresponding [`Entry`] for the reference of the key given when
+    /// this entry selector was constructed. If the entry does not exist, clones the
+    /// key and resolves the `init` future. If `Some(value)` was returned by the
+    /// future, inserts an entry with the value . If `None` was returned, this method
+    /// does not insert an entry and returns `None`.
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    ///
     /// # Example
     ///
     /// ```rust
@@ -473,6 +585,17 @@ where
     ///     assert!(!entry.is_fresh());
     ///     assert_eq!(entry.into_value(), 3);
     /// }
+    /// ```
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing entry
+    /// are coalesced into one evaluation of the `init` future. Only one of the calls
+    /// evaluates its future, and other calls wait for that future to resolve.
+    ///
+    /// See [`Cache::optionally_get_with`][opt-get-with-method] for more details.
+    ///
+    /// [opt-get-with-method]: ./struct.Cache.html#method.optionally_get_with
     pub async fn or_optionally_insert_with(
         self,
         init: impl Future<Output = Option<V>>,
@@ -482,6 +605,16 @@ where
             .await
     }
 
+    /// Returns the corresponding [`Entry`] for the reference of the key given when
+    /// this entry selector was constructed. If the entry does not exist, clones the
+    /// key and resolves the `init` future. If `Ok(value)` was returned from the
+    /// future, inserts an entry with the value. If `Err(_)` was returned, this
+    /// method does not insert an entry and returns the `Err` wrapped by
+    /// [`std::sync::Arc`][std-arc].
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    /// [std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
+    ///
     /// # Example
     ///
     /// ```rust
@@ -524,6 +657,17 @@ where
     ///     assert_eq!(entry.into_value(), 3);
     /// }
     /// ```
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing entry
+    /// are coalesced into one evaluation of the `init` future (as long as these
+    /// futures return the same error type). Only one of the calls evaluates its
+    /// future, and other calls wait for that future to resolve.
+    ///
+    /// See [`Cache::try_get_with`][try-get-with-method] for more details.
+    ///
+    /// [try-get-with-method]: ./struct.Cache.html#method.try_get_with
     pub async fn or_try_insert_with<F, E>(self, init: F) -> Result<Entry<K, V>, Arc<E>>
     where
         F: Future<Output = Result<V, E>>,
