@@ -7,7 +7,10 @@ use std::{
     thread,
 };
 
-use moka::sync::{Cache, SegmentedCache};
+use moka::{
+    sync::{Cache, SegmentedCache},
+    Entry,
+};
 use paste::paste;
 
 const NUM_THREADS: u8 = 16;
@@ -36,7 +39,7 @@ macro_rules! generate_test_get_with {
                             println!("Thread {} started.", thread_id);
 
                             let key = "key1".to_string();
-                            let value = match thread_id % 2 {
+                            let value = match thread_id % 4 {
                                 0 => my_cache.get_with(key.clone(), || {
                                     println!("Thread {} inserting a value.", thread_id);
                                     my_call_counter.fetch_add(1, Ordering::AcqRel);
@@ -47,6 +50,20 @@ macro_rules! generate_test_get_with {
                                     my_call_counter.fetch_add(1, Ordering::AcqRel);
                                     Arc::new(vec![0u8; TEN_MIB])
                                 }),
+                                2 => my_cache
+                                        .entry(key.clone())
+                                        .or_insert_with(|| {
+                                    println!("Thread {} inserting a value.", thread_id);
+                                    my_call_counter.fetch_add(1, Ordering::AcqRel);
+                                    Arc::new(vec![0u8; TEN_MIB])
+                                }).into_value(),
+                                3 => my_cache
+                                        .entry_by_ref(key.as_str())
+                                        .or_insert_with(|| {
+                                    println!("Thread {} inserting a value.", thread_id);
+                                    my_call_counter.fetch_add(1, Ordering::AcqRel);
+                                    Arc::new(vec![0u8; TEN_MIB])
+                                }).into_value(),
                                 _ => unreachable!(),
                             };
 
@@ -99,7 +116,7 @@ macro_rules! generate_test_optionally_get_with {
                             println!("Thread {} started.", thread_id);
 
                             let key = "key1".to_string();
-                            let value = match thread_id % 2 {
+                            let value = match thread_id % 4 {
                                 0 => {
                                     my_cache.optionally_get_with(key.clone(), || {
                                         get_file_size(thread_id, FILE, &my_call_counter)
@@ -110,6 +127,16 @@ macro_rules! generate_test_optionally_get_with {
                                        get_file_size(thread_id, FILE, &my_call_counter)
                                     })
                                 },
+                                2 => my_cache
+                                    .entry(key.clone())
+                                    .or_optionally_insert_with(|| {
+                                        get_file_size(thread_id, FILE, &my_call_counter)
+                                    }).map(Entry::into_value),
+                                3 => my_cache
+                                    .entry_by_ref(key.as_str())
+                                    .or_optionally_insert_with(|| {
+                                        get_file_size(thread_id, FILE, &my_call_counter)
+                                    }).map(Entry::into_value),
                                 _ => unreachable!(),
                             };
 
@@ -166,7 +193,7 @@ macro_rules! generate_test_try_get_with {
                             println!("Thread {} started.", thread_id);
 
                             let key = "key1".to_string();
-                            let value = match thread_id % 2 {
+                            let value = match thread_id % 4 {
                                 0 => {
                                     my_cache.try_get_with(key.clone(), || {
                                         get_file_size(thread_id, FILE, &my_call_counter)
@@ -177,6 +204,16 @@ macro_rules! generate_test_try_get_with {
                                        get_file_size(thread_id, FILE, &my_call_counter)
                                     })
                                 },
+                                2 => my_cache
+                                    .entry(key.clone())
+                                    .or_try_insert_with(|| {
+                                        get_file_size(thread_id, FILE, &my_call_counter)
+                                    }).map(Entry::into_value),
+                                3 => my_cache
+                                    .entry_by_ref(key.as_str())
+                                    .or_try_insert_with(|| {
+                                        get_file_size(thread_id, FILE, &my_call_counter)
+                                    }).map(Entry::into_value),
                                 _ => unreachable!(),
                             };
 
