@@ -932,7 +932,7 @@ where
     /// // This async function tries to get HTML from the given URI.
     /// async fn get_html(task_id: u8, uri: &str) -> Result<String, reqwest::Error> {
     ///     println!("get_html() called by task {}.", task_id);
-    ///     Ok(reqwest::get(uri).await?.text().await?)
+    ///     reqwest::get(uri).await?.text().await
     /// }
     ///
     /// #[tokio::main]
