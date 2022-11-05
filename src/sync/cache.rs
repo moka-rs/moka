@@ -1,6 +1,6 @@
 use super::{
     value_initializer::{InitResult, ValueInitializer},
-    CacheBuilder, ConcurrentCacheExt, OptionallyNone, OwnedKeyEntrySelector, RefKeyEntrySelector,
+    CacheBuilder, ConcurrentCacheExt, OwnedKeyEntrySelector, RefKeyEntrySelector,
 };
 use crate::{
     common::{
@@ -22,7 +22,6 @@ use crate::{
 
 use crossbeam_channel::{Sender, TrySendError};
 use std::{
-    any::TypeId,
     borrow::Borrow,
     collections::hash_map::RandomState,
     fmt,
@@ -1014,7 +1013,7 @@ where
     ///
     /// ```rust
     /// use moka::sync::Cache;
-    /// use std::{sync::Arc, thread, time::Duration};
+    /// use std::{sync::Arc, thread};
     ///
     /// const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
     /// let cache = Cache::new(100);
@@ -1036,7 +1035,6 @@ where
     ///
     ///             // Ensure the value exists now.
     ///             assert_eq!(value.len(), TEN_MIB);
-    ///             thread::sleep(Duration::from_millis(10));
     ///             assert!(my_cache.get(&"key1").is_some());
     ///
     ///             println!("Thread {} got the value. (len: {})", task_id, value.len());
@@ -1121,20 +1119,9 @@ where
         mut replace_if: Option<impl FnMut(&V) -> bool>,
         need_key: bool,
     ) -> Entry<K, V> {
-        match (
-            self.base.get_with_hash(&key, hash, need_key),
-            &mut replace_if,
-        ) {
-            (Some(entry), None) => return entry,
-            (Some(entry), Some(cond)) => {
-                if !cond(entry.value()) {
-                    return entry;
-                }
-            }
-            _ => (),
-        }
-
-        self.insert_with_hash_and_fun(key, hash, init, need_key)
+        self.base
+            .get_with_hash_but_ignore_if(&key, hash, replace_if.as_mut(), need_key)
+            .unwrap_or_else(|| self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key))
     }
 
     // Need to create new function instead of using the existing
@@ -1154,21 +1141,12 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        match (
-            self.base.get_with_hash(key, hash, need_key),
-            &mut replace_if,
-        ) {
-            (Some(entry), None) => return entry,
-            (Some(entry), Some(cond)) => {
-                if !cond(entry.value()) {
-                    return entry;
-                }
-            }
-            _ => (),
-        }
-        let key = Arc::new(key.to_owned());
-
-        self.insert_with_hash_and_fun(key, hash, init, need_key)
+        self.base
+            .get_with_hash_but_ignore_if(key, hash, replace_if.as_mut(), need_key)
+            .unwrap_or_else(|| {
+                let key = Arc::new(key.to_owned());
+                self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key)
+            })
     }
 
     pub(crate) fn insert_with_hash_and_fun(
@@ -1176,18 +1154,26 @@ where
         key: Arc<K>,
         hash: u64,
         init: impl FnOnce() -> V,
+        mut replace_if: Option<impl FnMut(&V) -> bool>,
         need_key: bool,
     ) -> Entry<K, V> {
+        let get = || {
+            self.base
+                .get_with_hash_but_no_recording(&key, hash, replace_if.as_mut(), need_key)
+        };
+        let insert = |v| self.insert_with_hash(key.clone(), hash, v);
+
         let k = if need_key {
             Some(Arc::clone(&key))
         } else {
             None
         };
-        match self.value_initializer.init_or_read(Arc::clone(&key), init) {
+
+        match self
+            .value_initializer
+            .init_or_read(Arc::clone(&key), get, init, insert)
+        {
             InitResult::Initialized(v) => {
-                self.insert_with_hash(Arc::clone(&key), hash, v.clone());
-                self.value_initializer
-                    .remove_waiter(&key, TypeId::of::<()>());
                 crossbeam_epoch::pin().flush();
                 Entry::new(k, v, true)
             }
@@ -1248,12 +1234,12 @@ where
     ///
     /// ```rust
     /// use moka::sync::Cache;
-    /// use std::{path::Path, time::Duration, thread};
+    /// use std::{path::Path, thread};
     ///
     /// /// This function tries to get the file size in bytes.
     /// fn get_file_size(thread_id: u8, path: impl AsRef<Path>) -> Option<u64> {
     ///     println!("get_file_size() called by thread {}.", thread_id);
-    ///     std::fs::metadata(path).ok().and_then(|m|Some(m.len()))
+    ///     std::fs::metadata(path).ok().map(|m| m.len())
     /// }
     ///
     /// let cache = Cache::new(100);
@@ -1275,7 +1261,6 @@ where
     ///
     ///             // Ensure the value exists now.
     ///             assert!(value.is_some());
-    ///             thread::sleep(Duration::from_millis(10));
     ///             assert!(my_cache.get(&"key1").is_some());
     ///
     ///             println!(
@@ -1393,19 +1378,24 @@ where
     where
         F: FnOnce() -> Option<V>,
     {
+        let get = || {
+            let ignore_if = None as Option<&mut fn(&V) -> bool>;
+            self.base
+                .get_with_hash_but_no_recording(&key, hash, ignore_if, need_key)
+        };
+        let insert = |v| self.insert_with_hash(key.clone(), hash, v);
+
         let k = if need_key {
             Some(Arc::clone(&key))
         } else {
             None
         };
+
         match self
             .value_initializer
-            .optionally_init_or_read(Arc::clone(&key), init)
+            .optionally_init_or_read(Arc::clone(&key), get, init, insert)
         {
             InitResult::Initialized(v) => {
-                self.insert_with_hash(Arc::clone(&key), hash, v.clone());
-                self.value_initializer
-                    .remove_waiter(&key, TypeId::of::<OptionallyNone>());
                 crossbeam_epoch::pin().flush();
                 Some(Entry::new(k, v, true))
             }
@@ -1435,7 +1425,7 @@ where
     ///
     /// ```rust
     /// use moka::sync::Cache;
-    /// use std::{path::Path, time::Duration, thread};
+    /// use std::{path::Path, thread};
     ///
     /// /// This function tries to get the file size in bytes.
     /// fn get_file_size(thread_id: u8, path: impl AsRef<Path>) -> Result<u64, std::io::Error> {
@@ -1462,7 +1452,6 @@ where
     ///
     ///             // Ensure the value exists now.
     ///             assert!(value.is_ok());
-    ///             thread::sleep(Duration::from_millis(10));
     ///             assert!(my_cache.get(&"key1").is_some());
     ///
     ///             println!(
@@ -1581,19 +1570,24 @@ where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
     {
+        let get = || {
+            let ignore_if = None as Option<&mut fn(&V) -> bool>;
+            self.base
+                .get_with_hash_but_no_recording(&key, hash, ignore_if, need_key)
+        };
+        let insert = |v| self.insert_with_hash(key.clone(), hash, v);
+
         let k = if need_key {
             Some(Arc::clone(&key))
         } else {
             None
         };
+
         match self
             .value_initializer
-            .try_init_or_read(Arc::clone(&key), init)
+            .try_init_or_read(Arc::clone(&key), get, init, insert)
         {
             InitResult::Initialized(v) => {
-                self.insert_with_hash(Arc::clone(&key), hash, v.clone());
-                self.value_initializer
-                    .remove_waiter(&key, TypeId::of::<E>());
                 crossbeam_epoch::pin().flush();
                 Ok(Entry::new(k, v, true))
             }

@@ -22,7 +22,6 @@ use crate::common::concurrent::debug_counters::CacheDebugStats;
 
 use crossbeam_channel::{Sender, TrySendError};
 use std::{
-    any::TypeId,
     borrow::Borrow,
     collections::hash_map::RandomState,
     fmt,
@@ -31,8 +30,6 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-
-use super::OptionallyNone;
 
 /// A thread-safe, futures-aware concurrent in-memory cache.
 ///
@@ -989,6 +986,8 @@ where
     ///
     /// # Example
     ///
+    /// The following code snippet demonstrates this behavior:
+    ///
     /// ```rust
     /// // Cargo.toml
     /// //
@@ -1113,6 +1112,13 @@ where
     ///
     /// # Example
     ///
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` future (as long as these
+    /// futures return the same error type). Only one of the calls evaluates its
+    /// future, and other calls wait for that future to resolve.
+    ///
+    /// The following code snippet demonstrates this behavior:
+    ///
     /// ```rust
     /// // Cargo.toml
     /// //
@@ -1126,7 +1132,7 @@ where
     /// // This async function tries to get HTML from the given URI.
     /// async fn get_html(task_id: u8, uri: &str) -> Result<String, reqwest::Error> {
     ///     println!("get_html() called by task {}.", task_id);
-    ///     Ok(reqwest::get(uri).await?.text().await?)
+    ///     reqwest::get(uri).await?.text().await
     /// }
     ///
     /// #[tokio::main]
@@ -1455,18 +1461,15 @@ where
         mut replace_if: Option<impl FnMut(&V) -> bool>,
         need_key: bool,
     ) -> Entry<K, V> {
-        match (self.base.get_with_hash(&key, hash, false), &mut replace_if) {
-            (Some(entry), None) => return entry,
-            (Some(entry), Some(cond)) => {
-                if !cond(entry.value()) {
-                    return entry;
-                };
-            }
-            _ => (),
+        let maybe_v = self
+            .base
+            .get_with_hash_but_ignore_if(&key, hash, replace_if.as_mut(), need_key);
+        if let Some(v) = maybe_v {
+            v
+        } else {
+            self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key)
+                .await
         }
-
-        self.insert_with_hash_and_fun(key, hash, init, need_key)
-            .await
     }
 
     pub(crate) async fn get_or_insert_with_hash_by_ref_and_fun<Q>(
@@ -1481,18 +1484,16 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        match (self.base.get_with_hash(key, hash, false), &mut replace_if) {
-            (Some(entry), None) => return entry,
-            (Some(entry), Some(cond)) => {
-                if !cond(entry.value()) {
-                    return entry;
-                };
-            }
-            _ => (),
+        let maybe_v = self
+            .base
+            .get_with_hash_but_ignore_if(key, hash, replace_if.as_mut(), need_key);
+        if let Some(v) = maybe_v {
+            v
+        } else {
+            let key = Arc::new(key.to_owned());
+            self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key)
+                .await
         }
-        let key = Arc::new(key.to_owned());
-        self.insert_with_hash_and_fun(key, hash, init, need_key)
-            .await
     }
 
     async fn insert_with_hash_and_fun(
@@ -1500,23 +1501,29 @@ where
         key: Arc<K>,
         hash: u64,
         init: impl Future<Output = V>,
+        mut replace_if: Option<impl FnMut(&V) -> bool>,
         need_key: bool,
     ) -> Entry<K, V> {
+        use futures_util::FutureExt;
+
+        let get = || {
+            self.base
+                .get_with_hash_but_no_recording(&key, hash, replace_if.as_mut(), need_key)
+        };
+        let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
+
         let k = if need_key {
             Some(Arc::clone(&key))
         } else {
             None
         };
+
         match self
             .value_initializer
-            .init_or_read(Arc::clone(&key), init)
+            .init_or_read(Arc::clone(&key), get, init, insert)
             .await
         {
             InitResult::Initialized(v) => {
-                self.insert_with_hash(Arc::clone(&key), hash, v.clone())
-                    .await;
-                self.value_initializer
-                    .remove_waiter(&key, TypeId::of::<()>());
                 crossbeam_epoch::pin().flush();
                 Entry::new(k, v, true)
             }
@@ -1615,21 +1622,27 @@ where
     where
         F: Future<Output = Option<V>>,
     {
+        use futures_util::FutureExt;
+
+        let get = || {
+            let ignore_if = None as Option<&mut fn(&V) -> bool>;
+            self.base
+                .get_with_hash_but_no_recording(&key, hash, ignore_if, need_key)
+        };
+        let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
+
         let k = if need_key {
             Some(Arc::clone(&key))
         } else {
             None
         };
+
         match self
             .value_initializer
-            .optionally_init_or_read(Arc::clone(&key), init)
+            .optionally_init_or_read(Arc::clone(&key), get, init, insert)
             .await
         {
             InitResult::Initialized(v) => {
-                self.insert_with_hash(Arc::clone(&key), hash, v.clone())
-                    .await;
-                self.value_initializer
-                    .remove_waiter(&key, TypeId::of::<OptionallyNone>());
                 crossbeam_epoch::pin().flush();
                 Some(Entry::new(k, v, true))
             }
@@ -1689,21 +1702,27 @@ where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
     {
+        use futures_util::FutureExt;
+
+        let get = || {
+            let ignore_if = None as Option<&mut fn(&V) -> bool>;
+            self.base
+                .get_with_hash_but_no_recording(&key, hash, ignore_if, need_key)
+        };
+        let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
+
         let k = if need_key {
             Some(Arc::clone(&key))
         } else {
             None
         };
+
         match self
             .value_initializer
-            .try_init_or_read(Arc::clone(&key), init)
+            .try_init_or_read(Arc::clone(&key), get, init, insert)
             .await
         {
             InitResult::Initialized(v) => {
-                self.insert_with_hash(Arc::clone(&key), hash, v.clone())
-                    .await;
-                self.value_initializer
-                    .remove_waiter(&key, TypeId::of::<E>());
                 crossbeam_epoch::pin().flush();
                 Ok(Entry::new(k, v, true))
             }

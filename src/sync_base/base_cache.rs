@@ -228,11 +228,72 @@ where
             self.record_read_op(op, now)
                 .expect("Failed to record a get op");
         };
+        let ignore_if = None as Option<&mut fn(&V) -> bool>;
+        self.do_get_with_hash(key, hash, record, ignore_if)
+    }
 
-        let maybe_entry = self.inner.get_key_value_and_then(key, hash, |k, entry| {
-            let i = &self.inner;
-            let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
-            let now = self.current_time_from_expiration_clock();
+    pub(crate) fn get_with_hash_but_ignore_if<Q, I>(
+        &self,
+        key: &Q,
+        hash: u64,
+        ignore_if: Option<&mut I>,
+    ) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+        I: FnMut(&V) -> bool,
+    {
+        // Define a closure to record a read op.
+        let record = |op, now| {
+            self.record_read_op(op, now)
+                .expect("Failed to record a get op");
+        };
+        self.do_get_with_hash(key, hash, record, ignore_if)
+    }
+
+    pub(crate) fn get_with_hash_but_no_recording<Q, I>(
+        &self,
+        key: &Q,
+        hash: u64,
+        ignore_if: Option<&mut I>,
+    ) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+        I: FnMut(&V) -> bool,
+    {
+        // Define a closure that skips to record a read op.
+        let record = |_op, _now| {};
+        self.do_get_with_hash(key, hash, record, ignore_if)
+    }
+
+    fn do_get_with_hash<Q, R, I>(
+        &self,
+        key: &Q,
+        hash: u64,
+        read_recorder: R,
+        mut ignore_if: Option<&mut I>,
+    ) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+        R: Fn(ReadOp<K, V>, Instant),
+        I: FnMut(&V) -> bool,
+    {
+        let now = self.current_time_from_expiration_clock();
+
+        let maybe_entry = self
+            .inner
+            .get_key_value_and_then(key, hash, move |k, entry| {
+                if let Some(ignore_if) = &mut ignore_if {
+                    if ignore_if(&entry.value) {
+                        // Ignore the entry.
+                        return None;
+                    }
+                }
+
+                let i = &self.inner;
+                let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
 
             if is_expired_entry_wo(ttl, va, entry, now)
                 || is_expired_entry_ao(tti, va, entry, now)
@@ -249,11 +310,10 @@ where
 
         if let Some((maybe_key, entry, now)) = maybe_entry {
             let v = entry.value.clone();
-            record(ReadOp::Hit(hash, entry, now), now);
+            read_recorder(ReadOp::Hit(hash, entry, now), now);
             Some(Entry::new(maybe_key, v, false))
         } else {
-            let now = self.current_time_from_expiration_clock();
-            record(ReadOp::Miss(hash), now);
+            read_recorder(ReadOp::Miss(hash), now);
             None
         }
     }

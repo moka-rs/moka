@@ -21,8 +21,8 @@ pub(crate) enum InitResult<V, E> {
 }
 
 pub(crate) struct ValueInitializer<K, V, S> {
-    // TypeId is the type ID of the concrete error type of generic type E in
-    // try_init_or_read(). We use the type ID as a part of the key to ensure that
+    // TypeId is the type ID of the concrete error type of generic type E in the
+    // try_get_with method. We use the type ID as a part of the key to ensure that
     // we can always downcast the trait object ErrorObject (in Waiter<V>) into
     // its concrete type.
     waiters: crate::cht::SegmentedHashMap<(Arc<K>, TypeId), Waiter<V>, S>,
@@ -44,92 +44,120 @@ where
     }
 
     /// # Panics
-    /// Panics if the `init` future has been panicked.
-    pub(crate) fn init_or_read(&self, key: Arc<K>, init: impl FnOnce() -> V) -> InitResult<V, ()> {
+    /// Panics if the `init` closure has been panicked.
+    pub(crate) fn init_or_read(
+        &self,
+        key: Arc<K>,
+        // Closure to get an existing value from cache.
+        get: impl FnMut() -> Option<V>,
+        init: impl FnOnce() -> V,
+        // Closure to insert a new value into cache.
+        mut insert: impl FnMut(V),
+    ) -> InitResult<V, ()> {
+        // This closure will be called before the init closure is called, in order to
+        // check if the value has already been inserted by other thread.
+        let pre_init = make_pre_init(get);
+
         // This closure will be called after the init closure has returned a value.
-        // It will convert the returned value (from init) into an InitResult.
-        let post_init = |_key, value: V, lock: &mut WaiterValue<V>| {
-            *lock = Some(Ok(value.clone()));
-            InitResult::Initialized(value)
+        // It will insert the returned value (from init) to the cache, and convert
+        // the value into a pair of a WaiterValue and an InitResult.
+        let post_init = |value: V| {
+            insert(value.clone());
+            (Some(Ok(value.clone())), InitResult::Initialized(value))
         };
 
         let type_id = TypeId::of::<()>();
-        self.do_try_init(&key, type_id, init, post_init)
+        self.do_try_init(&key, type_id, pre_init, init, post_init)
     }
 
     /// # Panics
-    /// Panics if the `init` future has been panicked.
-    pub(crate) fn try_init_or_read<F, E>(&self, key: Arc<K>, init: F) -> InitResult<V, E>
+    /// Panics if the `init` closure has been panicked.
+    pub(crate) fn try_init_or_read<E>(
+        &self,
+        key: Arc<K>,
+        get: impl FnMut() -> Option<V>,
+        init: impl FnOnce() -> Result<V, E>,
+        mut insert: impl FnMut(V),
+    ) -> InitResult<V, E>
     where
-        F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
     {
         let type_id = TypeId::of::<E>();
 
+        // This closure will be called before the init closure is called, in order to
+        // check if the value has already been inserted by other thread.
+        let pre_init = make_pre_init(get);
+
         // This closure will be called after the init closure has returned a value.
-        // It will convert the returned value (from init) into an InitResult.
-        let post_init = |key, value: Result<V, E>, lock: &mut WaiterValue<V>| match value {
+        // It will insert the returned value (from init) to the cache, and convert
+        // the value into a pair of a WaiterValue and an InitResult.
+        let post_init = |value: Result<V, E>| match value {
             Ok(value) => {
-                *lock = Some(Ok(value.clone()));
-                InitResult::Initialized(value)
+                insert(value.clone());
+                (Some(Ok(value.clone())), InitResult::Initialized(value))
             }
             Err(e) => {
                 let err: ErrorObject = Arc::new(e);
-                *lock = Some(Err(Arc::clone(&err)));
-                self.remove_waiter(key, type_id);
-                InitResult::InitErr(err.downcast().unwrap())
+                (
+                    Some(Err(Arc::clone(&err))),
+                    InitResult::InitErr(err.downcast().unwrap()),
+                )
             }
         };
 
-        self.do_try_init(&key, type_id, init, post_init)
+        self.do_try_init(&key, type_id, pre_init, init, post_init)
     }
 
     /// # Panics
-    /// Panics if the `init` future has been panicked.
-    pub(super) fn optionally_init_or_read<F>(
+    /// Panics if the `init` closure has been panicked.
+    pub(super) fn optionally_init_or_read(
         &self,
         key: Arc<K>,
-        init: F,
-    ) -> InitResult<V, OptionallyNone>
-    where
-        F: FnOnce() -> Option<V>,
-    {
+        get: impl FnMut() -> Option<V>,
+        init: impl FnOnce() -> Option<V>,
+        mut insert: impl FnMut(V),
+    ) -> InitResult<V, OptionallyNone> {
         let type_id = TypeId::of::<OptionallyNone>();
 
+        // This closure will be called before the init closure is called, in order to
+        // check if the value has already been inserted by other thread.
+        let pre_init = make_pre_init(get);
+
         // This closure will be called after the init closure has returned a value.
-        // It will convert the returned value (from init) into an InitResult.
-        let post_init = |key, value: Option<V>, lock: &mut WaiterValue<V>| match value {
+        // It will insert the returned value (from init) to the cache, and convert
+        // the value into a pair of a WaiterValue and an InitResult.
+        let post_init = |value: Option<V>| match value {
             Some(value) => {
-                *lock = Some(Ok(value.clone()));
-                InitResult::Initialized(value)
+                insert(value.clone());
+                (Some(Ok(value.clone())), InitResult::Initialized(value))
             }
             None => {
                 // `value` can be either `Some` or `None`. For `None` case, without
                 // change the existing API too much, we will need to convert `None`
-                // to Arc<E> here. `Infalliable` could not be instantiated. So it
+                // to Arc<E> here. `Infallible` could not be instantiated. So it
                 // might be good to use an empty struct to indicate the error type.
                 let err: ErrorObject = Arc::new(OptionallyNone);
-                *lock = Some(Err(Arc::clone(&err)));
-                self.remove_waiter(key, type_id);
-                InitResult::InitErr(err.downcast().unwrap())
+                (
+                    Some(Err(Arc::clone(&err))),
+                    InitResult::InitErr(err.downcast().unwrap()),
+                )
             }
         };
 
-        self.do_try_init(&key, type_id, init, post_init)
+        self.do_try_init(&key, type_id, pre_init, init, post_init)
     }
 
     /// # Panics
-    /// Panics if the `init` future has been panicked.
-    fn do_try_init<'a, F, O, C, E>(
+    /// Panics if the `init` closure has been panicked.
+    fn do_try_init<O, E>(
         &self,
-        key: &'a Arc<K>,
+        key: &Arc<K>,
         type_id: TypeId,
-        init: F,
-        mut post_init: C,
+        mut pre_init: impl FnMut() -> Option<(WaiterValue<V>, InitResult<V, E>)>,
+        init: impl FnOnce() -> O,
+        mut post_init: impl FnMut(O) -> (WaiterValue<V>, InitResult<V, E>),
     ) -> InitResult<V, E>
     where
-        F: FnOnce() -> O,
-        C: FnMut(&'a Arc<K>, O, &mut WaiterValue<V>) -> InitResult<V, E>,
         E: Send + Sync + 'static,
     {
         use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
@@ -138,29 +166,47 @@ where
         const MAX_RETRIES: usize = 200;
         let mut retries = 0;
 
+        let (cht_key, hash) = self.cht_key_hash(key, type_id);
+
         loop {
             let waiter = TrioArc::new(RwLock::new(None));
             let mut lock = waiter.write();
 
-            match self.try_insert_waiter(key, type_id, &waiter) {
+            match self.try_insert_waiter(cht_key.clone(), hash, &waiter) {
                 None => {
-                    // Our waiter was inserted. Let's resolve the init future.
-                    // Catching panic is safe here as we do not try to resolve the future again.
+                    // Our waiter was inserted.
+                    // Check if the value has already been inserted by other thread.
+                    if let Some((waiter_val, init_res)) = pre_init() {
+                        // Yes. Set the waiter value, remove our waiter, and return
+                        // the existing value.
+                        *lock = waiter_val;
+                        self.remove_waiter(cht_key, hash);
+                        return init_res;
+                    }
+
+                    // The value still does note exist. Let's evaluate the init
+                    // closure. Catching panic is safe here as we do not try to
+                    // evaluate the closure again.
                     match catch_unwind(AssertUnwindSafe(init)) {
-                        // Resolved.
-                        Ok(value) => return post_init(key, value, &mut lock),
+                        // Evaluated.
+                        Ok(value) => {
+                            let (waiter_val, init_res) = post_init(value);
+                            *lock = waiter_val;
+                            self.remove_waiter(cht_key, hash);
+                            return init_res;
+                        }
                         // Panicked.
                         Err(payload) => {
                             *lock = None;
                             // Remove the waiter so that others can retry.
-                            self.remove_waiter(key, type_id);
+                            self.remove_waiter(cht_key, hash);
                             resume_unwind(payload);
-                        } // The write lock will be unlocked here.
-                    }
+                        }
+                    } // The write lock will be unlocked here.
                 }
                 Some(res) => {
-                    // Somebody else's waiter already exists. Drop our write lock and wait
-                    // for a read lock to become available.
+                    // Somebody else's waiter already exists. Drop our write lock and
+                    // wait for the read lock to become available.
                     std::mem::drop(lock);
                     match &*res.read() {
                         Some(Ok(value)) => return ReadExisting(value.clone()),
@@ -186,19 +232,17 @@ where
     }
 
     #[inline]
-    pub(crate) fn remove_waiter(&self, key: &Arc<K>, type_id: TypeId) {
-        let (cht_key, hash) = self.cht_key_hash(key, type_id);
+    fn remove_waiter(&self, cht_key: (Arc<K>, TypeId), hash: u64) {
         self.waiters.remove(hash, |k| k == &cht_key);
     }
 
     #[inline]
     fn try_insert_waiter(
         &self,
-        key: &Arc<K>,
-        type_id: TypeId,
+        cht_key: (Arc<K>, TypeId),
+        hash: u64,
         waiter: &Waiter<V>,
     ) -> Option<Waiter<V>> {
-        let (cht_key, hash) = self.cht_key_hash(key, type_id);
         let waiter = TrioArc::clone(waiter);
         self.waiters.insert_if_not_present(cht_key, hash, waiter)
     }
@@ -209,4 +253,14 @@ where
         let hash = self.waiters.hash(&cht_key);
         (cht_key, hash)
     }
+}
+
+#[inline]
+fn make_pre_init<V, E>(
+    mut get: impl FnMut() -> Option<V>,
+) -> impl FnMut() -> Option<(WaiterValue<V>, InitResult<V, E>)>
+where
+    V: Clone,
+{
+    move || get().map(|value| (Some(Ok(value.clone())), InitResult::ReadExisting(value)))
 }
