@@ -1,5 +1,13 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.9.6
+
+### Fixed
+
+- Prevent race condition in `get_with` family methods to avoid evaluating `init`
+  closure or future multiple times in concurrent calls. ([#195][gh-pull-0195]):
+
+
 ## Version 0.9.5
 
 ### Added
@@ -527,6 +535,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0195]: https://github.com/moka-rs/moka/pull/195/
 [gh-pull-0190]: https://github.com/moka-rs/moka/pull/190/
 [gh-pull-0189]: https://github.com/moka-rs/moka/pull/189/
 [gh-pull-0187]: https://github.com/moka-rs/moka/pull/187/
