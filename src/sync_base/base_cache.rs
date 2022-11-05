@@ -229,7 +229,7 @@ where
                 .expect("Failed to record a get op");
         };
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
-        self.do_get_with_hash(key, hash, record, ignore_if)
+        self.do_get_with_hash(key, hash, record, ignore_if, need_key)
     }
 
     pub(crate) fn get_with_hash_but_ignore_if<Q, I>(
@@ -237,7 +237,8 @@ where
         key: &Q,
         hash: u64,
         ignore_if: Option<&mut I>,
-    ) -> Option<V>
+        need_key: bool,
+    ) -> Option<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -248,7 +249,7 @@ where
             self.record_read_op(op, now)
                 .expect("Failed to record a get op");
         };
-        self.do_get_with_hash(key, hash, record, ignore_if)
+        self.do_get_with_hash(key, hash, record, ignore_if, need_key)
     }
 
     pub(crate) fn get_with_hash_but_no_recording<Q, I>(
@@ -256,7 +257,8 @@ where
         key: &Q,
         hash: u64,
         ignore_if: Option<&mut I>,
-    ) -> Option<V>
+        need_key: bool,
+    ) -> Option<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -264,7 +266,7 @@ where
     {
         // Define a closure that skips to record a read op.
         let record = |_op, _now| {};
-        self.do_get_with_hash(key, hash, record, ignore_if)
+        self.do_get_with_hash(key, hash, record, ignore_if, need_key)
     }
 
     fn do_get_with_hash<Q, R, I>(
@@ -273,7 +275,8 @@ where
         hash: u64,
         read_recorder: R,
         mut ignore_if: Option<&mut I>,
-    ) -> Option<V>
+        need_key: bool,
+    ) -> Option<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
