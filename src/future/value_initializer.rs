@@ -82,9 +82,9 @@ where
 {
     fn drop(&mut self) {
         if !self.is_waiter_value_set {
-            // Value is not set. This means the future containing
-            // `get_or_*_insert_with` has been aborted. Remove our waiter to prevent
-            // the issue described in https://github.com/moka-rs/moka/issues/59
+            // Value is not set. This means the future containing `*get_with` method
+            // has been aborted. Remove our waiter to prevent the issue described in
+            // https://github.com/moka-rs/moka/issues/59
             *self.write_lock = WaiterValue::EnclosingFutureAborted;
             remove_waiter(&self.waiters, self.cht_key.clone(), self.hash);
             self.is_waiter_value_set = true;
@@ -93,10 +93,10 @@ where
 }
 
 pub(crate) struct ValueInitializer<K, V, S> {
-    // TypeId is the type ID of the concrete error type of generic type E in
-    // try_init_or_read(). We use the type ID as a part of the key to ensure that
-    // we can always downcast the trait object ErrorObject (in Waiter<V>) into
-    // its concrete type.
+    // TypeId is the type ID of the concrete error type of generic type E in the
+    // try_get_with method. We use the type ID as a part of the key to ensure that we
+    // can always downcast the trait object ErrorObject (in Waiter<V>) into its
+    // concrete type.
     waiters: TrioArc<WaiterMap<K, V, S>>,
 }
 
@@ -126,13 +126,13 @@ where
         // Closure to insert a new value into cache.
         mut insert: impl FnMut(V) -> BoxFuture<'a, ()> + Send + 'a,
     ) -> InitResult<V, ()> {
-        // This closure will be called before the init closure is called, in order to
-        // check if the value has already been inserted by other async task.
+        // This closure will be called before the init future is resolved, in order
+        // to check if the value has already been inserted by other async task.
         let pre_init = make_pre_init(get);
 
-        // This closure will be called after the init closure has returned a value.
-        // It will convert the returned value (from init) into a pair of a
-        // WaiterValue and an InitResult.
+        // This closure will be called after the init future has returned a value. It
+        // will insert the returned value (from init) to the cache, and convert the
+        // value into a pair of a WaiterValue and an InitResult.
         let post_init = |value: V| {
             async move {
                 insert(value.clone()).await;
@@ -151,24 +151,23 @@ where
 
     /// # Panics
     /// Panics if the `init` future has been panicked.
-    pub(crate) async fn try_init_or_read<'a, F, E>(
+    pub(crate) async fn try_init_or_read<'a, E>(
         &'a self,
         key: Arc<K>,
         get: impl FnMut() -> Option<V>,
-        init: F,
+        init: impl Future<Output = Result<V, E>>,
         mut insert: impl FnMut(V) -> BoxFuture<'a, ()> + Send + 'a,
     ) -> InitResult<V, E>
     where
-        F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
     {
-        // This closure will be called before the init closure is called, in order to
-        // check if the value has already been inserted by other async task.
+        // This closure will be called before the init future is resolved, in order
+        // to check if the value has already been inserted by other async task.
         let pre_init = make_pre_init(get);
 
-        // This closure will be called after the init closure has returned a value.
-        // It will convert the returned value (from init) into a pair of a
-        // WaiterValue and an InitResult.
+        // This closure will be called after the init future has returned a value. It
+        // will insert the returned value (from init) to the cache, and convert the
+        // value into a pair of a WaiterValue and an InitResult.
         let post_init = move |value: Result<V, E>| {
             async move {
                 match value {
@@ -198,23 +197,20 @@ where
 
     /// # Panics
     /// Panics if the `init` future has been panicked.
-    pub(super) async fn optionally_init_or_read<'a, F>(
+    pub(super) async fn optionally_init_or_read<'a>(
         &'a self,
         key: Arc<K>,
         get: impl FnMut() -> Option<V>,
-        init: F,
+        init: impl Future<Output = Option<V>>,
         mut insert: impl FnMut(V) -> BoxFuture<'a, ()> + Send + 'a,
-    ) -> InitResult<V, OptionallyNone>
-    where
-        F: Future<Output = Option<V>>,
-    {
-        // This closure will be called before the init closure is called, in order to
-        // check if the value has already been inserted by other async task.
+    ) -> InitResult<V, OptionallyNone> {
+        // This closure will be called before the init future is resolved, in order
+        // to check if the value has already been inserted by other async task.
         let pre_init = make_pre_init(get);
 
-        // This closure will be called after the init closure has returned a value.
-        // It will convert the returned value (from init) into a pair of a
-        // WaiterValue and an InitResult.
+        // This closure will be called after the init future has returned a value. It
+        // will insert the returned value (from init) to the cache, and convert the
+        // value into a pair of a WaiterValue and an InitResult.
         let post_init = |value: Option<V>| {
             async move {
                 match value {
@@ -226,10 +222,11 @@ where
                         )
                     }
                     None => {
-                        // `value` can be either `Some` or `None`. For `None` case, without
-                        // change the existing API too much, we will need to convert `None`
-                        // to Arc<E> here. `Infalliable` could not be instantiated. So it
-                        // might be good to use an empty struct to indicate the error type.
+                        // `value` can be either `Some` or `None`. For `None` case,
+                        // without change the existing API too much, we will need to
+                        // convert `None` to Arc<E> here. `Infallible` could not be
+                        // instantiated. So it might be good to use an empty struct
+                        // to indicate the error type.
                         let err: ErrorObject = Arc::new(OptionallyNone);
                         (
                             WaiterValue::Ready(Err(Arc::clone(&err))),
@@ -248,18 +245,15 @@ where
 
     /// # Panics
     /// Panics if the `init` future has been panicked.
-    async fn do_try_init<'a, F, O, C1, C2, E>(
+    async fn do_try_init<'a, O, E>(
         &'a self,
         key: &Arc<K>,
         type_id: TypeId,
-        mut pre_init: C1,
-        init: F,
-        post_init: C2,
+        mut pre_init: impl FnMut() -> Option<(WaiterValue<V>, InitResult<V, E>)>,
+        init: impl Future<Output = O>,
+        post_init: impl FnOnce(O) -> BoxFuture<'a, (WaiterValue<V>, InitResult<V, E>)>,
     ) -> InitResult<V, E>
     where
-        F: Future<Output = O>,
-        C1: FnMut() -> Option<(WaiterValue<V>, InitResult<V, E>)>,
-        C2: FnOnce(O) -> BoxFuture<'a, (WaiterValue<V>, InitResult<V, E>)>,
         E: Send + Sync + 'static,
     {
         use std::panic::{resume_unwind, AssertUnwindSafe};

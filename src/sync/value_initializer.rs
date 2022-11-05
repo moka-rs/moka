@@ -21,8 +21,8 @@ pub(crate) enum InitResult<V, E> {
 }
 
 pub(crate) struct ValueInitializer<K, V, S> {
-    // TypeId is the type ID of the concrete error type of generic type E in
-    // try_init_or_read(). We use the type ID as a part of the key to ensure that
+    // TypeId is the type ID of the concrete error type of generic type E in the
+    // try_get_with method. We use the type ID as a part of the key to ensure that
     // we can always downcast the trait object ErrorObject (in Waiter<V>) into
     // its concrete type.
     waiters: crate::cht::SegmentedHashMap<(Arc<K>, TypeId), Waiter<V>, S>,
@@ -59,8 +59,8 @@ where
         let pre_init = make_pre_init(get);
 
         // This closure will be called after the init closure has returned a value.
-        // It will convert the returned value (from init) into a pair of a
-        // WaiterValue and an InitResult.
+        // It will insert the returned value (from init) to the cache, and convert
+        // the value into a pair of a WaiterValue and an InitResult.
         let post_init = |value: V| {
             insert(value.clone());
             (Some(Ok(value.clone())), InitResult::Initialized(value))
@@ -72,15 +72,14 @@ where
 
     /// # Panics
     /// Panics if the `init` closure has been panicked.
-    pub(crate) fn try_init_or_read<F, E>(
+    pub(crate) fn try_init_or_read<E>(
         &self,
         key: Arc<K>,
         get: impl FnMut() -> Option<V>,
-        init: F,
+        init: impl FnOnce() -> Result<V, E>,
         mut insert: impl FnMut(V),
     ) -> InitResult<V, E>
     where
-        F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
     {
         let type_id = TypeId::of::<E>();
@@ -90,8 +89,8 @@ where
         let pre_init = make_pre_init(get);
 
         // This closure will be called after the init closure has returned a value.
-        // It will convert the returned value (from init) into a pair of a
-        // WaiterValue and an InitResult.
+        // It will insert the returned value (from init) to the cache, and convert
+        // the value into a pair of a WaiterValue and an InitResult.
         let post_init = |value: Result<V, E>| match value {
             Ok(value) => {
                 insert(value.clone());
@@ -111,16 +110,13 @@ where
 
     /// # Panics
     /// Panics if the `init` closure has been panicked.
-    pub(super) fn optionally_init_or_read<F>(
+    pub(super) fn optionally_init_or_read(
         &self,
         key: Arc<K>,
         get: impl FnMut() -> Option<V>,
-        init: F,
+        init: impl FnOnce() -> Option<V>,
         mut insert: impl FnMut(V),
-    ) -> InitResult<V, OptionallyNone>
-    where
-        F: FnOnce() -> Option<V>,
-    {
+    ) -> InitResult<V, OptionallyNone> {
         let type_id = TypeId::of::<OptionallyNone>();
 
         // This closure will be called before the init closure is called, in order to
@@ -128,8 +124,8 @@ where
         let pre_init = make_pre_init(get);
 
         // This closure will be called after the init closure has returned a value.
-        // It will convert the returned value (from init) into a pair of a
-        // WaiterValue and an InitResult.
+        // It will insert the returned value (from init) to the cache, and convert
+        // the value into a pair of a WaiterValue and an InitResult.
         let post_init = |value: Option<V>| match value {
             Some(value) => {
                 insert(value.clone());
@@ -138,7 +134,7 @@ where
             None => {
                 // `value` can be either `Some` or `None`. For `None` case, without
                 // change the existing API too much, we will need to convert `None`
-                // to Arc<E> here. `Infalliable` could not be instantiated. So it
+                // to Arc<E> here. `Infallible` could not be instantiated. So it
                 // might be good to use an empty struct to indicate the error type.
                 let err: ErrorObject = Arc::new(OptionallyNone);
                 (
@@ -153,18 +149,15 @@ where
 
     /// # Panics
     /// Panics if the `init` closure has been panicked.
-    fn do_try_init<F, O, C1, C2, E>(
+    fn do_try_init<O, E>(
         &self,
         key: &Arc<K>,
         type_id: TypeId,
-        mut pre_init: C1,
-        init: F,
-        mut post_init: C2,
+        mut pre_init: impl FnMut() -> Option<(WaiterValue<V>, InitResult<V, E>)>,
+        init: impl FnOnce() -> O,
+        mut post_init: impl FnMut(O) -> (WaiterValue<V>, InitResult<V, E>),
     ) -> InitResult<V, E>
     where
-        F: FnOnce() -> O,
-        C1: FnMut() -> Option<(WaiterValue<V>, InitResult<V, E>)>,
-        C2: FnMut(O) -> (WaiterValue<V>, InitResult<V, E>),
         E: Send + Sync + 'static,
     {
         use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};

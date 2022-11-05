@@ -277,7 +277,7 @@ where
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
-        R: FnOnce(ReadOp<K, V>, Instant),
+        R: Fn(ReadOp<K, V>, Instant),
         I: FnMut(&V) -> bool,
     {
         let now = self.current_time_from_expiration_clock();
