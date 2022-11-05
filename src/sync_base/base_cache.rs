@@ -298,18 +298,18 @@ where
                 let i = &self.inner;
                 let (ttl, tti, va) = (&i.time_to_live(), &i.time_to_idle(), &i.valid_after());
 
-            if is_expired_entry_wo(ttl, va, entry, now)
-                || is_expired_entry_ao(tti, va, entry, now)
-                || i.is_invalidated_entry(k, entry)
-            {
-                // Expired or invalidated entry.
-                None
-            } else {
-                // Valid entry.
-                let maybe_key = if need_key { Some(Arc::clone(k)) } else { None };
-                Some((maybe_key, TrioArc::clone(entry), now))
-            }
-        });
+                if is_expired_entry_wo(ttl, va, entry, now)
+                    || is_expired_entry_ao(tti, va, entry, now)
+                    || i.is_invalidated_entry(k, entry)
+                {
+                    // Expired or invalidated entry.
+                    None
+                } else {
+                    // Valid entry.
+                    let maybe_key = if need_key { Some(Arc::clone(k)) } else { None };
+                    Some((maybe_key, TrioArc::clone(entry), now))
+                }
+            });
 
         if let Some((maybe_key, entry, now)) = maybe_entry {
             let v = entry.value.clone();

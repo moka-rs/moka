@@ -1461,9 +1461,9 @@ where
         mut replace_if: Option<impl FnMut(&V) -> bool>,
         need_key: bool,
     ) -> Entry<K, V> {
-        let maybe_v = self
-            .base
-            .get_with_hash_but_ignore_if(&key, hash, replace_if.as_mut(), need_key);
+        let maybe_v =
+            self.base
+                .get_with_hash_but_ignore_if(&key, hash, replace_if.as_mut(), need_key);
         if let Some(v) = maybe_v {
             v
         } else {
@@ -1484,9 +1484,9 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        let maybe_v = self
-            .base
-            .get_with_hash_but_ignore_if(key, hash, replace_if.as_mut(), need_key);
+        let maybe_v =
+            self.base
+                .get_with_hash_but_ignore_if(key, hash, replace_if.as_mut(), need_key);
         if let Some(v) = maybe_v {
             v
         } else {
