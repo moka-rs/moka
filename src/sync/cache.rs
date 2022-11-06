@@ -1159,8 +1159,7 @@ where
     ) -> Entry<K, V> {
         let get = || {
             self.base
-                .get_with_hash_but_no_recording(&key, hash, replace_if.as_mut(), false)
-                .map(Entry::into_value)
+                .get_with_hash_but_no_recording(&key, hash, replace_if.as_mut())
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 
@@ -1382,8 +1381,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_but_no_recording(&key, hash, ignore_if, false)
-                .map(Entry::into_value)
+                .get_with_hash_but_no_recording(&key, hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 
@@ -1575,8 +1573,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_but_no_recording(&key, hash, ignore_if, need_key)
-                .map(Entry::into_value)
+                .get_with_hash_but_no_recording(&key, hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 

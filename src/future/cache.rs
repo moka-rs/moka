@@ -984,10 +984,6 @@ where
     ///
     /// The following code snippet demonstrates this behavior:
     ///
-    /// # Example
-    ///
-    /// The following code snippet demonstrates this behavior:
-    ///
     /// ```rust
     /// // Cargo.toml
     /// //
@@ -1102,15 +1098,6 @@ where
     /// [std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
     ///
     /// # Concurrent calls on the same key
-    ///
-    /// This method guarantees that concurrent calls on the same not-existing key are
-    /// coalesced into one evaluation of the `init` future (as long as these
-    /// futures return the same error type). Only one of the calls evaluates its
-    /// future, and other calls wait for that future to resolve.
-    ///
-    /// The following code snippet demonstrates this behavior:
-    ///
-    /// # Example
     ///
     /// This method guarantees that concurrent calls on the same not-existing key are
     /// coalesced into one evaluation of the `init` future (as long as these
@@ -1461,10 +1448,10 @@ where
         mut replace_if: Option<impl FnMut(&V) -> bool>,
         need_key: bool,
     ) -> Entry<K, V> {
-        let maybe_v =
+        let maybe_entry =
             self.base
                 .get_with_hash_but_ignore_if(&key, hash, replace_if.as_mut(), need_key);
-        if let Some(v) = maybe_v {
+        if let Some(v) = maybe_entry {
             v
         } else {
             self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key)
@@ -1484,10 +1471,10 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        let maybe_v =
+        let maybe_entry =
             self.base
                 .get_with_hash_but_ignore_if(key, hash, replace_if.as_mut(), need_key);
-        if let Some(v) = maybe_v {
+        if let Some(v) = maybe_entry {
             v
         } else {
             let key = Arc::new(key.to_owned());
@@ -1508,8 +1495,7 @@ where
 
         let get = || {
             self.base
-                .get_with_hash_but_no_recording(&key, hash, replace_if.as_mut(), false)
-                .map(Entry::into_value)
+                .get_with_hash_but_no_recording(&key, hash, replace_if.as_mut())
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
 
@@ -1628,8 +1614,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_but_no_recording(&key, hash, ignore_if, false)
-                .map(Entry::into_value)
+                .get_with_hash_but_no_recording(&key, hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
 
@@ -1709,8 +1694,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_but_no_recording(&key, hash, ignore_if, false)
-                .map(Entry::into_value)
+                .get_with_hash_but_no_recording(&key, hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
 

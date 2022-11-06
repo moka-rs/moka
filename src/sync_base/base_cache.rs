@@ -257,8 +257,7 @@ where
         key: &Q,
         hash: u64,
         ignore_if: Option<&mut I>,
-        need_key: bool,
-    ) -> Option<Entry<K, V>>
+    ) -> Option<V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -266,7 +265,8 @@ where
     {
         // Define a closure that skips to record a read op.
         let record = |_op, _now| {};
-        self.do_get_with_hash(key, hash, record, ignore_if, need_key)
+        self.do_get_with_hash(key, hash, record, ignore_if, false)
+            .map(Entry::into_value)
     }
 
     fn do_get_with_hash<Q, R, I>(
