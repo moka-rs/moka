@@ -32,7 +32,7 @@ fn test_get_with() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Task {} started.", task_id);
 
                 let key = "key1".to_string();
-                let value = match task_id % 2 {
+                let value = match task_id % 4 {
                     0 => {
                         my_cache
                             .get_with(key.clone(), async move {
@@ -51,6 +51,24 @@ fn test_get_with() -> Result<(), Box<dyn std::error::Error>> {
                             })
                             .await
                     }
+                    2 => my_cache
+                        .entry(key.clone())
+                        .or_insert_with(async move {
+                            println!("Task {} inserting a value.", task_id);
+                            my_call_counter.fetch_add(1, Ordering::AcqRel);
+                            Arc::new(vec![0u8; TEN_MIB])
+                        })
+                        .await
+                        .into_value(),
+                    3 => my_cache
+                        .entry_by_ref(key.as_str())
+                        .or_insert_with(async move {
+                            println!("Task {} inserting a value.", task_id);
+                            my_call_counter.fetch_add(1, Ordering::AcqRel);
+                            Arc::new(vec![0u8; TEN_MIB])
+                        })
+                        .await
+                        .into_value(),
                     _ => unreachable!(),
                 };
 

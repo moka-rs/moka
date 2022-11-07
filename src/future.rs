@@ -7,11 +7,13 @@ use std::{hash::Hash, sync::Arc};
 
 mod builder;
 mod cache;
+mod entry_selector;
 mod value_initializer;
 
 pub use {
     builder::CacheBuilder,
     cache::{BlockingOp, Cache},
+    entry_selector::{OwnedKeyEntrySelector, RefKeyEntrySelector},
 };
 
 /// The type of the unique ID to identify a predicate used by

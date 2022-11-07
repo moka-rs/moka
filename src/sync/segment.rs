@@ -1,9 +1,11 @@
-use super::{cache::Cache, CacheBuilder, ConcurrentCacheExt};
+use super::{
+    cache::Cache, CacheBuilder, ConcurrentCacheExt, OwnedKeyEntrySelector, RefKeyEntrySelector,
+};
 use crate::{
     common::concurrent::{housekeeper, Weigher},
     notification::{self, EvictionListener},
     sync_base::iter::{Iter, ScanningGet},
-    Policy, PredicateError,
+    Entry, Policy, PredicateError,
 };
 
 use std::{
@@ -270,7 +272,29 @@ where
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.inner.hash(key);
-        self.inner.select(hash).get_with_hash(key, hash)
+        self.inner
+            .select(hash)
+            .get_with_hash(key, hash, false)
+            .map(Entry::into_value)
+    }
+
+    pub fn entry(&self, key: K) -> OwnedKeyEntrySelector<'_, K, V, S>
+    where
+        K: Hash + Eq,
+    {
+        let hash = self.inner.hash(&key);
+        let cache = self.inner.select(hash);
+        OwnedKeyEntrySelector::new(key, hash, cache)
+    }
+
+    pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    {
+        let hash = self.inner.hash(key);
+        let cache = self.inner.select(hash);
+        RefKeyEntrySelector::new(key, hash, cache)
     }
 
     /// Deprecated, replaced with [`get_with`](#method.get_with)
@@ -306,7 +330,8 @@ where
         let replace_if = None as Option<fn(&V) -> bool>;
         self.inner
             .select(hash)
-            .get_or_insert_with_hash_and_fun(key, hash, init, replace_if)
+            .get_or_insert_with_hash_and_fun(key, hash, init, replace_if, false)
+            .into_value()
     }
 
     /// Similar to [`get_with`](#method.get_with), but instead of passing an owned
@@ -321,7 +346,8 @@ where
         let replace_if = None as Option<fn(&V) -> bool>;
         self.inner
             .select(hash)
-            .get_or_insert_with_hash_by_ref_and_fun(key, hash, init, replace_if)
+            .get_or_insert_with_hash_by_ref_and_fun(key, hash, init, replace_if, false)
+            .into_value()
     }
 
     /// Works like [`get_with`](#method.get_with), but takes an additional
@@ -342,29 +368,9 @@ where
         let key = Arc::new(key);
         self.inner
             .select(hash)
-            .get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if))
+            .get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if), false)
+            .into_value()
     }
-
-    // We will provide this API under the new `entry` API.
-    //
-    // /// Similar to [`get_with_if`](#method.get_with_if), but instead of passing an
-    // /// owned key, you can pass a reference to the key. If the key does not exist in
-    // /// the cache, the key will be cloned to create new entry in the cache.
-    // pub fn get_with_if_by_ref<Q>(
-    //     &self,
-    //     key: &Q,
-    //     init: impl FnOnce() -> V,
-    //     replace_if: impl FnMut(&V) -> bool,
-    // ) -> V
-    // where
-    //     K: Borrow<Q>,
-    //     Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
-    // {
-    //     let hash = self.inner.hash(key);
-    //     self.inner
-    //         .select(hash)
-    //         .get_or_insert_with_hash_by_ref_and_fun(key, hash, init, Some(replace_if))
-    // }
 
     /// Returns a _clone_ of the value corresponding to the key. If the value does
     /// not exist, evaluates the `init` closure, and inserts the value if
@@ -387,7 +393,8 @@ where
         let key = Arc::new(key);
         self.inner
             .select(hash)
-            .get_or_optionally_insert_with_hash_and_fun(key, hash, init)
+            .get_or_optionally_insert_with_hash_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
     }
 
     /// Similar to [`optionally_get_with`](#method.optionally_get_with), but instead
@@ -403,7 +410,8 @@ where
         let hash = self.inner.hash(key);
         self.inner
             .select(hash)
-            .get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init)
+            .get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
     }
 
     /// Returns a _clone_ of the value corresponding to the key. If the value does
@@ -431,7 +439,8 @@ where
         let key = Arc::new(key);
         self.inner
             .select(hash)
-            .get_or_try_insert_with_hash_and_fun(key, hash, init)
+            .get_or_try_insert_with_hash_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
     }
 
     /// Similar to [`try_get_with`](#method.try_get_with), but instead of passing an
@@ -447,7 +456,8 @@ where
         let hash = self.inner.hash(key);
         self.inner
             .select(hash)
-            .get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init)
+            .get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
     }
 
     /// Inserts a key-value pair into the cache.
