@@ -3831,7 +3831,11 @@ mod tests {
     // should always be ordered. This is true even if multiple client threads
     // try to modify the entries for the key at the same time. (This test will
     // run three client threads)
+    //
+    // This test is ignored by default. It becomes unstable when run in parallel
+    // with other tests.
     #[test]
+    #[ignore]
     fn test_key_lock_used_by_immediate_removal_notifications() {
         use std::thread::{sleep, spawn};
 
@@ -3851,21 +3855,21 @@ mod tests {
         let actual = Arc::new(Mutex::new(Vec::new()));
 
         // Create an eviction listener.
-        // Note that this listener is slow and will take ~100 ms to complete.
+        // Note that this listener is slow and will take 300 ms to complete.
         let a0 = Arc::clone(&actual);
         let listener = move |_k, v, cause| {
             a0.lock().push(Event::BeginNotify(v, cause));
-            sleep(Duration::from_millis(100));
+            sleep(Duration::from_millis(300));
             a0.lock().push(Event::EndNotify(v, cause));
         };
         let listener_conf = notification::Configuration::builder()
             .delivery_mode(DeliveryMode::Immediate)
             .build();
 
-        // Create a cache with the eviction listener and also TTL.
+        // Create a cache with the eviction listener and also TTL 500 ms.
         let mut cache = Cache::builder()
             .eviction_listener_with_conf(listener, listener_conf)
-            .time_to_live(Duration::from_millis(200))
+            .time_to_live(Duration::from_millis(500))
             .build();
         cache.reconfigure_for_testing();
 
@@ -3877,15 +3881,15 @@ mod tests {
         // Time  Event
         // ----- -------------------------------------
         // 0000: Insert value a0
-        // 0200: a0 expired
-        // 0210: Insert value a1 -> expired a0 (N-A0)
-        // 0220: Insert value a2 (waiting) (A-A2)
-        // 0310: N-A0 processed
+        // 0500: a0 expired
+        // 0600: Insert value a1 -> expired a0 (N-A0)
+        // 0800: Insert value a2 (waiting) (A-A2)
+        // 0900: N-A0 processed
         //       A-A2 finished waiting -> replace a1 (N-A1)
-        // 0320: Invalidate (waiting) (R-A2)
-        // 0410: N-A1 processed
+        // 1100: Invalidate (waiting) (R-A2)
+        // 1200: N-A1 processed
         //       R-A2 finished waiting -> explicit a2 (N-A2)
-        // 0510: N-A2 processed
+        // 1500: N-A2 processed
 
         let expected = vec![
             Event::Insert("a0"),
@@ -3904,37 +3908,37 @@ mod tests {
         actual.lock().push(Event::Insert("a0"));
         cache.insert(KEY, "a0");
         // Call `sync` to set the last modified for the KEY immediately so that
-        // this entry should expire in 200 ms from now.
+        // this entry should expire in 1000 ms from now.
         cache.sync();
 
-        // 0210: Insert value a1 -> expired a0 (N-A0)
+        // 0500: Insert value a1 -> expired a0 (N-A0)
         let thread1 = {
             let a1 = Arc::clone(&actual);
             let c1 = cache.clone();
             spawn(move || {
-                sleep(Duration::from_millis(210));
+                sleep(Duration::from_millis(600));
                 a1.lock().push(Event::Insert("a1"));
                 c1.insert(KEY, "a1");
             })
         };
 
-        // 0220: Insert value a2 (waiting) (A-A2)
+        // 0800: Insert value a2 (waiting) (A-A2)
         let thread2 = {
             let a2 = Arc::clone(&actual);
             let c2 = cache.clone();
             spawn(move || {
-                sleep(Duration::from_millis(220));
+                sleep(Duration::from_millis(800));
                 a2.lock().push(Event::Insert("a2"));
                 c2.insert(KEY, "a2");
             })
         };
 
-        // 0320: Invalidate (waiting) (R-A2)
+        // 1100: Invalidate (waiting) (R-A2)
         let thread3 = {
             let a3 = Arc::clone(&actual);
             let c3 = cache.clone();
             spawn(move || {
-                sleep(Duration::from_millis(320));
+                sleep(Duration::from_millis(1100));
                 a3.lock().push(Event::Invalidate("a2"));
                 c3.invalidate(&KEY);
             })
@@ -4041,7 +4045,10 @@ mod tests {
         cache.invalidate(key_s);
     }
 
+    // Ignored by default. This test becomes unstable when run in parallel with
+    // other tests.
     #[test]
+    #[ignore]
     fn drop_value_immediately_after_eviction() {
         use crate::common::test_utils::{Counters, Value};
 
