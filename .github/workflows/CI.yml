@@ -30,6 +30,13 @@ jobs:
       - name: Checkout Moka
         uses: actions/checkout@v2
 
+      # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners#supported-runners-and-hardware-resources
+      # 2-core CPU (x86_64), 7 GB of RAM
+      - name: Show CPU into
+        run: |
+          nproc
+          lscpu
+
       - name: Install Rust toolchain
         uses: actions-rs/toolchain@v1
         with:

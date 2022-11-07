@@ -6,6 +6,11 @@ jobs:
     steps:
       - checkout
       - run:
+          name: Show CPU info
+          command: |
+            nproc
+            lscpu
+      - run:
           name: Run cargo tarpaulin (Allowing a failure)
           command: |
             docker run --security-opt seccomp=unconfined -v "${PWD}:/volume" \
