@@ -832,22 +832,6 @@ where
         RefKeyEntrySelector::new(key, hash, self)
     }
 
-    /// Deprecated, replaced with [`get_with`](#method.get_with)
-    #[deprecated(since = "0.8.0", note = "Replaced with `get_with`")]
-    pub async fn get_or_insert_with(&self, key: K, init: impl Future<Output = V>) -> V {
-        self.get_with(key, init).await
-    }
-
-    /// Deprecated, replaced with [`try_get_with`](#method.try_get_with)
-    #[deprecated(since = "0.8.0", note = "Replaced with `try_get_with`")]
-    pub async fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
-    where
-        F: Future<Output = Result<V, E>>,
-        E: Send + Sync + 'static,
-    {
-        self.try_get_with(key, init).await
-    }
-
     /// Returns a _clone_ of the value corresponding to the key. If the value does
     /// not exist, resolve the `init` future and inserts the output.
     ///
@@ -1451,8 +1435,8 @@ where
         let maybe_entry =
             self.base
                 .get_with_hash_but_ignore_if(&key, hash, replace_if.as_mut(), need_key);
-        if let Some(v) = maybe_entry {
-            v
+        if let Some(entry) = maybe_entry {
+            entry
         } else {
             self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key)
                 .await
@@ -1474,8 +1458,8 @@ where
         let maybe_entry =
             self.base
                 .get_with_hash_but_ignore_if(key, hash, replace_if.as_mut(), need_key);
-        if let Some(v) = maybe_entry {
-            v
+        if let Some(entry) = maybe_entry {
+            entry
         } else {
             let key = Arc::new(key.to_owned());
             self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key)
