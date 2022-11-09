@@ -1,6 +1,6 @@
 use std::convert::TryInto;
 
-#[cfg(any(feature = "sync", feature = "future", feature = "dash"))]
+#[cfg(any(feature = "sync", feature = "future"))]
 pub(crate) mod concurrent;
 
 #[cfg(any(feature = "sync", feature = "future"))]

@@ -25,10 +25,12 @@ sync = ["crossbeam-epoch", "thiserror", "uuid"]
 # Enable this feature to use `moka::future::Cache`.
 future = ["crossbeam-epoch", "thiserror", "uuid", "async-io", "async-lock", "futures-util"]
 
-# Enable this feature to use **experimental** `moka::dash::Cache`.
-# Please note that the APIs for this feature will be frequently changed in next
-# few releases.
-dash = ["dashmap"]
+# Removed from "moka" (v0.10.0): `moka::dash::Cache` has been moved to a separate
+# crate called "mini-moka" and the module `dash` was renamed to `sync` there. Please
+# use `mini_moka::sync::Cache` instead.
+# https://docs.rs/mini-moka/latest/mini_moka/sync/struct.Cache.html
+# https://crates.io/crates/mini-moka
+dash = []
 
 # Enable this feature to activate optional logging from caches.
 # Currently cache will emit log only when it encounters a panic in user provided
@@ -71,9 +73,6 @@ quanta = { version = "0.10.0", optional = true }
 thiserror = { version = "1.0", optional = true }
 uuid = { version = "1.1", features = ["v4"], optional = true }
 
-# Optional dependencies (dashmap)
-dashmap = { version = "5.2", optional = true }
-
 # Optional dependencies (future)
 async-io = { version = "1.4", optional = true }
 async-lock = { version = "2.4", optional = true }
@@ -105,7 +104,7 @@ rustc_version = "0.4.0"
 # https://docs.rs/about/metadata
 [package.metadata.docs.rs]
 # Build the doc with some features enabled.
-features = ["future", "dash"]
+features = ["future"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 # ----------------------------------

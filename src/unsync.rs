@@ -1,7 +1,8 @@
-//! Provides a *not* thread-safe cache implementation built upon
-//! [`std::collections::HashMap`][std-hashmap].
+//! **Deprecated** since 0.10.0: Moved to "[mini-moka][mini-moka-crate]" crate. Use
+//! [`mini_moka::unsync`][unsync-module] module instead.
 //!
-//! [std-hashmap]: https://doc.rust-lang.org/std/collections/struct.HashMap.html
+//! [mini-moka-crate]: https://crates.io/crates/mini-moka
+//! [unsync-module]: https://docs.rs/mini-moka/latest/mini_moka/unsync/index.html
 
 mod builder;
 mod cache;
@@ -11,8 +12,11 @@ mod iter;
 use std::{ptr::NonNull, rc::Rc};
 use tagptr::TagNonNull;
 
+#[allow(deprecated)]
 pub use builder::CacheBuilder;
+#[allow(deprecated)]
 pub use cache::Cache;
+#[allow(deprecated)]
 pub use iter::Iter;
 
 use crate::common::{deque::DeqNode, time::Instant};

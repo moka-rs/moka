@@ -48,7 +48,6 @@ linux_arm64_task:
   pin_deps_script: |
     if [ "v$RUST_VERSION" == "v1.51.0" ]; then
       echo 'Pinning some dependencies to specific versions'
-      cargo update -p dashmap --precise 5.2.0
       cargo update -p indexmap --precise 1.8.2
       cargo update -p hashbrown --precise 0.11.2
       cargo update -p native-tls --precise 0.2.8
@@ -69,23 +68,23 @@ linux_arm64_task:
     # Run tests (release, sync feature, thread-pool test for sync::Cache)
     - cargo test --release --lib --features sync sync::cache::tests::enabling_and_disabling_thread_pools -- --exact --ignored
 
-    # Run tests (release, sync feature, thread-pool test for sync::SegmentCache)
+    # Run tests (release, sync feature, thread-pool test for sync::SegmentedCache)
     - cargo test --release --lib --features sync sync::segment::tests::enabling_and_disabling_thread_pools -- --exact --ignored
 
     # Run tests (sync feature, key lock test for notification)
     - cargo test --release --lib --features sync sync::cache::tests::test_key_lock_used_by_immediate_removal_notifications -- --exact --ignored
 
-    # Run tests (sync feature, drop value after eviction)
+    # Run tests (sync feature, drop value after eviction for sync::Cache)
     - cargo test --release --lib --features sync sync::cache::tests::drop_value_immediately_after_eviction -- --exact --ignored
+
+    # Run tests (sync feature, drop value after eviction for sync::SegmentedCache)
+    - cargo test --release --lib --features sync sync::segment::tests::drop_value_immediately_after_eviction -- --exact --ignored
 
     # Run tests (future feature, but no sync feature)
     - cargo test -j 1  --no-default-features --features 'future, atomic64, quanta' -- --test-threads=$NUM_CPUS
 
     # Run tests (future, sync and logging features)
     - cargo test -j 1  --features 'future, sync, logging' -- --test-threads=$NUM_CPUS
-
-    # Run tests (dash feature, but no sync feature)
-    - cargo test -j 1  --no-default-features --features 'dash, atomic64, quanta' -- --test-threads=$NUM_CPUS
 
   # before_cache_script:
   #   - rm -rf $CARGO_HOME/registry/index
