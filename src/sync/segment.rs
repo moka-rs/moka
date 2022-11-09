@@ -1853,7 +1853,10 @@ mod tests {
         cache.invalidate(key_s);
     }
 
+    // Ignored by default. This test becomes unstable when run in parallel with
+    // other tests.
     #[test]
+    #[ignore]
     fn drop_value_immediately_after_eviction() {
         use crate::common::test_utils::{Counters, Value};
 

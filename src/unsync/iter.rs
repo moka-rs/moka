@@ -9,7 +9,10 @@ use std::{
 
 type HashMapIter<'i, K, V> = std::collections::hash_map::Iter<'i, Rc<K>, ValueEntry<K, V>>;
 
-#[deprecated(since = "0.10.0", note = "Moved to \"mini-moka\" crate. Use `mini_moka::unsync::Iter` instead")]
+#[deprecated(
+    since = "0.10.0",
+    note = "Moved to \"mini-moka\" crate. Use `mini_moka::unsync::Iter` instead"
+)]
 pub struct Iter<'i, K, V, S> {
     cache: &'i Cache<K, V, S>,
     iter: HashMapIter<'i, K, V>,

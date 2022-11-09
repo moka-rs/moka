@@ -60,9 +60,9 @@
 //! separate crate called ["mini-moka"][mini-moka-crate]. Please use it instead.
 //!
 //! - A not thread-safe, blocking cache for single threaded applications:
-//!     - `moka::unsync::Cache` => [`mini_moka::unsync::Cache`][unsync-cache-struct]
+//!     - `moka::unsync::Cache` → [`mini_moka::unsync::Cache`][unsync-cache-struct]
 //! - Experimental, thread-safe, synchronous cache:
-//!     - `moka::dash::Cache` => [`mini_moka::sync::Cache`][dash-cache-struct]
+//!     - `moka::dash::Cache` → [`mini_moka::sync::Cache`][dash-cache-struct]
 //!
 //! [mini-moka-crate]: https://crates.io/crates/mini-moka
 //! [unsync-cache-struct]: https://docs.rs/mini-moka/latest/mini_moka/unsync/struct.Cache.html
@@ -196,7 +196,9 @@ pub use common::entry::Entry;
 pub use policy::Policy;
 
 #[cfg(feature = "dash")]
-compile_error!("`Moved to `mini-moka` crate. Use `mini_moka::sync::Cache` instead");
+compile_error!(
+    "`dash::Cache` has been moved to `mini-moka` crate. Use `mini_moka::sync::Cache` instead"
+);
 
 // Deprecated since v0.10.0. Use `mini_moka::unsync` instead.
 pub mod unsync;
