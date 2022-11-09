@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use super::{
     deques::Deques, AccessTime, CacheBuilder, Iter, KeyDate, KeyHashDate, ValueEntry, Weigher,
 };
@@ -164,6 +166,7 @@ type CacheStore<K, V, S> = std::collections::HashMap<Rc<K>, ValueEntry<K, V>, S>
 /// [build-with-hasher-method]: ./struct.CacheBuilder.html#method.build_with_hasher
 /// [ahash-crate]: https://crates.io/crates/ahash
 ///
+#[deprecated(since = "0.10.0", note = "Moved to \"mini-moka\" crate. Use `mini_moka::unsync::Cache` instead")]
 pub struct Cache<K, V, S = RandomState> {
     max_capacity: Option<u64>,
     entry_count: u64,

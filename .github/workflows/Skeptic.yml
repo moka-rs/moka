@@ -46,27 +46,27 @@ jobs:
         env:
           RUSTFLAGS: '--cfg skeptic'
 
-      - name: Run tests (release, future and dash)
+      - name: Run tests (release, sync and future)
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --release --features 'sync, future, dash'
+          args: --release --features 'sync, future'
         env:
           RUSTFLAGS: '--cfg skeptic'
 
-      - name: Run tests (sync, future and dash, without atomic64 and quanta)
+      - name: Run tests (sync and future, without atomic64 and quanta)
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --release --no-default-features --features 'sync, future, dash'
+          args: --release --no-default-features --features 'sync, future'
         env:
           RUSTFLAGS: '--cfg skeptic'
 
-      - name: Run compile error tests (sync, future and dash features, trybuild)
+      - name: Run compile error tests (sync and future features, trybuild)
         uses: actions-rs/cargo@v1
         if: ${{ matrix.rust == 'stable' }}
         with:
           command: test
-          args: ui_trybuild --release --features 'sync, future, dash'
+          args: ui_trybuild --release --features 'sync, future'
         env:
           RUSTFLAGS: '--cfg trybuild'

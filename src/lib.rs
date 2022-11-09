@@ -47,18 +47,26 @@
 //! - Thread-safe, synchronous caches:
 //!     - [`sync::Cache`][sync-cache-struct]
 //!     - [`sync::SegmentedCache`][sync-seg-cache-struct]
-//!     - [`dash::Cache`][dash-cache-struct] (Experimental, requires "dash" feature)
 //! - An asynchronous (futures aware) cache:
 //!     - [`future::Cache`][future-cache-struct] (Requires "future" feature)
-//! - A not thread-safe, blocking cache for single threaded applications:
-//!     - [`unsync::Cache`][unsync-cache-struct]
 //!
-//! [dash-cache-struct]: ./dash/struct.Cache.html
 //! [future-cache-struct]: ./future/struct.Cache.html
 //! [sync-cache-struct]: ./sync/struct.Cache.html
 //! [sync-seg-cache-struct]: ./sync/struct.SegmentedCache.html
-//! [unsync-cache-struct]: ./unsync/struct.Cache.html
-//! [dashmap]: https://docs.rs/dashmap/*/dashmap/struct.DashMap.html
+//!
+//! # Notes on `unsync::Cache` and `dash::Cache`
+//!
+//! The `unsync::Cache` and an experimental `dash::Cache` have been moved to a
+//! separate crate called ["mini-moka"][mini-moka-crate]. Please use it instead.
+//!
+//! - A not thread-safe, blocking cache for single threaded applications:
+//!     - `moka::unsync::Cache` => [`mini_moka::unsync::Cache`][unsync-cache-struct]
+//! - Experimental, thread-safe, synchronous cache:
+//!     - `moka::dash::Cache` => [`mini_moka::sync::Cache`][dash-cache-struct]
+//!
+//! [mini-moka-crate]: https://crates.io/crates/mini-moka
+//! [unsync-cache-struct]: https://docs.rs/mini-moka/latest/mini_moka/unsync/struct.Cache.html
+//! [dash-cache-struct]: https://docs.rs/mini-moka/latest/mini_moka/sync/struct.Cache.html
 //!
 //! # Minimum Supported Rust Versions
 //!
@@ -160,14 +168,9 @@
 
 pub(crate) mod common;
 pub(crate) mod policy;
-pub mod unsync;
 
 #[cfg(any(feature = "sync", feature = "future"))]
 pub(crate) mod cht;
-
-#[cfg(feature = "dash")]
-#[cfg_attr(docsrs, doc(cfg(feature = "dash")))]
-pub mod dash;
 
 #[cfg(feature = "future")]
 #[cfg_attr(docsrs, doc(cfg(feature = "future")))]
@@ -192,6 +195,12 @@ pub use common::entry::Entry;
 
 pub use policy::Policy;
 
+#[cfg(feature = "dash")]
+compile_error!("`Moved to `mini-moka` crate. Use `mini_moka::sync::Cache` instead");
+
+// Deprecated since v0.10.0. Use `mini_moka::unsync` instead.
+pub mod unsync;
+
 #[cfg(feature = "unstable-debug-counters")]
 #[cfg_attr(docsrs, doc(cfg(feature = "unstable-debug-counters")))]
 pub use common::concurrent::debug_counters::GlobalDebugCounters;
@@ -203,13 +212,6 @@ mod tests {
     fn trybuild_default() {
         let t = trybuild::TestCases::new();
         t.compile_fail("tests/compile_tests/default/clone/*.rs");
-    }
-
-    #[cfg(all(trybuild, feature = "dash"))]
-    #[test]
-    fn trybuild_dash() {
-        let t = trybuild::TestCases::new();
-        t.compile_fail("tests/compile_tests/dash/clone/*.rs");
     }
 
     #[cfg(all(trybuild, feature = "future"))]

@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 use super::{Cache, Weigher};
 use crate::common::builder_utils;
 
@@ -39,6 +41,7 @@ use std::{
 /// ```
 ///
 #[must_use]
+#[deprecated(since = "0.10.0", note = "Moved to \"mini-moka\" crate. Use `mini_moka::unsync::CacheBuilder` instead")]
 pub struct CacheBuilder<K, V, C> {
     max_capacity: Option<u64>,
     initial_capacity: Option<usize>,
