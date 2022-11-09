@@ -11,8 +11,11 @@ mod iter;
 use std::{ptr::NonNull, rc::Rc};
 use tagptr::TagNonNull;
 
+#[allow(deprecated)]
 pub use builder::CacheBuilder;
+#[allow(deprecated)]
 pub use cache::Cache;
+#[allow(deprecated)]
 pub use iter::Iter;
 
 use crate::common::{deque::DeqNode, time::Instant};

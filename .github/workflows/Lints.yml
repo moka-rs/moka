@@ -43,7 +43,9 @@ jobs:
         if: ${{ matrix.rust == 'stable' || matrix.rust == 'beta' }}
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          args: --lib --tests --all-features --all-targets -- -D warnings
+          # Specify individual features until we remove `dash` feature.
+          # args: --lib --tests --all-features --all-targets -- -D warnings
+          args: --lib --tests --features 'future, logging, unstable-debug-counters' --all-targets -- -D warnings
 
       - name: Run Rustfmt
         uses: actions-rs/cargo@v1
