@@ -60,8 +60,8 @@ high level of concurrency for concurrent access.
 
 ### Choosing the right cache for your use case
 
-No cache implementation is perfect for all use cases. Moka is a complex software and
-can be overkill for your use case. Sometimes other caches like
+No cache implementation is perfect for every use cases. Moka is a complex software
+and can be overkill for your use case. Sometimes simpler caches like
 [Mini Moka][mini-moka-crate] or [Quick Cache][quick-cache] might be a better fit.
 
 The following table shows the trade-offs between the different cache implementations:
@@ -75,7 +75,7 @@ The following table shows the trade-offs between the different cache implementat
 | Bounded by the total weighted size of entries | ✅ | ✅ | ❌ |
 | Near optimal hit ratio | ✅ TinyLFU | ✅ TinyLFU | ✅ CLOCK-Pro |
 | Expiration policies | ✅ | ✅ | ❌ |
-| Eviction lister | ✅ | ❌ | ❌ |
+| Eviction listener | ✅ | ❌ | ❌ |
 | Per-key, atomic insertion | ✅ `get_with` family methods | ❌ | ❌ |
 | Lock-free, concurrent iterator | ✅ | ❌ | ❌ |
 | Lock-per-shard, concurrent iterator | ❌ | ✅ | ❌ |
@@ -112,7 +112,8 @@ routers. Here are some highlights:
 
 - [CHANGELOG.md](https://github.com/moka-rs/moka/blob/master/CHANGELOG.md)
 
-### `unsync::Cache` and `dash::Cache` have been move to Mini Moka crate
+The `unsync::Cache` and `dash::Cache` have been moved to [Mini Moka][mini-moka-crate]
+crate:
 
 - Non concurrent cache for single threaded applications:
     - `moka::unsync::Cache` → [`mini_moka::unsync::Cache`][unsync-cache-struct]
