@@ -12,8 +12,7 @@ Moka is a fast, concurrent cache library for Rust. Moka is inspired by the
 [Caffeine][caffeine-git] library for Java.
 
 Moka provides cache implementations on top of hash maps. They support full
-concurrency of retrievals and a high expected concurrency for updates. Moka also
-provides a non-thread-safe cache implementation for single thread applications.
+concurrency of retrievals and a high expected concurrency for updates.
 
 All caches perform a best-effort bounding of a hash map using an entry replacement
 algorithm to determine which entries to evict when the capacity is exceeded.
@@ -38,6 +37,9 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 
 ## Features
 
+Moka provides a rich and flexible feature set while maintaining high hit ratio and a
+high level of concurrency for concurrent access.
+
 - Thread-safe, highly concurrent in-memory cache implementations:
     - Synchronous caches that can be shared across OS threads.
     - An asynchronous (futures aware) cache that can be accessed inside and outside
@@ -56,15 +58,37 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 - Supports eviction listener, a callback function that will be called when an entry
   is removed from the cache.
 
-Moka provides a rich and flexible feature set while maintaining high hit ratio and a
-high level of concurrency for concurrent access. However, it may not be as fast as
-other caches, especially those that focus on much smaller feature sets.
+### Choosing the right cache for your use case
 
-If you do not need features like: time to live, size aware eviction, and eviction
-listener, you may want to take a look at the [Quick Cache][quick-cache] crate.
+No cache implementation is perfect for all use cases. Moka is a complex software and
+can be overkill for your use case. Sometimes other caches like
+[Mini Moka][mini-moka-crate] or [Quick Cache][quick-cache] might be a better fit.
+
+The following table shows the trade-offs between the different cache implementations:
+
+| Feature | Moka v0.10 | Mini Moka v0.10 | Quick Cache v0.1 |
+|:------- |:---- |:--------- |:----------- |
+| Thread-safe, sync cache | ✅ | ✅ | ✅ |
+| Thread-safe, async cache | ✅ | ❌ | ❌ |
+| Non-concurrent cache | ❌ | ✅ | ✅ |
+| Bounded by the maximum number of entries | ✅ | ✅ | ✅ |
+| Bounded by the total weighted size of entries | ✅ | ✅ | ❌ |
+| Near optimal hit ratio | ✅ TinyLFU | ✅ TinyLFU | ✅ CLOCK-Pro |
+| Expiration policies | ✅ | ✅ | ❌ |
+| Eviction lister | ✅ | ❌ | ❌ |
+| Per-key, atomic insertion | ✅ `get_with` family methods | ❌ | ❌ |
+| Lock-free, concurrent iterator | ✅ | ❌ | ❌ |
+| Lock-per-shard, concurrent iterator | ❌ | ✅ | ❌ |
+
+| Performance | Moka v0.10 | Mini Moka v0.10 | Quick Cache v0.1 |
+|:------- |:---- |:--------- |:----------- |
+| Small overhead compared to a concurrent hash table | ❌ | ❌ | ✅ |
+| Does not use background threads | ❌ | ✅ | ✅ |
+| Small dependency tree | ❌ | ✅ | ✅ |
 
 [tiny-lfu]: https://github.com/moka-rs/moka/wiki#admission-and-eviction-policies
 [quick-cache]: https://crates.io/crates/quick_cache
+[mini-moka-crate]: https://crates.io/crates/mini-moka
 
 ## Moka in Production
 
@@ -88,10 +112,21 @@ routers. Here are some highlights:
 
 - [CHANGELOG.md](https://github.com/moka-rs/moka/blob/master/CHANGELOG.md)
 
+### `unsync::Cache` and `dash::Cache` have been move to Mini Moka crate
+
+- Non concurrent cache for single threaded applications:
+    - `moka::unsync::Cache` → [`mini_moka::unsync::Cache`][unsync-cache-struct]
+- Experimental, thread-safe, synchronous cache:
+    - `moka::dash::Cache` →→ [`mini_moka::sync::Cache`][dash-cache-struct]
+
+[unsync-cache-struct]: https://docs.rs/mini-moka/latest/mini_moka/unsync/struct.Cache.html
+[dash-cache-struct]: https://docs.rs/mini-moka/latest/mini_moka/sync/struct.Cache.html
+
 
 ## Table of Contents
 
 - [Features](#features)
+    - [Choosing the right cache for your use case](#choosing-the-right-cache-for-your-use-case)
 - [Moka in Production](#moka-in-production)
 - [Change Log](#change-log)
 - [Usage](#usage)

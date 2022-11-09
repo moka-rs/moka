@@ -12,9 +12,6 @@
 //! updates. They utilize a lock-free concurrent hash table as the central key-value
 //! storage.
 //!
-//! Moka also provides an in-memory, non-thread-safe cache implementation for single
-//! thread applications.
-//!
 //! All cache implementations perform a best-effort bounding of the map using an
 //! entry replacement algorithm to determine which entries to evict when the capacity
 //! is exceeded.
@@ -54,12 +51,10 @@
 //! [sync-cache-struct]: ./sync/struct.Cache.html
 //! [sync-seg-cache-struct]: ./sync/struct.SegmentedCache.html
 //!
-//! # Notes on `unsync::Cache` and `dash::Cache`
+//! **NOTE:** The following caches have been moved to a separate crate called
+//! "[mini-moka][mini-moka-crate]"".
 //!
-//! The `unsync::Cache` and an experimental `dash::Cache` have been moved to a
-//! separate crate called ["mini-moka"][mini-moka-crate]. Please use it instead.
-//!
-//! - A not thread-safe, blocking cache for single threaded applications:
+//! - Non concurrent cache for single threaded applications:
 //!     - `moka::unsync::Cache` → [`mini_moka::unsync::Cache`][unsync-cache-struct]
 //! - Experimental, thread-safe, synchronous cache:
 //!     - `moka::dash::Cache` → [`mini_moka::sync::Cache`][dash-cache-struct]

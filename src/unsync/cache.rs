@@ -31,6 +31,12 @@ type CacheStore<K, V, S> = std::collections::HashMap<Rc<K>, ValueEntry<K, V>, S>
 
 /// An in-memory cache that is _not_ thread-safe.
 ///
+/// **Deprecated**: Moved to "[mini-moka][mini-moka-crate]" crate. Use
+/// [`mini_moka::unsync::Cache`][unsync-cache-struct] instead.
+///
+/// [mini-moka-crate]: https://crates.io/crates/mini-moka
+/// [unsync-cache-struct]: https://docs.rs/mini-moka/latest/mini_moka/unsync/struct.Cache.html
+///
 /// `Cache` utilizes a hash table [`std::collections::HashMap`][std-hashmap] from the
 /// standard library for the central key-value storage. `Cache` performs a
 /// best-effort bounding of the map using an entry replacement algorithm to determine
