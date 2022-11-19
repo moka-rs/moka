@@ -51,6 +51,7 @@ linux_arm64_task:
       cargo update -p dashmap --precise 5.2.0
       cargo update -p indexmap --precise 1.8.2
       cargo update -p hashbrown --precise 0.11.2
+      cargo update -p reqwest --precise 0.11.12
       cargo update -p native-tls --precise 0.2.8
       cargo update -p async-global-executor --precise 2.0.4
       cargo update -p pulldown-cmark --precise 0.9.1

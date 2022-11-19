@@ -62,6 +62,7 @@ jobs:
       - name: Pin some dependencies to specific versions (MSRV only)
         if: ${{ matrix.rust == '1.51.0' }}
         # hashbrown >= v0.12 requires Rust 2021 edition.
+        # reqwest >= v0.11.13 requires native-tls v0.2.10.
         # native-tls >= v0.2.9 requires more recent Rust version.
         # async-global-executor >= 2.1 requires Rust 2021 edition.
         # pull-down-cmark >= 0.9.2 requires Rust 2021 edition.
@@ -70,6 +71,7 @@ jobs:
           cargo update -p dashmap --precise 5.2.0
           cargo update -p indexmap --precise 1.8.2
           cargo update -p hashbrown --precise 0.11.2
+          cargo update -p reqwest --precise 0.11.12
           cargo update -p native-tls --precise 0.2.8
           cargo update -p async-global-executor --precise 2.0.4
           cargo update -p pulldown-cmark --precise 0.9.1
