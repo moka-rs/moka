@@ -223,13 +223,8 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
-        // Define a closure to record a read op.
-        let record = |op, now| {
-            self.record_read_op(op, now)
-                .expect("Failed to record a get op");
-        };
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
-        self.do_get_with_hash(key, hash, record, ignore_if, need_key)
+        self.do_get_with_hash(key, hash, true, ignore_if, need_key)
     }
 
     pub(crate) fn get_with_hash_but_ignore_if<Q, I>(
@@ -244,12 +239,7 @@ where
         Q: Hash + Eq + ?Sized,
         I: FnMut(&V) -> bool,
     {
-        // Define a closure to record a read op.
-        let record = |op, now| {
-            self.record_read_op(op, now)
-                .expect("Failed to record a get op");
-        };
-        self.do_get_with_hash(key, hash, record, ignore_if, need_key)
+        self.do_get_with_hash(key, hash, true, ignore_if, need_key)
     }
 
     pub(crate) fn get_with_hash_but_no_recording<Q, I>(
@@ -263,24 +253,21 @@ where
         Q: Hash + Eq + ?Sized,
         I: FnMut(&V) -> bool,
     {
-        // Define a closure that skips to record a read op.
-        let record = |_op, _now| {};
-        self.do_get_with_hash(key, hash, record, ignore_if, false)
+        self.do_get_with_hash(key, hash, false, ignore_if, false)
             .map(Entry::into_value)
     }
 
-    fn do_get_with_hash<Q, R, I>(
+    fn do_get_with_hash<Q, I>(
         &self,
         key: &Q,
         hash: u64,
-        read_recorder: R,
+        record_read: bool,
         mut ignore_if: Option<&mut I>,
         need_key: bool,
     ) -> Option<Entry<K, V>>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
-        R: Fn(ReadOp<K, V>, Instant),
         I: FnMut(&V) -> bool,
     {
         let now = self.current_time_from_expiration_clock();
@@ -313,10 +300,16 @@ where
 
         if let Some((maybe_key, entry, now)) = maybe_entry {
             let v = entry.value.clone();
-            read_recorder(ReadOp::Hit(hash, entry, now), now);
+            if record_read {
+                self.record_read_op(ReadOp::Hit(hash, entry, now), now)
+                    .expect("Failed to record a get op");
+            }
             Some(Entry::new(maybe_key, v, false))
         } else {
-            read_recorder(ReadOp::Miss(hash), now);
+            if record_read {
+                self.record_read_op(ReadOp::Miss(hash), now)
+                    .expect("Failed to record a get op");
+            }
             None
         }
     }
