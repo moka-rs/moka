@@ -294,13 +294,18 @@ where
                 } else {
                     // Valid entry.
                     let maybe_key = if need_key { Some(Arc::clone(k)) } else { None };
-                    Some((maybe_key, TrioArc::clone(entry), now))
+                    let v = entry.value.clone();
+                    let maybe_entry = if record_read {
+                        Some(TrioArc::clone(entry))
+                    } else {
+                        None
+                    };
+                    Some((maybe_key, v, maybe_entry, now))
                 }
             });
 
-        if let Some((maybe_key, entry, now)) = maybe_entry {
-            let v = entry.value.clone();
-            if record_read {
+        if let Some((maybe_key, v, maybe_entry, now)) = maybe_entry {
+            if let Some(entry) = maybe_entry {
                 self.record_read_op(ReadOp::Hit(hash, entry, now), now)
                     .expect("Failed to record a get op");
             }
