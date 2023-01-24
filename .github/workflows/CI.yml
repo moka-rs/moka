@@ -59,6 +59,11 @@ jobs:
           command: update
           args: -Z minimal-versions
 
+      - name: Pin some dependencies to specific versions (Nightly only)
+        if: ${{ matrix.rust == 'nightly' }}
+        run: |
+          cargo update -p openssl --precise 0.10.39
+
       - name: Pin some dependencies to specific versions (MSRV only)
         if: ${{ matrix.rust == '1.51.0' }}
         # hashbrown >= v0.12 requires Rust 2021 edition.
