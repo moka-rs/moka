@@ -40,6 +40,7 @@ linux_arm64_task:
     if [ -z "$RUST_VERSION" ]; then
       echo 'Downgrading dependencies to minimal versions'
       cargo update -Z minimal-versions
+      cargo update -p openssl --precise 0.10.39
     else
       echo 'Skipped'
     fi
