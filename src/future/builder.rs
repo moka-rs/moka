@@ -137,7 +137,7 @@ where
     /// ```rust
     /// // Cargo.toml
     /// // [dependencies]
-    /// // ahash = "0.3.8"
+    /// // ahash = "0.8"
     /// // moka = { version = ..., features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///

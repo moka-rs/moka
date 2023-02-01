@@ -164,7 +164,7 @@ where
     /// ```rust
     /// // Cargo.toml
     /// // [dependencies]
-    /// // ahash = "0.3.8"
+    /// // ahash = "0.8"
     /// // moka = ...
     ///
     /// use moka::sync::Cache;
@@ -288,7 +288,7 @@ where
     /// ```rust
     /// // Cargo.toml
     /// // [dependencies]
-    /// // ahash = "0.3.8"
+    /// // ahash = "0.8"
     /// // moka = ...
     ///
     /// use moka::sync::SegmentedCache;
