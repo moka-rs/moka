@@ -225,7 +225,7 @@ use std::{
 /// The hashing algorithm can be replaced on a per-`Cache` basis using the
 /// [`build_with_hasher`][build-with-hasher-method] method of the
 /// `CacheBuilder`. Many alternative algorithms are available on crates.io, such
-/// as the [aHash][ahash-crate] crate.
+/// as the [AHash][ahash-crate] crate.
 ///
 /// [build-with-hasher-method]: ./struct.CacheBuilder.html#method.build_with_hasher
 /// [ahash-crate]: https://crates.io/crates/ahash
