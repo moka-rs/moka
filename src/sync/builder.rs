@@ -153,10 +153,68 @@ where
         )
     }
 
-    /// Builds a `Cache<K, V, S>`, with the given `hasher`.
+    /// Builds a `Cache<K, V, S>` with the given `hasher` of type `S`.
     ///
-    /// If you want to build a `SegmentedCache<K, V>`, call `segments` method  before
-    /// calling this method.
+    /// # Examples
+    ///
+    /// This example uses AHash hasher from [AHash][ahash-crate] crate.
+    ///
+    /// [ahash-crate]: https://crates.io/crates/ahash
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// // [dependencies]
+    /// // ahash = "0.8"
+    /// // moka = ...
+    ///
+    /// use moka::sync::Cache;
+    ///
+    /// // The type of this cache is: Cache<i32, String, ahash::RandomState>
+    /// let cache = Cache::builder()
+    ///     .max_capacity(100)
+    ///     .build_with_hasher(ahash::RandomState::default());
+    /// cache.insert(1, "one".to_string());
+    /// ```
+    ///
+    /// Note: If you need to add a type annotation to your cache, you must use the
+    /// form of `Cache<K, V, S>` instead of `Cache<K, V>`. That `S` is the type of
+    /// the build hasher, and its default is the `RandomState` from
+    /// `std::collections::hash_map` module . If you use a different build hasher,
+    /// you must specify `S` explicitly.
+    ///
+    /// Here is a good example:
+    ///
+    /// ```rust
+    /// # use moka::sync::Cache;
+    /// # let cache = Cache::builder()
+    /// #     .build_with_hasher(ahash::RandomState::default());
+    /// struct Good {
+    ///     // Specifying the type in Cache<K, V, S> format.
+    ///     cache: Cache<i32, String, ahash::RandomState>,
+    /// }
+    ///
+    /// // Storing the cache from above example. This should compile.
+    /// Good { cache };
+    /// ```
+    ///
+    /// Here is a bad example. This struct cannot store the above cache because it
+    /// does not specify `S`:
+    ///
+    /// ```compile_fail
+    /// # use moka::sync::Cache;
+    /// # let cache = Cache::builder()
+    /// #     .build_with_hasher(ahash::RandomState::default());
+    /// struct Bad {
+    ///     // Specifying the type in Cache<K, V> format.
+    ///     cache: Cache<i32, String>,
+    /// }
+    ///
+    /// // This should not compile.
+    /// Bad { cache };
+    /// // => error[E0308]: mismatched types
+    /// //    expected struct `std::collections::hash_map::RandomState`,
+    /// //       found struct `ahash::RandomState`
+    /// ```
     ///
     /// # Panics
     ///
@@ -218,10 +276,69 @@ where
         )
     }
 
-    /// Builds a `SegmentedCache<K, V, S>`, with the given `hasher`.
+    /// Builds a `SegmentedCache<K, V, S>` with the given `hasher`.
     ///
-    /// If you want to build a `Cache<K, V>`, do not call `segments` method before
-    /// calling this method.
+    ///
+    /// # Examples
+    ///
+    /// This example uses AHash hasher from [AHash][ahash-crate] crate.
+    ///
+    /// [ahash-crate]: https://crates.io/crates/ahash
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// // [dependencies]
+    /// // ahash = "0.8"
+    /// // moka = ...
+    ///
+    /// use moka::sync::SegmentedCache;
+    ///
+    /// // The type of this cache is: SegmentedCache<i32, String, ahash::RandomState>
+    /// let cache = SegmentedCache::builder(4)
+    ///     .max_capacity(100)
+    ///     .build_with_hasher(ahash::RandomState::default());
+    /// cache.insert(1, "one".to_string());
+    /// ```
+    ///
+    /// Note: If you need to add a type annotation to your cache, you must use the
+    /// form of `SegmentedCache<K, V, S>` instead of `SegmentedCache<K, V>`. That `S`
+    /// is the type of the build hasher, whose default is the `RandomState` from
+    /// `std::collections::hash_map` module . If you use a different build hasher,
+    /// you must specify `S` explicitly.
+    ///
+    /// Here is a good example:
+    ///
+    /// ```rust
+    /// # use moka::sync::SegmentedCache;
+    /// # let cache = SegmentedCache::builder(4)
+    /// #     .build_with_hasher(ahash::RandomState::default());
+    /// struct Good {
+    ///     // Specifying the type in SegmentedCache<K, V, S> format.
+    ///     cache: SegmentedCache<i32, String, ahash::RandomState>,
+    /// }
+    ///
+    /// // Storing the cache from above example. This should compile.
+    /// Good { cache };
+    /// ```
+    ///
+    /// Here is a bad example. This struct cannot store the above cache because it
+    /// does not specify `S`:
+    ///
+    /// ```compile_fail
+    /// # use moka::sync::SegmentedCache;
+    /// # let cache = SegmentedCache::builder(4)
+    /// #     .build_with_hasher(ahash::RandomState::default());
+    /// struct Bad {
+    ///     // Specifying the type in SegmentedCache<K, V> format.
+    ///     cache: SegmentedCache<i32, String>,
+    /// }
+    ///
+    /// // This should not compile.
+    /// Bad { cache };
+    /// // => error[E0308]: mismatched types
+    /// //    expected struct `std::collections::hash_map::RandomState`,
+    /// //       found struct `ahash::RandomState`
+    /// ```
     ///
     /// # Panics
     ///

@@ -49,6 +49,8 @@ linux_arm64_task:
   pin_deps_script: |
     if [ "v$RUST_VERSION" == "v1.51.0" ]; then
       echo 'Pinning some dependencies to specific versions'
+      rm -f Cargo.lock
+      sed -i 's/ahash = ".*"/ahash = "=0.7.6"/g' Cargo.toml
       cargo update -p dashmap --precise 5.2.0
       cargo update -p indexmap --precise 1.8.2
       cargo update -p hashbrown --precise 0.11.2
