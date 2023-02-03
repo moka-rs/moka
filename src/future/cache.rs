@@ -2727,7 +2727,7 @@ mod tests {
             let cache1 = cache.clone();
             async move {
                 // Call `or_insert_with_if` immediately.
-                let v = cache1
+                let entry = cache1
                     .entry(KEY)
                     .or_insert_with_if(
                         async {
@@ -2737,9 +2737,11 @@ mod tests {
                         },
                         |_v| unreachable!(),
                     )
-                    .await
-                    .into_value();
-                assert_eq!(v, "task1");
+                    .await;
+                // Entry should be fresh because our async block should have been
+                // evaluated.
+                assert!(entry.is_fresh());
+                assert_eq!(entry.into_value(), "task1");
             }
         };
 
@@ -2751,12 +2753,14 @@ mod tests {
             async move {
                 // Wait for 100 ms before calling `or_insert_with_if`.
                 Timer::after(Duration::from_millis(100)).await;
-                let v = cache2
+                let entry = cache2
                     .entry(KEY)
                     .or_insert_with_if(async { unreachable!() }, |_v| unreachable!())
-                    .await
-                    .into_value();
-                assert_eq!(v, "task1");
+                    .await;
+                // Entry should not be fresh because task1's async block should have
+                // been evaluated instead of ours.
+                assert!(!entry.is_fresh());
+                assert_eq!(entry.into_value(), "task1");
             }
         };
 
@@ -2771,15 +2775,15 @@ mod tests {
             async move {
                 // Wait for 350 ms before calling `or_insert_with_if`.
                 Timer::after(Duration::from_millis(350)).await;
-                let v = cache3
+                let entry = cache3
                     .entry(KEY)
                     .or_insert_with_if(async { unreachable!() }, |v| {
                         assert_eq!(v, &"task1");
                         false
                     })
-                    .await
-                    .into_value();
-                assert_eq!(v, "task1");
+                    .await;
+                assert!(!entry.is_fresh());
+                assert_eq!(entry.into_value(), "task1");
             }
         };
 
@@ -2792,15 +2796,15 @@ mod tests {
             async move {
                 // Wait for 400 ms before calling `or_insert_with_if`.
                 Timer::after(Duration::from_millis(400)).await;
-                let v = cache4
+                let entry = cache4
                     .entry(KEY)
                     .or_insert_with_if(async { "task4" }, |v| {
                         assert_eq!(v, &"task1");
                         true
                     })
-                    .await
-                    .into_value();
-                assert_eq!(v, "task4");
+                    .await;
+                assert!(entry.is_fresh());
+                assert_eq!(entry.into_value(), "task4");
             }
         };
 
@@ -2857,7 +2861,7 @@ mod tests {
             let cache1 = cache.clone();
             async move {
                 // Call `or_insert_with_if` immediately.
-                let v = cache1
+                let entry = cache1
                     .entry_by_ref(KEY)
                     .or_insert_with_if(
                         async {
@@ -2867,9 +2871,11 @@ mod tests {
                         },
                         |_v| unreachable!(),
                     )
-                    .await
-                    .into_value();
-                assert_eq!(v, "task1");
+                    .await;
+                // Entry should be fresh because our async block should have been
+                // evaluated.
+                assert!(entry.is_fresh());
+                assert_eq!(entry.into_value(), "task1");
             }
         };
 
@@ -2881,12 +2887,14 @@ mod tests {
             async move {
                 // Wait for 100 ms before calling `or_insert_with_if`.
                 Timer::after(Duration::from_millis(100)).await;
-                let v = cache2
+                let entry = cache2
                     .entry_by_ref(KEY)
                     .or_insert_with_if(async { unreachable!() }, |_v| unreachable!())
-                    .await
-                    .into_value();
-                assert_eq!(v, "task1");
+                    .await;
+                // Entry should not be fresh because task1's async block should have
+                // been evaluated instead of ours.
+                assert!(!entry.is_fresh());
+                assert_eq!(entry.into_value(), "task1");
             }
         };
 
@@ -2901,15 +2909,15 @@ mod tests {
             async move {
                 // Wait for 350 ms before calling `or_insert_with_if`.
                 Timer::after(Duration::from_millis(350)).await;
-                let v = cache3
+                let entry = cache3
                     .entry_by_ref(KEY)
                     .or_insert_with_if(async { unreachable!() }, |v| {
                         assert_eq!(v, &"task1");
                         false
                     })
-                    .await
-                    .into_value();
-                assert_eq!(v, "task1");
+                    .await;
+                assert!(!entry.is_fresh());
+                assert_eq!(entry.into_value(), "task1");
             }
         };
 
@@ -2922,15 +2930,15 @@ mod tests {
             async move {
                 // Wait for 400 ms before calling `or_insert_with_if`.
                 Timer::after(Duration::from_millis(400)).await;
-                let v = cache4
+                let entry = cache4
                     .entry_by_ref(KEY)
                     .or_insert_with_if(async { "task4" }, |v| {
                         assert_eq!(v, &"task1");
                         true
                     })
-                    .await
-                    .into_value();
-                assert_eq!(v, "task4");
+                    .await;
+                assert!(entry.is_fresh());
+                assert_eq!(entry.into_value(), "task4");
             }
         };
 

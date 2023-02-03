@@ -2779,18 +2779,18 @@ mod tests {
             let cache1 = cache.clone();
             spawn(move || {
                 // Call `get_with` immediately.
-                let v = cache1
-                    .entry(KEY)
-                    .or_insert_with_if(
-                        || {
-                            // Wait for 300 ms and return a &str value.
-                            sleep(Duration::from_millis(300));
-                            "thread1"
-                        },
-                        |_v| unreachable!(),
-                    )
-                    .into_value();
-                assert_eq!(v, "thread1");
+                let entry = cache1.entry(KEY).or_insert_with_if(
+                    || {
+                        // Wait for 300 ms and return a &str value.
+                        sleep(Duration::from_millis(300));
+                        "thread1"
+                    },
+                    |_v| unreachable!(),
+                );
+                // Entry should be fresh because our async block should have been
+                // evaluated.
+                assert!(entry.is_fresh());
+                assert_eq!(entry.into_value(), "thread1");
             })
         };
 
@@ -2803,11 +2803,13 @@ mod tests {
             spawn(move || {
                 // Wait for 100 ms before calling `get_with`.
                 sleep(Duration::from_millis(100));
-                let v = cache2
+                let entry = cache2
                     .entry(KEY)
-                    .or_insert_with_if(|| unreachable!(), |_v| unreachable!())
-                    .into_value();
-                assert_eq!(v, "thread1");
+                    .or_insert_with_if(|| unreachable!(), |_v| unreachable!());
+                // Entry should not be fresh because thread1's async block should have
+                // been evaluated instead of ours.
+                assert!(!entry.is_fresh());
+                assert_eq!(entry.into_value(), "thread1");
             })
         };
 
@@ -2822,17 +2824,15 @@ mod tests {
             spawn(move || {
                 // Wait for 350 ms before calling `or_insert_with_if`.
                 sleep(Duration::from_millis(350));
-                let v = cache3
-                    .entry(KEY)
-                    .or_insert_with_if(
-                        || unreachable!(),
-                        |v| {
-                            assert_eq!(v, &"thread1");
-                            false
-                        },
-                    )
-                    .into_value();
-                assert_eq!(v, "thread1");
+                let entry = cache3.entry(KEY).or_insert_with_if(
+                    || unreachable!(),
+                    |v| {
+                        assert_eq!(v, &"thread1");
+                        false
+                    },
+                );
+                assert!(!entry.is_fresh());
+                assert_eq!(entry.into_value(), "thread1");
             })
         };
 
@@ -2845,17 +2845,15 @@ mod tests {
             spawn(move || {
                 // Wait for 400 ms before calling `or_insert_with_if`.
                 sleep(Duration::from_millis(400));
-                let v = cache4
-                    .entry(KEY)
-                    .or_insert_with_if(
-                        || "thread4",
-                        |v| {
-                            assert_eq!(v, &"thread1");
-                            true
-                        },
-                    )
-                    .into_value();
-                assert_eq!(v, "thread4");
+                let entry = cache4.entry(KEY).or_insert_with_if(
+                    || "thread4",
+                    |v| {
+                        assert_eq!(v, &"thread1");
+                        true
+                    },
+                );
+                assert!(entry.is_fresh());
+                assert_eq!(entry.into_value(), "thread4");
             })
         };
 
