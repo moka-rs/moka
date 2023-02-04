@@ -512,8 +512,12 @@ where
     ///
     /// This method guarantees that concurrent calls on the same not-existing entry
     /// are coalesced into one evaluation of the `init` future. Only one of the calls
-    /// evaluates its future, and other calls wait for that future to resolve. See
-    /// [`Cache::get_with`][get-with-method] for more details.
+    /// evaluates its future (thus returned entry's `is_fresh` method returns
+    /// `true`), and other calls wait for that future to resolve (and their
+    /// `is_fresh` return `false`).
+    ///
+    /// For more detail about the coalescing behavior, see
+    /// [`Cache::get_with`][get-with-method].
     ///
     /// [get-with-method]: ./struct.Cache.html#method.get_with
     pub async fn or_insert_with(self, init: impl Future<Output = V>) -> Entry<K, V> {
@@ -597,12 +601,14 @@ where
     /// ```
     ///
     /// # Concurrent calls on the same key
-    ///
     /// This method guarantees that concurrent calls on the same not-existing entry
     /// are coalesced into one evaluation of the `init` future. Only one of the calls
-    /// evaluates its future, and other calls wait for that future to resolve.
+    /// evaluates its future (thus returned entry's `is_fresh` method returns
+    /// `true`), and other calls wait for that future to resolve (and their
+    /// `is_fresh` return `false`).
     ///
-    /// See [`Cache::optionally_get_with`][opt-get-with-method] for more details.
+    /// For more detail about the coalescing behavior, see
+    /// [`Cache::optionally_get_with`][opt-get-with-method].
     ///
     /// [opt-get-with-method]: ./struct.Cache.html#method.optionally_get_with
     pub async fn or_optionally_insert_with(
@@ -672,9 +678,11 @@ where
     /// This method guarantees that concurrent calls on the same not-existing entry
     /// are coalesced into one evaluation of the `init` future (as long as these
     /// futures return the same error type). Only one of the calls evaluates its
-    /// future, and other calls wait for that future to resolve.
+    /// future (thus returned entry's `is_fresh` method returns `true`), and other
+    /// calls wait for that future to resolve (and their `is_fresh` return `false`).
     ///
-    /// See [`Cache::try_get_with`][try-get-with-method] for more details.
+    /// For more detail about the coalescing behavior, see
+    /// [`Cache::try_get_with`][try-get-with-method].
     ///
     /// [try-get-with-method]: ./struct.Cache.html#method.try_get_with
     pub async fn or_try_insert_with<F, E>(self, init: F) -> Result<Entry<K, V>, Arc<E>>

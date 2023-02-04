@@ -134,8 +134,12 @@ where
     ///
     /// This method guarantees that concurrent calls on the same not-existing entry
     /// are coalesced into one evaluation of the `init` closure. Only one of the
-    /// calls evaluates its closure, and other calls wait for that closure to
-    /// complete. See [`Cache::get_with`][get-with-method] for more details.
+    /// calls evaluates its closure (thus returned entry's `is_fresh` method returns
+    /// `true`), and other calls wait for that closure to complete (and their
+    /// `is_fresh` return `false`).
+    ///
+    /// For more detail about the coalescing behavior, see
+    /// [`Cache::get_with`][get-with-method].
     ///
     /// [get-with-method]: ./struct.Cache.html#method.get_with
     pub fn or_insert_with(self, init: impl FnOnce() -> V) -> Entry<K, V> {
@@ -205,10 +209,13 @@ where
     /// # Concurrent calls on the same key
     ///
     /// This method guarantees that concurrent calls on the same not-existing entry
-    /// are coalesced into one evaluation of the `init` closure. Only one of the calls
-    /// evaluates its closure, and other calls wait for that closure to complete.
+    /// are coalesced into one evaluation of the `init` closure. Only one of the
+    /// calls evaluates its closure (thus returned entry's `is_fresh` method returns
+    /// `true`), and other calls wait for that closure to complete (and their
+    /// `is_fresh` return `false`).
     ///
-    /// See [`Cache::optionally_get_with`][opt-get-with-method] for more details.
+    /// For more detail about the coalescing behavior, see
+    /// [`Cache::optionally_get_with`][opt-get-with-method].
     ///
     /// [opt-get-with-method]: ./struct.Cache.html#method.optionally_get_with
     pub fn or_optionally_insert_with(
@@ -265,9 +272,12 @@ where
     /// This method guarantees that concurrent calls on the same not-existing entry
     /// are coalesced into one evaluation of the `init` closure (as long as these
     /// closures return the same error type). Only one of the calls evaluates its
-    /// closure, and other calls wait for that closure to complete.
+    /// closure (thus returned entry's `is_fresh` method returns `true`), and other
+    /// calls wait for that closure to complete (and their `is_fresh` return
+    /// `false`).
     ///
-    /// See [`Cache::try_get_with`][try-get-with-method] for more details.
+    /// For more detail about the coalescing behavior, see
+    /// [`Cache::try_get_with`][try-get-with-method].
     ///
     /// [try-get-with-method]: ./struct.Cache.html#method.try_get_with
     pub fn or_try_insert_with<F, E>(self, init: F) -> Result<Entry<K, V>, Arc<E>>
@@ -410,9 +420,13 @@ where
     /// # Concurrent calls on the same key
     ///
     /// This method guarantees that concurrent calls on the same not-existing entry
-    /// are coalesced into one evaluation of the `init` closure. Only one of the calls
-    /// evaluates its closure, and other calls wait for that closure to complete. See
-    /// [`Cache::get_with`][get-with-method] for more details.
+    /// are coalesced into one evaluation of the `init` closure. Only one of the
+    /// calls evaluates its closure (thus returned entry's `is_fresh` method returns
+    /// `true`), and other calls wait for that closure to complete (and their
+    /// `is_fresh` return `false`).
+    ///
+    /// For more detail about the coalescing behavior, see
+    /// [`Cache::get_with`][get-with-method].
     ///
     /// [get-with-method]: ./struct.Cache.html#method.get_with
     pub fn or_insert_with(self, init: impl FnOnce() -> V) -> Entry<K, V> {
@@ -491,10 +505,12 @@ where
     ///
     /// This method guarantees that concurrent calls on the same not-existing entry
     /// are coalesced into one evaluation of the `init` closure. Only one of the
-    /// calls evaluates its closure, and other calls wait for that closure to
-    /// complete.
+    /// calls evaluates its closure (thus returned entry's `is_fresh` method returns
+    /// `true`), and other calls wait for that closure to complete (and their
+    /// `is_fresh` return `false`).
     ///
-    /// See [`Cache::optionally_get_with`][opt-get-with-method] for more details.
+    /// For more detail about the coalescing behavior, see
+    /// [`Cache::optionally_get_with`][opt-get-with-method].
     ///
     /// [opt-get-with-method]: ./struct.Cache.html#method.optionally_get_with
     pub fn or_optionally_insert_with(
@@ -551,9 +567,12 @@ where
     /// This method guarantees that concurrent calls on the same not-existing entry
     /// are coalesced into one evaluation of the `init` closure (as long as these
     /// closures return the same error type). Only one of the calls evaluates its
-    /// closure, and other calls wait for that closure to complete.
+    /// closure (thus returned entry's `is_fresh` method returns `true`), and other
+    /// calls wait for that closure to complete (and their `is_fresh` return
+    /// `false`).
     ///
-    /// See [`Cache::try_get_with`][try-get-with-method] for more details.
+    /// For more detail about the coalescing behavior, see
+    /// [`Cache::try_get_with`][try-get-with-method].
     ///
     /// [try-get-with-method]: ./struct.Cache.html#method.try_get_with
     pub fn or_try_insert_with<F, E>(self, init: F) -> Result<Entry<K, V>, Arc<E>>
