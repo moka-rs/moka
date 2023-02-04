@@ -266,7 +266,7 @@ where
 
     /// Returns the `type_id` for `optionally_get_with` method of cache.
     pub(crate) fn type_id_for_optionally_get_with() -> TypeId {
-        TypeId::of::<()>()
+        TypeId::of::<OptionallyNone>()
     }
 
     /// Returns the `type_id` for `try_get_with` method of cache.
