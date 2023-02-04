@@ -126,7 +126,78 @@ where
         )
     }
 
-    /// Builds a `Cache<K, V, S>`, with the given `hasher`.
+    /// Builds a `Cache<K, V, S>` with the given `hasher` of type `S`.
+    ///
+    /// # Examples
+    ///
+    /// This example uses AHash hasher from [AHash][ahash-crate] crate.
+    ///
+    /// [ahash-crate]: https://crates.io/crates/ahash
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// // [dependencies]
+    /// // ahash = "0.8"
+    /// // moka = { version = ..., features = ["future"] }
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    ///
+    /// use moka::future::Cache;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     // The type of this cache is: Cache<i32, String, ahash::RandomState>
+    ///     let cache = Cache::builder()
+    ///         .max_capacity(100)
+    ///         .build_with_hasher(ahash::RandomState::default());
+    ///     cache.insert(1, "one".to_string()).await;
+    /// }
+    /// ```
+    ///
+    /// Note: If you need to add a type annotation to your cache, you must use the
+    /// form of `Cache<K, V, S>` instead of `Cache<K, V>`. That `S` is the type of
+    /// the build hasher, and its default is the `RandomState` from
+    /// `std::collections::hash_map` module . If you use a different build hasher,
+    /// you must specify `S` explicitly.
+    ///
+    /// Here is a good example:
+    ///
+    /// ```rust
+    /// # use moka::future::Cache;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// # let cache = Cache::builder()
+    /// #     .build_with_hasher(ahash::RandomState::default());
+    /// struct Good {
+    ///     // Specifying the type in Cache<K, V, S> format.
+    ///     cache: Cache<i32, String, ahash::RandomState>,
+    /// }
+    ///
+    /// // Storing the cache from above example. This should compile.
+    /// Good { cache };
+    /// # }
+    /// ```
+    ///
+    /// Here is a bad example. This struct cannot store the above cache because it
+    /// does not specify `S`:
+    ///
+    /// ```compile_fail
+    /// # use moka::future::Cache;
+    /// # #[tokio::main]
+    /// # async fn main() {
+    /// # let cache = Cache::builder()
+    /// #     .build_with_hasher(ahash::RandomState::default());
+    /// struct Bad {
+    ///     // Specifying the type in Cache<K, V> format.
+    ///     cache: Cache<i32, String>,
+    /// }
+    ///
+    /// // This should not compile.
+    /// Bad { cache };
+    /// // => error[E0308]: mismatched types
+    /// //    expected struct `std::collections::hash_map::RandomState`,
+    /// //       found struct `ahash::RandomState`
+    /// # }
+    /// ```
     ///
     /// # Panics
     ///
