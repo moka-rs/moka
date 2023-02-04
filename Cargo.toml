@@ -83,6 +83,7 @@ log = { version = "0.4", optional = true }
 
 [dev-dependencies]
 actix-rt = { version = "2.7", default-features = false }
+ahash = "0.8.3"
 anyhow = "1.0.19"
 async-std = { version = "1.11", features = ["attributes"] }
 env_logger = "0.9"

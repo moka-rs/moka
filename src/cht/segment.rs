@@ -62,7 +62,7 @@ use crossbeam_epoch::Atomic;
 /// [`default`], [`with_hasher`], [`with_capacity_and_hasher`],
 /// [`with_num_segments_and_hasher`], and
 /// [`with_num_segments_capacity_and_hasher`] methods. Many alternative
-/// algorithms are available on crates.io, such as the [`aHash`] crate.
+/// algorithms are available on crates.io, such as the [`AHash`] crate.
 ///
 /// The number of segments can be specified on a per-`HashMap` basis using the
 /// [`with_num_segments`], [`with_num_segments_and_capacity`],
@@ -88,7 +88,7 @@ use crossbeam_epoch::Atomic;
 /// the [`Eq`] trait, changes while it is in the map. This is normally only
 /// possible through [`Cell`], [`RefCell`], global state, I/O, or unsafe code.
 ///
-/// [`aHash`]: https://crates.io/crates/ahash
+/// [`AHash`]: https://crates.io/crates/ahash
 /// [`default`]: #method.default
 /// [`with_hasher`]: #method.with_hasher
 /// [`with_capacity`]: #method.with_capacity

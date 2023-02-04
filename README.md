@@ -450,7 +450,7 @@ attacks such as HashDoS.
 
 The hashing algorithm can be replaced on a per-`Cache` basis using the
 `build_with_hasher` method of the `CacheBuilder`. Many alternative algorithms are
-available on crates.io, such as the [aHash][ahash-crate] crate.
+available on crates.io, such as the [AHash][ahash-crate] crate.
 
 [ahash-crate]: https://crates.io/crates/ahash
 
