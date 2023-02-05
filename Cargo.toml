@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.9.6"
+version = "0.9.7"
 edition = "2018"
 rust-version = "1.51"
 
