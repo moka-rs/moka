@@ -26,6 +26,7 @@ use std::{
     fmt,
     future::Future,
     hash::{BuildHasher, Hash},
+    pin::Pin,
     sync::Arc,
     time::Duration,
 };
@@ -847,6 +848,7 @@ where
     /// `init` futures.
     ///
     pub async fn get_with(&self, key: K, init: impl Future<Output = V>) -> V {
+        futures_util::pin_mut!(init);
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         let replace_if = None as Option<fn(&V) -> bool>;
@@ -862,6 +864,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
+        futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
         let replace_if = None as Option<fn(&V) -> bool>;
 
@@ -883,6 +886,7 @@ where
         init: impl Future<Output = V>,
         replace_if: impl FnMut(&V) -> bool,
     ) -> V {
+        futures_util::pin_mut!(init);
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         self.get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if))
@@ -1005,6 +1009,7 @@ where
     where
         F: Future<Output = Option<V>>,
     {
+        futures_util::pin_mut!(init);
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         self.get_or_optionally_insert_with_hash_and_fun(key, hash, init)
@@ -1021,6 +1026,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
+        futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
         self.get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init)
             .await
@@ -1126,6 +1132,7 @@ where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
     {
+        futures_util::pin_mut!(init);
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         self.get_or_try_insert_with_hash_and_fun(key, hash, init)
@@ -1142,6 +1149,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
+        futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
         self.get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init)
             .await
@@ -1378,7 +1386,7 @@ where
         &self,
         key: Arc<K>,
         hash: u64,
-        init: impl Future<Output = V>,
+        init: Pin<&mut impl Future<Output = V>>,
         mut replace_if: Option<impl FnMut(&V) -> bool>,
     ) -> V {
         let maybe_v = self
@@ -1396,7 +1404,7 @@ where
         &self,
         key: &Q,
         hash: u64,
-        init: impl Future<Output = V>,
+        init: Pin<&mut impl Future<Output = V>>,
         mut replace_if: Option<impl FnMut(&V) -> bool>,
     ) -> V
     where
@@ -1419,7 +1427,7 @@ where
         &self,
         key: Arc<K>,
         hash: u64,
-        init: impl Future<Output = V>,
+        init: Pin<&mut impl Future<Output = V>>,
         mut replace_if: Option<impl FnMut(&V) -> bool>,
     ) -> V {
         use futures_util::FutureExt;
@@ -1430,9 +1438,12 @@ where
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
 
+        let type_id = ValueInitializer::<K, V, S>::type_id_for_get_with();
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_get_with;
+
         match self
             .value_initializer
-            .init_or_read(Arc::clone(&key), get, init, insert)
+            .try_init_or_read(&Arc::clone(&key), type_id, get, init, insert, post_init)
             .await
         {
             InitResult::Initialized(v) => {
@@ -1448,7 +1459,7 @@ where
         &self,
         key: Arc<K>,
         hash: u64,
-        init: F,
+        init: Pin<&mut F>,
     ) -> Result<V, Arc<E>>
     where
         F: Future<Output = Result<V, E>>,
@@ -1465,7 +1476,7 @@ where
         &self,
         key: &Q,
         hash: u64,
-        init: F,
+        init: Pin<&mut F>,
     ) -> Result<V, Arc<E>>
     where
         F: Future<Output = Result<V, E>>,
@@ -1484,7 +1495,7 @@ where
         &self,
         key: Arc<K>,
         hash: u64,
-        init: F,
+        init: Pin<&mut F>,
     ) -> Result<V, Arc<E>>
     where
         F: Future<Output = Result<V, E>>,
@@ -1499,9 +1510,12 @@ where
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
 
+        let type_id = ValueInitializer::<K, V, S>::type_id_for_try_get_with::<E>();
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_try_get_with;
+
         match self
             .value_initializer
-            .try_init_or_read(Arc::clone(&key), get, init, insert)
+            .try_init_or_read(&Arc::clone(&key), type_id, get, init, insert, post_init)
             .await
         {
             InitResult::Initialized(v) => {
@@ -1520,7 +1534,7 @@ where
         &self,
         key: Arc<K>,
         hash: u64,
-        init: F,
+        init: Pin<&mut F>,
     ) -> Option<V>
     where
         F: Future<Output = Option<V>>,
@@ -1539,7 +1553,7 @@ where
         &self,
         key: &Q,
         hash: u64,
-        init: F,
+        init: Pin<&mut F>,
     ) -> Option<V>
     where
         F: Future<Output = Option<V>>,
@@ -1560,7 +1574,7 @@ where
         &self,
         key: Arc<K>,
         hash: u64,
-        init: F,
+        init: Pin<&mut F>,
     ) -> Option<V>
     where
         F: Future<Output = Option<V>>,
@@ -1574,9 +1588,12 @@ where
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
 
+        let type_id = ValueInitializer::<K, V, S>::type_id_for_optionally_get_with();
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_optionally_get_with;
+
         match self
             .value_initializer
-            .optionally_init_or_read(Arc::clone(&key), get, init, insert)
+            .try_init_or_read(&Arc::clone(&key), type_id, get, init, insert, post_init)
             .await
         {
             InitResult::Initialized(v) => {
