@@ -27,13 +27,14 @@ use std::{
     fmt,
     future::Future,
     hash::{BuildHasher, Hash},
+    pin::Pin,
     sync::Arc,
     time::Duration,
 };
 
 //
-// Macros to mitigate the compiler issue that inflates the size of the `init` future
-// in `get_with` and friends methods:
+// Macros to mitigate the compiler issue that inflates the size of future returned
+// from `get_with` and friends methods:
 //
 // - https://github.com/moka-rs/moka/issues/212
 // - https://swatinem.de/blog/future-size/
@@ -43,10 +44,9 @@ use std::{
 // benefits of reducing the future size outweigh this drawback.
 //
 macro_rules! insert_with_hash_and_fun_m(
-    ( $self:ident, $key:expr, $hash:expr, $get:expr, $init:expr, $replace_if:expr, $need_key:expr ) => {
+    ( $self:ident, $key:expr, $hash:expr, $get:expr, $init:ident, $replace_if:expr, $need_key:expr ) => {
         {
             use futures_util::FutureExt;
-
 
             let insert = |v| $self.insert_with_hash($key.clone(), $hash, v).boxed();
 
@@ -76,7 +76,7 @@ macro_rules! insert_with_hash_and_fun_m(
 );
 
 macro_rules! get_or_insert_with_hash_and_fun_m(
-    ( $self:ident, $key:expr, $hash:expr, $init:expr, $replace_if:expr, $need_key:expr ) => {
+    ( $self:ident, $key:expr, $hash:expr, $init:ident, $replace_if:expr, $need_key:expr ) => {
         {
             let maybe_entry =
                 $self.base
@@ -95,7 +95,7 @@ macro_rules! get_or_insert_with_hash_and_fun_m(
 );
 
 macro_rules! get_or_insert_with_hash_by_ref_and_fun_m(
-    ( $self:ident, $key:expr, $hash:expr, $init:expr, $replace_if:expr, $need_key:expr ) => {
+    ( $self:ident, $key:expr, $hash:expr, $init:ident, $replace_if:expr, $need_key:expr ) => {
         {
             let maybe_entry =
                 $self.base
@@ -998,6 +998,7 @@ where
     /// `init` futures.
     ///
     pub async fn get_with(&self, key: K, init: impl Future<Output = V>) -> V {
+        futures_util::pin_mut!(init);
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         let mut replace_if = None as Option<fn(&V) -> bool>;
@@ -1012,6 +1013,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
+        futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
         let mut replace_if = None as Option<fn(&V) -> bool>;
         get_or_insert_with_hash_by_ref_and_fun_m!(self, key, hash, init, replace_if, false)
@@ -1027,6 +1029,7 @@ where
         init: impl Future<Output = V>,
         replace_if: impl FnMut(&V) -> bool,
     ) -> V {
+        futures_util::pin_mut!(init);
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         let mut replace_if = Some(replace_if);
@@ -1129,6 +1132,7 @@ where
     where
         F: Future<Output = Option<V>>,
     {
+        futures_util::pin_mut!(init);
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         self.get_or_optionally_insert_with_hash_and_fun(key, hash, init, false)
@@ -1146,6 +1150,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
+        futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
         self.get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init, false)
             .await
@@ -1252,6 +1257,7 @@ where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
     {
+        futures_util::pin_mut!(init);
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
         self.get_or_try_insert_with_hash_and_fun(key, hash, init, false)
@@ -1269,6 +1275,7 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
+        futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
         self.get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init, false)
             .await
@@ -1506,7 +1513,7 @@ where
         &self,
         key: Arc<K>,
         hash: u64,
-        init: impl Future<Output = V>,
+        init: Pin<&mut impl Future<Output = V>>,
         mut replace_if: Option<impl FnMut(&V) -> bool>,
         need_key: bool,
     ) -> Entry<K, V> {
@@ -1517,7 +1524,7 @@ where
         &self,
         key: &Q,
         hash: u64,
-        init: impl Future<Output = V>,
+        init: Pin<&mut impl Future<Output = V>>,
         mut replace_if: Option<impl FnMut(&V) -> bool>,
         need_key: bool,
     ) -> Entry<K, V>
@@ -1571,7 +1578,7 @@ where
         &self,
         key: Arc<K>,
         hash: u64,
-        init: F,
+        init: Pin<&mut F>,
         need_key: bool,
     ) -> Option<Entry<K, V>>
     where
@@ -1590,7 +1597,7 @@ where
         &self,
         key: &Q,
         hash: u64,
-        init: F,
+        init: Pin<&mut F>,
         need_key: bool,
     ) -> Option<Entry<K, V>>
     where
@@ -1612,7 +1619,7 @@ where
         &self,
         key: Arc<K>,
         hash: u64,
-        init: F,
+        init: Pin<&mut F>,
         need_key: bool,
     ) -> Option<Entry<K, V>>
     where
@@ -1654,7 +1661,7 @@ where
         &self,
         key: Arc<K>,
         hash: u64,
-        init: F,
+        init: Pin<&mut F>,
         need_key: bool,
     ) -> Result<Entry<K, V>, Arc<E>>
     where
@@ -1673,7 +1680,7 @@ where
         &self,
         key: &Q,
         hash: u64,
-        init: F,
+        init: Pin<&mut F>,
         need_key: bool,
     ) -> Result<Entry<K, V>, Arc<E>>
     where
@@ -1694,7 +1701,7 @@ where
         &self,
         key: Arc<K>,
         hash: u64,
-        init: F,
+        init: Pin<&mut F>,
         need_key: bool,
     ) -> Result<Entry<K, V>, Arc<E>>
     where

@@ -4,6 +4,7 @@ use std::{
     any::{Any, TypeId},
     future::Future,
     hash::{BuildHasher, Hash},
+    pin::Pin,
     sync::Arc,
 };
 use triomphe::Arc as TrioArc;
@@ -123,7 +124,7 @@ where
         type_id: TypeId,
         // Closure to get an existing value from cache.
         mut get: impl FnMut() -> Option<V>,
-        init: impl Future<Output = O>,
+        init: Pin<&mut impl Future<Output = O>>,
         // Closure to insert a new value into cache.
         mut insert: impl FnMut(V) -> BoxFuture<'a, ()> + Send + 'a,
         // This function will be called after the init future has returned a value of

@@ -176,6 +176,7 @@ where
     ///
     /// [get-with-method]: ./struct.Cache.html#method.get_with
     pub async fn or_insert_with(self, init: impl Future<Output = V>) -> Entry<K, V> {
+        futures_util::pin_mut!(init);
         let key = Arc::new(self.owned_key);
         let replace_if = None as Option<fn(&V) -> bool>;
         self.cache
@@ -196,6 +197,7 @@ where
         init: impl Future<Output = V>,
         replace_if: impl FnMut(&V) -> bool,
     ) -> Entry<K, V> {
+        futures_util::pin_mut!(init);
         let key = Arc::new(self.owned_key);
         self.cache
             .get_or_insert_with_hash_and_fun(key, self.hash, init, Some(replace_if), true)
@@ -269,6 +271,7 @@ where
         self,
         init: impl Future<Output = Option<V>>,
     ) -> Option<Entry<K, V>> {
+        futures_util::pin_mut!(init);
         let key = Arc::new(self.owned_key);
         self.cache
             .get_or_optionally_insert_with_hash_and_fun(key, self.hash, init, true)
@@ -344,6 +347,7 @@ where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
     {
+        futures_util::pin_mut!(init);
         let key = Arc::new(self.owned_key);
         self.cache
             .get_or_try_insert_with_hash_and_fun(key, self.hash, init, true)
@@ -521,6 +525,7 @@ where
     ///
     /// [get-with-method]: ./struct.Cache.html#method.get_with
     pub async fn or_insert_with(self, init: impl Future<Output = V>) -> Entry<K, V> {
+        futures_util::pin_mut!(init);
         let replace_if = None as Option<fn(&V) -> bool>;
         self.cache
             .get_or_insert_with_hash_by_ref_and_fun(self.ref_key, self.hash, init, replace_if, true)
@@ -540,6 +545,7 @@ where
         init: impl Future<Output = V>,
         replace_if: impl FnMut(&V) -> bool,
     ) -> Entry<K, V> {
+        futures_util::pin_mut!(init);
         self.cache
             .get_or_insert_with_hash_by_ref_and_fun(
                 self.ref_key,
@@ -617,6 +623,7 @@ where
         self,
         init: impl Future<Output = Option<V>>,
     ) -> Option<Entry<K, V>> {
+        futures_util::pin_mut!(init);
         self.cache
             .get_or_optionally_insert_with_hash_by_ref_and_fun(self.ref_key, self.hash, init, true)
             .await
@@ -692,6 +699,7 @@ where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
     {
+        futures_util::pin_mut!(init);
         self.cache
             .get_or_try_insert_with_hash_by_ref_and_fun(self.ref_key, self.hash, init, true)
             .await
