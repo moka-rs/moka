@@ -116,6 +116,16 @@ where
         }
     }
 
+    //
+    // NOTES: We use `Pin<&mut impl Future>` instead of `impl Future` here for the
+    // `init` argument. This is because we want to avoid the future size inflation
+    // caused by calling nested async functions. See the following links for more
+    // details:
+    //
+    // - https://github.com/moka-rs/moka/issues/212
+    // - https://swatinem.de/blog/future-size/
+    //
+
     /// # Panics
     /// Panics if the `init` future has been panicked.
     pub(crate) async fn try_init_or_read<'a, O, E>(
@@ -124,8 +134,9 @@ where
         type_id: TypeId,
         // Closure to get an existing value from cache.
         mut get: impl FnMut() -> Option<V>,
+        // Future to initialize a new value.
         init: Pin<&mut impl Future<Output = O>>,
-        // Closure to insert a new value into cache.
+        // Closure that returns a future to insert a new value into cache.
         mut insert: impl FnMut(V) -> BoxFuture<'a, ()> + Send + 'a,
         // This function will be called after the init future has returned a value of
         // type O. It converts O into Result<V, E>.
@@ -262,6 +273,8 @@ where
 
     /// Returns the `type_id` for `get_with` method of cache.
     pub(crate) fn type_id_for_get_with() -> TypeId {
+        // NOTE: We use a regular function here instead of a const fn because TypeId
+        // is not stable as a const fn. (as of our MSRV)
         TypeId::of::<()>()
     }
 

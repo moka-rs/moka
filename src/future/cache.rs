@@ -32,88 +32,6 @@ use std::{
     time::Duration,
 };
 
-//
-// Macros to mitigate the compiler issue that inflates the size of future returned
-// from `get_with` and friends methods:
-//
-// - https://github.com/moka-rs/moka/issues/212
-// - https://swatinem.de/blog/future-size/
-//
-// These macros are used by `get_with`, etc. of this module. We are not big fans of
-// macros as they make the code difficult to understand. However, we believe the
-// benefits of reducing the future size outweigh this drawback.
-//
-macro_rules! insert_with_hash_and_fun_m(
-    ( $self:ident, $key:expr, $hash:expr, $get:expr, $init:ident, $replace_if:expr, $need_key:expr ) => {
-        {
-            use futures_util::FutureExt;
-
-            let insert = |v| $self.insert_with_hash($key.clone(), $hash, v).boxed();
-
-            let k = if $need_key {
-                Some(Arc::clone(&$key))
-            } else {
-                None
-            };
-
-            let type_id = ValueInitializer::<K, V, S>::type_id_for_get_with();
-            let post_init = ValueInitializer::<K, V, S>::post_init_for_get_with;
-
-            match $self
-                .value_initializer
-                .try_init_or_read(&Arc::clone(&$key), type_id, $get, $init, insert, post_init)
-                .await
-            {
-                InitResult::Initialized(v) => {
-                    crossbeam_epoch::pin().flush();
-                    Entry::new(k, v, true)
-                }
-                InitResult::ReadExisting(v) => Entry::new(k, v, false),
-                InitResult::InitErr(_) => unreachable!(),
-            }
-        }
-    }
-);
-
-macro_rules! get_or_insert_with_hash_and_fun_m(
-    ( $self:ident, $key:expr, $hash:expr, $init:ident, $replace_if:expr, $need_key:expr ) => {
-        {
-            let maybe_entry =
-                $self.base
-                    .get_with_hash_but_ignore_if(&$key, $hash, $replace_if.as_mut(), $need_key);
-            if let Some(entry) = maybe_entry {
-                entry
-            } else {
-                let get = || {
-                    $self.base
-                        .get_with_hash_but_no_recording(&$key, $hash, $replace_if.as_mut())
-                };
-                insert_with_hash_and_fun_m!($self, $key, $hash, get, $init, $replace_if, $need_key)
-            }
-        }
-    }
-);
-
-macro_rules! get_or_insert_with_hash_by_ref_and_fun_m(
-    ( $self:ident, $key:expr, $hash:expr, $init:ident, $replace_if:expr, $need_key:expr ) => {
-        {
-            let maybe_entry =
-                $self.base
-                    .get_with_hash_but_ignore_if($key, $hash, $replace_if.as_mut(), $need_key);
-            if let Some(entry) = maybe_entry {
-                entry
-            } else {
-                let get = || {
-                    $self.base
-                        .get_with_hash_but_no_recording(&$key, $hash, $replace_if.as_mut())
-                };
-                let arc_key = Arc::new($key.to_owned());
-                insert_with_hash_and_fun_m!($self, arc_key, $hash, get, $init, $replace_if, $need_key)
-            }
-        }
-    }
-);
-
 /// A thread-safe, futures-aware concurrent in-memory cache.
 ///
 /// `Cache` supports full concurrency of retrievals and a high expected concurrency
@@ -1001,8 +919,10 @@ where
         futures_util::pin_mut!(init);
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
-        let mut replace_if = None as Option<fn(&V) -> bool>;
-        get_or_insert_with_hash_and_fun_m!(self, key, hash, init, replace_if, false).into_value()
+        let replace_if = None as Option<fn(&V) -> bool>;
+        self.get_or_insert_with_hash_and_fun(key, hash, init, replace_if, false)
+            .await
+            .into_value()
     }
 
     /// Similar to [`get_with`](#method.get_with), but instead of passing an owned
@@ -1015,8 +935,9 @@ where
     {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
-        let mut replace_if = None as Option<fn(&V) -> bool>;
-        get_or_insert_with_hash_by_ref_and_fun_m!(self, key, hash, init, replace_if, false)
+        let replace_if = None as Option<fn(&V) -> bool>;
+        self.get_or_insert_with_hash_by_ref_and_fun(key, hash, init, replace_if, false)
+            .await
             .into_value()
     }
 
@@ -1032,8 +953,10 @@ where
         futures_util::pin_mut!(init);
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
-        let mut replace_if = Some(replace_if);
-        get_or_insert_with_hash_and_fun_m!(self, key, hash, init, replace_if, false).into_value()
+        let replace_if = Some(replace_if);
+        self.get_or_insert_with_hash_and_fun(key, hash, init, replace_if, false)
+            .await
+            .into_value()
     }
 
     /// Returns a _clone_ of the value corresponding to the key. If the value does
@@ -1517,7 +1440,15 @@ where
         mut replace_if: Option<impl FnMut(&V) -> bool>,
         need_key: bool,
     ) -> Entry<K, V> {
-        get_or_insert_with_hash_and_fun_m!(self, key, hash, init, replace_if, need_key)
+        let maybe_entry =
+            self.base
+                .get_with_hash_but_ignore_if(&key, hash, replace_if.as_mut(), need_key);
+        if let Some(entry) = maybe_entry {
+            entry
+        } else {
+            self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key)
+                .await
+        }
     }
 
     pub(crate) async fn get_or_insert_with_hash_by_ref_and_fun<Q>(
@@ -1532,7 +1463,55 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        get_or_insert_with_hash_by_ref_and_fun_m!(self, key, hash, init, replace_if, need_key)
+        let maybe_entry =
+            self.base
+                .get_with_hash_but_ignore_if(key, hash, replace_if.as_mut(), need_key);
+        if let Some(entry) = maybe_entry {
+            entry
+        } else {
+            let key = Arc::new(key.to_owned());
+            self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key)
+                .await
+        }
+    }
+
+    async fn insert_with_hash_and_fun(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        init: Pin<&mut impl Future<Output = V>>,
+        mut replace_if: Option<impl FnMut(&V) -> bool>,
+        need_key: bool,
+    ) -> Entry<K, V> {
+        use futures_util::FutureExt;
+
+        let get = || {
+            self.base
+                .get_with_hash_but_no_recording(&key, hash, replace_if.as_mut())
+        };
+        let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
+
+        let k = if need_key {
+            Some(Arc::clone(&key))
+        } else {
+            None
+        };
+
+        let type_id = ValueInitializer::<K, V, S>::type_id_for_get_with();
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_get_with;
+
+        match self
+            .value_initializer
+            .try_init_or_read(&Arc::clone(&key), type_id, get, init, insert, post_init)
+            .await
+        {
+            InitResult::Initialized(v) => {
+                crossbeam_epoch::pin().flush();
+                Entry::new(k, v, true)
+            }
+            InitResult::ReadExisting(v) => Entry::new(k, v, false),
+            InitResult::InitErr(_) => unreachable!(),
+        }
     }
 
     pub(crate) async fn get_or_insert_with_hash(
