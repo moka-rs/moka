@@ -4,6 +4,7 @@ use std::{
     any::{Any, TypeId},
     future::Future,
     hash::{BuildHasher, Hash},
+    pin::Pin,
     sync::Arc,
 };
 use triomphe::Arc as TrioArc;
@@ -115,143 +116,31 @@ where
         }
     }
 
-    /// # Panics
-    /// Panics if the `init` future has been panicked.
-    pub(crate) async fn init_or_read<'a>(
-        &'a self,
-        key: Arc<K>,
-        // Closure to get an existing value from cache.
-        get: impl FnMut() -> Option<V>,
-        init: impl Future<Output = V>,
-        // Closure to insert a new value into cache.
-        mut insert: impl FnMut(V) -> BoxFuture<'a, ()> + Send + 'a,
-    ) -> InitResult<V, ()> {
-        // This closure will be called before the init future is resolved, in order
-        // to check if the value has already been inserted by other async task.
-        let pre_init = make_pre_init(get);
-
-        // This closure will be called after the init future has returned a value. It
-        // will insert the returned value (from init) to the cache, and convert the
-        // value into a pair of a WaiterValue and an InitResult.
-        let post_init = |value: V| {
-            async move {
-                insert(value.clone()).await;
-                (
-                    WaiterValue::Ready(Ok(value.clone())),
-                    InitResult::Initialized(value),
-                )
-            }
-            .boxed()
-        };
-
-        let type_id = TypeId::of::<()>();
-        self.do_try_init(&key, type_id, pre_init, init, post_init)
-            .await
-    }
+    //
+    // NOTES: We use `Pin<&mut impl Future>` instead of `impl Future` here for the
+    // `init` argument. This is because we want to avoid the future size inflation
+    // caused by calling nested async functions. See the following links for more
+    // details:
+    //
+    // - https://github.com/moka-rs/moka/issues/212
+    // - https://swatinem.de/blog/future-size/
+    //
 
     /// # Panics
     /// Panics if the `init` future has been panicked.
-    pub(crate) async fn try_init_or_read<'a, E>(
-        &'a self,
-        key: Arc<K>,
-        get: impl FnMut() -> Option<V>,
-        init: impl Future<Output = Result<V, E>>,
-        mut insert: impl FnMut(V) -> BoxFuture<'a, ()> + Send + 'a,
-    ) -> InitResult<V, E>
-    where
-        E: Send + Sync + 'static,
-    {
-        // This closure will be called before the init future is resolved, in order
-        // to check if the value has already been inserted by other async task.
-        let pre_init = make_pre_init(get);
-
-        // This closure will be called after the init future has returned a value. It
-        // will insert the returned value (from init) to the cache, and convert the
-        // value into a pair of a WaiterValue and an InitResult.
-        let post_init = move |value: Result<V, E>| {
-            async move {
-                match value {
-                    Ok(value) => {
-                        insert(value.clone()).await;
-                        (
-                            WaiterValue::Ready(Ok(value.clone())),
-                            InitResult::Initialized(value),
-                        )
-                    }
-                    Err(e) => {
-                        let err: ErrorObject = Arc::new(e);
-                        (
-                            WaiterValue::Ready(Err(Arc::clone(&err))),
-                            InitResult::InitErr(err.downcast().unwrap()),
-                        )
-                    }
-                }
-            }
-            .boxed()
-        };
-
-        let type_id = TypeId::of::<E>();
-        self.do_try_init(&key, type_id, pre_init, init, post_init)
-            .await
-    }
-
-    /// # Panics
-    /// Panics if the `init` future has been panicked.
-    pub(super) async fn optionally_init_or_read<'a>(
-        &'a self,
-        key: Arc<K>,
-        get: impl FnMut() -> Option<V>,
-        init: impl Future<Output = Option<V>>,
-        mut insert: impl FnMut(V) -> BoxFuture<'a, ()> + Send + 'a,
-    ) -> InitResult<V, OptionallyNone> {
-        // This closure will be called before the init future is resolved, in order
-        // to check if the value has already been inserted by other async task.
-        let pre_init = make_pre_init(get);
-
-        // This closure will be called after the init future has returned a value. It
-        // will insert the returned value (from init) to the cache, and convert the
-        // value into a pair of a WaiterValue and an InitResult.
-        let post_init = |value: Option<V>| {
-            async move {
-                match value {
-                    Some(value) => {
-                        insert(value.clone()).await;
-                        (
-                            WaiterValue::Ready(Ok(value.clone())),
-                            InitResult::Initialized(value),
-                        )
-                    }
-                    None => {
-                        // `value` can be either `Some` or `None`. For `None` case,
-                        // without change the existing API too much, we will need to
-                        // convert `None` to Arc<E> here. `Infallible` could not be
-                        // instantiated. So it might be good to use an empty struct
-                        // to indicate the error type.
-                        let err: ErrorObject = Arc::new(OptionallyNone);
-                        (
-                            WaiterValue::Ready(Err(Arc::clone(&err))),
-                            InitResult::InitErr(err.downcast().unwrap()),
-                        )
-                    }
-                }
-            }
-            .boxed()
-        };
-
-        let type_id = TypeId::of::<OptionallyNone>();
-        self.do_try_init(&key, type_id, pre_init, init, post_init)
-            .await
-    }
-
-    /// # Panics
-    /// Panics if the `init` future has been panicked.
-    async fn do_try_init<'a, O, E>(
+    pub(crate) async fn try_init_or_read<'a, O, E>(
         &'a self,
         key: &Arc<K>,
         type_id: TypeId,
-        mut pre_init: impl FnMut() -> Option<(WaiterValue<V>, InitResult<V, E>)>,
-        init: impl Future<Output = O>,
-        post_init: impl FnOnce(O) -> BoxFuture<'a, (WaiterValue<V>, InitResult<V, E>)>,
+        // Closure to get an existing value from cache.
+        mut get: impl FnMut() -> Option<V>,
+        // Future to initialize a new value.
+        init: Pin<&mut impl Future<Output = O>>,
+        // Closure that returns a future to insert a new value into cache.
+        mut insert: impl FnMut(V) -> BoxFuture<'a, ()> + Send + 'a,
+        // This function will be called after the init future has returned a value of
+        // type O. It converts O into Result<V, E>.
+        post_init: fn(O) -> Result<V, E>,
     ) -> InitResult<V, E>
     where
         E: Send + Sync + 'static,
@@ -283,12 +172,12 @@ where
                     );
 
                     // Check if the value has already been inserted by other thread.
-                    if let Some((waiter_val, init_res)) = pre_init() {
+                    if let Some(value) = get() {
                         // Yes. Set the waiter value, remove our waiter, and return
                         // the existing value.
-                        waiter_guard.set_waiter_value(waiter_val);
+                        waiter_guard.set_waiter_value(WaiterValue::Ready(Ok(value.clone())));
                         remove_waiter(&self.waiters, cht_key, hash);
-                        return init_res;
+                        return InitResult::ReadExisting(value);
                     }
 
                     // The value still does note exist. Let's resolve the init future.
@@ -297,7 +186,22 @@ where
                     match AssertUnwindSafe(init).catch_unwind().await {
                         // Resolved.
                         Ok(value) => {
-                            let (waiter_val, init_res) = post_init(value).await;
+                            let (waiter_val, init_res) = match post_init(value) {
+                                Ok(value) => {
+                                    insert(value.clone()).await;
+                                    (
+                                        WaiterValue::Ready(Ok(value.clone())),
+                                        InitResult::Initialized(value),
+                                    )
+                                }
+                                Err(e) => {
+                                    let err: ErrorObject = Arc::new(e);
+                                    (
+                                        WaiterValue::Ready(Err(Arc::clone(&err))),
+                                        InitResult::InitErr(err.downcast().unwrap()),
+                                    )
+                                }
+                            };
                             waiter_guard.set_waiter_value(waiter_val);
                             remove_waiter(&self.waiters, cht_key, hash);
                             return init_res;
@@ -345,6 +249,44 @@ where
             }
         }
     }
+
+    /// The `post_init` function for the `get_with` method of cache.
+    pub(crate) fn post_init_for_get_with(value: V) -> Result<V, ()> {
+        Ok(value)
+    }
+
+    /// The `post_init` function for the `optionally_get_with` method of cache.
+    pub(crate) fn post_init_for_optionally_get_with(
+        value: Option<V>,
+    ) -> Result<V, Arc<OptionallyNone>> {
+        // `value` can be either `Some` or `None`. For `None` case, without change
+        // the existing API too much, we will need to convert `None` to Arc<E> here.
+        // `Infallible` could not be instantiated. So it might be good to use an
+        // empty struct to indicate the error type.
+        value.ok_or(Arc::new(OptionallyNone))
+    }
+
+    /// The `post_init` function for `try_get_with` method of cache.
+    pub(crate) fn post_init_for_try_get_with<E>(result: Result<V, E>) -> Result<V, E> {
+        result
+    }
+
+    /// Returns the `type_id` for `get_with` method of cache.
+    pub(crate) fn type_id_for_get_with() -> TypeId {
+        // NOTE: We use a regular function here instead of a const fn because TypeId
+        // is not stable as a const fn. (as of our MSRV)
+        TypeId::of::<()>()
+    }
+
+    /// Returns the `type_id` for `optionally_get_with` method of cache.
+    pub(crate) fn type_id_for_optionally_get_with() -> TypeId {
+        TypeId::of::<OptionallyNone>()
+    }
+
+    /// Returns the `type_id` for `try_get_with` method of cache.
+    pub(crate) fn type_id_for_try_get_with<E: 'static>() -> TypeId {
+        TypeId::of::<E>()
+    }
 }
 
 #[inline]
@@ -384,23 +326,6 @@ where
     let cht_key = (Arc::clone(key), type_id);
     let hash = waiter_map.hash(&cht_key);
     (cht_key, hash)
-}
-
-#[inline]
-fn make_pre_init<V, E>(
-    mut get: impl FnMut() -> Option<V>,
-) -> impl FnMut() -> Option<(WaiterValue<V>, InitResult<V, E>)>
-where
-    V: Clone,
-{
-    move || {
-        get().map(|value| {
-            (
-                WaiterValue::Ready(Ok(value.clone())),
-                InitResult::ReadExisting(value),
-            )
-        })
-    }
 }
 
 fn panic_if_retry_exhausted_for_panicking(retries: usize, max: usize) {
