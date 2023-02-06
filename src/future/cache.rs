@@ -953,8 +953,7 @@ where
         futures_util::pin_mut!(init);
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
-        let replace_if = Some(replace_if);
-        self.get_or_insert_with_hash_and_fun(key, hash, init, replace_if, false)
+        self.get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if), false)
             .await
             .into_value()
     }
