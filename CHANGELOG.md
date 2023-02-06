@@ -1,11 +1,29 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.9.7
+
+### Fixed
+
+- Fix an issue that `get_with` method of `future` cache inflates future size by ~7x,
+  sometimes causing stack overflow ([#212][gh-issue-0212]):
+    - This was caused by a known `rustc` optimization issue on async functions
+      ([rust-lang/rust#62958][gh-rust-issue-62958]).
+    - Added a workaround to our cache and now it will only inflate the size by ~2.5x.
+- Fix a bug that setting the number of segments of `sync` cache will disable
+  notifications. ([#207][gh-issue-0207])
+
+### Added
+
+- Add examples for `build_with_hasher` method of cache builders.
+  ([#216][gh-pull-0216])
+
+
 ## Version 0.9.6
 
 ### Fixed
 
 - Prevent race condition in `get_with` family methods to avoid evaluating `init`
-  closure or future multiple times in concurrent calls. ([#195][gh-pull-0195]):
+  closure or future multiple times in concurrent calls. ([#195][gh-pull-0195])
 
 
 ## Version 0.9.5
@@ -25,7 +43,7 @@
 
 ### Changed
 
-- Changed the CI to run Linux AArch64 tests on real hardware using Cirrus CI.
+- Change the CI to run Linux AArch64 tests on real hardware using Cirrus CI.
   ([#180][gh-pull-0180], by [@ClSlaid][gh-ClSlaid])
 
 ### Fixed
@@ -510,6 +528,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [resolving-error-on-32bit]: https://github.com/moka-rs/moka#compile-errors-on-some-32-bit-platforms
 
 [ghsa-qc84-gqf4-9926]: https://github.com/advisories/GHSA-qc84-gqf4-9926
+[gh-rust-issue-62958]: https://github.com/rust-lang/rust/issues/62958
 
 [gh-06chaynes]: https://github.com/06chaynes
 [gh-aspect]: https://github.com/aspect
@@ -523,6 +542,8 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-tinou98]: https://github.com/tinou98
 
+[gh-issue-0212]: https://github.com/moka-rs/moka/issues/212/
+[gh-issue-0207]: https://github.com/moka-rs/moka/issues/207/
 [gh-issue-0162]: https://github.com/moka-rs/moka/issues/162/
 [gh-issue-0155]: https://github.com/moka-rs/moka/issues/155/
 [gh-issue-0123]: https://github.com/moka-rs/moka/issues/123/
@@ -535,6 +556,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0216]: https://github.com/moka-rs/moka/pull/216/
 [gh-pull-0195]: https://github.com/moka-rs/moka/pull/195/
 [gh-pull-0190]: https://github.com/moka-rs/moka/pull/190/
 [gh-pull-0189]: https://github.com/moka-rs/moka/pull/189/
