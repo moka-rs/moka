@@ -25,7 +25,7 @@ pub use {
 pub type PredicateId = String;
 
 // Empty struct to be used in InitResult::InitErr to represent the Option None.
-struct OptionallyNone;
+pub(crate) struct OptionallyNone;
 
 pub struct Iter<'i, K, V>(crate::sync_base::iter::Iter<'i, K, V>);
 
