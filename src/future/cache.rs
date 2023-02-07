@@ -1501,7 +1501,7 @@ where
 
         match self
             .value_initializer
-            .try_init_or_read(&Arc::clone(&key), type_id, get, init, insert, post_init)
+            .try_init_or_read(&key, type_id, get, init, insert, post_init)
             .await
         {
             InitResult::Initialized(v) => {
@@ -1623,7 +1623,7 @@ where
 
         match self
             .value_initializer
-            .try_init_or_read(&Arc::clone(&key), type_id, get, init, insert, post_init)
+            .try_init_or_read(&key, type_id, get, init, insert, post_init)
             .await
         {
             InitResult::Initialized(v) => {
@@ -1706,7 +1706,7 @@ where
 
         match self
             .value_initializer
-            .try_init_or_read(&Arc::clone(&key), type_id, get, init, insert, post_init)
+            .try_init_or_read(&key, type_id, get, init, insert, post_init)
             .await
         {
             InitResult::Initialized(v) => {
