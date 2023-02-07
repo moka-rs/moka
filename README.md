@@ -478,35 +478,6 @@ cases, increasing MSRV is _not_ considered a semver-breaking change.
 
 ## Troubleshooting
 
-### Integer Overflow in Quanta Crate on Some x86_64 Machines
-
-Quanta crate up to v0.9.3 has an issue on some specific x86_64-based machines. It
-will cause intermittent panic due to integer overflow:
-
-- metrics-rs/quanta &mdash; [Intermittent panic due to overflowing our source calibration denominator. #61](https://github.com/metrics-rs/quanta/issues/61)
-  (Fixed by Quanta v0.10.0)
-
-The overflows have been reported by a couple of users who use AMD-based Lenovo
-laptops or Circle CI.
-
-When this issue occurs, you will get a stacktrace containing the following lines:
-
-```console
-... panicked at 'attempt to add with overflow', ...
-...
-quanta::Calibration::calibrate
-    at ... /quanta-0.9.3/src/lib.rs:226:13
-quanta::Clock::new::{{closure}}
-    at ... /quanta-0.9.3/src/lib.rs:307:17
-...
-```
-
-This issue was fixed by Quanta v0.10.0.
-
-You can prevent the issue by upgrading Moka to v0.8.4 or newer, which depends on
-Quanta v0.10.0 or newer.
-
-
 ### Compile Errors on Some 32-bit Platforms
 
 On some 32-bit target platforms including the followings, you may encounter compile
@@ -636,10 +607,3 @@ at your option.
 See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.
 
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_large)
-
-<!--
-
-MEMO:
-- Column width is 85. (Emacs: C-x f)
-
--->
