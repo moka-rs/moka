@@ -22,4 +22,4 @@ pub trait ConcurrentCacheExt<K, V> {
 
 // Empty internal struct to be used in optionally_get_with to represent the None
 // results.
-struct OptionallyNone;
+pub(crate) struct OptionallyNone;

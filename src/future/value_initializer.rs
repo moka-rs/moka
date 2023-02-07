@@ -138,8 +138,8 @@ where
         init: Pin<&mut impl Future<Output = O>>,
         // Closure that returns a future to insert a new value into cache.
         mut insert: impl FnMut(V) -> BoxFuture<'a, ()> + Send + 'a,
-        // This function will be called after the init future has returned a value of
-        // type O. It converts O into Result<V, E>.
+        // Function to convert a value O, returned from the init future, into
+        // Result<V, E>.
         post_init: fn(O) -> Result<V, E>,
     ) -> InitResult<V, E>
     where
@@ -180,9 +180,9 @@ where
                         return InitResult::ReadExisting(value);
                     }
 
-                    // The value still does note exist. Let's resolve the init future.
-
-                    // Catching panic is safe here as we do not try to resolve the future again.
+                    // The value still does note exist. Let's resolve the init
+                    // future. Catching panic is safe here as we do not try to
+                    // resolve the future again.
                     match AssertUnwindSafe(init).catch_unwind().await {
                         // Resolved.
                         Ok(value) => {

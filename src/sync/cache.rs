@@ -1153,9 +1153,12 @@ where
             None
         };
 
+        let type_id = ValueInitializer::<K, V, S>::type_id_for_get_with();
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_get_with;
+
         match self
             .value_initializer
-            .init_or_read(Arc::clone(&key), get, init, insert)
+            .try_init_or_read(&key, type_id, get, init, insert, post_init)
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
@@ -1375,9 +1378,12 @@ where
             None
         };
 
+        let type_id = ValueInitializer::<K, V, S>::type_id_for_optionally_get_with();
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_optionally_get_with;
+
         match self
             .value_initializer
-            .optionally_init_or_read(Arc::clone(&key), get, init, insert)
+            .try_init_or_read(&key, type_id, get, init, insert, post_init)
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
@@ -1567,9 +1573,12 @@ where
             None
         };
 
+        let type_id = ValueInitializer::<K, V, S>::type_id_for_try_get_with::<E>();
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_try_get_with;
+
         match self
             .value_initializer
-            .try_init_or_read(Arc::clone(&key), get, init, insert)
+            .try_init_or_read(&key, type_id, get, init, insert, post_init)
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
