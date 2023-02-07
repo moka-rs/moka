@@ -1,5 +1,37 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.10.0
+
+### Breaking Changes
+
+- The following caches have been moved to a separate crate called
+  [Mini-Moka][mini-moka-crate]:
+    - `moka::unsync::Cache` → `mini_moka::unsync::Cache`
+    - `moka::dash::Cache` → `mini_moka::sync::Cache`
+- The following methods have been removed from `sync` and `future` caches
+  ([#199][gh-pull-0199]). They were deprecated in v0.8.0:
+    - `get_or_insert_with` (Use `get_with` instead)
+    - `get_or_try_insert_with` (Use `try_get_with` instead)
+- The following methods of `sync` and `future` caches have been marked as deprecated
+  ([#193][gh-pull-0193]):
+    - `get_with_if` (Use `entry` API's `or_insert_with_if` instead)
+
+### Added
+
+- Add `entry` and `entry_by_ref` APIs to `sync` and `future` caches
+  ([#193][gh-pull-0193]):
+    - They allow users to perform more complex operations on a cache entry. At this
+      point, the following operations (methods) are provided:
+        - `or_default`
+        - `or_insert`
+        - `or_insert_with`
+        - `or_insert_with_if`
+        - `or_optionally_insert_with`
+        - `or_try_insert_with`
+    - The above methods return `Entry` type, which provides `is_fresh` method to
+      check if the value was freshly computed or already existed in the cache.
+
+
 ## Version 0.9.7
 
 ### Fixed
@@ -522,6 +554,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 <!-- Links -->
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
+[mini-moka-crate]: https://crates.io/crates/mini-moka
 [quanta-crate]: https://crates.io/crates/quanta
 
 [panic_in_quanta]: https://github.com/moka-rs/moka#integer-overflow-in-quanta-crate-on-some-x86_64-machines
@@ -557,7 +590,9 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
 [gh-pull-0216]: https://github.com/moka-rs/moka/pull/216/
+[gh-pull-0199]: https://github.com/moka-rs/moka/pull/199/
 [gh-pull-0195]: https://github.com/moka-rs/moka/pull/195/
+[gh-pull-0193]: https://github.com/moka-rs/moka/pull/193/
 [gh-pull-0190]: https://github.com/moka-rs/moka/pull/190/
 [gh-pull-0189]: https://github.com/moka-rs/moka/pull/189/
 [gh-pull-0187]: https://github.com/moka-rs/moka/pull/187/

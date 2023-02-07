@@ -52,7 +52,7 @@
 //! [sync-seg-cache-struct]: ./sync/struct.SegmentedCache.html
 //!
 //! **NOTE:** The following caches have been moved to a separate crate called
-//! "[mini-moka][mini-moka-crate]"".
+//! "[mini-moka][mini-moka-crate]".
 //!
 //! - Non concurrent cache for single threaded applications:
 //!     - `moka::unsync::Cache` → [`mini_moka::unsync::Cache`][unsync-cache-struct]
