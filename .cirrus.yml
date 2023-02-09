@@ -58,6 +58,7 @@ linux_arm64_task:
       cargo update -p async-global-executor --precise 2.0.4
       cargo update -p pulldown-cmark --precise 0.9.1
       cargo update -p once_cell --precise 1.14.0
+      cargo update -p tokio-native-tls --precise 0.3.0
     else
       echo 'Skipped'
     fi
