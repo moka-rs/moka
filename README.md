@@ -112,13 +112,11 @@ routers. Here are some highlights:
 
 - [CHANGELOG.md](https://github.com/moka-rs/moka/blob/master/CHANGELOG.md)
 
-The `unsync::Cache` and `dash::Cache` have been moved to [Mini Moka][mini-moka-crate]
-crate:
+The `unsync::Cache` and `dash::Cache` have been moved to a separate crate called
+[Mini Moka][mini-moka-crate]:
 
-- Non concurrent cache for single threaded applications:
-    - `moka::unsync::Cache` → [`mini_moka::unsync::Cache`][unsync-cache-struct]
-- Experimental, thread-safe, synchronous cache:
-    - `moka::dash::Cache` →→ [`mini_moka::sync::Cache`][dash-cache-struct]
+- `moka::unsync::Cache` → [`mini_moka::unsync::Cache`][unsync-cache-struct]
+- `moka::dash::Cache` → [`mini_moka::sync::Cache`][dash-cache-struct]
 
 [unsync-cache-struct]: https://docs.rs/mini-moka/latest/mini_moka/unsync/struct.Cache.html
 [dash-cache-struct]: https://docs.rs/mini-moka/latest/mini_moka/sync/struct.Cache.html
