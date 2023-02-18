@@ -66,13 +66,13 @@ and can be overkill for your use case. Sometimes simpler caches like
 
 The following table shows the trade-offs between the different cache implementations:
 
-| Feature | Moka v0.10 | Mini Moka v0.10 | Quick Cache v0.1 |
+| Feature | Moka v0.10 | Mini Moka v0.10 | Quick Cache v0.2 |
 |:------- |:---- |:--------- |:----------- |
 | Thread-safe, sync cache | ✅ | ✅ | ✅ |
 | Thread-safe, async cache | ✅ | ❌ | ❌ |
 | Non-concurrent cache | ❌ | ✅ | ✅ |
 | Bounded by the maximum number of entries | ✅ | ✅ | ✅ |
-| Bounded by the total weighted size of entries | ✅ | ✅ | ❌ |
+| Bounded by the total weighted size of entries | ✅ | ✅ | ✅ |
 | Near optimal hit ratio | ✅ TinyLFU | ✅ TinyLFU | ✅ CLOCK-Pro |
 | Expiration policies | ✅ | ✅ | ❌ |
 | Eviction listener | ✅ | ❌ | ❌ |
@@ -80,10 +80,10 @@ The following table shows the trade-offs between the different cache implementat
 | Lock-free, concurrent iterator | ✅ | ❌ | ❌ |
 | Lock-per-shard, concurrent iterator | ❌ | ✅ | ❌ |
 
-| Performance | Moka v0.10 | Mini Moka v0.10 | Quick Cache v0.1 |
+| Performance | Moka v0.10 | Mini Moka v0.10 | Quick Cache v0.2 |
 |:------- |:---- |:--------- |:----------- |
 | Small overhead compared to a concurrent hash table | ❌ | ❌ | ✅ |
-| Does not use background threads | ❌ | ✅ | ✅ |
+| Does not use background threads | ❌ Will be removed from v0.11 | ✅ | ✅ |
 | Small dependency tree | ❌ | ✅ | ✅ |
 
 [tiny-lfu]: https://github.com/moka-rs/moka/wiki#admission-and-eviction-policies
