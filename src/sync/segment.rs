@@ -720,9 +720,10 @@ where
 
         let actual_num_segments = num_segments.next_power_of_two();
         let segment_shift = 64 - actual_num_segments.trailing_zeros();
-        // TODO: Round up.
-        let seg_max_capacity = max_capacity.map(|n| n / actual_num_segments as u64);
-        let seg_init_capacity = initial_capacity.map(|cap| cap / actual_num_segments);
+        let seg_max_capacity =
+            max_capacity.map(|n| (n as f64 / actual_num_segments as f64).ceil() as u64);
+        let seg_init_capacity =
+            initial_capacity.map(|cap| (cap as f64 / actual_num_segments as f64).ceil() as usize);
         // NOTE: We cannot initialize the segments as `vec![cache; actual_num_segments]`
         // because Cache::clone() does not clone its inner but shares the same inner.
         let segments = (0..actual_num_segments)
@@ -788,6 +789,24 @@ mod tests {
     };
     use parking_lot::Mutex;
     use std::{sync::Arc, time::Duration};
+
+    #[test]
+    fn max_capacity_zero() {
+        let mut cache = SegmentedCache::new(0, 1);
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert(0, ());
+
+        assert!(!cache.contains_key(&0));
+        assert!(cache.get(&0).is_none());
+        cache.sync();
+        assert!(!cache.contains_key(&0));
+        assert!(cache.get(&0).is_none());
+        assert_eq!(cache.entry_count(), 0)
+    }
 
     #[test]
     fn basic_single_thread() {

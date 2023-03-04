@@ -102,6 +102,10 @@ impl<K, V, S> BaseCache<K, V, S> {
         self.inner.weighted_size()
     }
 
+    pub(crate) fn is_map_disabled(&self) -> bool {
+        self.inner.max_capacity == Some(0)
+    }
+
     #[inline]
     pub(crate) fn is_removal_notifier_enabled(&self) -> bool {
         self.inner.is_removal_notifier_enabled()
@@ -163,8 +167,15 @@ where
         invalidator_enabled: bool,
         housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
-        let (r_snd, r_rcv) = crossbeam_channel::bounded(READ_LOG_SIZE);
-        let (w_snd, w_rcv) = crossbeam_channel::bounded(WRITE_LOG_SIZE);
+        let (r_size, w_size) = if max_capacity == Some(0) {
+            (0, 0)
+        } else {
+            (READ_LOG_SIZE, WRITE_LOG_SIZE)
+        };
+
+        let (r_snd, r_rcv) = crossbeam_channel::bounded(r_size);
+        let (w_snd, w_rcv) = crossbeam_channel::bounded(w_size);
+
         let inner = Arc::new(Inner::new(
             name,
             max_capacity,
@@ -905,12 +916,16 @@ where
         time_to_idle: Option<Duration>,
         invalidator_enabled: bool,
     ) -> Self {
-        let initial_capacity = initial_capacity
-            .map(|cap| cap + WRITE_LOG_SIZE)
-            .unwrap_or_default();
-        const NUM_SEGMENTS: usize = 64;
+        let (num_segments, initial_capacity) = if max_capacity == Some(0) {
+            (1, 0)
+        } else {
+            let ic = initial_capacity
+                .map(|cap| cap + WRITE_LOG_SIZE)
+                .unwrap_or_default();
+            (64, ic)
+        };
         let cache = crate::cht::SegmentedHashMap::with_num_segments_capacity_and_hasher(
-            NUM_SEGMENTS,
+            num_segments,
             initial_capacity,
             build_hasher.clone(),
         );
@@ -1100,16 +1115,20 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
+        if self.max_capacity == Some(0) {
+            return None;
+        }
+
         let mut deqs = self.deques.lock();
         let mut calls = 0;
-        let mut should_sync = true;
-
         let current_ec = self.entry_count.load();
         let current_ws = self.weighted_size.load();
         let mut eviction_state =
             EvictionState::new(current_ec, current_ws, self.removal_notifier.as_ref());
 
-        while should_sync && calls <= max_repeats {
+        let mut should_process_logs = true;
+
+        while should_process_logs && calls <= max_repeats {
             let r_len = self.read_op_ch.len();
             if r_len > 0 {
                 self.apply_reads(&mut deqs, r_len);
@@ -1125,7 +1144,7 @@ where
             }
 
             calls += 1;
-            should_sync = self.read_op_ch.len() >= READ_LOG_FLUSH_POINT
+            should_process_logs = self.read_op_ch.len() >= READ_LOG_FLUSH_POINT
                 || self.write_op_ch.len() >= WRITE_LOG_FLUSH_POINT;
         }
 
@@ -1171,7 +1190,7 @@ where
 
         crossbeam_epoch::pin().flush();
 
-        if should_sync {
+        if should_process_logs {
             Some(SyncPace::Fast)
         } else if self.write_op_ch.len() <= WRITE_LOG_LOW_WATER_MARK {
             Some(SyncPace::Normal)
@@ -1210,12 +1229,15 @@ where
 
     #[inline]
     fn should_enable_frequency_sketch(&self, counters: &EvictionCounters) -> bool {
-        if self.frequency_sketch_enabled.load(Ordering::Acquire) {
-            false
-        } else if let Some(max_cap) = self.max_capacity {
-            counters.weighted_size >= max_cap / 2
-        } else {
-            false
+        match self.max_capacity {
+            None | Some(0) => false,
+            Some(max_cap) => {
+                if self.frequency_sketch_enabled.load(Ordering::Acquire) {
+                    false // The frequency sketch is already enabled.
+                } else {
+                    counters.weighted_size >= max_cap / 2
+                }
+            }
         }
     }
 

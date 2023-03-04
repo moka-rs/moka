@@ -1602,6 +1602,10 @@ where
     }
 
     pub(crate) fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
+        if self.base.is_map_disabled() {
+            return;
+        }
+
         let (op, now) = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
         Self::schedule_write_op(
@@ -1911,6 +1915,24 @@ mod tests {
 
     use parking_lot::Mutex;
     use std::{convert::Infallible, sync::Arc, time::Duration};
+
+    #[test]
+    fn max_capacity_zero() {
+        let mut cache = Cache::new(0);
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert(0, ());
+
+        assert!(!cache.contains_key(&0));
+        assert!(cache.get(&0).is_none());
+        cache.sync();
+        assert!(!cache.contains_key(&0));
+        assert!(cache.get(&0).is_none());
+        assert_eq!(cache.entry_count(), 0)
+    }
 
     #[test]
     fn basic_single_thread() {
