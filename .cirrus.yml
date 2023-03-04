@@ -4,6 +4,9 @@ env:
   NUM_CPUS: "2"
 
 linux_arm64_task:
+  # Skip the whole task when this is a temporary branch for GitHub merge queue.
+  skip: $CIRRUS_BRANCH =~ 'gh-readonly-queue/.*'
+
   arm_container:
     cpu: $NUM_CPUS
     matrix:
