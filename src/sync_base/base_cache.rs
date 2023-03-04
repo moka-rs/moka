@@ -294,6 +294,10 @@ where
         R: Fn(ReadOp<K, V>, Instant),
         I: FnMut(&V) -> bool,
     {
+        if self.is_map_disabled() {
+            return None;
+        }
+
         let now = self.current_time_from_expiration_clock();
 
         let maybe_entry = self
