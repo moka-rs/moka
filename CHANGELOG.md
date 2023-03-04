@@ -1,5 +1,15 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.10.1
+
+### Changed
+
+- Now `sync` and `future` caches will not cache anything when the max capacity is set
+  to zero ([#230][gh-issue-0230]):
+    - Previously, they would cache some entries for short time (< 0.5 secs) even
+      though the max capacity is zero.
+
+
 ## Version 0.10.0
 
 ### Breaking Changes
@@ -575,6 +585,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-tinou98]: https://github.com/tinou98
 
+[gh-issue-0230]: https://github.com/moka-rs/moka/issues/230/
 [gh-issue-0212]: https://github.com/moka-rs/moka/issues/212/
 [gh-issue-0207]: https://github.com/moka-rs/moka/issues/207/
 [gh-issue-0162]: https://github.com/moka-rs/moka/issues/162/
