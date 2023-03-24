@@ -56,6 +56,7 @@ jobs:
         if: ${{ matrix.rust == 'nightly' }}
         run: |
           cargo update -p openssl --precise 0.10.39
+          cargo update -p cc --precise 1.0.61
 
       - name: Pin some dependencies to specific versions (MSRV only)
         if: ${{ matrix.rust == '1.51.0' }}
