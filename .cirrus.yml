@@ -63,6 +63,8 @@ linux_arm64_task:
       cargo update -p pulldown-cmark --precise 0.9.1
       cargo update -p once_cell --precise 1.14.0
       cargo update -p tokio-native-tls --precise 0.3.0
+      cargo update -p thiserror --precise 1.0.39
+      cargo update -p serde --precise 1.0.156
     else
       echo 'Skipped'
     fi
