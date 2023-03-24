@@ -44,6 +44,7 @@ linux_arm64_task:
       echo 'Downgrading dependencies to minimal versions'
       cargo update -Z minimal-versions
       cargo update -p openssl --precise 0.10.39
+      cargo update -p cc --precise 1.0.61
     else
       echo 'Skipped'
     fi
