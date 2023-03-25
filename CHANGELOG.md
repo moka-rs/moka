@@ -2,6 +2,11 @@
 
 ## Version 0.10.1
 
+### Fixed
+
+- Fixed a bug that `future` cache's `blocking().invalidate(key)` method does not
+  trigger the eviction listener. ([#242][gh-issue-0242])
+
 ### Changed
 
 - Now `sync` and `future` caches will not cache anything when the max capacity is set
@@ -585,6 +590,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-tinou98]: https://github.com/tinou98
 
+[gh-issue-0242]: https://github.com/moka-rs/moka/issues/242/
 [gh-issue-0230]: https://github.com/moka-rs/moka/issues/230/
 [gh-issue-0212]: https://github.com/moka-rs/moka/issues/212/
 [gh-issue-0207]: https://github.com/moka-rs/moka/issues/207/
