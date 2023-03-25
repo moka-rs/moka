@@ -1269,6 +1269,9 @@ where
     {
         let hash = self.base.hash(key);
         if let Some(kv) = self.base.remove_entry(key, hash) {
+            if self.base.is_removal_notifier_enabled() {
+                self.base.notify_invalidate(&kv.key, &kv.entry)
+            }
             let op = WriteOp::Remove(kv);
             let now = self.base.current_time_from_expiration_clock();
             let hk = self.base.housekeeper.as_ref();
@@ -1963,7 +1966,21 @@ mod tests {
 
     #[test]
     fn basic_single_blocking_api() {
-        let mut cache = Cache::new(3);
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        // We use non-async mutex in the eviction listener (because the listener
+        // is a regular closure).
+        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+
+        // Create a cache with the eviction listener.
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .eviction_listener_with_queued_delivery_mode(listener)
+            .build();
         cache.reconfigure_for_testing();
 
         // Make the cache exterior immutable.
@@ -1988,16 +2005,19 @@ mod tests {
 
         // "d" should not be admitted because its frequency is too low.
         cache.blocking().insert("d", "david"); //   count: d -> 0
+        expected.push((Arc::new("d"), "david", RemovalCause::Size));
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 1
 
         cache.blocking().insert("d", "david");
+        expected.push((Arc::new("d"), "david", RemovalCause::Size));
         cache.sync();
         assert_eq!(cache.get(&"d"), None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher than c's.
         cache.blocking().insert("d", "dennis");
+        expected.push((Arc::new("c"), "cindy", RemovalCause::Size));
         cache.sync();
         assert_eq!(cache.get(&"a"), Some("alice"));
         assert_eq!(cache.get(&"b"), Some("bob"));
@@ -2005,7 +2025,10 @@ mod tests {
         assert_eq!(cache.get(&"d"), Some("dennis"));
 
         cache.blocking().invalidate(&"b");
+        expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
         assert_eq!(cache.get(&"b"), None);
+
+        verify_notification_vec(&cache, actual, &expected);
     }
 
     #[tokio::test]
