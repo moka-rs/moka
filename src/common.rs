@@ -13,6 +13,7 @@ pub(crate) mod builder_utils;
 pub(crate) mod deque;
 pub(crate) mod frequency_sketch;
 pub(crate) mod time;
+pub(crate) mod timer_wheel;
 
 #[cfg(all(test, any(feature = "sync", feature = "future")))]
 pub(crate) mod test_utils;
