@@ -1,5 +1,11 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.10.2
+
+Bumped the minimum supported Rust version (MSRV) to 1.60 (2022-04-07).
+([#252][gh-issue-0252])
+
+
 ## Version 0.10.1
 
 ### Fixed
@@ -590,6 +596,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-tinou98]: https://github.com/tinou98
 
+[gh-issue-0252]: https://github.com/moka-rs/moka/issues/252/
 [gh-issue-0242]: https://github.com/moka-rs/moka/issues/242/
 [gh-issue-0230]: https://github.com/moka-rs/moka/issues/230/
 [gh-issue-0212]: https://github.com/moka-rs/moka/issues/212/
