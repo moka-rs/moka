@@ -5,6 +5,13 @@
 Bumped the minimum supported Rust version (MSRV) to 1.60 (2022-04-07).
 ([#252][gh-issue-0252])
 
+### Changed
+
+- Upgraded `quanta` crate to v0.11.0. ([#251][gh-pull-0251])
+    - This resolved "[RUSTSEC-2020-0168]: `mach` is unmaintained"
+      ([#243][gh-issue-0243]) by replacing `mach` with `mach2`.
+    - `quanta` v0.11.0's MSRV is 1.60, so we also bumped the MSRV of Moka to 1.60.
+
 
 ## Version 0.10.1
 
@@ -584,6 +591,8 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [ghsa-qc84-gqf4-9926]: https://github.com/advisories/GHSA-qc84-gqf4-9926
 [gh-rust-issue-62958]: https://github.com/rust-lang/rust/issues/62958
 
+[RUSTSEC-2020-0168]: https://rustsec.org/advisories/RUSTSEC-2020-0168.html
+
 [gh-06chaynes]: https://github.com/06chaynes
 [gh-aspect]: https://github.com/aspect
 [gh-barkanido]: https://github.com/barkanido
@@ -597,6 +606,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-tinou98]: https://github.com/tinou98
 
 [gh-issue-0252]: https://github.com/moka-rs/moka/issues/252/
+[gh-issue-0243]: https://github.com/moka-rs/moka/issues/243/
 [gh-issue-0242]: https://github.com/moka-rs/moka/issues/242/
 [gh-issue-0230]: https://github.com/moka-rs/moka/issues/230/
 [gh-issue-0212]: https://github.com/moka-rs/moka/issues/212/
@@ -613,6 +623,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0251]: https://github.com/moka-rs/moka/pull/251/
 [gh-pull-0216]: https://github.com/moka-rs/moka/pull/216/
 [gh-pull-0199]: https://github.com/moka-rs/moka/pull/199/
 [gh-pull-0195]: https://github.com/moka-rs/moka/pull/195/
