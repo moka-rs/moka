@@ -12,7 +12,7 @@ linux_arm64_task:
     matrix:
       - image: rust:slim  # docker's official latest rust stable version
       - image: rustlang/rust:nightly-slim # nightly hosted by rustlang
-      - image: rust:1.51.0-slim # MSRV
+      - image: rust:1.60.0-slim # MSRV
       # no rust-beta image found in docker hub, won't be tested
 
   ## Disable caching as there is no Cargo.lock file in Moka repository.
@@ -50,26 +50,13 @@ linux_arm64_task:
     fi
 
   # Pin some dependencies to specific versions (MSRV only)
-  pin_deps_script: |
-    if [ "v$RUST_VERSION" == "v1.51.0" ]; then
-      echo 'Pinning some dependencies to specific versions'
-      rm -f Cargo.lock
-      sed -i 's/ahash = ".*"/ahash = "=0.7.6"/g' Cargo.toml
-      cargo update -p indexmap --precise 1.8.2
-      cargo update -p hashbrown --precise 0.11.2
-      cargo update -p reqwest --precise 0.11.12
-      cargo update -p native-tls --precise 0.2.8
-      cargo update -p async-global-executor --precise 2.0.4
-      cargo update -p pulldown-cmark --precise 0.9.1
-      cargo update -p once_cell --precise 1.14.0
-      cargo update -p tokio-native-tls --precise 0.3.0
-      cargo update -p thiserror --precise 1.0.39
-      cargo update -p serde --precise 1.0.156
-      cargo update -p tokio --precise 1.26.0
-      cargo update -p futures-util --precise 0.3.27
-    else
-      echo 'Skipped'
-    fi
+  # pin_deps_script: |
+  #   if [ "v$RUST_VERSION" == "v1.60.0" ]; then
+  #     echo 'Pinning some dependencies to specific versions'
+  #     cargo update -p <crate> --precise <version>
+  #   else
+  #     echo 'Skipped'
+  #   fi
 
   test_script:
     # Run tests (debug, sync feature)
