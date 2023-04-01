@@ -38,8 +38,8 @@ const SPANS: &[u64] = &[
     aligned_duration(Duration::from_secs(60)),      // 1.14m
     aligned_duration(Duration::from_secs(60 * 60)), // 1.22h
     aligned_duration(DAY),                          // 1.63d
-    BUCKET_COUNTS[3] * aligned_duration(DAY),        // 6.5d
-    BUCKET_COUNTS[3] * aligned_duration(DAY),        // 6.5d
+    BUCKET_COUNTS[3] * aligned_duration(DAY),       // 6.5d
+    BUCKET_COUNTS[3] * aligned_duration(DAY),       // 6.5d
 ];
 
 const SHIFT: &[u64] = &[
