@@ -478,7 +478,7 @@ where
             hash,
             // on_insert
             || {
-                let entry = self.new_value_entry(value.clone(), ts, weight);
+                let entry = self.new_value_entry(&key, hash, value.clone(), ts, weight);
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((
                     cnt,
@@ -555,11 +555,14 @@ where
     #[inline]
     fn new_value_entry(
         &self,
+        key: &Arc<K>,
+        hash: u64,
         value: V,
         timestamp: Instant,
         policy_weight: u32,
     ) -> TrioArc<ValueEntry<K, V>> {
-        let info = TrioArc::new(EntryInfo::new(timestamp, policy_weight));
+        let key_hash = KeyHash::new(Arc::clone(key), hash);
+        let info = TrioArc::new(EntryInfo::new(key_hash, timestamp, policy_weight));
         TrioArc::new(ValueEntry::new(value, info))
     }
 
