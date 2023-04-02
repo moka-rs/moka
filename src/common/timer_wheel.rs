@@ -66,8 +66,8 @@ const fn aligned_duration(duration: Duration) -> u64 {
 }
 
 pub(crate) struct TimerNode<K> {
-    level: AtomicU8,
-    index: AtomicU8,
+    level: AtomicU8, // When unset, we use `u8::MAX`.
+    index: AtomicU8, // When unset, we use `u8::MAX`.
     entry_info: TrioArc<EntryInfo<K>>,
 }
 
@@ -145,6 +145,15 @@ impl<K> TimerWheel<K> {
             let (level, index) = self.bucket_indices(t);
             elem.level.store(level as u8, Ordering::Release);
             elem.index.store(index as u8, Ordering::Release);
+        } else {
+            // TODO: We must decide what to do when the expiration time is unset. We
+            // will have to unset the pointer to this node in the ValueEntry and then
+            // drop the node.
+            //
+            // For now, we will let the node to be leaked. Just unset the level and
+            // index.
+            elem.level.store(u8::MAX, Ordering::Release);
+            elem.index.store(u8::MAX, Ordering::Release);
         }
     }
 
@@ -161,9 +170,11 @@ impl<K> TimerWheel<K> {
     /// IMPORTANT: This method is unsafe because it does not drop the node.
     unsafe fn unlink_timer(&mut self, node: NonNull<DeqNode<TimerNode<K>>>) {
         let p = unsafe { node.as_ref() };
-        let level = p.element.level.load(Ordering::Acquire) as usize;
-        let index = p.element.index.load(Ordering::Acquire) as usize;
-        unsafe { self.wheels[level][index].unlink(node) };
+        let level = p.element.level.load(Ordering::Acquire);
+        let index = p.element.index.load(Ordering::Acquire);
+        if level != u8::MAX && index != u8::MAX {
+            self.wheels[level as usize][index as usize].unlink(node);
+        }
     }
 
     /// Advances the timer wheel to the current time, and returns an iterator over
