@@ -80,13 +80,15 @@ impl<K> TimerNode<K> {
     }
 }
 
+type Bucket<K> = Deque<TimerNode<K>>;
+
 /// A hierarchical timer wheel to add, remove, and fire expiration events in
 /// amortized O(1) time.
 ///
 /// The expiration events are deferred until the timer is advanced, which is
 /// performed as part of the cache's housekeeping cycle.
 pub(crate) struct TimerWheel<K> {
-    wheels: Box<[Box<[Deque<TimerNode<K>>]>]>,
+    wheels: Box<[Box<[Bucket<K>]>]>,
     /// The time when this timer wheel was created.
     origin: Instant,
     /// The time when this timer wheel was last advanced.
@@ -149,10 +151,10 @@ impl<K> TimerWheel<K> {
 
     /// Advances the timer wheel to the current time, and returns an iterator over
     /// expired cache entries.
-    pub(crate) fn advance<'a>(
-        &'a mut self,
+    pub(crate) fn advance(
+        &mut self,
         current_time: Instant,
-    ) -> impl Iterator<Item = TrioArc<EntryInfo<K>>> + 'a {
+    ) -> impl Iterator<Item = TrioArc<EntryInfo<K>>> + '_ {
         let previous_time = self.current;
         self.current = current_time;
         ExpiredEntries::new(self, previous_time, current_time)
@@ -446,6 +448,7 @@ mod tests {
         // Add timers that will expire in some minutes.
         const MINUTES: u64 = 60;
         schedule_timer(&mut timer, 1, now, s2d(5 * MINUTES));
+        #[allow(clippy::identity_op)]
         schedule_timer(&mut timer, 2, now, s2d(1 * MINUTES));
         schedule_timer(&mut timer, 3, now, s2d(63 * MINUTES));
         schedule_timer(&mut timer, 4, now, s2d(3 * MINUTES));
@@ -472,6 +475,7 @@ mod tests {
         // Add timers that will expire in some hours.
         const HOURS: u64 = 60 * 60;
         schedule_timer(&mut timer, 1, now, s2d(5 * HOURS));
+        #[allow(clippy::identity_op)]
         schedule_timer(&mut timer, 2, now, s2d(1 * HOURS));
         schedule_timer(&mut timer, 3, now, s2d(31 * HOURS));
         schedule_timer(&mut timer, 4, now, s2d(3 * HOURS));
@@ -498,6 +502,7 @@ mod tests {
         // Add timers that will expire in a few days.
         const DAYS: u64 = 24 * 60 * 60;
         schedule_timer(&mut timer, 1, now, s2d(5 * DAYS));
+        #[allow(clippy::identity_op)]
         schedule_timer(&mut timer, 2, now, s2d(1 * DAYS));
         schedule_timer(&mut timer, 3, now, s2d(2 * DAYS));
         // Longer than ~6.5 days, so this should be stored in the overflow area.

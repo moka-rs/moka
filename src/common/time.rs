@@ -7,7 +7,6 @@ pub(crate) mod clock;
 pub(crate) use clock::Clock;
 
 #[cfg(test)]
-#[cfg(all(test, feature = "sync"))]
 pub(crate) use clock::Mock;
 
 /// a wrapper type over Instant to force checked additions and prevent

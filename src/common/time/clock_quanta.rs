@@ -1,5 +1,5 @@
 pub(crate) type Clock = quanta::Clock;
 pub(crate) type Instant = quanta::Instant;
 
-#[cfg(all(test, feature = "sync"))]
+#[cfg(test)]
 pub(crate) type Mock = quanta::Mock;
