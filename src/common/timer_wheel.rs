@@ -13,7 +13,12 @@
 
 #![allow(unused)] // TODO: Remove this.
 
-use std::{convert::TryInto, ptr::NonNull, time::Duration};
+use std::{
+    convert::TryInto,
+    ptr::NonNull,
+    sync::atomic::{AtomicU8, Ordering},
+    time::Duration,
+};
 
 use super::{
     concurrent::entry_info::EntryInfo,
@@ -61,16 +66,16 @@ const fn aligned_duration(duration: Duration) -> u64 {
 }
 
 pub(crate) struct TimerNode<K> {
-    level: u8,
-    index: u8,
+    level: AtomicU8,
+    index: AtomicU8,
     entry_info: TrioArc<EntryInfo<K>>,
 }
 
 impl<K> TimerNode<K> {
     fn new(entry_info: TrioArc<EntryInfo<K>>, level: usize, index: usize) -> Self {
         Self {
-            level: level.try_into().unwrap(),
-            index: index.try_into().unwrap(),
+            level: AtomicU8::new(level as u8),
+            index: AtomicU8::new(index as u8),
             entry_info,
         }
     }
@@ -121,7 +126,6 @@ impl<K> TimerWheel<K> {
     ) -> Option<NonNull<DeqNode<TimerNode<K>>>> {
         if let Some(t) = entry_info.expiration_time() {
             let (level, index) = self.bucket_indices(t);
-            dbg!(level, index);
             let node = Box::new(DeqNode::new(TimerNode::new(entry_info, level, index)));
             let node = self.wheels[level][index].push_back(node);
             Some(node)
@@ -131,22 +135,35 @@ impl<K> TimerWheel<K> {
     }
 
     /// Reschedules an active timer event for the node.
-    pub(crate) fn reschedule(
-        &mut self,
-        node: NonNull<DeqNode<TimerNode<K>>>,
-    ) -> Option<NonNull<DeqNode<TimerNode<K>>>> {
-        let p = unsafe { node.as_ref() };
-        let entry_info = TrioArc::clone(&p.element.entry_info);
-        self.deschedule(node);
-        self.schedule(entry_info)
+    pub(crate) fn reschedule(&mut self, node: NonNull<DeqNode<TimerNode<K>>>) {
+        unsafe { self.unlink_timer(node) };
+
+        // Since cache entry's ValueEntry has a pointer to this node, we must reuse
+        // the node.
+        let elem = &unsafe { node.as_ref() }.element;
+        if let Some(t) = elem.entry_info.expiration_time() {
+            let (level, index) = self.bucket_indices(t);
+            elem.level.store(level as u8, Ordering::Release);
+            elem.index.store(index as u8, Ordering::Release);
+        }
     }
 
     /// Removes a timer event for this node if present.
     pub(crate) fn deschedule(&mut self, node: NonNull<DeqNode<TimerNode<K>>>) {
+        unsafe {
+            self.unlink_timer(node);
+            std::mem::drop(Box::from_raw(node.as_ptr()));
+        }
+    }
+
+    /// Removes a timer event for this node if present.
+    ///
+    /// IMPORTANT: This method is unsafe because it does not drop the node.
+    unsafe fn unlink_timer(&mut self, node: NonNull<DeqNode<TimerNode<K>>>) {
         let p = unsafe { node.as_ref() };
-        let level = p.element.level as usize;
-        let index = p.element.index as usize;
-        unsafe { self.wheels[level][index].unlink_and_drop(node) };
+        let level = p.element.level.load(Ordering::Acquire) as usize;
+        let index = p.element.index.load(Ordering::Acquire) as usize;
+        unsafe { self.wheels[level][index].unlink(node) };
     }
 
     /// Advances the timer wheel to the current time, and returns an iterator over
@@ -206,9 +223,8 @@ pub(crate) struct ExpiredEntries<'iter, K> {
     current_time: Instant,
     is_done: bool,
     level: usize,
-    // TODO: u8 should be enough.
-    index: u64,
-    end_index: u64,
+    index: u8,
+    end_index: u8,
     index_mask: u64,
     is_index_set: bool,
 }
@@ -264,9 +280,10 @@ impl<'iter, K> Iterator for ExpiredEntries<'iter, K> {
                     return None;
                 }
 
-                self.index_mask = BUCKET_COUNTS[self.level] - 1;
-                self.index = previous_ticks & self.index_mask;
-                let steps = (current_ticks - previous_ticks + 1).min(BUCKET_COUNTS[self.level]);
+                self.index_mask = (BUCKET_COUNTS[self.level] - 1);
+                self.index = (previous_ticks & self.index_mask) as u8;
+                let steps =
+                    (current_ticks - previous_ticks + 1).min(BUCKET_COUNTS[self.level]) as u8;
                 self.end_index = self.index + steps;
 
                 self.is_index_set = true;
@@ -276,7 +293,7 @@ impl<'iter, K> Iterator for ExpiredEntries<'iter, K> {
 
             // Pop the next timer event (cache entry) from the current level and
             // index.
-            let i = self.index & self.index_mask;
+            let i = self.index & self.index_mask as u8;
             match self.timer_wheel.pop_timer(self.level, i as usize) {
                 Some(entry_info) => {
                     if let Some(t) = entry_info.expiration_time() {
