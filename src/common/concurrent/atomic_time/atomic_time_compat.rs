@@ -2,6 +2,7 @@ use super::Instant;
 
 use parking_lot::RwLock;
 
+#[derive(Debug)]
 pub(crate) struct AtomicInstant {
     instant: RwLock<Option<Instant>>,
 }

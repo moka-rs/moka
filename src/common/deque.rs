@@ -227,7 +227,9 @@ impl<T> Deque<T> {
     /// This method takes care not to create mutable references to `element`, to
     /// maintain validity of aliasing pointers.
     ///
-    /// Panics:
+    /// IMPORTANT: This method does not drop the node. If the node is no longer
+    /// needed, use `unlink_and_drop` instead, or drop it at the caller side.
+    /// Otherwise, the node will leak.
     pub(crate) unsafe fn unlink(&mut self, mut node: NonNull<DeqNode<T>>) {
         if self.is_at_cursor(node.as_ref()) {
             self.advance_cursor();

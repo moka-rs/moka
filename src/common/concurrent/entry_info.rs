@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use super::{AccessTime, KeyHash};
 use crate::common::{concurrent::atomic_time::AtomicInstant, time::Instant};
 
+#[derive(Debug)]
 pub(crate) struct EntryInfo<K> {
     #[allow(unused)] // TODO: Remove this.
     key_hash: KeyHash<K>,

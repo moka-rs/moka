@@ -11,7 +11,7 @@ pub(crate) use clock::Mock;
 
 /// a wrapper type over Instant to force checked additions and prevent
 /// unintentional overflow. The type preserve the Copy semantics for the wrapped
-#[derive(PartialEq, PartialOrd, Clone, Copy)]
+#[derive(PartialEq, PartialOrd, Clone, Copy, Debug)]
 pub(crate) struct Instant(clock::Instant);
 
 pub(crate) trait CheckedTimeOps {

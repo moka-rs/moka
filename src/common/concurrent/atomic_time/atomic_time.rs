@@ -5,6 +5,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+#[derive(Debug)]
 pub(crate) struct AtomicInstant {
     instant: AtomicU64,
 }

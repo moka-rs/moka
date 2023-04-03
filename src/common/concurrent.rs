@@ -42,6 +42,7 @@ pub(crate) trait AccessTime {
     fn set_last_modified(&self, timestamp: Instant);
 }
 
+#[derive(Debug)]
 pub(crate) struct KeyHash<K> {
     pub(crate) key: Arc<K>,
     pub(crate) hash: u64,
