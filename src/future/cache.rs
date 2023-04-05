@@ -1220,7 +1220,7 @@ where
 
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
-        let (op, now) = self.base.do_insert_with_hash(key, hash, value);
+        let (op, now) = self.base.do_insert_with_hash(key, hash, value, None);
         let hk = self.base.housekeeper.as_ref();
         Self::blocking_schedule_write_op(
             self.base.inner.as_ref(),
@@ -1733,7 +1733,7 @@ where
             return;
         }
 
-        let (op, now) = self.base.do_insert_with_hash(key, hash, value);
+        let (op, now) = self.base.do_insert_with_hash(key, hash, value, None);
         let hk = self.base.housekeeper.as_ref();
         Self::schedule_write_op(
             self.base.inner.as_ref(),

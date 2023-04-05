@@ -80,12 +80,21 @@ impl<K> TimerNode<K> {
         }
     }
 
-    fn entry_info(&self) -> &TrioArc<EntryInfo<K>> {
+    pub(crate) fn entry_info(&self) -> &TrioArc<EntryInfo<K>> {
         &self.entry_info
     }
 }
 
 type Bucket<K> = Deque<TimerNode<K>>;
+
+#[must_use = "this `ReschedulingResult` may be an `Removed` variant, which should be handled"]
+#[derive(PartialEq)]
+pub(crate) enum ReschedulingResult {
+    /// The timer event was rescheduled.
+    Rescheduled,
+    /// The timer event was not rescheduled because the entry has no expiration time.
+    Removed,
+}
 
 /// A hierarchical timer wheel to add, remove, and fire expiration events in
 /// amortized O(1) time.
@@ -100,9 +109,36 @@ pub(crate) struct TimerWheel<K> {
     current: Instant,
 }
 
+#[cfg(feature = "future")]
+// TODO: https://github.com/moka-rs/moka/issues/54
+#[allow(clippy::non_send_fields_in_send_ty)]
+// Multi-threaded async runtimes require base_cache::Inner to be Send, but it will
+// not be without this `unsafe impl`. This is because DeqNodes have NonNull
+// pointers.
+unsafe impl<K> Send for TimerWheel<K> {}
+
 impl<K> TimerWheel<K> {
-    fn new(now: Instant) -> Self {
-        let wheels = BUCKET_COUNTS
+    pub(crate) fn new(now: Instant) -> Self {
+        Self {
+            wheels: Default::default(), // Empty.
+            origin: now,
+            current: now,
+        }
+    }
+
+    pub(crate) fn set_origin(&mut self, time: Instant) {
+        self.origin = time;
+        self.current = time;
+    }
+
+    pub(crate) fn is_enabled(&self) -> bool {
+        !self.wheels.is_empty()
+    }
+
+    pub(crate) fn enable(&mut self) {
+        assert!(!self.is_enabled());
+
+        self.wheels = BUCKET_COUNTS
             .iter()
             .map(|b| {
                 (0..*b)
@@ -112,11 +148,6 @@ impl<K> TimerWheel<K> {
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        Self {
-            wheels,
-            origin: now,
-            current: now,
-        }
     }
 
     /// Schedules a timer event for the node.
@@ -124,6 +155,8 @@ impl<K> TimerWheel<K> {
         &mut self,
         entry_info: TrioArc<EntryInfo<K>>,
     ) -> Option<NonNull<DeqNode<TimerNode<K>>>> {
+        debug_assert!(self.is_enabled());
+
         if let Some(t) = entry_info.expiration_time() {
             let (level, index) = self.bucket_indices(t);
             let node = Box::new(DeqNode::new(TimerNode::new(entry_info, level, index)));
@@ -134,7 +167,12 @@ impl<K> TimerWheel<K> {
         }
     }
 
-    fn schedule_existing_node(&mut self, node: NonNull<DeqNode<TimerNode<K>>>) -> bool {
+    fn schedule_existing_node(
+        &mut self,
+        node: NonNull<DeqNode<TimerNode<K>>>,
+    ) -> ReschedulingResult {
+        debug_assert!(self.is_enabled());
+
         // Since cache entry's ValueEntry has a pointer to this node, we must reuse
         // the node.
         let elem = &unsafe { node.as_ref() }.element;
@@ -144,32 +182,37 @@ impl<K> TimerWheel<K> {
             elem.index.store(index as u8, Ordering::Release);
             let node = unsafe { Box::from_raw(node.as_ptr()) };
             self.wheels[level][index].push_back(node);
-            true // Successfully rescheduled.
+            ReschedulingResult::Rescheduled
         } else {
             // Unset the level and index.
             elem.level.store(u8::MAX, Ordering::Release);
             elem.index.store(u8::MAX, Ordering::Release);
-            false // The node no longer has the expiration time. Removed.
+            ReschedulingResult::Removed
         }
     }
 
     /// Reschedules an active timer event for the node.
-    pub(crate) fn reschedule(&mut self, node: NonNull<DeqNode<TimerNode<K>>>) -> bool {
+    pub(crate) fn reschedule(
+        &mut self,
+        node: NonNull<DeqNode<TimerNode<K>>>,
+    ) -> ReschedulingResult {
+        debug_assert!(self.is_enabled());
         unsafe { self.unlink_timer(node) };
         self.schedule_existing_node(node)
     }
 
     /// Removes a timer event for this node if present.
     pub(crate) fn deschedule(&mut self, node: NonNull<DeqNode<TimerNode<K>>>) {
+        debug_assert!(self.is_enabled());
         unsafe {
             self.unlink_timer(node);
-            std::mem::drop(Box::from_raw(node.as_ptr()));
+            Self::drop_node(node);
         }
     }
 
     /// Removes a timer event for this node if present.
     ///
-    /// IMPORTANT: This method is unsafe because it does not drop the node.
+    /// IMPORTANT: This method does not drop the node.
     unsafe fn unlink_timer(&mut self, node: NonNull<DeqNode<TimerNode<K>>>) {
         let p = unsafe { node.as_ref() };
         let level = p.element.level.load(Ordering::Acquire);
@@ -179,23 +222,25 @@ impl<K> TimerWheel<K> {
         }
     }
 
+    pub(crate) unsafe fn drop_node(node: NonNull<DeqNode<TimerNode<K>>>) {
+        std::mem::drop(Box::from_raw(node.as_ptr()));
+    }
+
     /// Advances the timer wheel to the current time, and returns an iterator over
     /// timer events.
     pub(crate) fn advance(
         &mut self,
         current_time: Instant,
     ) -> impl Iterator<Item = TimerEvent<K>> + '_ {
+        debug_assert!(self.is_enabled());
+
         let previous_time = self.current;
         self.current = current_time;
         TimerEventsIter::new(self, previous_time, current_time)
     }
 
     /// Returns a pointer to the timer event (cache entry) at the front of the queue.
-    pub(crate) fn pop_timer_node(
-        &mut self,
-        level: usize,
-        index: usize,
-    ) -> Option<Box<DeqNode<TimerNode<K>>>> {
+    fn pop_timer_node(&mut self, level: usize, index: usize) -> Option<Box<DeqNode<TimerNode<K>>>> {
         self.wheels[level][index].pop_front()
     }
 
@@ -332,7 +377,9 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
                         } else {
                             // The cache entry has not expired. Reschedule it.
                             let node_p = NonNull::new(Box::into_raw(node)).expect("Got a null ptr");
-                            if self.timer_wheel.schedule_existing_node(node_p) {
+                            if self.timer_wheel.schedule_existing_node(node_p)
+                                == ReschedulingResult::Rescheduled
+                            {
                                 let entry_info = unsafe { node_p.as_ref() }.element.entry_info();
                                 return Some(TimerEvent::Rescheduled(TrioArc::clone(entry_info)));
                             } else {
@@ -387,6 +434,8 @@ mod tests {
         let now = now(&clock);
 
         let mut timer = TimerWheel::<()>::new(now);
+        timer.enable();
+
         assert_eq!(timer.bucket_indices(now), (0, 0));
 
         // Level 0: 1.07s
@@ -487,6 +536,7 @@ mod tests {
         let now = advance_clock(&clock, &mock, s2d(10));
 
         let mut timer = TimerWheel::<u32>::new(now);
+        timer.enable();
 
         // Add timers that will expire in some seconds.
         schedule_timer(&mut timer, 1, now, s2d(5));
