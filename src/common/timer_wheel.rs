@@ -88,12 +88,11 @@ impl<K> TimerNode<K> {
 type Bucket<K> = Deque<TimerNode<K>>;
 
 #[must_use = "this `ReschedulingResult` may be an `Removed` variant, which should be handled"]
-#[derive(PartialEq)]
-pub(crate) enum ReschedulingResult {
+pub(crate) enum ReschedulingResult<K> {
     /// The timer event was rescheduled.
     Rescheduled,
     /// The timer event was not rescheduled because the entry has no expiration time.
-    Removed,
+    Removed(Box<DeqNode<TimerNode<K>>>),
 }
 
 /// A hierarchical timer wheel to add, remove, and fire expiration events in
@@ -170,7 +169,7 @@ impl<K> TimerWheel<K> {
     fn schedule_existing_node(
         &mut self,
         node: NonNull<DeqNode<TimerNode<K>>>,
-    ) -> ReschedulingResult {
+    ) -> ReschedulingResult<K> {
         debug_assert!(self.is_enabled());
 
         // Since cache entry's ValueEntry has a pointer to this node, we must reuse
@@ -187,7 +186,7 @@ impl<K> TimerWheel<K> {
             // Unset the level and index.
             elem.level.store(u8::MAX, Ordering::Release);
             elem.index.store(u8::MAX, Ordering::Release);
-            ReschedulingResult::Removed
+            ReschedulingResult::Removed(unsafe { Box::from_raw(node.as_ptr()) })
         }
     }
 
@@ -195,7 +194,7 @@ impl<K> TimerWheel<K> {
     pub(crate) fn reschedule(
         &mut self,
         node: NonNull<DeqNode<TimerNode<K>>>,
-    ) -> ReschedulingResult {
+    ) -> ReschedulingResult<K> {
         debug_assert!(self.is_enabled());
         unsafe { self.unlink_timer(node) };
         self.schedule_existing_node(node)
@@ -222,7 +221,7 @@ impl<K> TimerWheel<K> {
         }
     }
 
-    pub(crate) unsafe fn drop_node(node: NonNull<DeqNode<TimerNode<K>>>) {
+    unsafe fn drop_node(node: NonNull<DeqNode<TimerNode<K>>>) {
         std::mem::drop(Box::from_raw(node.as_ptr()));
     }
 
@@ -276,7 +275,7 @@ impl<K> TimerWheel<K> {
 #[derive(Debug)]
 pub(crate) enum TimerEvent<K> {
     /// This cache entry has expired.
-    Expired(TrioArc<EntryInfo<K>>),
+    Expired(Box<DeqNode<TimerNode<K>>>),
     // This cache entry has been rescheduled. Rescheduling includes moving a timer
     // from one wheel to another in a lower level of the hierarchy. (This variant
     // is mainly used for testing)
@@ -372,22 +371,25 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
                     if let Some(t) = expiration_time {
                         if t <= self.current_time {
                             // The cache entry has expired. Return it.
-                            let entry_info = unsafe { node.as_ref() }.element.entry_info();
-                            return Some(TimerEvent::Expired(TrioArc::clone(entry_info)));
+                            return Some(TimerEvent::Expired(node));
                         } else {
                             // The cache entry has not expired. Reschedule it.
                             let node_p = NonNull::new(Box::into_raw(node)).expect("Got a null ptr");
-                            if self.timer_wheel.schedule_existing_node(node_p)
-                                == ReschedulingResult::Rescheduled
-                            {
-                                let entry_info = unsafe { node_p.as_ref() }.element.entry_info();
-                                return Some(TimerEvent::Rescheduled(TrioArc::clone(entry_info)));
-                            } else {
-                                // The timer event has been removed from the timer
-                                // wheel. Return it, so that the caller can remove the
-                                // pointer to the node from a `ValueEntry`.
-                                let node = unsafe { Box::from_raw(node_p.as_ptr()) };
-                                return Some(TimerEvent::Descheduled(node));
+                            match self.timer_wheel.schedule_existing_node(node_p) {
+                                ReschedulingResult::Rescheduled => {
+                                    let entry_info =
+                                        unsafe { node_p.as_ref() }.element.entry_info();
+                                    return Some(TimerEvent::Rescheduled(TrioArc::clone(
+                                        entry_info,
+                                    )));
+                                }
+                                ReschedulingResult::Removed(node) => {
+                                    // The timer event has been removed from the timer
+                                    // wheel. Return it, so that the caller can remove the
+                                    // pointer to the node from a `ValueEntry`.
+                                    let node = unsafe { Box::from_raw(node_p.as_ptr()) };
+                                    return Some(TimerEvent::Descheduled(node));
+                                }
                             }
                         }
                     }
@@ -519,7 +521,7 @@ mod tests {
         fn expired_key(maybe_entry: Option<TimerEvent<u32>>) -> u32 {
             let entry = maybe_entry.expect("entry is none");
             match entry {
-                TimerEvent::Expired(entry) => *entry.key_hash().key,
+                TimerEvent::Expired(node) => *node.element.entry_info().key_hash().key,
                 _ => panic!("Expected an expired entry. Got {:?}", entry),
             }
         }

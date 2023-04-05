@@ -1170,8 +1170,9 @@ where
             let w_len = self.write_op_ch.len();
             if w_len > 0 {
                 // NOTE: This call may enable the `TimerWheel<K>`; `apply_writes`
-                // method will call `handle_admit` method, and `handle_admit` may
-                // call `TimerWheel`'s `enable` method.
+                // method will call `update_timer_wheel_for_upsert` method, and
+                // `update_timer_wheel_for_upsert` may call `TimerWheel`'s `enable`
+                // method.
                 self.apply_writes(&mut deqs, &mut timer_wheel, w_len, &mut eviction_state);
             }
 
@@ -1393,6 +1394,7 @@ where
                 // The entry has been already admitted, so treat this as an update.
                 counters.saturating_sub(0, old_weight);
                 counters.saturating_add(0, new_weight);
+                self.update_timer_wheel_for_upsert(&entry, timer_wheel);
                 deqs.move_to_back_ao(&entry);
                 deqs.move_to_back_wo(&entry);
                 return;
@@ -1582,7 +1584,6 @@ where
         }
     }
 
-    /// NOTE: This method may enable the timer wheel.
     fn handle_admit(
         &self,
         kh: KeyHash<K>,
@@ -1595,6 +1596,26 @@ where
         let key = Arc::clone(&kh.key);
         counters.saturating_add(1, policy_weight);
 
+        self.update_timer_wheel_for_upsert(entry, timer_wheel);
+
+        // Update the deques.
+        deqs.push_back_ao(
+            CacheRegion::MainProbation,
+            KeyHashDate::new(kh, entry.entry_info()),
+            entry,
+        );
+        if self.is_write_order_queue_enabled() {
+            deqs.push_back_wo(KeyDate::new(key, entry.entry_info()), entry);
+        }
+        entry.set_admitted(true);
+    }
+
+    /// NOTE: This method may enable the timer wheel.
+    fn update_timer_wheel_for_upsert(
+        &self,
+        entry: &TrioArc<ValueEntry<K, V>>,
+        timer_wheel: &mut TimerWheel<K>,
+    ) {
         // Enable the timer wheel if needed.
         if entry.entry_info().expiration_time().is_some() && !timer_wheel.is_enabled() {
             timer_wheel.enable();
@@ -1618,12 +1639,12 @@ where
             // expiration time and already registered to the timer wheel.
             (true, Some(tn)) => {
                 let result = timer_wheel.reschedule(tn);
-                if result == ReschedulingResult::Removed {
+                if let ReschedulingResult::Removed(removed_tn) = result {
                     // The timer node was removed from the timer wheel because the
                     // expiration time has been unset by other thread after we
                     // checked.
                     entry.set_timer_node(None);
-                    unsafe { TimerWheel::drop_node(tn) };
+                    drop(removed_tn);
                 }
             }
             // Unregister the cache entry from the timer wheel; the cache entry has
@@ -1633,17 +1654,6 @@ where
                 timer_wheel.deschedule(tn);
             }
         }
-
-        // Update the deques.
-        deqs.push_back_ao(
-            CacheRegion::MainProbation,
-            KeyHashDate::new(kh, entry.entry_info()),
-            entry,
-        );
-        if self.is_write_order_queue_enabled() {
-            deqs.push_back_wo(KeyDate::new(key, entry.entry_info()), entry);
-        }
-        entry.set_admitted(true);
     }
 
     fn handle_remove(
@@ -1714,9 +1724,11 @@ where
 
         for event in timer_wheel.advance(now) {
             match event {
-                TimerEvent::Expired(entry_info) => {
+                TimerEvent::Expired(node) => {
+                    let entry_info = node.element.entry_info();
                     let kh = entry_info.key_hash();
                     let key = &kh.key;
+                    let hash = kh.hash;
 
                     // Lock the key for removal if blocking removal notification is enabled.
                     let kl = self.maybe_key_lock(key);
@@ -1725,7 +1737,7 @@ where
                     // Remove the key from the map only when the entry is really
                     // expired.
                     let maybe_entry = self.cache.remove_if(
-                        kh.hash,
+                        hash,
                         |k| k == key,
                         |_, v| is_expired_by_per_entry_ttl(v.entry_info(), now),
                     );
@@ -1741,14 +1753,20 @@ where
                             entry,
                             &mut eviction_state.counters,
                         );
+                    } else if let Some(entry) = self.cache.get(hash, |k| k == key) {
+                        // The entry exists but is not expired. It is possible that
+                        // the entry has been updated by other thread. Unset the
+                        // timer node, so that a new timer node will be created
+                        // when the entry is processed by `handle_upsert` method.
+                        entry.set_timer_node(None);
                     }
+                    drop(node);
                 }
                 TimerEvent::Descheduled(node) => {
                     let kh = node.element.entry_info().key_hash();
                     if let Some(entry) = self.cache.get(kh.hash, |k| k == &kh.key) {
                         entry.set_timer_node(None);
                     }
-                    // IMPORTANT: Drop the node. Otherwise, it will leak.
                 }
                 TimerEvent::Rescheduled(_) => (),
             }
@@ -2455,8 +2473,8 @@ mod tests {
         let (op, _now) = cache.do_insert_with_hash(Arc::new(key), hash, 'a', per_entry_ttl);
         cache.write_op_ch.send(op).expect("Failed to send");
 
-        // Run a sync to registered the entry to the internal data structures
-        // including the timer wheel.
+        // Run a sync to register the entry to the internal data structures including
+        // the timer wheel.
         cache.inner.sync(1);
         assert_eq!(cache.entry_count(), 1);
 
@@ -2466,14 +2484,15 @@ mod tests {
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
-        // Increment the time by 999ms. The entry should be expired, so
+        // Increment the time by 1ms. The entry should be expired, so
         // contains_key_with_hash should return false no matter if the entry is in
         // the cache or not.
         mock.increment(Duration::from_millis(1));
         cache.inner.sync(1);
         assert!(!cache.contains_key_with_hash(&key, hash));
 
-        // Increment more to ensure the entry has been evicted from the cache.
+        // Increment the time more to ensure the entry has been evicted from the
+        // cache.
         mock.increment(Duration::from_secs(1));
         cache.inner.sync(1);
         assert_eq!(cache.entry_count(), 0);
