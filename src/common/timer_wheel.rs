@@ -11,10 +11,7 @@
 // For full authorship information, see the version control history of
 // https://github.com/ben-manes/caffeine/
 
-#![allow(unused)] // TODO: Remove this.
-
 use std::{
-    convert::TryInto,
     ptr::NonNull,
     sync::atomic::{AtomicU8, Ordering},
     time::Duration,
@@ -125,6 +122,7 @@ impl<K> TimerWheel<K> {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn set_origin(&mut self, time: Instant) {
         self.origin = time;
         self.current = time;
@@ -348,7 +346,7 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
                     return None;
                 }
 
-                self.index_mask = (BUCKET_COUNTS[self.level] - 1);
+                self.index_mask = BUCKET_COUNTS[self.level] - 1;
                 self.index = (previous_ticks & self.index_mask) as u8;
                 let steps =
                     (current_ticks - previous_ticks + 1).min(BUCKET_COUNTS[self.level]) as u8;
@@ -364,10 +362,7 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
             let i = self.index & self.index_mask as u8;
             match self.timer_wheel.pop_timer_node(self.level, i as usize) {
                 Some(node) => {
-                    let expiration_time = unsafe { node.as_ref() }
-                        .element
-                        .entry_info()
-                        .expiration_time();
+                    let expiration_time = node.as_ref().element.entry_info().expiration_time();
                     if let Some(t) = expiration_time {
                         if t <= self.current_time {
                             // The cache entry has expired. Return it.
@@ -387,7 +382,6 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
                                     // The timer event has been removed from the timer
                                     // wheel. Return it, so that the caller can remove the
                                     // pointer to the node from a `ValueEntry`.
-                                    let node = unsafe { Box::from_raw(node_p.as_ptr()) };
                                     return Some(TimerEvent::Descheduled(node));
                                 }
                             }
@@ -415,7 +409,7 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
 
 #[cfg(test)]
 mod tests {
-    use std::{f32::MIN, sync::Arc, time::Duration};
+    use std::{sync::Arc, time::Duration};
 
     use super::{TimerEvent, TimerWheel, SPANS};
     use crate::common::{
@@ -513,7 +507,7 @@ mod tests {
             let hash = key as u64;
             let key_hash = KeyHash::new(Arc::new(key), hash);
             let policy_weight = 0;
-            let mut entry_info = TrioArc::new(EntryInfo::new(key_hash, now, policy_weight));
+            let entry_info = TrioArc::new(EntryInfo::new(key_hash, now, policy_weight));
             entry_info.set_expiration_time(now.checked_add(ttl).unwrap());
             timer.schedule(entry_info);
         }

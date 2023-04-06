@@ -5,7 +5,6 @@ use crate::common::{concurrent::atomic_time::AtomicInstant, time::Instant};
 
 #[derive(Debug)]
 pub(crate) struct EntryInfo<K> {
-    #[allow(unused)] // TODO: Remove this.
     key_hash: KeyHash<K>,
     /// `is_admitted` indicates that the entry has been admitted to the
     /// cache. When `false`, it means the entry is _temporary_ admitted to
@@ -39,7 +38,6 @@ impl<K> EntryInfo<K> {
     }
 
     #[inline]
-    #[allow(unused)] // TODO: Remove this.
     pub(crate) fn key_hash(&self) -> &KeyHash<K> {
         &self.key_hash
     }
@@ -78,7 +76,6 @@ impl<K> EntryInfo<K> {
         self.expiration_time.instant()
     }
 
-    #[allow(unused)] // TODO: Remove this.
     pub(crate) fn set_expiration_time(&self, time: Instant) {
         self.expiration_time.set_instant(time);
     }

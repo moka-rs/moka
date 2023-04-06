@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 use super::{base_cache::Inner, PredicateId, PredicateIdStr};
 use crate::{
     common::{

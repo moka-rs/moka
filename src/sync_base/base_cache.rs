@@ -1767,6 +1767,7 @@ where
                     if let Some(entry) = self.cache.get(kh.hash, |k| k == &kh.key) {
                         entry.set_timer_node(None);
                     }
+                    drop(node);
                 }
                 TimerEvent::Rescheduled(_) => (),
             }

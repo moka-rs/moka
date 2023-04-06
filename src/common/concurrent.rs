@@ -291,12 +291,10 @@ impl<K, V> ValueEntry<K, V> {
         self.nodes.lock().write_order_q_node.take()
     }
 
-    #[allow(unused)] // TODO: Remove this.
     pub(crate) fn timer_node(&self) -> Option<DeqNodeTimer<K>> {
         self.nodes.lock().timer_node
     }
 
-    #[allow(unused)] // TODO: Remove this.
     pub(crate) fn set_timer_node(&self, node: Option<DeqNodeTimer<K>>) {
         self.nodes.lock().timer_node = node;
     }

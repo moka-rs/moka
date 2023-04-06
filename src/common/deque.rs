@@ -267,7 +267,6 @@ impl<T> Deque<T> {
         std::mem::drop(Box::from_raw(node.as_ptr()));
     }
 
-    #[allow(unused)]
     pub(crate) fn reset_cursor(&mut self) {
         self.cursor = None;
     }
