@@ -335,6 +335,8 @@ where
                     |k, v, t, d| expiry.expire_after_read(k, v, t, d),
                     &entry.entry_info().key_hash().key,
                     &entry,
+                    self.inner.expiration_policy.time_to_live(),
+                    self.inner.expiration_policy.time_to_idle(),
                     now,
                     self.inner.clocks(),
                 );
@@ -554,6 +556,8 @@ where
                         |k, v, t, d| expiry.expire_after_update(k, v, t, d),
                         &key,
                         value_entry,
+                        self.inner.expiration_policy.time_to_live(),
+                        self.inner.expiration_policy.time_to_idle(),
                         ts,
                         self.inner.clocks(),
                     );
@@ -593,6 +597,8 @@ where
                             |k, v, t, d| expiry.expire_after_update(k, v, t, d),
                             &key,
                             value_entry,
+                            self.inner.expiration_policy.time_to_live(),
+                            self.inner.expiration_policy.time_to_idle(),
                             ts,
                             self.inner.clocks(),
                         );
@@ -614,6 +620,29 @@ where
         }
     }
 
+    #[inline]
+    fn apply_reads_if_needed(&self, inner: &Inner<K, V, S>, now: Instant) {
+        let len = self.read_op_ch.len();
+
+        if let Some(hk) = &self.housekeeper {
+            if Self::should_apply_reads(hk, len, now) {
+                hk.try_sync(inner);
+            }
+        }
+    }
+
+    #[inline]
+    fn should_apply_reads(hk: &HouseKeeperArc<K, V, S>, ch_len: usize, now: Instant) -> bool {
+        hk.should_apply_reads(ch_len, now)
+    }
+
+    #[inline]
+    fn should_apply_writes(hk: &HouseKeeperArc<K, V, S>, ch_len: usize, now: Instant) -> bool {
+        hk.should_apply_writes(ch_len, now)
+    }
+}
+
+impl<K, V, S> BaseCache<K, V, S> {
     #[inline]
     fn new_value_entry(
         &self,
@@ -665,14 +694,23 @@ where
         expiry: impl FnOnce(&K, &V, StdInstant, Option<Duration>) -> Option<Duration>,
         key: &K,
         value_entry: &ValueEntry<K, V>,
+        ttl: Option<Duration>,
+        tti: Option<Duration>,
         ts: Instant,
         clocks: &Clocks,
     ) -> bool {
         let current_time = clocks.to_std_instant(ts);
+        let ei = &value_entry.entry_info();
 
-        // TODO: Also calculate expiration times using the cache-wide TTL and TTI,
-        // and pick the earliest one.
-        let current_duration = value_entry.entry_info().expiration_time().and_then(|time| {
+        let exp_time = IntoIterator::into_iter([
+            ei.expiration_time(),
+            ttl.and_then(|dur| ei.last_modified().and_then(|ts| ts.checked_add(dur))),
+            tti.and_then(|dur| ei.last_accessed().and_then(|ts| ts.checked_add(dur))),
+        ])
+        .flatten()
+        .min();
+
+        let current_duration = exp_time.and_then(|time| {
             let std_time = clocks.to_std_instant(time);
             std_time.checked_duration_since(current_time)
         });
@@ -690,27 +728,6 @@ where
         } else {
             false
         }
-    }
-
-    #[inline]
-    fn apply_reads_if_needed(&self, inner: &Inner<K, V, S>, now: Instant) {
-        let len = self.read_op_ch.len();
-
-        if let Some(hk) = &self.housekeeper {
-            if Self::should_apply_reads(hk, len, now) {
-                hk.try_sync(inner);
-            }
-        }
-    }
-
-    #[inline]
-    fn should_apply_reads(hk: &HouseKeeperArc<K, V, S>, ch_len: usize, now: Instant) -> bool {
-        hk.should_apply_reads(ch_len, now)
-    }
-
-    #[inline]
-    fn should_apply_writes(hk: &HouseKeeperArc<K, V, S>, ch_len: usize, now: Instant) -> bool {
-        hk.should_apply_writes(ch_len, now)
     }
 }
 

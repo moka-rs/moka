@@ -84,7 +84,7 @@ pub trait Expiry<K, V> {
     /// `time_to_idle` policies, the entry will be evicted after the earliest of the
     /// expiration time calculated by this expiry, the `time_to_live` and
     /// `time_to_idle` policies. Also the `current_duration` takes in account the
-    /// `time_to_live` and `time_to_idle` policies (TODO).
+    /// `time_to_live` and `time_to_idle` policies.
     #[allow(unused_variables)]
     fn expire_after_read(
         &self,
@@ -105,7 +105,7 @@ pub trait Expiry<K, V> {
     /// `time_to_idle` policies, the entry will be evicted after the earliest of the
     /// expiration time calculated by this expiry, the `time_to_live` and
     /// `time_to_idle` policies. Also the `current_duration` takes in account the
-    /// `time_to_live` and `time_to_idle` policies (TODO).
+    /// `time_to_live` and `time_to_idle` policies.
     #[allow(unused_variables)]
     fn expire_after_update(
         &self,
