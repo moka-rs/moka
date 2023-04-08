@@ -1858,11 +1858,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Cache, ConcurrentCacheExt};
-    use crate::{common::time::Clock, notification::RemovalCause};
+    use crate::{common::time::Clock, notification::RemovalCause, Expiry};
 
     use async_io::Timer;
     use parking_lot::Mutex;
-    use std::{convert::Infallible, sync::Arc, time::Duration};
+    use std::{
+        convert::Infallible,
+        sync::Arc,
+        time::{Duration, Instant as StdInstant},
+    };
 
     #[tokio::test]
     async fn max_capacity_zero() {
@@ -2449,6 +2453,206 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .time_to_idle(Duration::from_secs(10))
+            .eviction_listener_with_queued_delivery_mode(listener)
+            .build();
+        cache.reconfigure_for_testing();
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice").await;
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), Some("alice"));
+
+        mock.increment(Duration::from_secs(5)); // 10 secs.
+        cache.sync();
+
+        cache.insert("b", "bob").await;
+        cache.sync();
+
+        assert_eq!(cache.entry_count(), 2);
+
+        mock.increment(Duration::from_secs(2)); // 12 secs.
+        cache.sync();
+
+        // contains_key does not reset the idle timer for the key.
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        cache.sync();
+
+        assert_eq!(cache.entry_count(), 2);
+
+        mock.increment(Duration::from_secs(3)); // 15 secs.
+        expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
+
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert!(!cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 1);
+
+        cache.sync();
+        assert_eq!(cache.entry_count(), 1);
+
+        mock.increment(Duration::from_secs(10)); // 25 secs
+        expected.push((Arc::new("b"), "bob", RemovalCause::Expired));
+
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), None);
+        assert!(!cache.contains_key(&"a"));
+        assert!(!cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
+        assert!(cache.is_table_empty());
+
+        verify_notification_vec(&cache, actual, &expected);
+    }
+
+    #[tokio::test]
+    async fn time_to_live_by_expiry_type() {
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Define an expiry type.
+        struct MyExpiry;
+
+        impl Expiry<&str, &str> for MyExpiry {
+            fn expire_after_create(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+            ) -> Option<Duration> {
+                Some(Duration::from_secs(10))
+            }
+
+            fn expire_after_update(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+                _current_duration: Option<Duration>,
+            ) -> Option<Duration> {
+                Some(Duration::from_secs(10))
+            }
+        }
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+
+        // Create a cache with the expiry and eviction listener.
+        let mut cache = Cache::builder()
+            .max_capacity(100)
+            .expire_after(MyExpiry)
+            .eviction_listener_with_queued_delivery_mode(listener)
+            .build();
+        cache.reconfigure_for_testing();
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice").await;
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert!(cache.contains_key(&"a"));
+
+        mock.increment(Duration::from_secs(5)); // 10 secs.
+        expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
+        assert_eq!(cache.get(&"a"), None);
+        assert!(!cache.contains_key(&"a"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
+        assert!(cache.is_table_empty());
+
+        cache.insert("b", "bob").await;
+        cache.sync();
+
+        assert_eq!(cache.entry_count(), 1);
+
+        mock.increment(Duration::from_secs(5)); // 15 secs.
+        cache.sync();
+
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert!(cache.contains_key(&"b"));
+        assert_eq!(cache.entry_count(), 1);
+
+        cache.insert("b", "bill").await;
+        expected.push((Arc::new("b"), "bob", RemovalCause::Replaced));
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 20 secs
+        cache.sync();
+
+        assert_eq!(cache.get(&"b"), Some("bill"));
+        assert!(cache.contains_key(&"b"));
+        assert_eq!(cache.entry_count(), 1);
+
+        mock.increment(Duration::from_secs(5)); // 25 secs
+        expected.push((Arc::new("b"), "bill", RemovalCause::Expired));
+
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), None);
+        assert!(!cache.contains_key(&"a"));
+        assert!(!cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
+        assert!(cache.is_table_empty());
+
+        verify_notification_vec(&cache, actual, &expected);
+    }
+
+    #[tokio::test]
+    async fn time_to_idle_by_expiry_type() {
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Define an expiry type.
+        struct MyExpiry;
+
+        impl Expiry<&str, &str> for MyExpiry {
+            fn expire_after_read(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+                _current_duration: Option<Duration>,
+            ) -> Option<Duration> {
+                Some(Duration::from_secs(10))
+            }
+        }
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+
+        // Create a cache with the expiry and eviction listener.
+        let mut cache = Cache::builder()
+            .max_capacity(100)
+            .expire_after(MyExpiry)
             .eviction_listener_with_queued_delivery_mode(listener)
             .build();
         cache.reconfigure_for_testing();

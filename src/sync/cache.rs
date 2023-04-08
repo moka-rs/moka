@@ -815,8 +815,7 @@ where
             None,
             None,
             None,
-            None,
-            None,
+            Default::default(),
             false,
             housekeeper_conf,
         )
@@ -847,13 +846,10 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
         eviction_listener_conf: Option<notification::Configuration>,
-        time_to_live: Option<Duration>,
-        time_to_idle: Option<Duration>,
+        expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
         housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
-        // TODO
-        let expiration_policy = ExpirationPolicy::new(time_to_live, time_to_idle, None);
         Self {
             base: BaseCache::new(
                 name,

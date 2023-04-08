@@ -65,6 +65,11 @@ pub trait Expiry<K, V> {
     /// Specifies that the entry should be automatically removed from the cache once
     /// the duration has elapsed after the entry's creation. Returning `None`
     /// indicates no expiration for the entry.
+    ///
+    /// **NOTE:** If the cache is configured with `time_to_live` and/or
+    /// `time_to_idle` policies, the entry will be evicted after the earliest of the
+    /// expiration time calculated by this expiry, the `time_to_live` and
+    /// `time_to_idle` policies.
     #[allow(unused_variables)]
     fn expire_after_create(&self, key: &K, value: &V, current_time: Instant) -> Option<Duration> {
         None
@@ -74,6 +79,12 @@ pub trait Expiry<K, V> {
     /// the duration has elapsed after its last read. Returning `None` indicates no
     /// expiration for the entry. Returning `current_duration` will not modify the
     /// expiration time.
+    ///
+    /// **NOTE:** If the cache is configured with `time_to_live` and/or
+    /// `time_to_idle` policies, the entry will be evicted after the earliest of the
+    /// expiration time calculated by this expiry, the `time_to_live` and
+    /// `time_to_idle` policies. Also the `current_duration` takes in account the
+    /// `time_to_live` and `time_to_idle` policies (TODO).
     #[allow(unused_variables)]
     fn expire_after_read(
         &self,
@@ -82,13 +93,19 @@ pub trait Expiry<K, V> {
         current_time: Instant,
         current_duration: Option<Duration>,
     ) -> Option<Duration> {
-        None
+        current_duration
     }
 
     /// Specifies that the entry should be automatically removed from the cache once
     /// the duration has elapsed after the replacement of its value. Returning `None`
     /// indicates no expiration for the entry. Returning `current_duration` will not
     /// modify the expiration time.
+    ///
+    /// **NOTE:** If the cache is configured with `time_to_live` and/or
+    /// `time_to_idle` policies, the entry will be evicted after the earliest of the
+    /// expiration time calculated by this expiry, the `time_to_live` and
+    /// `time_to_idle` policies. Also the `current_duration` takes in account the
+    /// `time_to_live` and `time_to_idle` policies (TODO).
     #[allow(unused_variables)]
     fn expire_after_update(
         &self,
@@ -97,11 +114,10 @@ pub trait Expiry<K, V> {
         current_time: Instant,
         current_duration: Option<Duration>,
     ) -> Option<Duration> {
-        None
+        current_duration
     }
 }
 
-#[derive(Clone)]
 pub(crate) struct ExpirationPolicy<K, V> {
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
@@ -118,7 +134,18 @@ impl<K, V> Default for ExpirationPolicy<K, V> {
     }
 }
 
+impl<K, V> Clone for ExpirationPolicy<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            time_to_live: self.time_to_live,
+            time_to_idle: self.time_to_idle,
+            expiry: self.expiry.as_ref().map(Arc::clone),
+        }
+    }
+}
+
 impl<K, V> ExpirationPolicy<K, V> {
+    #[cfg(test)]
     pub(crate) fn new(
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,

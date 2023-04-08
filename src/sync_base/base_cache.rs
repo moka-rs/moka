@@ -332,7 +332,7 @@ where
             let mut is_expiry_modified = false;
             if let Some(expiry) = &self.inner.expiration_policy.expiry() {
                 is_expiry_modified = Self::expire_after_read_or_update(
-                    |k, v, t, d| expiry.expire_after_update(k, v, t, d),
+                    |k, v, t, d| expiry.expire_after_read(k, v, t, d),
                     &entry.entry_info().key_hash().key,
                     &entry,
                     now,
@@ -669,6 +669,9 @@ where
         clocks: &Clocks,
     ) -> bool {
         let current_time = clocks.to_std_instant(ts);
+
+        // TODO: Also calculate expiration times using the cache-wide TTL and TTI,
+        // and pick the earliest one.
         let current_duration = value_entry.entry_info().expiration_time().and_then(|time| {
             let std_time = clocks.to_std_instant(time);
             std_time.checked_duration_since(current_time)
