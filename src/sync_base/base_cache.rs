@@ -31,7 +31,8 @@ use crate::{
         notifier::{RemovalNotifier, RemovedEntry},
         EvictionListener, RemovalCause,
     },
-    Entry, Policy, PredicateError,
+    policy::ExpirationPolicy,
+    Entry, Expiry, Policy, PredicateError,
 };
 
 #[cfg(feature = "unstable-debug-counters")]
@@ -51,7 +52,7 @@ use std::{
         atomic::{AtomicBool, AtomicU8, Ordering},
         Arc,
     },
-    time::Duration,
+    time::{Duration, Instant as StdInstant},
 };
 use triomphe::Arc as TrioArc;
 
@@ -163,8 +164,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
         eviction_listener_conf: Option<notification::Configuration>,
-        time_to_live: Option<Duration>,
-        time_to_idle: Option<Duration>,
+        expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
         housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
@@ -187,8 +187,7 @@ where
             eviction_listener_conf,
             r_rcv,
             w_rcv,
-            time_to_live,
-            time_to_idle,
+            expiration_policy,
             invalidator_enabled,
         ));
         if invalidator_enabled {
@@ -330,8 +329,23 @@ where
             });
 
         if let Some((maybe_key, entry, now)) = maybe_entry {
+            let mut is_expiry_modified = false;
+            if let Some(expiry) = &self.inner.expiration_policy.expiry() {
+                is_expiry_modified = Self::expire_after_read_or_update(
+                    |k, v, t, d| expiry.expire_after_update(k, v, t, d),
+                    &entry.entry_info().key_hash().key,
+                    &entry,
+                    now,
+                    self.inner.clocks(),
+                );
+            }
             let v = entry.value.clone();
-            read_recorder(ReadOp::Hit(hash, entry, now), now);
+            let op = ReadOp::Hit {
+                value_entry: entry,
+                timestamp: now,
+                is_expiry_modified,
+            };
+            read_recorder(op, now);
             Some(Entry::new(maybe_key, v, false))
         } else {
             read_recorder(ReadOp::Miss(hash), now);
@@ -457,11 +471,9 @@ where
         key: Arc<K>,
         hash: u64,
         value: V,
-        per_entry_ttl: Option<Duration>,
     ) -> (WriteOp<K, V>, Instant) {
         let ts = self.current_time_from_expiration_clock();
         let weight = self.inner.weigh(&key, &value);
-        let expiration_time = per_entry_ttl.map(|ttl| ts.checked_add(ttl).expect("Overflow"));
         let op_cnt1 = Rc::new(AtomicU8::new(0));
         let op_cnt2 = Rc::clone(&op_cnt1);
         let mut op1 = None;
@@ -484,8 +496,7 @@ where
             hash,
             // on_insert
             || {
-                let entry =
-                    self.new_value_entry(&key, hash, value.clone(), ts, weight, expiration_time);
+                let entry = self.new_value_entry(&key, hash, value.clone(), ts, weight);
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((
                     cnt,
@@ -507,13 +518,7 @@ where
                 // 3. This method will update the policy_weight with the new weight.
                 let old_weight = old_entry.policy_weight();
                 let old_timestamps = (old_entry.last_accessed(), old_entry.last_modified());
-                let entry = self.new_value_entry_from(
-                    value.clone(),
-                    ts,
-                    weight,
-                    expiration_time,
-                    old_entry,
-                );
+                let entry = self.new_value_entry_from(value.clone(), ts, weight, old_entry);
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((
                     cnt,
@@ -531,9 +536,29 @@ where
         );
 
         match (op1, op2) {
-            (Some((_cnt, ins_op)), None) => (ins_op, ts),
+            (Some((_cnt, ins_op)), None) => {
+                if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
+                    (&self.inner.expiration_policy.expiry(), &ins_op)
+                {
+                    Self::expire_after_create(expiry, &key, value_entry, ts, self.inner.clocks());
+                }
+                (ins_op, ts)
+            }
             (None, Some((_cnt, old_entry, (old_last_accessed, old_last_modified), upd_op))) => {
                 old_entry.unset_q_nodes();
+
+                if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
+                    (&self.inner.expiration_policy.expiry(), &upd_op)
+                {
+                    Self::expire_after_read_or_update(
+                        |k, v, t, d| expiry.expire_after_update(k, v, t, d),
+                        &key,
+                        value_entry,
+                        ts,
+                        self.inner.clocks(),
+                    );
+                }
+
                 if self.is_removal_notifier_enabled() {
                     self.inner
                         .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified);
@@ -546,9 +571,33 @@ where
                 Some((cnt2, old_entry, (old_last_accessed, old_last_modified), upd_op)),
             ) => {
                 if cnt1 > cnt2 {
+                    if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
+                        (&self.inner.expiration_policy.expiry(), &ins_op)
+                    {
+                        Self::expire_after_create(
+                            expiry,
+                            &key,
+                            value_entry,
+                            ts,
+                            self.inner.clocks(),
+                        );
+                    }
                     (ins_op, ts)
                 } else {
                     old_entry.unset_q_nodes();
+
+                    if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
+                        (&self.inner.expiration_policy.expiry(), &upd_op)
+                    {
+                        Self::expire_after_read_or_update(
+                            |k, v, t, d| expiry.expire_after_update(k, v, t, d),
+                            &key,
+                            value_entry,
+                            ts,
+                            self.inner.clocks(),
+                        );
+                    }
+
                     if self.is_removal_notifier_enabled() {
                         self.inner.notify_upsert(
                             key,
@@ -573,13 +622,9 @@ where
         value: V,
         timestamp: Instant,
         policy_weight: u32,
-        expiration_time: Option<Instant>,
     ) -> TrioArc<ValueEntry<K, V>> {
         let key_hash = KeyHash::new(Arc::clone(key), hash);
         let info = TrioArc::new(EntryInfo::new(key_hash, timestamp, policy_weight));
-        if let Some(expiration_time) = expiration_time {
-            info.set_expiration_time(expiration_time);
-        }
         TrioArc::new(ValueEntry::new(value, info))
     }
 
@@ -589,7 +634,6 @@ where
         value: V,
         timestamp: Instant,
         policy_weight: u32,
-        expiration_time: Option<Instant>,
         other: &ValueEntry<K, V>,
     ) -> TrioArc<ValueEntry<K, V>> {
         let info = TrioArc::clone(other.entry_info());
@@ -599,10 +643,50 @@ where
         info.set_last_accessed(timestamp);
         info.set_last_modified(timestamp);
         info.set_policy_weight(policy_weight);
-        if let Some(expiration_time) = expiration_time {
-            info.set_expiration_time(expiration_time);
-        }
         TrioArc::new(ValueEntry::new_from(value, info, other))
+    }
+
+    fn expire_after_create(
+        expiry: &Arc<dyn Expiry<K, V> + Send + Sync + 'static>,
+        key: &K,
+        value_entry: &ValueEntry<K, V>,
+        ts: Instant,
+        clocks: &Clocks,
+    ) {
+        let duration =
+            expiry.expire_after_create(key, &value_entry.value, clocks.to_std_instant(ts));
+        let expiration_time = duration.map(|duration| ts.checked_add(duration).expect("Overflow"));
+        value_entry
+            .entry_info()
+            .set_expiration_time(expiration_time);
+    }
+
+    fn expire_after_read_or_update(
+        expiry: impl FnOnce(&K, &V, StdInstant, Option<Duration>) -> Option<Duration>,
+        key: &K,
+        value_entry: &ValueEntry<K, V>,
+        ts: Instant,
+        clocks: &Clocks,
+    ) -> bool {
+        let current_time = clocks.to_std_instant(ts);
+        let current_duration = value_entry.entry_info().expiration_time().and_then(|time| {
+            let std_time = clocks.to_std_instant(time);
+            std_time.checked_duration_since(current_time)
+        });
+
+        let duration = expiry(key, &value_entry.value, current_time, current_duration);
+
+        if duration != current_duration {
+            let expiration_time =
+                duration.map(|duration| ts.checked_add(duration).expect("Overflow"));
+            value_entry
+                .entry_info()
+                .set_expiration_time(expiration_time);
+            // The `expiration_time` has changed from `None` to `Some` or vice versa.
+            true
+        } else {
+            false
+        }
     }
 
     #[inline]
@@ -783,6 +867,46 @@ enum AdmissionResult<K> {
 
 type CacheStore<K, V, S> = crate::cht::SegmentedHashMap<Arc<K>, TrioArc<ValueEntry<K, V>>, S>;
 
+struct Clocks {
+    has_expiration_clock: AtomicBool,
+    expiration_clock: RwLock<Option<Clock>>,
+    /// The time (`moka::common::time`) when this timer wheel was created.
+    origin: Instant,
+    /// The time (`StdInstant`) when this timer wheel was created.
+    origin_std: StdInstant,
+    /// Mutable version of `origin` and `origin_std`. Used when the
+    /// `expiration_clock` is set.
+    mutable_origin: RwLock<Option<(Instant, StdInstant)>>,
+}
+
+impl Clocks {
+    fn new(time: Instant, std_time: StdInstant) -> Self {
+        Self {
+            has_expiration_clock: Default::default(),
+            expiration_clock: Default::default(),
+            origin: time,
+            origin_std: std_time,
+            mutable_origin: Default::default(),
+        }
+    }
+
+    fn to_std_instant(&self, time: Instant) -> StdInstant {
+        let (origin, origin_std) = if self.has_expiration_clock.load(Ordering::Relaxed) {
+            self.mutable_origin
+                .read()
+                .expect("mutable_origin is not set")
+        } else {
+            (self.origin, self.origin_std)
+        };
+        origin_std + (time.checked_duration_since(origin).unwrap())
+    }
+
+    #[cfg(test)]
+    fn set_origin(&self, time: Instant, std_time: StdInstant) {
+        *self.mutable_origin.write() = Some((time, std_time));
+    }
+}
+
 pub(crate) struct Inner<K, V, S> {
     name: Option<String>,
     max_capacity: Option<u64>,
@@ -796,16 +920,16 @@ pub(crate) struct Inner<K, V, S> {
     frequency_sketch_enabled: AtomicBool,
     read_op_ch: Receiver<ReadOp<K, V>>,
     write_op_ch: Receiver<WriteOp<K, V>>,
-    time_to_live: Option<Duration>,
-    time_to_idle: Option<Duration>,
+    expiration_policy: ExpirationPolicy<K, V>,
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
     removal_notifier: Option<RemovalNotifier<K, V>>,
     key_locks: Option<KeyLockMap<K, S>>,
     invalidator_enabled: bool,
     invalidator: RwLock<Option<Invalidator<K, V, S>>>,
-    has_expiration_clock: AtomicBool,
-    expiration_clock: RwLock<Option<Clock>>,
+    // has_expiration_clock: AtomicBool,
+    // expiration_clock: RwLock<Option<Clock>>,
+    clocks: Clocks,
 }
 
 // functions/methods used by BaseCache
@@ -815,7 +939,8 @@ impl<K, V, S> Inner<K, V, S> {
     }
 
     fn policy(&self) -> Policy {
-        Policy::new(self.max_capacity, 1, self.time_to_live, self.time_to_idle)
+        let exp = &self.expiration_policy;
+        Policy::new(self.max_capacity, 1, exp.time_to_live(), exp.time_to_idle())
     }
 
     #[inline]
@@ -857,9 +982,10 @@ impl<K, V, S> Inner<K, V, S> {
 
     #[inline]
     fn current_time_from_expiration_clock(&self) -> Instant {
-        if self.has_expiration_clock.load(Ordering::Relaxed) {
+        if self.clocks.has_expiration_clock.load(Ordering::Relaxed) {
             Instant::new(
-                self.expiration_clock
+                self.clocks
+                    .expiration_clock
                     .read()
                     .as_ref()
                     .expect("Cannot get the expiration clock")
@@ -876,22 +1002,23 @@ impl<K, V, S> Inner<K, V, S> {
 
     #[inline]
     fn time_to_live(&self) -> Option<Duration> {
-        self.time_to_live
+        self.expiration_policy.time_to_live()
     }
 
     #[inline]
     fn time_to_idle(&self) -> Option<Duration> {
-        self.time_to_idle
+        self.expiration_policy.time_to_idle()
     }
 
     #[inline]
     fn has_expiry(&self) -> bool {
-        self.time_to_live.is_some() || self.time_to_idle.is_some()
+        let exp = &self.expiration_policy;
+        exp.time_to_live().is_some() || exp.time_to_idle().is_some()
     }
 
     #[inline]
     fn is_write_order_queue_enabled(&self) -> bool {
-        self.time_to_live.is_some() || self.invalidator_enabled
+        self.expiration_policy.time_to_live().is_some() || self.invalidator_enabled
     }
 
     #[inline]
@@ -922,6 +1049,15 @@ where
 }
 
 // functions/methods used by BaseCache
+impl<K, V, S> Inner<K, V, S> {
+    fn clocks(&self) -> &Clocks {
+        &self.clocks
+    }
+    // fn to_std_instant(&self, instant: Instant) -> StdInstant {
+    //     self.clocks.to_std_instant(instant)
+    // }
+}
+
 impl<K, V, S> Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -941,8 +1077,7 @@ where
         eviction_listener_conf: Option<notification::Configuration>,
         read_op_ch: Receiver<ReadOp<K, V>>,
         write_op_ch: Receiver<WriteOp<K, V>>,
-        time_to_live: Option<Duration>,
-        time_to_idle: Option<Duration>,
+        expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
     ) -> Self {
         let (num_segments, initial_capacity) = if max_capacity == Some(0) {
@@ -958,7 +1093,14 @@ where
             initial_capacity,
             build_hasher.clone(),
         );
-        let timer_wheel = Mutex::new(TimerWheel::new(Instant::now()));
+
+        // Assume that getting `moka::common::Instant::now` has lower latency than
+        // `StdInstant::now`.
+        let now_std = StdInstant::now();
+        let now = Instant::now();
+        let clocks = Clocks::new(now, now_std);
+        let timer_wheel = Mutex::new(TimerWheel::new(now));
+
         let (removal_notifier, key_locks) = if let Some(listener) = eviction_listener {
             let rn = RemovalNotifier::new(
                 listener,
@@ -988,8 +1130,7 @@ where
             frequency_sketch_enabled: Default::default(),
             read_op_ch,
             write_op_ch,
-            time_to_live,
-            time_to_idle,
+            expiration_policy,
             valid_after: Default::default(),
             weigher,
             removal_notifier,
@@ -997,8 +1138,7 @@ where
             invalidator_enabled,
             // When enabled, this field will be set later via the set_invalidator method.
             invalidator: Default::default(),
-            has_expiration_clock: Default::default(),
-            expiration_clock: Default::default(),
+            clocks,
         }
     }
 
@@ -1164,15 +1304,11 @@ where
         while should_process_logs && calls <= max_repeats {
             let r_len = self.read_op_ch.len();
             if r_len > 0 {
-                self.apply_reads(&mut deqs, r_len);
+                self.apply_reads(&mut deqs, &mut timer_wheel, r_len);
             }
 
             let w_len = self.write_op_ch.len();
             if w_len > 0 {
-                // NOTE: This call may enable the `TimerWheel<K>`; `apply_writes`
-                // method will call `update_timer_wheel_for_upsert` method, and
-                // `update_timer_wheel_for_upsert` may call `TimerWheel`'s `enable`
-                // method.
                 self.apply_writes(&mut deqs, &mut timer_wheel, w_len, &mut eviction_state);
             }
 
@@ -1316,16 +1452,24 @@ where
         self.frequency_sketch_enabled.store(true, Ordering::Release);
     }
 
-    fn apply_reads(&self, deqs: &mut Deques<K>, count: usize) {
+    fn apply_reads(&self, deqs: &mut Deques<K>, timer_wheel: &mut TimerWheel<K>, count: usize) {
         use ReadOp::*;
         let mut freq = self.frequency_sketch.write();
         let ch = &self.read_op_ch;
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Hit(hash, entry, timestamp)) => {
-                    freq.increment(hash);
-                    entry.set_last_accessed(timestamp);
-                    deqs.move_to_back_ao(&entry)
+                Ok(Hit {
+                    value_entry,
+                    timestamp,
+                    is_expiry_modified,
+                }) => {
+                    let kh = value_entry.entry_info().key_hash();
+                    freq.increment(kh.hash);
+                    value_entry.set_last_accessed(timestamp);
+                    if is_expiry_modified {
+                        self.update_timer_wheel(&value_entry, timer_wheel);
+                    }
+                    deqs.move_to_back_ao(&value_entry);
                 }
                 Ok(Miss(hash)) => freq.increment(hash),
                 Err(_) => break,
@@ -1394,7 +1538,7 @@ where
                 // The entry has been already admitted, so treat this as an update.
                 counters.saturating_sub(0, old_weight);
                 counters.saturating_add(0, new_weight);
-                self.update_timer_wheel_for_upsert(&entry, timer_wheel);
+                self.update_timer_wheel(&entry, timer_wheel);
                 deqs.move_to_back_ao(&entry);
                 deqs.move_to_back_wo(&entry);
                 return;
@@ -1596,7 +1740,7 @@ where
         let key = Arc::clone(&kh.key);
         counters.saturating_add(1, policy_weight);
 
-        self.update_timer_wheel_for_upsert(entry, timer_wheel);
+        self.update_timer_wheel(entry, timer_wheel);
 
         // Update the deques.
         deqs.push_back_ao(
@@ -1611,7 +1755,7 @@ where
     }
 
     /// NOTE: This method may enable the timer wheel.
-    fn update_timer_wheel_for_upsert(
+    fn update_timer_wheel(
         &self,
         entry: &TrioArc<ValueEntry<K, V>>,
         timer_wheel: &mut TimerWheel<K>,
@@ -1789,7 +1933,7 @@ where
             self.remove_expired_wo(deqs, timer_wheel, batch_size, now, eviction_state);
         }
 
-        if self.time_to_idle.is_some() || self.has_valid_after() {
+        if self.expiration_policy.time_to_idle().is_some() || self.has_valid_after() {
             let (window, probation, protected, wo) = (
                 &mut deqs.window,
                 &mut deqs.probation,
@@ -1821,7 +1965,7 @@ where
     ) where
         V: Clone,
     {
-        let tti = &self.time_to_idle;
+        let tti = &self.expiration_policy.time_to_idle();
         let va = &self.valid_after();
         for _ in 0..batch_size {
             // Peek the front node of the deque and check if it is expired.
@@ -1927,7 +2071,7 @@ where
     ) where
         V: Clone,
     {
-        let ttl = &self.time_to_live;
+        let ttl = &self.expiration_policy.time_to_live();
         let va = &self.valid_after();
         for _ in 0..batch_size {
             let key_cause = deqs.write_order.peek_front().and_then(
@@ -2168,17 +2312,18 @@ where
         last_modified: Option<Instant>,
     ) {
         let now = self.current_time_from_expiration_clock();
+        let exp = &self.expiration_policy;
 
         let mut cause = RemovalCause::Replaced;
 
         if let Some(last_accessed) = last_accessed {
-            if is_expired_by_tti(&self.time_to_idle, last_accessed, now) {
+            if is_expired_by_tti(&exp.time_to_idle(), last_accessed, now) {
                 cause = RemovalCause::Expired;
             }
         }
 
         if let Some(last_modified) = last_modified {
-            if is_expired_by_ttl(&self.time_to_live, last_modified, now) {
+            if is_expired_by_ttl(&exp.time_to_live(), last_modified, now) {
                 cause = RemovalCause::Expired;
             } else if is_invalid_entry(&self.valid_after(), last_modified) {
                 cause = RemovalCause::Explicit;
@@ -2191,17 +2336,18 @@ where
     #[inline]
     fn notify_invalidate(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>) {
         let now = self.current_time_from_expiration_clock();
+        let exp = &self.expiration_policy;
 
         let mut cause = RemovalCause::Explicit;
 
         if let Some(last_accessed) = entry.last_accessed() {
-            if is_expired_by_tti(&self.time_to_idle, last_accessed, now) {
+            if is_expired_by_tti(&exp.time_to_idle(), last_accessed, now) {
                 cause = RemovalCause::Expired;
             }
         }
 
         if let Some(last_modified) = entry.last_modified() {
-            if is_expired_by_ttl(&self.time_to_live, last_modified, now) {
+            if is_expired_by_ttl(&exp.time_to_live(), last_modified, now) {
                 cause = RemovalCause::Expired;
             }
         }
@@ -2228,14 +2374,20 @@ where
     }
 
     fn set_expiration_clock(&self, clock: Option<Clock>) {
-        let mut exp_clock = self.expiration_clock.write();
+        let mut exp_clock = self.clocks.expiration_clock.write();
         if let Some(clock) = clock {
+            let std_now = StdInstant::now();
             let now = Instant::new(clock.now());
             *exp_clock = Some(clock);
-            self.has_expiration_clock.store(true, Ordering::SeqCst);
+            self.clocks
+                .has_expiration_clock
+                .store(true, Ordering::SeqCst);
+            self.clocks.set_origin(now, std_now);
             self.timer_wheel.lock().set_origin(now);
         } else {
-            self.has_expiration_clock.store(false, Ordering::SeqCst);
+            self.clocks
+                .has_expiration_clock
+                .store(false, Ordering::SeqCst);
             *exp_clock = None;
         }
     }
@@ -2368,7 +2520,7 @@ fn is_expired_by_ttl(
 
 #[cfg(test)]
 mod tests {
-    use crate::common::concurrent::housekeeper;
+    use crate::{common::concurrent::housekeeper, policy::ExpirationPolicy};
 
     use super::BaseCache;
 
@@ -2389,8 +2541,7 @@ mod tests {
                 None,
                 None,
                 None,
-                None,
-                None,
+                Default::default(),
                 false,
                 housekeeper::Configuration::new_thread_pool(true),
             );
@@ -2440,9 +2591,30 @@ mod tests {
     #[test]
     fn test_per_entry_expiration() {
         use super::InnerSync;
-        use crate::common::time::Clock;
+        use crate::{common::time::Clock, Expiry};
 
-        use std::{collections::hash_map::RandomState, sync::Arc, time::Duration};
+        use std::{
+            collections::hash_map::RandomState,
+            sync::Arc,
+            time::{Duration, Instant as StdInstant},
+        };
+
+        struct MyExpiry;
+
+        impl Expiry<u32, char> for MyExpiry {
+            fn expire_after_create(
+                &self,
+                key: &u32,
+                _value: &char,
+                _current_time: StdInstant,
+            ) -> Option<Duration> {
+                if key == &1 {
+                    Some(Duration::from_secs(1))
+                } else {
+                    None
+                }
+            }
+        }
 
         let mut cache = BaseCache::<u32, char>::new(
             None,
@@ -2452,8 +2624,7 @@ mod tests {
             None,
             None,
             None,
-            None,
-            None,
+            ExpirationPolicy::new(None, None, Some(Arc::new(MyExpiry))),
             false,
             housekeeper::Configuration::new_blocking(),
         );
@@ -2467,11 +2638,10 @@ mod tests {
 
         mock.increment(Duration::from_millis(10));
 
-        // Insert an entry with a per-entry TTL of 1 second.
+        // Insert an entry. It will have a per-entry TTL of 1 second.
         let key = 1;
         let hash = cache.hash(&key);
-        let per_entry_ttl = Some(Duration::from_secs(1));
-        let (op, _now) = cache.do_insert_with_hash(Arc::new(key), hash, 'a', per_entry_ttl);
+        let (op, _now) = cache.do_insert_with_hash(Arc::new(key), hash, 'a');
         cache.write_op_ch.send(op).expect("Failed to send");
 
         // Run a sync to register the entry to the internal data structures including

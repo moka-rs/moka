@@ -76,8 +76,12 @@ impl<K> EntryInfo<K> {
         self.expiration_time.instant()
     }
 
-    pub(crate) fn set_expiration_time(&self, time: Instant) {
-        self.expiration_time.set_instant(time);
+    pub(crate) fn set_expiration_time(&self, time: Option<Instant>) {
+        if let Some(t) = time {
+            self.expiration_time.set_instant(t);
+        } else {
+            self.expiration_time.clear();
+        }
     }
 }
 

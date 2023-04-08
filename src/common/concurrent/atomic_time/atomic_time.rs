@@ -28,6 +28,10 @@ impl AtomicInstant {
         ai
     }
 
+    pub(crate) fn clear(&self) {
+        self.instant.store(u64::MAX, Ordering::Release);
+    }
+
     pub(crate) fn is_set(&self) -> bool {
         self.instant.load(Ordering::Acquire) != u64::MAX
     }

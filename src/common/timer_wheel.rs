@@ -508,7 +508,7 @@ mod tests {
             let key_hash = KeyHash::new(Arc::new(key), hash);
             let policy_weight = 0;
             let entry_info = TrioArc::new(EntryInfo::new(key_hash, now, policy_weight));
-            entry_info.set_expiration_time(now.checked_add(ttl).unwrap());
+            entry_info.set_expiration_time(Some(now.checked_add(ttl).unwrap()));
             timer.schedule(entry_info);
         }
 

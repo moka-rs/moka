@@ -13,6 +13,7 @@ use crate::{
         time::Instant,
     },
     notification::{self, EvictionListener},
+    policy::ExpirationPolicy,
     sync_base::base_cache::{BaseCache, HouseKeeperArc},
     Entry, Policy, PredicateError,
 };
@@ -661,8 +662,7 @@ where
             None,
             None,
             None,
-            None,
-            None,
+            Default::default(),
             false,
             housekeeper::Configuration::new_thread_pool(true),
         )
@@ -693,8 +693,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
         eviction_listener_conf: Option<notification::Configuration>,
-        time_to_live: Option<Duration>,
-        time_to_idle: Option<Duration>,
+        expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
         housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
@@ -707,8 +706,7 @@ where
                 weigher,
                 eviction_listener,
                 eviction_listener_conf,
-                time_to_live,
-                time_to_idle,
+                expiration_policy,
                 invalidator_enabled,
                 housekeeper_conf,
             ),
@@ -1220,7 +1218,7 @@ where
 
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
-        let (op, now) = self.base.do_insert_with_hash(key, hash, value, None);
+        let (op, now) = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
         Self::blocking_schedule_write_op(
             self.base.inner.as_ref(),
@@ -1733,7 +1731,7 @@ where
             return;
         }
 
-        let (op, now) = self.base.do_insert_with_hash(key, hash, value, None);
+        let (op, now) = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
         Self::schedule_write_op(
             self.base.inner.as_ref(),

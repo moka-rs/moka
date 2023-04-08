@@ -336,8 +336,12 @@ impl<K, V> AccessTime for TrioArc<ValueEntry<K, V>> {
 }
 
 pub(crate) enum ReadOp<K, V> {
+    Hit {
+        value_entry: TrioArc<ValueEntry<K, V>>,
+        timestamp: Instant,
+        is_expiry_modified: bool,
+    },
     // u64 is the hash of the key.
-    Hit(u64, TrioArc<ValueEntry<K, V>>, Instant),
     Miss(u64),
 }
 

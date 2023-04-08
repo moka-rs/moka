@@ -12,6 +12,7 @@ use crate::{
         time::Instant,
     },
     notification::{self, EvictionListener},
+    policy::ExpirationPolicy,
     sync::{Iter, PredicateId},
     sync_base::{
         base_cache::{BaseCache, HouseKeeperArc},
@@ -851,6 +852,8 @@ where
         invalidator_enabled: bool,
         housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
+        // TODO
+        let expiration_policy = ExpirationPolicy::new(time_to_live, time_to_idle, None);
         Self {
             base: BaseCache::new(
                 name,
@@ -860,8 +863,7 @@ where
                 weigher,
                 eviction_listener,
                 eviction_listener_conf,
-                time_to_live,
-                time_to_idle,
+                expiration_policy,
                 invalidator_enabled,
                 housekeeper_conf,
             ),
@@ -1606,7 +1608,7 @@ where
             return;
         }
 
-        let (op, now) = self.base.do_insert_with_hash(key, hash, value, None);
+        let (op, now) = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
         Self::schedule_write_op(
             self.base.inner.as_ref(),

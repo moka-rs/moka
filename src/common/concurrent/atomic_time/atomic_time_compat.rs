@@ -22,6 +22,10 @@ impl AtomicInstant {
         ai
     }
 
+    pub(crate) fn clear(&self) {
+        *self.instant.write() = None;
+    }
+
     pub(crate) fn is_set(&self) -> bool {
         self.instant.read().is_some()
     }
