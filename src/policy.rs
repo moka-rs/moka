@@ -66,6 +66,8 @@ pub trait Expiry<K, V> {
     /// the duration has elapsed after the entry's creation. Returning `None`
     /// indicates no expiration for the entry.
     ///
+    /// The default implementation returns `None` (no expiration).
+    ///
     /// **NOTE:** If the cache is configured with `time_to_live` and/or
     /// `time_to_idle` policies, the entry will be evicted after the earliest of the
     /// expiration time calculated by this expiry, the `time_to_live` and
@@ -79,6 +81,11 @@ pub trait Expiry<K, V> {
     /// the duration has elapsed after its last read. Returning `None` indicates no
     /// expiration for the entry. Returning `current_duration` will not modify the
     /// expiration time.
+    ///
+    /// The `current_duration` is the duration until the entry expires.
+    ///
+    /// The default implementation returns `current_duration` (not modify the
+    /// expiration time)
     ///
     /// **NOTE:** If the cache is configured with `time_to_live` and/or
     /// `time_to_idle` policies, the entry will be evicted after the earliest of the
@@ -100,6 +107,11 @@ pub trait Expiry<K, V> {
     /// the duration has elapsed after the replacement of its value. Returning `None`
     /// indicates no expiration for the entry. Returning `current_duration` will not
     /// modify the expiration time.
+    ///
+    /// The `current_duration` is the duration until the entry expires.
+    ///
+    /// The default implementation returns `current_duration` (not modify the
+    /// expiration time)
     ///
     /// **NOTE:** If the cache is configured with `time_to_live` and/or
     /// `time_to_idle` policies, the entry will be evicted after the earliest of the

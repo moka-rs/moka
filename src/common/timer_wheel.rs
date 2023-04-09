@@ -62,23 +62,34 @@ const fn aligned_duration(duration: Duration) -> u64 {
     (duration.as_nanos() as u64).next_power_of_two()
 }
 
-pub(crate) struct TimerNode<K> {
-    level: AtomicU8, // When unset, we use `u8::MAX`.
-    index: AtomicU8, // When unset, we use `u8::MAX`.
-    entry_info: TrioArc<EntryInfo<K>>,
+pub(crate) enum TimerNode<K> {
+    Sentinel,
+    Entry {
+        level: AtomicU8, // When unset, we use `u8::MAX`.
+        index: AtomicU8, // When unset, we use `u8::MAX`.
+        entry_info: TrioArc<EntryInfo<K>>,
+    },
 }
 
 impl<K> TimerNode<K> {
     fn new(entry_info: TrioArc<EntryInfo<K>>, level: usize, index: usize) -> Self {
-        Self {
+        Self::Entry {
             level: AtomicU8::new(level as u8),
             index: AtomicU8::new(index as u8),
             entry_info,
         }
     }
 
+    pub(crate) fn is_sentinel(&self) -> bool {
+        matches!(self, Self::Sentinel)
+    }
+
     pub(crate) fn entry_info(&self) -> &TrioArc<EntryInfo<K>> {
-        &self.entry_info
+        if let Self::Entry { entry_info, .. } = &self {
+            entry_info
+        } else {
+            unreachable!()
+        }
     }
 }
 
@@ -135,11 +146,16 @@ impl<K> TimerWheel<K> {
     pub(crate) fn enable(&mut self) {
         assert!(!self.is_enabled());
 
+        // Populate each bucket with a queue having a sentinel node.
         self.wheels = BUCKET_COUNTS
             .iter()
             .map(|b| {
                 (0..*b)
-                    .map(|_| Deque::new(super::CacheRegion::Other))
+                    .map(|_| {
+                        let mut deq = Deque::new(super::CacheRegion::Other);
+                        deq.push_back(Box::new(DeqNode::new(TimerNode::Sentinel)));
+                        deq
+                    })
                     .collect::<Vec<_>>()
                     .into_boxed_slice()
             })
@@ -172,19 +188,27 @@ impl<K> TimerWheel<K> {
 
         // Since cache entry's ValueEntry has a pointer to this node, we must reuse
         // the node.
-        let elem = &unsafe { node.as_ref() }.element;
-        if let Some(t) = elem.entry_info.expiration_time() {
-            let (level, index) = self.bucket_indices(t);
-            elem.level.store(level as u8, Ordering::Release);
-            elem.index.store(index as u8, Ordering::Release);
-            let node = unsafe { Box::from_raw(node.as_ptr()) };
-            self.wheels[level][index].push_back(node);
-            ReschedulingResult::Rescheduled
+        if let TimerNode::Entry {
+            level,
+            index,
+            entry_info,
+        } = &unsafe { node.as_ref() }.element
+        {
+            if let Some(t) = entry_info.expiration_time() {
+                let (new_level, new_index) = self.bucket_indices(t);
+                level.store(new_level as u8, Ordering::Release);
+                index.store(new_index as u8, Ordering::Release);
+                let node = unsafe { Box::from_raw(node.as_ptr()) };
+                self.wheels[new_level][new_index].push_back(node);
+                ReschedulingResult::Rescheduled
+            } else {
+                // Unset the level and index.
+                level.store(u8::MAX, Ordering::Release);
+                index.store(u8::MAX, Ordering::Release);
+                ReschedulingResult::Removed(unsafe { Box::from_raw(node.as_ptr()) })
+            }
         } else {
-            // Unset the level and index.
-            elem.level.store(u8::MAX, Ordering::Release);
-            elem.index.store(u8::MAX, Ordering::Release);
-            ReschedulingResult::Removed(unsafe { Box::from_raw(node.as_ptr()) })
+            unreachable!()
         }
     }
 
@@ -212,10 +236,14 @@ impl<K> TimerWheel<K> {
     /// IMPORTANT: This method does not drop the node.
     unsafe fn unlink_timer(&mut self, node: NonNull<DeqNode<TimerNode<K>>>) {
         let p = unsafe { node.as_ref() };
-        let level = p.element.level.load(Ordering::Acquire);
-        let index = p.element.index.load(Ordering::Acquire);
-        if level != u8::MAX && index != u8::MAX {
-            self.wheels[level as usize][index as usize].unlink(node);
+        if let TimerNode::Entry { level, index, .. } = &p.element {
+            let level = level.load(Ordering::Acquire);
+            let index = index.load(Ordering::Acquire);
+            if level != u8::MAX && index != u8::MAX {
+                self.wheels[level as usize][index as usize].unlink(node);
+            }
+        } else {
+            unreachable!();
         }
     }
 
@@ -237,8 +265,58 @@ impl<K> TimerWheel<K> {
     }
 
     /// Returns a pointer to the timer event (cache entry) at the front of the queue.
+    /// If the front node is a sentinel, returns `None`.
     fn pop_timer_node(&mut self, level: usize, index: usize) -> Option<Box<DeqNode<TimerNode<K>>>> {
+        if let Some(node) = self.wheels[level][index].peek_front() {
+            if node.element.is_sentinel() {
+                return None;
+            }
+        }
+
         self.wheels[level][index].pop_front()
+    }
+
+    /// Moves the sentinel from the front of the queue to the back. Panics if the
+    /// sentinel is not at the front position.
+    fn rotate_sentinel_to_back(&mut self, level: usize, index: usize) {
+        let node = self.wheels[level][index].peek_front();
+        if let Some(node) = node {
+            if node.element.is_sentinel() {
+                unsafe {
+                    self.wheels[level][index].move_to_back(NonNull::from(node));
+                }
+                return;
+            }
+        }
+
+        panic!(
+            "BUG: Cannot find the sentinel at the front of the queue. level: {}, index: {}",
+            level, index
+        );
+    }
+
+    /// Resets the queue at the given level and index, by rotating nodes in the queue
+    /// until it sees the sentinel at the front position of the queue.
+    fn reset_queue(&mut self, level: usize, index: usize) {
+        loop {
+            // If the front node is a sentinel, we are done.
+            let node = self.wheels[level][index].peek_front();
+            if let Some(node) = node {
+                if node.element.is_sentinel() {
+                    break;
+                }
+
+                // Otherwise, move the front node to the back.
+                unsafe {
+                    self.wheels[level][index].move_to_back(NonNull::from(node));
+                }
+            } else {
+                panic!(
+                    "BUG: The queue is empty. level: {}, index: {}",
+                    level, index
+                );
+            }
+        }
     }
 
     /// Returns the bucket indices to locate the bucket that the timer event
@@ -292,7 +370,8 @@ pub(crate) struct TimerEventsIter<'iter, K> {
     index: u8,
     end_index: u8,
     index_mask: u64,
-    is_index_set: bool,
+    is_new_level: bool,
+    is_new_index: bool,
 }
 
 impl<'iter, K> TimerEventsIter<'iter, K> {
@@ -310,16 +389,28 @@ impl<'iter, K> TimerEventsIter<'iter, K> {
             index: 0,
             end_index: 0,
             index_mask: 0,
-            is_index_set: false,
+            is_new_level: true,
+            is_new_index: true,
         }
     }
 }
 
 impl<'iter, K> Drop for TimerEventsIter<'iter, K> {
     fn drop(&mut self) {
-        // If dropped without completely consuming this iterator, reset the timer
-        // wheel's current time to the previous time.
         if !self.is_done {
+            // This iterator was dropped before consuming all events. We need to
+            // reset the timer wheel to the state before the iterator was created
+            // (except the timer events that had already processed).
+
+            // Reset the queues (by brining the sentinel to the front).
+            for (level, count) in BUCKET_COUNTS.iter().enumerate() {
+                for index in 0..*count {
+                    self.timer_wheel.reset_queue(level, index as usize);
+                }
+            }
+
+            // Reset the `current` to the time when the timer wheel was last
+            // successfully advanced.
             self.timer_wheel.current = self.previous_time;
         }
     }
@@ -334,8 +425,7 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
         }
 
         loop {
-            // Ensure that the index for the current level is set.
-            if !self.is_index_set {
+            if self.is_new_level {
                 let previous_time_nanos = self.timer_wheel.time_nanos(self.previous_time);
                 let current_time_nanos = self.timer_wheel.time_nanos(self.current_time);
                 let previous_ticks = previous_time_nanos >> SHIFT[self.level];
@@ -352,14 +442,27 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
                     (current_ticks - previous_ticks + 1).min(BUCKET_COUNTS[self.level]) as u8;
                 self.end_index = self.index + steps;
 
-                self.is_index_set = true;
+                self.is_new_level = false;
+                self.is_new_index = true;
 
                 // dbg!(self.level, self.index, self.end_index);
             }
 
-            // Pop the next timer event (cache entry) from the current level and
-            // index.
             let i = self.index & self.index_mask as u8;
+
+            if self.is_new_index {
+                // Move the sentinel from the front of the queue to the end.
+                self.timer_wheel
+                    .rotate_sentinel_to_back(self.level, i as usize);
+
+                self.is_new_index = false;
+            }
+
+            // Pop the next timer event (cache entry) from the queue at the current
+            // level and index.
+            //
+            // We will repeat processing this level until we see the sentinel.
+            // (`pop_timer_node` will return `None` when it sees the sentinel)
             match self.timer_wheel.pop_timer_node(self.level, i as usize) {
                 Some(node) => {
                     let expiration_time = node.as_ref().element.entry_info().expiration_time();
@@ -388,10 +491,12 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
                         }
                     }
                 }
-                // Done with the current level and index. Move to the next index or
-                // next level.
+                // `None` means we see the sentinel. Done with the current queue.
+                // Move to the next index and/or next level.
                 None => {
                     self.index += 1;
+                    self.is_new_index = true;
+
                     if self.index >= self.end_index {
                         self.level += 1;
                         // No more levels to process. We are done.
@@ -399,7 +504,7 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
                             self.is_done = true;
                             return None;
                         }
-                        self.is_index_set = false;
+                        self.is_new_level = true;
                     }
                 }
             }
