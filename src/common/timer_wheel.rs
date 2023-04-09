@@ -235,7 +235,7 @@ impl<K> TimerWheel<K> {
     ///
     /// IMPORTANT: This method does not drop the node.
     unsafe fn unlink_timer(&mut self, node: NonNull<DeqNode<TimerNode<K>>>) {
-        let p = unsafe { node.as_ref() };
+        let p = node.as_ref();
         if let TimerNode::Entry { level, index, .. } = &p.element {
             let level = level.load(Ordering::Acquire);
             let index = index.load(Ordering::Acquire);
@@ -265,7 +265,7 @@ impl<K> TimerWheel<K> {
     }
 
     /// Returns a pointer to the timer event (cache entry) at the front of the queue.
-    /// If the front node is a sentinel, returns `None`.
+    /// Returns `None` if the front node is a sentinel.
     fn pop_timer_node(&mut self, level: usize, index: usize) -> Option<Box<DeqNode<TimerNode<K>>>> {
         if let Some(node) = self.wheels[level][index].peek_front() {
             if node.element.is_sentinel() {
@@ -276,45 +276,28 @@ impl<K> TimerWheel<K> {
         self.wheels[level][index].pop_front()
     }
 
-    /// Moves the sentinel from the front of the queue to the back. Panics if the
-    /// sentinel is not at the front position.
-    fn rotate_sentinel_to_back(&mut self, level: usize, index: usize) {
-        let node = self.wheels[level][index].peek_front();
-        if let Some(node) = node {
-            if node.element.is_sentinel() {
-                unsafe {
-                    self.wheels[level][index].move_to_back(NonNull::from(node));
-                }
-                return;
-            }
-        }
-
-        panic!(
-            "BUG: Cannot find the sentinel at the front of the queue. level: {}, index: {}",
-            level, index
-        );
-    }
-
-    /// Resets the queue at the given level and index, by rotating nodes in the queue
-    /// until it sees the sentinel at the front position of the queue.
-    fn reset_queue(&mut self, level: usize, index: usize) {
+    /// Reset the positions of the nodes in the queue at the given level and index.
+    fn reset_timer_node_positions(&mut self, level: usize, index: usize) {
+        // Rotate the nodes in the queue until we see the sentinel at the back of the
+        // queue.
         loop {
-            // If the front node is a sentinel, we are done.
-            let node = self.wheels[level][index].peek_front();
-            if let Some(node) = node {
-                if node.element.is_sentinel() {
-                    break;
-                }
-
-                // Otherwise, move the front node to the back.
-                unsafe {
-                    self.wheels[level][index].move_to_back(NonNull::from(node));
-                }
-            } else {
+            let node = self.wheels[level][index].peek_front().unwrap_or_else(|| {
                 panic!(
                     "BUG: The queue is empty. level: {}, index: {}",
                     level, index
-                );
+                )
+            });
+            let is_sentinel = node.element.is_sentinel();
+
+            // Move the front node to the back.
+            let node = NonNull::from(node);
+            unsafe {
+                self.wheels[level][index].move_to_back(node);
+            }
+
+            // If the node we just moved was the sentinel, we are done.
+            if is_sentinel {
+                break;
             }
         }
     }
@@ -398,19 +381,9 @@ impl<'iter, K> TimerEventsIter<'iter, K> {
 impl<'iter, K> Drop for TimerEventsIter<'iter, K> {
     fn drop(&mut self) {
         if !self.is_done {
-            // This iterator was dropped before consuming all events. We need to
-            // reset the timer wheel to the state before the iterator was created
-            // (except the timer events that had already processed).
-
-            // Reset the queues (by brining the sentinel to the front).
-            for (level, count) in BUCKET_COUNTS.iter().enumerate() {
-                for index in 0..*count {
-                    self.timer_wheel.reset_queue(level, index as usize);
-                }
-            }
-
-            // Reset the `current` to the time when the timer wheel was last
-            // successfully advanced.
+            // This iterator was dropped before consuming all events. Reset the
+            // `current` to the time when the timer wheel was last successfully
+            // advanced.
             self.timer_wheel.current = self.previous_time;
         }
     }
@@ -451,9 +424,9 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
             let i = self.index & self.index_mask as u8;
 
             if self.is_new_index {
-                // Move the sentinel from the front of the queue to the end.
+                // Move the sentinel to the back of the queue.
                 self.timer_wheel
-                    .rotate_sentinel_to_back(self.level, i as usize);
+                    .reset_timer_node_positions(self.level, i as usize);
 
                 self.is_new_index = false;
             }
@@ -491,8 +464,8 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
                         }
                     }
                 }
-                // `None` means we see the sentinel. Done with the current queue.
-                // Move to the next index and/or next level.
+                // Done with the current queue (`None` means we just saw the
+                // sentinel). Move to the next index and/or next level.
                 None => {
                     self.index += 1;
                     self.is_new_index = true;
