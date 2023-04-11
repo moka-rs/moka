@@ -99,6 +99,7 @@ pub trait Expiry<K, V> {
         value: &V,
         current_time: Instant,
         current_duration: Option<Duration>,
+        last_modified_at: Instant,
     ) -> Option<Duration> {
         current_duration
     }

@@ -305,14 +305,10 @@ impl<K> TimerWheel<K> {
     /// Returns the bucket indices to locate the bucket that the timer event
     /// should be added to.
     fn bucket_indices(&self, time: Instant) -> (usize, usize) {
-        let duration = time
-            .checked_duration_since(self.current)
-            // FIXME: unwrap will panic if the time is earlier than self.current.
-            .unwrap()
-            .as_nanos() as u64;
+        let duration_nanos = self.duration_nanos_since_last_advanced(time);
         let time_nanos = self.time_nanos(time);
         for level in 0..=NUM_LEVELS {
-            if duration < SPANS[level + 1] {
+            if duration_nanos < SPANS[level + 1] {
                 let ticks = time_nanos >> SHIFT[level];
                 let index = ticks & (BUCKET_COUNTS[level] - 1);
                 return (level, index as usize);
@@ -321,11 +317,28 @@ impl<K> TimerWheel<K> {
         (OVERFLOW_QUEUE_INDEX, 0)
     }
 
-    // Nano-seconds since the timer wheel was created.
+    // Returns nano-seconds between the given `time` and the time when this timer
+    // wheel was advanced. If the `time` is earlier than other, returns zero.
+    fn duration_nanos_since_last_advanced(&self, time: Instant) -> u64 {
+        time.checked_duration_since(self.current)
+            // If `time` is earlier than `self.current`, use zero. This could happen
+            // when a user provided `Expiry` method returned zero or a very short
+            // duration.
+            .unwrap_or_default() // Assuming `Duration::default()` returns `ZERO`.
+            .as_nanos() as u64
+    }
+
+    // Returns nano-seconds between the given `time` and the time when this timer
+    // wheel was created. If the `time` is earlier than other, returns zero.
     fn time_nanos(&self, time: Instant) -> u64 {
-        // ENHANCEME: Check overflow? (u128 -> u64)
-        // FIXME: unwrap will panic if the time is earlier than self.origin.
-        time.checked_duration_since(self.origin).unwrap().as_nanos() as u64
+        time.checked_duration_since(self.origin)
+            // If `time` is earlier than `self.origin`, use zero. This would never
+            // happen in practice as there should be some delay between the timer
+            // wheel was created and the first timer event is scheduled. But we will
+            // do this just in case.
+            .unwrap_or_default() // Assuming `Duration::default()` returns `ZERO`.
+            // TODO ENHANCEME: Check overflow? (u128 -> u64)
+            .as_nanos() as u64
     }
 }
 

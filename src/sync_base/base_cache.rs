@@ -299,7 +299,7 @@ where
             return None;
         }
 
-        let now = self.current_time_from_expiration_clock();
+        let mut now = self.current_time_from_expiration_clock();
 
         let maybe_entry = self
             .inner
@@ -324,15 +324,28 @@ where
                 } else {
                     // Valid entry.
                     let maybe_key = if need_key { Some(Arc::clone(k)) } else { None };
-                    Some((maybe_key, TrioArc::clone(entry), now))
+                    Some((maybe_key, TrioArc::clone(entry)))
                 }
             });
 
-        if let Some((maybe_key, entry, now)) = maybe_entry {
+        if let Some((maybe_key, entry)) = maybe_entry {
             let mut is_expiry_modified = false;
+
+            // Call the user supplied `expire_after_read` method if any.
             if let Some(expiry) = &self.inner.expiration_policy.expiry() {
+                let lm = entry.last_modified().expect("Last modified is not set");
+                // Check if the `last_modified` of entry is earlier than or equals to
+                // `now`. If not, update the `now` to `last_modified`. This is needed
+                // because there is a small chance that other threads have inserted
+                // the entry _after_ we obtained `now`.
+                now = now.max(lm);
+
+                // Convert `last_modified` from `moka::common::time::Instant` to
+                // `std::time::Instant`.
+                let lm = self.inner.clocks().to_std_instant(lm);
+
                 is_expiry_modified = Self::expire_after_read_or_update(
-                    |k, v, t, d| expiry.expire_after_read(k, v, t, d),
+                    |k, v, t, d| expiry.expire_after_read(k, v, t, d, lm),
                     &entry.entry_info().key_hash().key,
                     &entry,
                     self.inner.expiration_policy.time_to_live(),
@@ -341,6 +354,7 @@ where
                     self.inner.clocks(),
                 );
             }
+
             let v = entry.value.clone();
             let op = ReadOp::Hit {
                 value_entry: entry,
@@ -952,7 +966,10 @@ pub(crate) struct Inner<K, V, S> {
     clocks: Clocks,
 }
 
+//
 // functions/methods used by BaseCache
+//
+
 impl<K, V, S> Inner<K, V, S> {
     fn name(&self) -> Option<&str> {
         self.name.as_deref()
@@ -987,6 +1004,14 @@ impl<K, V, S> Inner<K, V, S> {
             .unwrap_or_default()
     }
 
+    fn maybe_key_lock(&self, key: &Arc<K>) -> Option<KeyLock<'_, K, S>>
+    where
+        K: Hash + Eq,
+        S: BuildHasher,
+    {
+        self.key_locks.as_ref().map(|kls| kls.key_lock(key))
+    }
+
     #[cfg(feature = "unstable-debug-counters")]
     pub fn debug_stats(&self) -> CacheDebugStats {
         let ec = self.entry_count.load();
@@ -1014,6 +1039,10 @@ impl<K, V, S> Inner<K, V, S> {
         } else {
             Instant::now()
         }
+    }
+
+    fn clocks(&self) -> &Clocks {
+        &self.clocks
     }
 
     fn num_cht_segments(&self) -> usize {
@@ -1055,27 +1084,6 @@ impl<K, V, S> Inner<K, V, S> {
     fn has_valid_after(&self) -> bool {
         self.valid_after.is_set()
     }
-}
-
-// functions/methods used by BaseCache
-impl<K, V, S> Inner<K, V, S>
-where
-    K: Hash + Eq,
-    S: BuildHasher,
-{
-    fn maybe_key_lock(&self, key: &Arc<K>) -> Option<KeyLock<'_, K, S>> {
-        self.key_locks.as_ref().map(|kls| kls.key_lock(key))
-    }
-}
-
-// functions/methods used by BaseCache
-impl<K, V, S> Inner<K, V, S> {
-    fn clocks(&self) -> &Clocks {
-        &self.clocks
-    }
-    // fn to_std_instant(&self, instant: Instant) -> StdInstant {
-    //     self.clocks.to_std_instant(instant)
-    // }
 }
 
 impl<K, V, S> Inner<K, V, S>

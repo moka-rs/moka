@@ -2640,6 +2640,7 @@ mod tests {
                 _value: &&str,
                 _current_time: StdInstant,
                 _current_duration: Option<Duration>,
+                _last_modified_at: StdInstant,
             ) -> Option<Duration> {
                 Some(Duration::from_secs(10))
             }
