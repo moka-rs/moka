@@ -189,16 +189,6 @@ pub(crate) struct DeqNodes<K> {
     timer_node: Option<DeqNodeTimer<K>>,
 }
 
-impl<K> Clone for DeqNodes<K> {
-    fn clone(&self) -> Self {
-        Self {
-            access_order_q_node: self.access_order_q_node,
-            write_order_q_node: self.write_order_q_node,
-            timer_node: self.timer_node,
-        }
-    }
-}
-
 impl<K> Default for DeqNodes<K> {
     fn default() -> Self {
         Self {
@@ -212,10 +202,16 @@ impl<K> Default for DeqNodes<K> {
 // We need this `unsafe impl` as DeqNodes have NonNull pointers.
 unsafe impl<K> Send for DeqNodes<K> {}
 
+impl<K> DeqNodes<K> {
+    pub(crate) fn set_timer_node(&mut self, timer_node: Option<DeqNodeTimer<K>>) {
+        self.timer_node = timer_node;
+    }
+}
+
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: V,
     info: TrioArc<EntryInfo<K>>,
-    nodes: Mutex<DeqNodes<K>>,
+    nodes: TrioArc<Mutex<DeqNodes<K>>>,
 }
 
 impl<K, V> ValueEntry<K, V> {
@@ -226,19 +222,17 @@ impl<K, V> ValueEntry<K, V> {
         Self {
             value,
             info: entry_info,
-            nodes: Mutex::new(DeqNodes::default()),
+            nodes: TrioArc::new(Mutex::new(DeqNodes::default())),
         }
     }
 
     pub(crate) fn new_from(value: V, entry_info: TrioArc<EntryInfo<K>>, other: &Self) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
         self::debug_counters::InternalGlobalDebugCounters::value_entry_created();
-
-        let nodes = (*other.nodes.lock()).clone();
         Self {
             value,
             info: entry_info,
-            nodes: Mutex::new(nodes),
+            nodes: TrioArc::clone(&other.nodes),
         }
     }
 
@@ -265,6 +259,10 @@ impl<K, V> ValueEntry<K, V> {
     #[inline]
     pub(crate) fn policy_weight(&self) -> u32 {
         self.info.policy_weight()
+    }
+
+    pub(crate) fn deq_nodes(&self) -> &TrioArc<Mutex<DeqNodes<K>>> {
+        &self.nodes
     }
 
     pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
@@ -297,6 +295,10 @@ impl<K, V> ValueEntry<K, V> {
 
     pub(crate) fn set_timer_node(&self, node: Option<DeqNodeTimer<K>>) {
         self.nodes.lock().timer_node = node;
+    }
+
+    pub(crate) fn take_timer_node(&self) -> Option<DeqNodeTimer<K>> {
+        self.nodes.lock().timer_node.take()
     }
 
     pub(crate) fn unset_q_nodes(&self) {

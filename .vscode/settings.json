@@ -10,6 +10,7 @@
         "ahash",
         "armv",
         "benmanes",
+        "CHECKME",
         "circleci",
         "CLFU",
         "clippy",

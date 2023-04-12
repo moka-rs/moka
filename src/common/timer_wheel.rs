@@ -18,11 +18,12 @@ use std::{
 };
 
 use super::{
-    concurrent::entry_info::EntryInfo,
+    concurrent::{entry_info::EntryInfo, DeqNodes},
     deque::{DeqNode, Deque},
     time::{CheckedTimeOps, Instant},
 };
 
+use parking_lot::Mutex;
 use triomphe::Arc as TrioArc;
 
 const BUCKET_COUNTS: &[u64] = &[
@@ -67,16 +68,25 @@ pub(crate) enum TimerNode<K> {
     Entry {
         level: AtomicU8, // When unset, we use `u8::MAX`.
         index: AtomicU8, // When unset, we use `u8::MAX`.
+        /// The `EntryInfo` of the cache entry.
         entry_info: TrioArc<EntryInfo<K>>,
+        /// The `DeqNodes` in the `ValueEntry` of the cache entry.
+        deq_nodes: TrioArc<Mutex<DeqNodes<K>>>,
     },
 }
 
 impl<K> TimerNode<K> {
-    fn new(entry_info: TrioArc<EntryInfo<K>>, level: usize, index: usize) -> Self {
+    fn new(
+        entry_info: TrioArc<EntryInfo<K>>,
+        deq_nodes: TrioArc<Mutex<DeqNodes<K>>>,
+        level: usize,
+        index: usize,
+    ) -> Self {
         Self::Entry {
             level: AtomicU8::new(level as u8),
             index: AtomicU8::new(index as u8),
             entry_info,
+            deq_nodes,
         }
     }
 
@@ -89,6 +99,14 @@ impl<K> TimerNode<K> {
             entry_info
         } else {
             unreachable!()
+        }
+    }
+
+    pub(crate) fn unset_timer_node_in_deq_nodes(&self) {
+        if let Self::Entry { deq_nodes, .. } = &self {
+            deq_nodes.lock().set_timer_node(None);
+        } else {
+            unreachable!();
         }
     }
 }
@@ -167,12 +185,15 @@ impl<K> TimerWheel<K> {
     pub(crate) fn schedule(
         &mut self,
         entry_info: TrioArc<EntryInfo<K>>,
+        deq_nodes: TrioArc<Mutex<DeqNodes<K>>>,
     ) -> Option<NonNull<DeqNode<TimerNode<K>>>> {
         debug_assert!(self.is_enabled());
 
         if let Some(t) = entry_info.expiration_time() {
             let (level, index) = self.bucket_indices(t);
-            let node = Box::new(DeqNode::new(TimerNode::new(entry_info, level, index)));
+            let node = Box::new(DeqNode::new(TimerNode::new(
+                entry_info, deq_nodes, level, index,
+            )));
             let node = self.wheels[level][index].push_back(node);
             Some(node)
         } else {
@@ -192,6 +213,7 @@ impl<K> TimerWheel<K> {
             level,
             index,
             entry_info,
+            deq_nodes,
         } = &unsafe { node.as_ref() }.element
         {
             if let Some(t) = entry_info.expiration_time() {
@@ -205,6 +227,7 @@ impl<K> TimerWheel<K> {
                 // Unset the level and index.
                 level.store(u8::MAX, Ordering::Release);
                 index.store(u8::MAX, Ordering::Release);
+                deq_nodes.lock().set_timer_node(None);
                 ReschedulingResult::Removed(unsafe { Box::from_raw(node.as_ptr()) })
             }
         } else {
@@ -237,11 +260,13 @@ impl<K> TimerWheel<K> {
     unsafe fn unlink_timer(&mut self, node: NonNull<DeqNode<TimerNode<K>>>) {
         let p = node.as_ref();
         if let TimerNode::Entry { level, index, .. } = &p.element {
-            let level = level.load(Ordering::Acquire);
-            let index = index.load(Ordering::Acquire);
-            if level != u8::MAX && index != u8::MAX {
-                self.wheels[level as usize][index as usize].unlink(node);
+            let lev = level.load(Ordering::Acquire);
+            let idx = index.load(Ordering::Acquire);
+            if lev != u8::MAX && idx != u8::MAX {
+                self.wheels[lev as usize][idx as usize].unlink(node);
             }
+            level.store(u8::MAX, Ordering::Release);
+            index.store(u8::MAX, Ordering::Release);
         } else {
             unreachable!();
         }
@@ -328,17 +353,29 @@ impl<K> TimerWheel<K> {
             .as_nanos() as u64
     }
 
-    // Returns nano-seconds between the given `time` and the time when this timer
-    // wheel was created. If the `time` is earlier than other, returns zero.
+    // Returns nano-seconds between the given `time` and `self.origin`, the time when
+    // this timer wheel was created.
+    //
+    // - If the `time` is earlier than other, returns zero.
+    // - If the `time` is later than `self.origin + u64::MAX`, returns `u64::MAX`,
+    //   which is ~584 years in nanoseconds.
+    //
     fn time_nanos(&self, time: Instant) -> u64 {
-        time.checked_duration_since(self.origin)
+        // `TryInto` will be in the prelude starting in Rust 2021 Edition.
+        use std::convert::TryInto;
+
+        let nanos_u128 = time
+            .checked_duration_since(self.origin)
             // If `time` is earlier than `self.origin`, use zero. This would never
             // happen in practice as there should be some delay between the timer
             // wheel was created and the first timer event is scheduled. But we will
             // do this just in case.
             .unwrap_or_default() // Assuming `Duration::default()` returns `ZERO`.
-            // TODO ENHANCEME: Check overflow? (u128 -> u64)
-            .as_nanos() as u64
+            .as_nanos();
+
+        // Convert an `u128` into an `u64`. If the value is too large, use `u64::MAX`
+        // (~584 years)
+        nanos_u128.try_into().unwrap_or(u64::MAX)
     }
 }
 
@@ -405,6 +442,8 @@ impl<'iter, K> Drop for TimerEventsIter<'iter, K> {
 impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
     type Item = TimerEvent<K>;
 
+    /// NOTE: When necessary, the iterator returned from advance() will unset the
+    /// timer node in the `ValueEntry`.
     fn next(&mut self) -> Option<Self::Item> {
         if self.is_done {
             return None;
@@ -454,7 +493,9 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
                     let expiration_time = node.as_ref().element.entry_info().expiration_time();
                     if let Some(t) = expiration_time {
                         if t <= self.current_time {
-                            // The cache entry has expired. Return it.
+                            // The cache entry has expired. Unset the timer node from
+                            // the ValueEntry and return the node.
+                            node.as_ref().element.unset_timer_node_in_deq_nodes();
                             return Some(TimerEvent::Expired(node));
                         } else {
                             // The cache entry has not expired. Reschedule it.
@@ -469,8 +510,8 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
                                 }
                                 ReschedulingResult::Removed(node) => {
                                     // The timer event has been removed from the timer
-                                    // wheel. Return it, so that the caller can remove the
-                                    // pointer to the node from a `ValueEntry`.
+                                    // wheel. Unset the timer node from the ValueEntry.
+                                    node.as_ref().element.unset_timer_node_in_deq_nodes();
                                     return Some(TimerEvent::Descheduled(node));
                                 }
                             }
@@ -600,7 +641,9 @@ mod tests {
             let policy_weight = 0;
             let entry_info = TrioArc::new(EntryInfo::new(key_hash, now, policy_weight));
             entry_info.set_expiration_time(Some(now.checked_add(ttl).unwrap()));
-            timer.schedule(entry_info);
+            let deq_nodes = Default::default();
+            let timer_node = timer.schedule(entry_info, TrioArc::clone(&deq_nodes));
+            deq_nodes.lock().set_timer_node(timer_node);
         }
 
         fn expired_key(maybe_entry: Option<TimerEvent<u32>>) -> u32 {

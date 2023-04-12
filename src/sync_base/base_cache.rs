@@ -561,8 +561,6 @@ where
                 (ins_op, ts)
             }
             (None, Some((_cnt, old_entry, (old_last_accessed, old_last_modified), upd_op))) => {
-                old_entry.unset_q_nodes();
-
                 if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
                     (&self.inner.expiration_policy.expiry(), &upd_op)
                 {
@@ -602,8 +600,6 @@ where
                     }
                     (ins_op, ts)
                 } else {
-                    old_entry.unset_q_nodes();
-
                     if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
                         (&self.inner.expiration_policy.expiry(), &upd_op)
                     {
@@ -1804,7 +1800,10 @@ where
             // Register the cache entry to the timer wheel; the cache entry has an
             // expiration time and not registered to the timer wheel.
             (true, None) => {
-                let timer = timer_wheel.schedule(TrioArc::clone(entry.entry_info()));
+                let timer = timer_wheel.schedule(
+                    TrioArc::clone(entry.entry_info()),
+                    TrioArc::clone(entry.deq_nodes()),
+                );
                 entry.set_timer_node(timer);
             }
             // Reschedule the cache entry in the timer wheel; the cache entry has an
@@ -1834,12 +1833,9 @@ where
         entry: TrioArc<ValueEntry<K, V>>,
         counters: &mut EvictionCounters,
     ) {
-        if entry.is_admitted() {
-            if let Some(timer_node) = entry.timer_node() {
-                timer_wheel.deschedule(timer_node);
-            }
+        if let Some(timer_node) = entry.take_timer_node() {
+            timer_wheel.deschedule(timer_node);
         }
-        entry.set_timer_node(None);
         Self::handle_remove_without_timer_wheel(deqs, entry, counters);
     }
 
@@ -1867,19 +1863,18 @@ where
         entry: TrioArc<ValueEntry<K, V>>,
         counters: &mut EvictionCounters,
     ) {
+        if let Some(timer) = entry.take_timer_node() {
+            timer_wheel.deschedule(timer);
+        }
         if entry.is_admitted() {
             entry.set_admitted(false);
             counters.saturating_sub(1, entry.policy_weight());
-            if let Some(timer) = entry.timer_node() {
-                timer_wheel.deschedule(timer);
-            }
             // The following two unlink_* functions will unset the deq nodes.
             Deques::unlink_ao_from_deque(ao_deq_name, ao_deq, &entry);
             Deques::unlink_wo(wo_deq, &entry);
         } else {
             entry.unset_q_nodes();
         }
-        entry.set_timer_node(None);
     }
 
     fn evict_expired_entries_using_timers(
@@ -1894,54 +1889,48 @@ where
 
         let now = self.current_time_from_expiration_clock();
 
+        // NOTE: When necessary, the iterator returned from advance() will unset the
+        // timer node in the `ValueEntry`, so we do not have to do it here.
         for event in timer_wheel.advance(now) {
-            match event {
-                TimerEvent::Expired(node) => {
-                    let entry_info = node.element.entry_info();
-                    let kh = entry_info.key_hash();
-                    let key = &kh.key;
-                    let hash = kh.hash;
+            // We do not have to do anything if event is `TimerEvent::Descheduled(_)`
+            // or `TimerEvent::Rescheduled(_)`.
+            if let TimerEvent::Expired(node) = event {
+                let entry_info = node.element.entry_info();
+                let kh = entry_info.key_hash();
+                let key = &kh.key;
+                let hash = kh.hash;
 
-                    // Lock the key for removal if blocking removal notification is enabled.
-                    let kl = self.maybe_key_lock(key);
-                    let _klg = &kl.as_ref().map(|kl| kl.lock());
+                // Lock the key for removal if blocking removal notification is
+                // enabled.
+                let kl = self.maybe_key_lock(key);
+                let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-                    // Remove the key from the map only when the entry is really
-                    // expired.
-                    let maybe_entry = self.cache.remove_if(
-                        hash,
-                        |k| k == key,
-                        |_, v| is_expired_by_per_entry_ttl(v.entry_info(), now),
+                // Remove the key from the map only when the entry is really
+                // expired.
+                let maybe_entry = self.cache.remove_if(
+                    hash,
+                    |k| k == key,
+                    |_, v| is_expired_by_per_entry_ttl(v.entry_info(), now),
+                );
+
+                if let Some(entry) = maybe_entry {
+                    if eviction_state.is_notifier_enabled() {
+                        let key = Arc::clone(key);
+                        eviction_state.add_removed_entry(key, &entry, RemovalCause::Expired);
+                    }
+                    Self::handle_remove_without_timer_wheel(
+                        deqs,
+                        entry,
+                        &mut eviction_state.counters,
                     );
-
-                    if let Some(entry) = maybe_entry {
-                        if eviction_state.is_notifier_enabled() {
-                            let key = Arc::clone(key);
-                            eviction_state.add_removed_entry(key, &entry, RemovalCause::Expired);
-                        }
-                        entry.set_timer_node(None);
-                        Self::handle_remove_without_timer_wheel(
-                            deqs,
-                            entry,
-                            &mut eviction_state.counters,
-                        );
-                    } else if let Some(entry) = self.cache.get(hash, |k| k == key) {
-                        // The entry exists but is not expired. It is possible that
-                        // the entry has been updated by other thread. Unset the
-                        // timer node, so that a new timer node will be created
-                        // when the entry is processed by `handle_upsert` method.
-                        entry.set_timer_node(None);
-                    }
-                    drop(node);
+                } else {
+                    // Other thread might have updated or invalidated the entry
+                    // already. We have nothing to do here as the `advance()`
+                    // iterator has unset the timer node in the old `ValueEntry`.
+                    // (In the case of update, the timer node will be recreated for
+                    // the new `ValueEntry` when it is processed by the
+                    // `handle_upsert` method.)
                 }
-                TimerEvent::Descheduled(node) => {
-                    let kh = node.element.entry_info().key_hash();
-                    if let Some(entry) = self.cache.get(kh.hash, |k| k == &kh.key) {
-                        entry.set_timer_node(None);
-                    }
-                    drop(node);
-                }
-                TimerEvent::Rescheduled(_) => (),
             }
         }
     }
@@ -2135,6 +2124,7 @@ where
                 }
                 Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters);
             } else if let Some(entry) = self.cache.get(hash, |k| k == key) {
+                // TODO: CHECKME: Should we check `entry.is_dirty()` instead?
                 if entry.last_modified().is_none() {
                     deqs.move_to_back_ao(&entry);
                     deqs.move_to_back_wo(&entry);
