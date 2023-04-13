@@ -11,11 +11,7 @@
 // For full authorship information, see the version control history of
 // https://github.com/ben-manes/caffeine/
 
-use std::{
-    ptr::NonNull,
-    sync::atomic::{AtomicU8, Ordering},
-    time::Duration,
-};
+use std::{ptr::NonNull, time::Duration};
 
 use super::{
     concurrent::{entry_info::EntryInfo, DeqNodes},
@@ -63,14 +59,18 @@ const fn aligned_duration(duration: Duration) -> u64 {
     (duration.as_nanos() as u64).next_power_of_two()
 }
 
+/// A timer node stored in a bucket of a timer wheel.
 pub(crate) enum TimerNode<K> {
+    /// A sentinel node that is used to mark the end of a timer wheel bucket.
     Sentinel,
+    /// A timer entry that is holding Arc pointers to the data structures in a cache
+    /// entry.
     Entry {
-        level: AtomicU8, // When unset, we use `u8::MAX`.
-        index: AtomicU8, // When unset, we use `u8::MAX`.
-        /// The `EntryInfo` of the cache entry.
+        /// The position (level and index) of the timer wheel bucket.
+        pos: Option<(u8, u8)>,
+        /// An Arc pointer to the `EntryInfo` of the cache entry (`ValueEntry`).
         entry_info: TrioArc<EntryInfo<K>>,
-        /// The `DeqNodes` in the `ValueEntry` of the cache entry.
+        /// An Arc pointer to the `DeqNodes` of the cache entry (`ValueEntry`).
         deq_nodes: TrioArc<Mutex<DeqNodes<K>>>,
     },
 }
@@ -83,14 +83,38 @@ impl<K> TimerNode<K> {
         index: usize,
     ) -> Self {
         Self::Entry {
-            level: AtomicU8::new(level as u8),
-            index: AtomicU8::new(index as u8),
+            pos: Some((level as u8, index as u8)),
             entry_info,
             deq_nodes,
         }
     }
 
-    pub(crate) fn is_sentinel(&self) -> bool {
+    /// Returns the position (level and index) of the timer wheel bucket.
+    fn position(&self) -> Option<(usize, usize)> {
+        if let Self::Entry { pos, .. } = &self {
+            pos.map(|(level, index)| (level as usize, index as usize))
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn set_position(&mut self, level: usize, index: usize) {
+        if let Self::Entry { pos, .. } = self {
+            *pos = Some((level as u8, index as u8));
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn unset_position(&mut self) {
+        if let Self::Entry { pos, .. } = self {
+            *pos = None;
+        } else {
+            unreachable!()
+        }
+    }
+
+    fn is_sentinel(&self) -> bool {
         matches!(self, Self::Sentinel)
     }
 
@@ -102,7 +126,7 @@ impl<K> TimerNode<K> {
         }
     }
 
-    pub(crate) fn unset_timer_node_in_deq_nodes(&self) {
+    fn unset_timer_node_in_deq_nodes(&self) {
         if let Self::Entry { deq_nodes, .. } = &self {
             deq_nodes.lock().set_timer_node(None);
         } else {
@@ -127,10 +151,11 @@ pub(crate) enum ReschedulingResult<K> {
 /// The expiration events are deferred until the timer is advanced, which is
 /// performed as part of the cache's housekeeping cycle.
 pub(crate) struct TimerWheel<K> {
+    /// The hierarchical timer wheels.
     wheels: Box<[Box<[Bucket<K>]>]>,
-    /// The time when this timer wheel was created.
+    /// The time when this `TimerWheel` was created.
     origin: Instant,
-    /// The time when this timer wheel was last advanced.
+    /// The time when this `TimerWheel` was last advanced.
     current: Instant,
 }
 
@@ -203,31 +228,26 @@ impl<K> TimerWheel<K> {
 
     fn schedule_existing_node(
         &mut self,
-        node: NonNull<DeqNode<TimerNode<K>>>,
+        mut node: NonNull<DeqNode<TimerNode<K>>>,
     ) -> ReschedulingResult<K> {
         debug_assert!(self.is_enabled());
 
         // Since cache entry's ValueEntry has a pointer to this node, we must reuse
         // the node.
-        if let TimerNode::Entry {
-            level,
-            index,
-            entry_info,
-            deq_nodes,
-        } = &unsafe { node.as_ref() }.element
-        {
-            if let Some(t) = entry_info.expiration_time() {
-                let (new_level, new_index) = self.bucket_indices(t);
-                level.store(new_level as u8, Ordering::Release);
-                index.store(new_index as u8, Ordering::Release);
+        //
+        // SAFETY on `node.as_mut()`: The self (`TimerWheel`) is the only owner of
+        // the node, and we have `&mut self` here. We are the only one who can mutate
+        // the node.
+        if let entry @ TimerNode::Entry { .. } = &mut unsafe { node.as_mut() }.element {
+            if let Some(t) = entry.entry_info().expiration_time() {
+                let (level, index) = self.bucket_indices(t);
+                entry.set_position(level, index);
                 let node = unsafe { Box::from_raw(node.as_ptr()) };
-                self.wheels[new_level][new_index].push_back(node);
+                self.wheels[level][index].push_back(node);
                 ReschedulingResult::Rescheduled
             } else {
-                // Unset the level and index.
-                level.store(u8::MAX, Ordering::Release);
-                index.store(u8::MAX, Ordering::Release);
-                deq_nodes.lock().set_timer_node(None);
+                entry.unset_position();
+                entry.unset_timer_node_in_deq_nodes();
                 ReschedulingResult::Removed(unsafe { Box::from_raw(node.as_ptr()) })
             }
         } else {
@@ -257,16 +277,15 @@ impl<K> TimerWheel<K> {
     /// Removes a timer event for this node if present.
     ///
     /// IMPORTANT: This method does not drop the node.
-    unsafe fn unlink_timer(&mut self, node: NonNull<DeqNode<TimerNode<K>>>) {
-        let p = node.as_ref();
-        if let TimerNode::Entry { level, index, .. } = &p.element {
-            let lev = level.load(Ordering::Acquire);
-            let idx = index.load(Ordering::Acquire);
-            if lev != u8::MAX && idx != u8::MAX {
-                self.wheels[lev as usize][idx as usize].unlink(node);
+    unsafe fn unlink_timer(&mut self, mut node: NonNull<DeqNode<TimerNode<K>>>) {
+        // SAFETY: The self (`TimerWheel`) is the only owner of the node, and we have
+        // `&mut self` here. We are the only one who can mutate the node.
+        let p = node.as_mut();
+        if let entry @ TimerNode::Entry { .. } = &mut p.element {
+            if let Some((level, index)) = entry.position() {
+                self.wheels[level][index].unlink(node);
+                entry.unset_position();
             }
-            level.store(u8::MAX, Ordering::Release);
-            index.store(u8::MAX, Ordering::Release);
         } else {
             unreachable!();
         }
@@ -380,7 +399,8 @@ impl<K> TimerWheel<K> {
 }
 
 /// A timer event, which is either an expired/rescheduled cache entry, or a
-/// descheduled timer. `TimerWheel::advance` returns an iterator over timer events.
+/// descheduled timer. `TimerWheel::advance` method returns an iterator over timer
+/// events.
 #[derive(Debug)]
 pub(crate) enum TimerEvent<K> {
     /// This cache entry has expired.
@@ -390,6 +410,7 @@ pub(crate) enum TimerEvent<K> {
     // is mainly used for testing)
     Rescheduled(TrioArc<EntryInfo<K>>),
     /// This timer node (containing a cache entry) has been removed from the timer.
+    /// (This variant is mainly used for testing)
     Descheduled(Box<DeqNode<TimerNode<K>>>),
 }
 
@@ -442,8 +463,8 @@ impl<'iter, K> Drop for TimerEventsIter<'iter, K> {
 impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
     type Item = TimerEvent<K>;
 
-    /// NOTE: When necessary, the iterator returned from advance() will unset the
-    /// timer node in the `ValueEntry`.
+    /// NOTE: When necessary, this iterator will unset the timer node pointer in the
+    /// `ValueEntry`.
     fn next(&mut self) -> Option<Self::Item> {
         if self.is_done {
             return None;

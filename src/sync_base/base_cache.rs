@@ -1890,7 +1890,7 @@ where
         let now = self.current_time_from_expiration_clock();
 
         // NOTE: When necessary, the iterator returned from advance() will unset the
-        // timer node in the `ValueEntry`, so we do not have to do it here.
+        // timer node pointer in the `ValueEntry`, so we do not have to do it here.
         for event in timer_wheel.advance(now) {
             // We do not have to do anything if event is `TimerEvent::Descheduled(_)`
             // or `TimerEvent::Rescheduled(_)`.
@@ -1926,9 +1926,9 @@ where
                 } else {
                     // Other thread might have updated or invalidated the entry
                     // already. We have nothing to do here as the `advance()`
-                    // iterator has unset the timer node in the old `ValueEntry`.
-                    // (In the case of update, the timer node will be recreated for
-                    // the new `ValueEntry` when it is processed by the
+                    // iterator has unset the timer node pointer in the old
+                    // `ValueEntry`. (In the case of update, the timer node will be
+                    // recreated for the new `ValueEntry` when it is processed by the
                     // `handle_upsert` method.)
                 }
             }
