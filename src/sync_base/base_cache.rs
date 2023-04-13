@@ -1668,6 +1668,10 @@ where
 
         // Move the skipped nodes to the back of the deque. We do not unlink (drop)
         // them because ValueEntries in the write op queue should be pointing them.
+        //
+        // TODO FIXME: This `move_to_back()` will be considered UB as violating the
+        // aliasing rule because these skipped nodes were acquired by `peek_front` or
+        // `next_node`. (They both return `&node` instead of `&mut node`).
         for node in skipped_nodes {
             unsafe { deqs.probation.move_to_back(node) };
         }
@@ -2066,9 +2070,13 @@ where
             }
         } else {
             // Skip this entry as the key might have been invalidated. Since the
-            // invalidated ValueEntry (which should be still in the write op
-            // queue) has a pointer to this node, move the node to the back of
-            // the deque instead of popping (dropping) it.
+            // invalidated ValueEntry (which should be still in the write op queue)
+            // has a pointer to this node, move the node to the back of the deque
+            // instead of popping (dropping) it.
+            //
+            // TODO FIXME: This `peek_front()` and `move_to_back()` combo will be
+            // considered UB as violating the aliasing rule. (`peek_front` returns
+            // `&node` instead of `&mut node`).
             if let Some(node) = deq.peek_front() {
                 let node = NonNull::from(node);
                 unsafe { deq.move_to_back(node) };
@@ -2137,6 +2145,10 @@ where
                 // invalidated ValueEntry (which should be still in the write op
                 // queue) has a pointer to this node, move the node to the back of
                 // the deque instead of popping (dropping) it.
+                //
+                // TODO FIXME: This `peek_front()` and `move_to_back()` combo will be
+                // considered UB as violating the aliasing rule (`peek_front` returns
+                // `&node` instead of `&mut node`).
                 if let Some(node) = deqs.write_order.peek_front() {
                     let node = NonNull::from(node);
                     unsafe { deqs.write_order.move_to_back(node) };

@@ -157,8 +157,7 @@ impl<T> Deque<T> {
         })
     }
 
-    #[cfg(test)]
-    fn peek_back(&self) -> Option<&DeqNode<T>> {
+    pub(crate) fn peek_back(&self) -> Option<&DeqNode<T>> {
         // This method takes care not to create mutable references to whole nodes,
         // to maintain validity of aliasing pointers into `element`.
         self.tail.as_ref().map(|node| unsafe { node.as_ref() })

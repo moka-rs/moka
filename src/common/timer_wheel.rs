@@ -322,22 +322,27 @@ impl<K> TimerWheel<K> {
 
     /// Reset the positions of the nodes in the queue at the given level and index.
     fn reset_timer_node_positions(&mut self, level: usize, index: usize) {
+        if let Some(node) = self.wheels[level][index].peek_back() {
+            if node.element.is_sentinel() {
+                // The sentinel is at the back of the queue. We are already set.
+                return;
+            }
+        } else {
+            panic!(
+                "BUG: The queue is empty. level: {}, index: {}",
+                level, index
+            )
+        }
+
         // Rotate the nodes in the queue until we see the sentinel at the back of the
         // queue.
         loop {
-            let node = self.wheels[level][index].peek_front().unwrap_or_else(|| {
-                panic!(
-                    "BUG: The queue is empty. level: {}, index: {}",
-                    level, index
-                )
-            });
+            // Safe to unwrap because we already checked the queue is not empty.
+            let node = self.wheels[level][index].pop_front().unwrap();
             let is_sentinel = node.element.is_sentinel();
 
             // Move the front node to the back.
-            let node = NonNull::from(node);
-            unsafe {
-                self.wheels[level][index].move_to_back(node);
-            }
+            self.wheels[level][index].push_back(node);
 
             // If the node we just moved was the sentinel, we are done.
             if is_sentinel {
