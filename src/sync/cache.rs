@@ -1909,10 +1909,16 @@ mod tests {
             macros::{assert_eq_with_mode, assert_with_mode},
             DeliveryMode, RemovalCause,
         },
+        policy::test_utils::ExpiryCallCounters,
+        Expiry,
     };
 
     use parking_lot::Mutex;
-    use std::{convert::Infallible, sync::Arc, time::Duration};
+    use std::{
+        convert::Infallible,
+        sync::Arc,
+        time::{Duration, Instant as StdInstant},
+    };
 
     #[test]
     fn max_capacity_zero() {
@@ -2521,6 +2527,257 @@ mod tests {
             cache.sync();
             assert_with_mode!(cache.is_table_empty(), delivery_mode);
 
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
+        }
+    }
+
+    #[test]
+    fn time_to_live_by_expiry_type() {
+        run_test(DeliveryMode::Immediate);
+        run_test(DeliveryMode::Queued);
+
+        // Define an expiry type.
+        struct MyExpiry {
+            counters: Arc<ExpiryCallCounters>,
+        }
+
+        impl MyExpiry {
+            fn new(counters: Arc<ExpiryCallCounters>) -> Self {
+                Self { counters }
+            }
+        }
+
+        impl Expiry<&str, &str> for MyExpiry {
+            fn expire_after_create(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_creations();
+                Some(Duration::from_secs(10))
+            }
+
+            fn expire_after_update(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+                _current_duration: Option<Duration>,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_updates();
+                Some(Duration::from_secs(10))
+            }
+        }
+
+        fn run_test(delivery_mode: DeliveryMode) {
+            // The following `Vec`s will hold actual and expected notifications.
+            let actual = Arc::new(Mutex::new(Vec::new()));
+            let mut expected = Vec::new();
+
+            // Create expiry counters and the expiry.
+            let expiry_counters = Arc::new(ExpiryCallCounters::default());
+            let expiry = MyExpiry::new(Arc::clone(&expiry_counters));
+
+            // Create an eviction listener.
+            let a1 = Arc::clone(&actual);
+            let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(delivery_mode)
+                .build();
+
+            // Create a cache with the eviction listener.
+            let mut cache = Cache::builder()
+                .max_capacity(100)
+                .expire_after(expiry)
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.reconfigure_for_testing();
+
+            let (clock, mock) = Clock::mock();
+            cache.set_expiration_clock(Some(clock));
+
+            // Make the cache exterior immutable.
+            let cache = cache;
+
+            cache.insert("a", "alice");
+            expiry_counters.incl_expected_creations();
+            cache.sync();
+
+            mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+            cache.sync();
+
+            assert_eq_with_mode!(cache.get(&"a"), Some("alice"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"a"), delivery_mode);
+
+            mock.increment(Duration::from_secs(5)); // 10 secs.
+            expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
+            assert_eq_with_mode!(cache.get(&"a"), None, delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"a"), delivery_mode);
+
+            assert_eq_with_mode!(cache.iter().count(), 0, delivery_mode);
+
+            cache.sync();
+            assert_with_mode!(cache.is_table_empty(), delivery_mode);
+
+            cache.insert("b", "bob");
+            expiry_counters.incl_expected_creations();
+            cache.sync();
+
+            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
+
+            mock.increment(Duration::from_secs(5)); // 15 secs.
+            cache.sync();
+
+            assert_eq_with_mode!(cache.get(&"b"), Some("bob"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
+
+            cache.insert("b", "bill");
+            expected.push((Arc::new("b"), "bob", RemovalCause::Replaced));
+            expiry_counters.incl_expected_updates();
+            cache.sync();
+
+            mock.increment(Duration::from_secs(5)); // 20 secs
+            cache.sync();
+
+            assert_eq_with_mode!(cache.get(&"b"), Some("bill"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
+
+            mock.increment(Duration::from_secs(5)); // 25 secs
+            expected.push((Arc::new("b"), "bill", RemovalCause::Expired));
+
+            assert_eq_with_mode!(cache.get(&"a"), None, delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), None, delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
+
+            assert_eq_with_mode!(cache.iter().count(), 0, delivery_mode);
+
+            cache.sync();
+            assert_with_mode!(cache.is_table_empty(), delivery_mode);
+
+            expiry_counters.verify();
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
+        }
+    }
+
+    #[test]
+    fn time_to_idle_by_expiry_type() {
+        run_test(DeliveryMode::Immediate);
+        run_test(DeliveryMode::Queued);
+
+        // Define an expiry type.
+        struct MyExpiry {
+            counters: Arc<ExpiryCallCounters>,
+        }
+
+        impl MyExpiry {
+            fn new(counters: Arc<ExpiryCallCounters>) -> Self {
+                Self { counters }
+            }
+        }
+
+        impl Expiry<&str, &str> for MyExpiry {
+            fn expire_after_read(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+                _current_duration: Option<Duration>,
+                _last_modified_at: StdInstant,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_reads();
+                Some(Duration::from_secs(10))
+            }
+        }
+
+        fn run_test(delivery_mode: DeliveryMode) {
+            // The following `Vec`s will hold actual and expected notifications.
+            let actual = Arc::new(Mutex::new(Vec::new()));
+            let mut expected = Vec::new();
+
+            // Create expiry counters and the expiry.
+            let expiry_counters = Arc::new(ExpiryCallCounters::default());
+            let expiry = MyExpiry::new(Arc::clone(&expiry_counters));
+
+            // Create an eviction listener.
+            let a1 = Arc::clone(&actual);
+            let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(delivery_mode)
+                .build();
+
+            // Create a cache with the eviction listener.
+            let mut cache = Cache::builder()
+                .max_capacity(100)
+                .expire_after(expiry)
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.reconfigure_for_testing();
+
+            let (clock, mock) = Clock::mock();
+            cache.set_expiration_clock(Some(clock));
+
+            // Make the cache exterior immutable.
+            let cache = cache;
+
+            cache.insert("a", "alice");
+            cache.sync();
+
+            mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+            cache.sync();
+
+            assert_eq_with_mode!(cache.get(&"a"), Some("alice"), delivery_mode);
+            expiry_counters.incl_expected_reads();
+
+            mock.increment(Duration::from_secs(5)); // 10 secs.
+            cache.sync();
+
+            cache.insert("b", "bob");
+            cache.sync();
+
+            assert_eq_with_mode!(cache.entry_count(), 2, delivery_mode);
+
+            mock.increment(Duration::from_secs(2)); // 12 secs.
+            cache.sync();
+
+            // contains_key does not reset the idle timer for the key.
+            assert_with_mode!(cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            cache.sync();
+
+            assert_eq_with_mode!(cache.entry_count(), 2, delivery_mode);
+
+            mock.increment(Duration::from_secs(3)); // 15 secs.
+            expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
+
+            assert_eq_with_mode!(cache.get(&"a"), None, delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), Some("bob"), delivery_mode);
+            expiry_counters.incl_expected_reads();
+            assert_with_mode!(!cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+
+            assert_eq_with_mode!(cache.iter().count(), 1, delivery_mode);
+
+            cache.sync();
+            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
+
+            mock.increment(Duration::from_secs(10)); // 25 secs
+            expected.push((Arc::new("b"), "bob", RemovalCause::Expired));
+
+            assert_eq_with_mode!(cache.get(&"a"), None, delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), None, delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
+
+            assert_eq_with_mode!(cache.iter().count(), 0, delivery_mode);
+
+            cache.sync();
+            assert_with_mode!(cache.is_table_empty(), delivery_mode);
+
+            expiry_counters.verify();
             verify_notification_vec(&cache, actual, &expected, delivery_mode);
         }
     }

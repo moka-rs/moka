@@ -126,11 +126,10 @@ mod test {
 
     // TODO: Re-enable this test.
 
-    // #[cfg_attr(
-    //     not(all(rustver, any(target_os = "linux", target_os = "macos"))),
-    //     ignore
-    // )]
-    #[ignore]
+    #[cfg_attr(
+        not(all(rustver, any(target_os = "linux", target_os = "macos"))),
+        ignore
+    )]
     #[test]
     fn check_struct_size() {
         use std::mem::size_of;
@@ -162,12 +161,13 @@ mod test {
         };
 
         let expected_sizes = match (arch, is_quanta_enabled) {
-            (Linux64, true) => vec![("1.51", 24)],
-            (Linux32, true) => vec![("1.51", 24)],
-            (MacOS64, true) => vec![("1.62", 24)],
-            (Linux64, false) => vec![("1.66", 56), ("1.51", 72)],
-            (Linux32, false) => vec![("1.66", 56), ("1.62", 72), ("1.51", 40)],
-            (MacOS64, false) => vec![("1.62", 56)],
+            (Linux64, true) => vec![("1.51", 48)],
+            (Linux32, true) => vec![("1.51", 48)],
+            (MacOS64, true) => vec![("1.62", 48)],
+            (Linux64, false) => vec![("1.66", 96), ("1.60", 120)],
+            // TODO: Replace `usize::MAX` with the expected size.
+            (Linux32, false) => vec![("1.66", 96), ("1.62", usize::MAX), ("1.60", usize::MAX)],
+            (MacOS64, false) => vec![("1.62", 96)],
         };
 
         let mut expected = None;
@@ -179,7 +179,10 @@ mod test {
         }
 
         if let Some(size) = expected {
-            assert_eq!(size_of::<EntryInfo<()>>(), size);
+            // TODO: Remove this check once we have the expected size for all versions.
+            if size != usize::MAX {
+                assert_eq!(size_of::<EntryInfo<()>>(), size);
+            }
         } else {
             panic!("No expected size for {:?} with Rust version {}", arch, ver);
         }

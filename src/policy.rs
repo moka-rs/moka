@@ -197,3 +197,62 @@ impl<K, V> ExpirationPolicy<K, V> {
         self.expiry = Some(expiry);
     }
 }
+
+#[cfg(test)]
+pub(crate) mod test_utils {
+    use std::sync::atomic::{AtomicU8, Ordering};
+
+    #[derive(Default)]
+    pub(crate) struct ExpiryCallCounters {
+        expected_creations: AtomicU8,
+        expected_reads: AtomicU8,
+        expected_updates: AtomicU8,
+        actual_creations: AtomicU8,
+        actual_reads: AtomicU8,
+        actual_updates: AtomicU8,
+    }
+
+    impl ExpiryCallCounters {
+        pub(crate) fn incl_expected_creations(&self) {
+            self.expected_creations.fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub(crate) fn incl_expected_reads(&self) {
+            self.expected_reads.fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub(crate) fn incl_expected_updates(&self) {
+            self.expected_updates.fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub(crate) fn incl_actual_creations(&self) {
+            self.actual_creations.fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub(crate) fn incl_actual_reads(&self) {
+            self.actual_reads.fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub(crate) fn incl_actual_updates(&self) {
+            self.actual_updates.fetch_add(1, Ordering::Relaxed);
+        }
+
+        pub(crate) fn verify(&self) {
+            assert_eq!(
+                self.expected_creations.load(Ordering::Relaxed),
+                self.actual_creations.load(Ordering::Relaxed),
+                "expected_creations != actual_creations"
+            );
+            assert_eq!(
+                self.expected_reads.load(Ordering::Relaxed),
+                self.actual_reads.load(Ordering::Relaxed),
+                "expected_reads != actual_reads"
+            );
+            assert_eq!(
+                self.expected_updates.load(Ordering::Relaxed),
+                self.actual_updates.load(Ordering::Relaxed),
+                "expected_updates != actual_updates"
+            );
+        }
+    }
+}

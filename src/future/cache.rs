@@ -1858,7 +1858,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Cache, ConcurrentCacheExt};
-    use crate::{common::time::Clock, notification::RemovalCause, Expiry};
+    use crate::{
+        common::time::Clock, notification::RemovalCause, policy::test_utils::ExpiryCallCounters,
+        Expiry,
+    };
 
     use async_io::Timer;
     use parking_lot::Mutex;
@@ -2525,7 +2528,15 @@ mod tests {
         let mut expected = Vec::new();
 
         // Define an expiry type.
-        struct MyExpiry;
+        struct MyExpiry {
+            counters: Arc<ExpiryCallCounters>,
+        }
+
+        impl MyExpiry {
+            fn new(counters: Arc<ExpiryCallCounters>) -> Self {
+                Self { counters }
+            }
+        }
 
         impl Expiry<&str, &str> for MyExpiry {
             fn expire_after_create(
@@ -2534,6 +2545,7 @@ mod tests {
                 _value: &&str,
                 _current_time: StdInstant,
             ) -> Option<Duration> {
+                self.counters.incl_actual_creations();
                 Some(Duration::from_secs(10))
             }
 
@@ -2544,6 +2556,7 @@ mod tests {
                 _current_time: StdInstant,
                 _current_duration: Option<Duration>,
             ) -> Option<Duration> {
+                self.counters.incl_actual_updates();
                 Some(Duration::from_secs(10))
             }
         }
@@ -2552,10 +2565,14 @@ mod tests {
         let a1 = Arc::clone(&actual);
         let listener = move |k, v, cause| a1.lock().push((k, v, cause));
 
+        // Create expiry counters and the expiry.
+        let expiry_counters = Arc::new(ExpiryCallCounters::default());
+        let expiry = MyExpiry::new(Arc::clone(&expiry_counters));
+
         // Create a cache with the expiry and eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
-            .expire_after(MyExpiry)
+            .expire_after(expiry)
             .eviction_listener_with_queued_delivery_mode(listener)
             .build();
         cache.reconfigure_for_testing();
@@ -2567,6 +2584,7 @@ mod tests {
         let cache = cache;
 
         cache.insert("a", "alice").await;
+        expiry_counters.incl_expected_creations();
         cache.sync();
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
@@ -2586,6 +2604,7 @@ mod tests {
         assert!(cache.is_table_empty());
 
         cache.insert("b", "bob").await;
+        expiry_counters.incl_expected_creations();
         cache.sync();
 
         assert_eq!(cache.entry_count(), 1);
@@ -2599,6 +2618,7 @@ mod tests {
 
         cache.insert("b", "bill").await;
         expected.push((Arc::new("b"), "bob", RemovalCause::Replaced));
+        expiry_counters.incl_expected_updates();
         cache.sync();
 
         mock.increment(Duration::from_secs(5)); // 20 secs
@@ -2621,6 +2641,7 @@ mod tests {
         cache.sync();
         assert!(cache.is_table_empty());
 
+        expiry_counters.verify();
         verify_notification_vec(&cache, actual, &expected);
     }
 
@@ -2631,7 +2652,15 @@ mod tests {
         let mut expected = Vec::new();
 
         // Define an expiry type.
-        struct MyExpiry;
+        struct MyExpiry {
+            counters: Arc<ExpiryCallCounters>,
+        }
+
+        impl MyExpiry {
+            fn new(counters: Arc<ExpiryCallCounters>) -> Self {
+                Self { counters }
+            }
+        }
 
         impl Expiry<&str, &str> for MyExpiry {
             fn expire_after_read(
@@ -2642,6 +2671,7 @@ mod tests {
                 _current_duration: Option<Duration>,
                 _last_modified_at: StdInstant,
             ) -> Option<Duration> {
+                self.counters.incl_actual_reads();
                 Some(Duration::from_secs(10))
             }
         }
@@ -2650,10 +2680,14 @@ mod tests {
         let a1 = Arc::clone(&actual);
         let listener = move |k, v, cause| a1.lock().push((k, v, cause));
 
+        // Create expiry counters and the expiry.
+        let expiry_counters = Arc::new(ExpiryCallCounters::default());
+        let expiry = MyExpiry::new(Arc::clone(&expiry_counters));
+
         // Create a cache with the expiry and eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
-            .expire_after(MyExpiry)
+            .expire_after(expiry)
             .eviction_listener_with_queued_delivery_mode(listener)
             .build();
         cache.reconfigure_for_testing();
@@ -2671,6 +2705,7 @@ mod tests {
         cache.sync();
 
         assert_eq!(cache.get(&"a"), Some("alice"));
+        expiry_counters.incl_expected_reads();
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
         cache.sync();
@@ -2695,6 +2730,7 @@ mod tests {
 
         assert_eq!(cache.get(&"a"), None);
         assert_eq!(cache.get(&"b"), Some("bob"));
+        expiry_counters.incl_expected_reads();
         assert!(!cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
 
@@ -2716,6 +2752,7 @@ mod tests {
         cache.sync();
         assert!(cache.is_table_empty());
 
+        expiry_counters.verify();
         verify_notification_vec(&cache, actual, &expected);
     }
 
