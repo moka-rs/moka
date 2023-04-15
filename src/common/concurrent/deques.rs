@@ -1,4 +1,4 @@
-use super::{KeyDate, KeyHashDate, ValueEntry};
+use super::{KeyHashDate, ValueEntry};
 use crate::common::{
     deque::{DeqNode, Deque},
     CacheRegion,
@@ -11,7 +11,7 @@ pub(crate) struct Deques<K> {
     pub(crate) window: Deque<KeyHashDate<K>>, //    Not used yet.
     pub(crate) probation: Deque<KeyHashDate<K>>,
     pub(crate) protected: Deque<KeyHashDate<K>>, // Not used yet.
-    pub(crate) write_order: Deque<KeyDate<K>>,
+    pub(crate) write_order: Deque<KeyHashDate<K>>,
 }
 
 #[cfg(feature = "future")]
@@ -51,7 +51,11 @@ impl<K> Deques<K> {
         entry.set_access_order_q_node(Some(tagged_node));
     }
 
-    pub(crate) fn push_back_wo<V>(&mut self, kd: KeyDate<K>, entry: &TrioArc<ValueEntry<K, V>>) {
+    pub(crate) fn push_back_wo<V>(
+        &mut self,
+        kd: KeyHashDate<K>,
+        entry: &TrioArc<ValueEntry<K, V>>,
+    ) {
         let node = Box::new(DeqNode::new(kd));
         let node = self.write_order.push_back(node);
         entry.set_write_order_q_node(Some(node));
@@ -107,7 +111,7 @@ impl<K> Deques<K> {
     }
 
     pub(crate) fn move_to_back_wo_in_deque<V>(
-        deq: &mut Deque<KeyDate<K>>,
+        deq: &mut Deque<KeyHashDate<K>>,
         entry: &TrioArc<ValueEntry<K, V>>,
     ) {
         if let Some(node) = entry.write_order_q_node() {
@@ -134,7 +138,7 @@ impl<K> Deques<K> {
         }
     }
 
-    pub(crate) fn unlink_wo<V>(deq: &mut Deque<KeyDate<K>>, entry: &TrioArc<ValueEntry<K, V>>) {
+    pub(crate) fn unlink_wo<V>(deq: &mut Deque<KeyHashDate<K>>, entry: &TrioArc<ValueEntry<K, V>>) {
         if let Some(node) = entry.take_write_order_q_node() {
             Self::unlink_node_wo(deq, node);
         }
@@ -177,7 +181,10 @@ impl<K> Deques<K> {
         }
     }
 
-    pub(crate) fn unlink_node_wo(deq: &mut Deque<KeyDate<K>>, node: NonNull<DeqNode<KeyDate<K>>>) {
+    pub(crate) fn unlink_node_wo(
+        deq: &mut Deque<KeyHashDate<K>>,
+        node: NonNull<DeqNode<KeyHashDate<K>>>,
+    ) {
         unsafe {
             let p = node.as_ref();
             if deq.contains(p) {

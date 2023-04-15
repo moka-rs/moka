@@ -17,8 +17,7 @@ use crate::{
             deques::Deques,
             entry_info::EntryInfo,
             housekeeper::{self, Housekeeper, InnerSync, SyncPace},
-            AccessTime, KeyDate, KeyHash, KeyHashDate, KvEntry, ReadOp, ValueEntry, Weigher,
-            WriteOp,
+            AccessTime, KeyHash, KeyHashDate, KvEntry, ReadOp, ValueEntry, Weigher, WriteOp,
         },
         deque::{DeqNode, Deque},
         frequency_sketch::FrequencySketch,
@@ -1590,7 +1589,7 @@ where
             if self.has_enough_capacity(new_weight, counters) {
                 // There are enough room in the cache (or the cache is unbounded).
                 // Add the candidate to the deques.
-                self.handle_admit(kh, &entry, new_weight, deqs, timer_wheel, counters);
+                self.handle_admit(&entry, new_weight, deqs, timer_wheel, counters);
                 return;
             }
         }
@@ -1661,7 +1660,6 @@ where
 
                 // Add the candidate to the deques.
                 self.handle_admit(
-                    kh,
                     &entry,
                     new_weight,
                     deqs,
@@ -1777,14 +1775,12 @@ where
 
     fn handle_admit(
         &self,
-        kh: KeyHash<K>,
         entry: &TrioArc<ValueEntry<K, V>>,
         policy_weight: u32,
         deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
         counters: &mut EvictionCounters,
     ) {
-        let key = Arc::clone(&kh.key);
         counters.saturating_add(1, policy_weight);
 
         self.update_timer_wheel(entry, timer_wheel);
@@ -1792,11 +1788,11 @@ where
         // Update the deques.
         deqs.push_back_ao(
             CacheRegion::MainProbation,
-            KeyHashDate::new(kh, entry.entry_info()),
+            KeyHashDate::new(entry.entry_info()),
             entry,
         );
         if self.is_write_order_queue_enabled() {
-            deqs.push_back_wo(KeyDate::new(key, entry.entry_info()), entry);
+            deqs.push_back_wo(KeyHashDate::new(entry.entry_info()), entry);
         }
         entry.set_admitted(true);
     }
@@ -1881,7 +1877,7 @@ where
     fn handle_remove_with_deques(
         ao_deq_name: &str,
         ao_deq: &mut Deque<KeyHashDate<K>>,
-        wo_deq: &mut Deque<KeyDate<K>>,
+        wo_deq: &mut Deque<KeyHashDate<K>>,
         timer_wheel: &mut TimerWheel<K>,
         entry: TrioArc<ValueEntry<K, V>>,
         counters: &mut EvictionCounters,
@@ -1997,7 +1993,7 @@ where
         &self,
         deq_name: &str,
         deq: &mut Deque<KeyHashDate<K>>,
-        write_order_deq: &mut Deque<KeyDate<K>>,
+        write_order_deq: &mut Deque<KeyHashDate<K>>,
         timer_wheel: &mut TimerWheel<K>,
         batch_size: usize,
         now: Instant,
@@ -2075,7 +2071,7 @@ where
         hash: u64,
         deq_name: &str,
         deq: &mut Deque<KeyHashDate<K>>,
-        write_order_deq: &mut Deque<KeyDate<K>>,
+        write_order_deq: &mut Deque<KeyHashDate<K>>,
     ) -> bool {
         if let Some(entry) = self.cache.get(hash, |k| (k.borrow() as &K) == key) {
             if entry.is_dirty() {
@@ -2216,7 +2212,7 @@ where
     fn submit_invalidation_task(
         &self,
         invalidator: &Invalidator<K, V, S>,
-        write_order: &mut Deque<KeyDate<K>>,
+        write_order: &mut Deque<KeyHashDate<K>>,
         batch_size: usize,
     ) where
         V: Clone,

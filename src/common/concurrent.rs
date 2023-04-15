@@ -63,59 +63,35 @@ impl<K> Clone for KeyHash<K> {
     }
 }
 
-pub(crate) struct KeyDate<K> {
-    key: Arc<K>,
-    entry_info: TrioArc<EntryInfo<K>>,
-}
-
-impl<K> KeyDate<K> {
-    pub(crate) fn new(key: Arc<K>, entry_info: &TrioArc<EntryInfo<K>>) -> Self {
-        Self {
-            key,
-            entry_info: TrioArc::clone(entry_info),
-        }
-    }
-
-    pub(crate) fn key(&self) -> &Arc<K> {
-        &self.key
-    }
-
-    #[cfg(any(feature = "sync", feature = "future"))]
-    pub(crate) fn last_modified(&self) -> Option<Instant> {
-        self.entry_info.last_modified()
-    }
-
-    #[cfg(any(feature = "sync", feature = "future"))]
-    pub(crate) fn is_dirty(&self) -> bool {
-        self.entry_info.is_dirty()
-    }
-}
-
 pub(crate) struct KeyHashDate<K> {
-    key: Arc<K>,
-    hash: u64,
     entry_info: TrioArc<EntryInfo<K>>,
 }
 
 impl<K> KeyHashDate<K> {
-    pub(crate) fn new(kh: KeyHash<K>, entry_info: &TrioArc<EntryInfo<K>>) -> Self {
+    pub(crate) fn new(entry_info: &TrioArc<EntryInfo<K>>) -> Self {
         Self {
-            key: kh.key,
-            hash: kh.hash,
             entry_info: TrioArc::clone(entry_info),
         }
     }
 
     pub(crate) fn key(&self) -> &Arc<K> {
-        &self.key
+        &self.entry_info.key_hash().key
     }
 
     pub(crate) fn hash(&self) -> u64 {
-        self.hash
+        self.entry_info.key_hash().hash
     }
 
     pub(crate) fn entry_info(&self) -> &EntryInfo<K> {
         &self.entry_info
+    }
+
+    pub(crate) fn last_modified(&self) -> Option<Instant> {
+        self.entry_info.last_modified()
+    }
+
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.entry_info.is_dirty()
     }
 }
 
@@ -127,28 +103,6 @@ pub(crate) struct KvEntry<K, V> {
 impl<K, V> KvEntry<K, V> {
     pub(crate) fn new(key: Arc<K>, entry: TrioArc<ValueEntry<K, V>>) -> Self {
         Self { key, entry }
-    }
-}
-
-impl<K> AccessTime for DeqNode<KeyDate<K>> {
-    #[inline]
-    fn last_accessed(&self) -> Option<Instant> {
-        None
-    }
-
-    #[inline]
-    fn set_last_accessed(&self, _timestamp: Instant) {
-        unreachable!();
-    }
-
-    #[inline]
-    fn last_modified(&self) -> Option<Instant> {
-        self.element.entry_info.last_modified()
-    }
-
-    #[inline]
-    fn set_last_modified(&self, timestamp: Instant) {
-        self.element.entry_info.set_last_modified(timestamp);
     }
 }
 
@@ -165,12 +119,12 @@ impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
 
     #[inline]
     fn last_modified(&self) -> Option<Instant> {
-        None
+        self.element.entry_info.last_modified()
     }
 
     #[inline]
-    fn set_last_modified(&self, _timestamp: Instant) {
-        unreachable!();
+    fn set_last_modified(&self, timestamp: Instant) {
+        self.element.entry_info.set_last_modified(timestamp);
     }
 }
 
@@ -178,7 +132,7 @@ impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
 type KeyDeqNodeAo<K> = TagNonNull<DeqNode<KeyHashDate<K>>, 2>;
 
 // DeqNode for the write order queue.
-type KeyDeqNodeWo<K> = NonNull<DeqNode<KeyDate<K>>>;
+type KeyDeqNodeWo<K> = NonNull<DeqNode<KeyHashDate<K>>>;
 
 // DeqNode for the timer wheel.
 type DeqNodeTimer<K> = NonNull<DeqNode<TimerNode<K>>>;
