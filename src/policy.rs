@@ -61,37 +61,78 @@ impl Policy {
 /// Calculates when cache entries expire. A single expiration time is retained on
 /// each entry so that the lifetime of an entry may be extended or reduced by
 /// subsequent evaluations.
+///
+/// `Expiry` trait provides three methods. They specify the expiration time of an
+/// entry by returning a `Some(duration)` until the entry expires:
+///
+/// - [`expire_after_create`](#method.expire_after_create) &mdash; Returns the
+///   duration (or none) after the entry's creation.
+/// - [`expire_after_read`](#method.expire_after_read) &mdash; Returns the duration
+///   (or none)  after its last read.
+/// - [`expire_after_update`](#method.expire_after_update) &mdash; Returns the
+///   duration (or none)  after its last update.
+///
+/// The default implementations are provided that return `None` (no expiration) or
+/// `current_duration: Option<Instant>` (not modify the current expiration time).
+/// Override some of them as you need.
+///
 pub trait Expiry<K, V> {
     /// Specifies that the entry should be automatically removed from the cache once
-    /// the duration has elapsed after the entry's creation. Returning `None`
-    /// indicates no expiration for the entry.
+    /// the duration has elapsed after the entry's creation. This method is called
+    /// for cache write methods such as `insert` and `get_with` but only when the key
+    /// is not present in the cache.
     ///
-    /// The default implementation returns `None` (no expiration).
+    /// # Parameters
     ///
-    /// **NOTE:** If the cache is configured with `time_to_live` and/or
-    /// `time_to_idle` policies, the entry will be evicted after the earliest of the
-    /// expiration time calculated by this expiry, the `time_to_live` and
-    /// `time_to_idle` policies.
+    /// - `key` &mdash; A reference to the key of the entry.
+    /// - `value` &mdash; A reference to the value of the entry.
+    /// - `current_time` &mdash; The current instant.
+    ///
+    /// # Returning `None`
+    ///
+    /// - Returning `None` indicates no expiration for the entry.
+    /// - The default implementation returns `None`.
+    ///
+    /// # Notes on `time_to_live` and `time_to_idle` policies
+    ///
+    /// When the cache is configured with `time_to_live` and/or `time_to_idle`
+    /// policies, the entry will be evicted after the earliest of the expiration time
+    /// returned by this expiry, the `time_to_live` and `time_to_idle` policies.
     #[allow(unused_variables)]
     fn expire_after_create(&self, key: &K, value: &V, current_time: Instant) -> Option<Duration> {
         None
     }
 
     /// Specifies that the entry should be automatically removed from the cache once
-    /// the duration has elapsed after its last read. Returning `None` indicates no
-    /// expiration for the entry. Returning `current_duration` will not modify the
-    /// expiration time.
+    /// the duration has elapsed after its last read. This method is called for cache
+    /// read methods such as `get` and `get_with` but only when the key is present
+    /// in the cache.
     ///
-    /// The `current_duration` is the duration until the entry expires.
+    /// # Parameters
     ///
-    /// The default implementation returns `current_duration` (not modify the
-    /// expiration time)
+    /// - `key` &mdash; A reference to the key of the entry.
+    /// - `value` &mdash; A reference to the value of the entry.
+    /// - `current_time` &mdash; The current instant.
+    /// - `current_duration` &mdash; The remaining duration until the entry expires.
+    /// - `last_modified_at` &mdash; The instant when the entry was created or
+    ///   updated.
     ///
-    /// **NOTE:** If the cache is configured with `time_to_live` and/or
-    /// `time_to_idle` policies, the entry will be evicted after the earliest of the
-    /// expiration time calculated by this expiry, the `time_to_live` and
-    /// `time_to_idle` policies. Also the `current_duration` takes in account the
-    /// `time_to_live` and `time_to_idle` policies.
+    /// # Returning `None` or `current_duration`
+    ///
+    /// - Returning `None` indicates no expiration for the entry.
+    /// - Returning `current_duration` will not modify the expiration time.
+    /// - The default implementation returns `current_duration` (not modify the
+    ///   expiration time)
+    ///
+    /// # Notes on `time_to_live` and `time_to_idle` policies
+    ///
+    /// When the cache is configured with `time_to_live` and/or `time_to_idle`
+    /// policies, then:
+    ///
+    /// - The entry will be evicted after the earliest of the expiration time
+    ///   returned by this expiry, the `time_to_live` and `time_to_idle` policies.
+    /// - The `current_duration` takes in account the `time_to_live` and
+    ///   `time_to_idle` policies.
     #[allow(unused_variables)]
     fn expire_after_read(
         &self,
@@ -105,20 +146,33 @@ pub trait Expiry<K, V> {
     }
 
     /// Specifies that the entry should be automatically removed from the cache once
-    /// the duration has elapsed after the replacement of its value. Returning `None`
-    /// indicates no expiration for the entry. Returning `current_duration` will not
-    /// modify the expiration time.
+    /// the duration has elapsed after the replacement of its value. This method is
+    /// called for cache write methods such as `insert` but only when the key is
+    /// already present in the cache.
     ///
-    /// The `current_duration` is the duration until the entry expires.
+    /// # Parameters
     ///
-    /// The default implementation returns `current_duration` (not modify the
-    /// expiration time)
+    /// - `key` &mdash; A reference to the key of the entry.
+    /// - `value` &mdash; A reference to the value of the entry.
+    /// - `current_time` &mdash; The current instant.
+    /// - `current_duration` &mdash; The remaining duration until the entry expires.
     ///
-    /// **NOTE:** If the cache is configured with `time_to_live` and/or
-    /// `time_to_idle` policies, the entry will be evicted after the earliest of the
-    /// expiration time calculated by this expiry, the `time_to_live` and
-    /// `time_to_idle` policies. Also the `current_duration` takes in account the
-    /// `time_to_live` and `time_to_idle` policies.
+    /// # Returning `None` or `current_duration`
+    ///
+    /// - Returning `None` indicates no expiration for the entry.
+    /// - Returning `current_duration` will not modify the expiration time.
+    /// - The default implementation returns `current_duration` (not modify the
+    ///   expiration time)
+    ///
+    /// # Notes on `time_to_live` and `time_to_idle` policies
+    ///
+    /// When the cache is configured with `time_to_live` and/or `time_to_idle`
+    /// policies, then:
+    ///
+    /// - The entry will be evicted after the earliest of the expiration time
+    ///   returned by this expiry, the `time_to_live` and `time_to_idle` policies.
+    /// - The `current_duration` takes in account the `time_to_live` and
+    ///   `time_to_idle` policies.
     #[allow(unused_variables)]
     fn expire_after_update(
         &self,
