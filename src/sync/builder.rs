@@ -77,7 +77,7 @@ where
             eviction_listener_conf: None,
             expiration_policy: Default::default(),
             invalidator_enabled: false,
-            // TODO: Change this to `false` in Moka 0.10.0.
+            // TODO: Change this to `false` in Moka v0.12.0 or v0.13.0.
             thread_pool_enabled: true,
             cache_type: Default::default(),
         }
@@ -517,7 +517,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     /// necessary.
     ///
     /// NOTE: The default value will be changed to `false` in a future release
-    /// (v0.10.0 or v0.11.0).
+    /// (v0.12.0 or v0.13.0).
     pub fn thread_pool_enabled(self, v: bool) -> Self {
         Self {
             thread_pool_enabled: v,
