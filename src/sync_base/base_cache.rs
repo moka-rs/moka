@@ -244,7 +244,7 @@ where
         self.do_get_with_hash(key, hash, record, ignore_if, need_key)
     }
 
-    pub(crate) fn get_with_hash_but_ignore_if<Q, I>(
+    pub(crate) fn get_with_hash_and_ignore_if<Q, I>(
         &self,
         key: &Q,
         hash: u64,
@@ -264,7 +264,7 @@ where
         self.do_get_with_hash(key, hash, record, ignore_if, need_key)
     }
 
-    pub(crate) fn get_with_hash_but_no_recording<Q, I>(
+    pub(crate) fn get_with_hash_without_recording<Q, I>(
         &self,
         key: &Q,
         hash: u64,
@@ -344,6 +344,25 @@ where
                 // `std::time::Instant`.
                 let lm = self.inner.clocks().to_std_instant(lm);
 
+                // Call the user supplied `expire_after_read` method.
+                //
+                // We will put the return value (`is_expiry_modified: bool`) to a
+                // `ReadOp` so that `apply_reads` method can determine whether or not
+                // to reschedule the timer for the entry.
+                //
+                // NOTE: It is not guaranteed that the `ReadOp` is passed to
+                // `apply_reads`. Here are the corner cases that the `ReadOp` will
+                // not be passed to `apply_reads`:
+                //
+                // - If the bounded `read_op_ch` channel is full, the `ReadOp` will
+                //   be discarded.
+                // - If we were called by `get_with_hash_without_recording` method,
+                //   the `ReadOp` will not be recorded at all.
+                //
+                // These cases are okay because when the timer wheel tries to expire
+                // the entry, it will check if the entry is actually expired. If not,
+                // the timer wheel will reschedule the expiration timer for the
+                // entry.
                 is_expiry_modified = Self::expire_after_read_or_update(
                     |k, v, t, d| expiry.expire_after_read(k, v, t, d, lm),
                     &entry.entry_info().key_hash().key,

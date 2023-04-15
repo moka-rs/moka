@@ -1102,7 +1102,7 @@ where
         need_key: bool,
     ) -> Entry<K, V> {
         self.base
-            .get_with_hash_but_ignore_if(&key, hash, replace_if.as_mut(), need_key)
+            .get_with_hash_and_ignore_if(&key, hash, replace_if.as_mut(), need_key)
             .unwrap_or_else(|| self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key))
     }
 
@@ -1124,7 +1124,7 @@ where
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
         self.base
-            .get_with_hash_but_ignore_if(key, hash, replace_if.as_mut(), need_key)
+            .get_with_hash_and_ignore_if(key, hash, replace_if.as_mut(), need_key)
             .unwrap_or_else(|| {
                 let key = Arc::new(key.to_owned());
                 self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key)
@@ -1141,7 +1141,7 @@ where
     ) -> Entry<K, V> {
         let get = || {
             self.base
-                .get_with_hash_but_no_recording(&key, hash, replace_if.as_mut())
+                .get_with_hash_without_recording(&key, hash, replace_if.as_mut())
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 
@@ -1366,7 +1366,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_but_no_recording(&key, hash, ignore_if)
+                .get_with_hash_without_recording(&key, hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 
@@ -1561,7 +1561,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_but_no_recording(&key, hash, ignore_if)
+                .get_with_hash_without_recording(&key, hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 
@@ -2780,6 +2780,88 @@ mod tests {
             expiry_counters.verify();
             verify_notification_vec(&cache, actual, &expected, delivery_mode);
         }
+    }
+
+    /// Verify that the `Expiry::expire_after_read()` method is called in `get_with`
+    /// only when the key was already present in the cache.
+    #[test]
+    fn test_expiry_using_get_with() {
+        // Define an expiry type, which always return `None`.
+        struct NoExpiry {
+            counters: Arc<ExpiryCallCounters>,
+        }
+
+        impl NoExpiry {
+            fn new(counters: Arc<ExpiryCallCounters>) -> Self {
+                Self { counters }
+            }
+        }
+
+        impl Expiry<&str, &str> for NoExpiry {
+            fn expire_after_create(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_creations();
+                None
+            }
+
+            fn expire_after_read(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+                _current_duration: Option<Duration>,
+                _last_modified_at: StdInstant,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_reads();
+                None
+            }
+
+            fn expire_after_update(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+                _current_duration: Option<Duration>,
+            ) -> Option<Duration> {
+                unreachable!("The `expire_after_update()` method should not be called.");
+            }
+        }
+
+        // Create expiry counters and the expiry.
+        let expiry_counters = Arc::new(ExpiryCallCounters::default());
+        let expiry = NoExpiry::new(Arc::clone(&expiry_counters));
+
+        // Create a cache with the expiry and eviction listener.
+        let mut cache = Cache::builder()
+            .max_capacity(100)
+            .expire_after(expiry)
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        // The key is not present.
+        cache.get_with("a", || "alice");
+        expiry_counters.incl_expected_creations();
+        cache.sync();
+
+        // The key is present.
+        cache.get_with("a", || "alex");
+        expiry_counters.incl_expected_reads();
+        cache.sync();
+
+        // The key is not present.
+        cache.invalidate("a");
+        cache.get_with("a", || "amanda");
+        expiry_counters.incl_expected_creations();
+        cache.sync();
+
+        expiry_counters.verify();
     }
 
     #[test]
