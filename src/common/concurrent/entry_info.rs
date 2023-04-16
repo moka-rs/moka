@@ -123,9 +123,6 @@ mod test {
     //   RUSTFLAGS='--cfg rustver' cargo test --lib --no-default-features --features sync -- common::concurrent::entry_info::test --nocapture
     //
     // Note: the size of the struct may change in a future version of Rust.
-
-    // TODO: Re-enable this test.
-
     #[cfg_attr(
         not(all(rustver, any(target_os = "linux", target_os = "macos"))),
         ignore
@@ -165,8 +162,7 @@ mod test {
             (Linux32, true) => vec![("1.51", 48)],
             (MacOS64, true) => vec![("1.62", 48)],
             (Linux64, false) => vec![("1.66", 96), ("1.60", 120)],
-            // TODO: Replace `usize::MAX` with the expected size.
-            (Linux32, false) => vec![("1.66", 96), ("1.62", usize::MAX), ("1.60", usize::MAX)],
+            (Linux32, false) => vec![("1.66", 96), ("1.62", 120), ("1.60", 72)],
             (MacOS64, false) => vec![("1.62", 96)],
         };
 
@@ -179,10 +175,7 @@ mod test {
         }
 
         if let Some(size) = expected {
-            // TODO: Remove this check once we have the expected size for all versions.
-            if size != usize::MAX {
-                assert_eq!(size_of::<EntryInfo<()>>(), size);
-            }
+            assert_eq!(size_of::<EntryInfo<()>>(), size);
         } else {
             panic!("No expected size for {:?} with Rust version {}", arch, ver);
         }
