@@ -188,7 +188,7 @@ pub use common::error::PredicateError;
 #[cfg(any(feature = "sync", feature = "future"))]
 pub use common::entry::Entry;
 
-pub use policy::Policy;
+pub use policy::{Expiry, Policy};
 
 #[cfg(feature = "dash")]
 compile_error!(

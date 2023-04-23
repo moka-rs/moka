@@ -5,6 +5,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
+#[derive(Debug)]
 pub(crate) struct AtomicInstant {
     instant: AtomicU64,
 }
@@ -25,6 +26,10 @@ impl AtomicInstant {
         let ai = Self::default();
         ai.set_instant(timestamp);
         ai
+    }
+
+    pub(crate) fn clear(&self) {
+        self.instant.store(u64::MAX, Ordering::Release);
     }
 
     pub(crate) fn is_set(&self) -> bool {

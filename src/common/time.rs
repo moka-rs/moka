@@ -7,16 +7,19 @@ pub(crate) mod clock;
 pub(crate) use clock::Clock;
 
 #[cfg(test)]
-#[cfg(all(test, feature = "sync"))]
 pub(crate) use clock::Mock;
 
 /// a wrapper type over Instant to force checked additions and prevent
 /// unintentional overflow. The type preserve the Copy semantics for the wrapped
-#[derive(PartialEq, PartialOrd, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
 pub(crate) struct Instant(clock::Instant);
 
 pub(crate) trait CheckedTimeOps {
     fn checked_add(&self, duration: Duration) -> Option<Self>
+    where
+        Self: Sized;
+
+    fn checked_duration_since(&self, earlier: Self) -> Option<Duration>
     where
         Self: Sized;
 }
@@ -39,5 +42,12 @@ impl Instant {
 impl CheckedTimeOps for Instant {
     fn checked_add(&self, duration: Duration) -> Option<Instant> {
         self.0.checked_add(duration).map(Instant)
+    }
+
+    fn checked_duration_since(&self, earlier: Self) -> Option<Duration>
+    where
+        Self: Sized,
+    {
+        self.0.checked_duration_since(earlier.0)
     }
 }

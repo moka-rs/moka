@@ -53,8 +53,9 @@ high level of concurrency for concurrent access.
     - Eviction from a cache is controlled by the Least Recently Used (LRU) policy.
     - [More details and some benchmark results are available here][tiny-lfu].
 - Supports expiration policies:
-    - Time to live
-    - Time to idle
+    - Time to live.
+    - Time to idle.
+    - Per-entry variable expiration.
 - Supports eviction listener, a callback function that will be called when an entry
   is removed from the cache.
 
@@ -66,7 +67,7 @@ and can be overkill for your use case. Sometimes simpler caches like
 
 The following table shows the trade-offs between the different cache implementations:
 
-| Feature | Moka v0.10 | Mini Moka v0.10 | Quick Cache v0.2 |
+| Feature | Moka v0.11 | Mini Moka v0.10 | Quick Cache v0.2 |
 |:------- |:---- |:--------- |:----------- |
 | Thread-safe, sync cache | ✅ | ✅ | ✅ |
 | Thread-safe, async cache | ✅ | ❌ | ❌ |
@@ -74,16 +75,17 @@ The following table shows the trade-offs between the different cache implementat
 | Bounded by the maximum number of entries | ✅ | ✅ | ✅ |
 | Bounded by the total weighted size of entries | ✅ | ✅ | ✅ |
 | Near optimal hit ratio | ✅ TinyLFU | ✅ TinyLFU | ✅ CLOCK-Pro |
-| Expiration policies | ✅ | ✅ | ❌ |
+| Cache-level expiration policies (Time-to-live and time-to-idle) | ✅ | ✅ | ❌ |
+| Per-entry variable expiration | ✅ | ❌ | ❌ |
 | Eviction listener | ✅ | ❌ | ❌ |
 | Per-key, atomic insertion | ✅ `get_with` family methods | ❌ | ❌ |
 | Lock-free, concurrent iterator | ✅ | ❌ | ❌ |
 | Lock-per-shard, concurrent iterator | ❌ | ✅ | ❌ |
 
-| Performance | Moka v0.10 | Mini Moka v0.10 | Quick Cache v0.2 |
+| Performance | Moka v0.11 | Mini Moka v0.10 | Quick Cache v0.2 |
 |:------- |:---- |:--------- |:----------- |
 | Small overhead compared to a concurrent hash table | ❌ | ❌ | ✅ |
-| Does not use background threads | ❌ Will be removed from v0.11 | ✅ | ✅ |
+| Does not use background threads | ❌ Will be removed from v0.12 or v0.13 | ✅ | ✅ |
 | Small dependency tree | ❌ | ✅ | ✅ |
 
 [tiny-lfu]: https://github.com/moka-rs/moka/wiki#admission-and-eviction-policies
@@ -154,14 +156,14 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-moka = "0.10"
+moka = "0.11"
 ```
 
 To use the asynchronous cache, enable a crate feature called "future".
 
 ```toml
 [dependencies]
-moka = { version = "0.10", features = ["future"] }
+moka = { version = "0.11", features = ["future"] }
 ```
 
 
@@ -263,7 +265,7 @@ Here is a similar program to the previous example, but using asynchronous cache 
 // Cargo.toml
 //
 // [dependencies]
-// moka = { version = "0.10", features = ["future"] }
+// moka = { version = "0.11", features = ["future"] }
 // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 // futures-util = "0.3"
 
@@ -502,9 +504,9 @@ to the dependency declaration.
 
 ```toml:Cargo.toml
 [dependencies]
-moka = { version = "0.10", default-features = false }
+moka = { version = "0.11", default-features = false }
 # Or
-moka = { version = "0.10", default-features = false, features = ["future"] }
+moka = { version = "0.11", default-features = false, features = ["future"] }
 ```
 
 This will make Moka to switch to a fall-back implementation, so it will compile.
@@ -547,13 +549,15 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
     - `blocking_insert(K, V)` → `blocking().insert(K, V)`
     - `time_to_live()` → `policy().time_to_live()`
 - [x] Notifications on eviction. (`v0.9.0` via [#145][gh-pull-145])
+- [x] The variable (per-entry) expiration, using a hierarchical timer wheel.
+  (`v0.11.0` via [#248][gh-pull-248])
 - [ ] Cache statistics. (Hit rate, etc.)
 - [ ] Upgrade TinyLFU to Window-TinyLFU. ([details][tiny-lfu])
-- [ ] The variable (per-entry) expiration, using a hierarchical timer wheel.
 
 [gh-pull-024]: https://github.com/moka-rs/moka/pull/24
 [gh-pull-105]: https://github.com/moka-rs/moka/pull/105
 [gh-pull-145]: https://github.com/moka-rs/moka/pull/145
+[gh-pull-248]: https://github.com/moka-rs/moka/pull/248
 
 
 ## About the Name

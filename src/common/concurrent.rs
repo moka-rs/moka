@@ -31,6 +31,8 @@ pub(crate) mod debug_counters;
 
 use self::entry_info::EntryInfo;
 
+use super::timer_wheel::TimerNode;
+
 pub(crate) type Weigher<K, V> = Arc<dyn Fn(&K, &V) -> u32 + Send + Sync + 'static>;
 
 pub(crate) trait AccessTime {
@@ -40,6 +42,7 @@ pub(crate) trait AccessTime {
     fn set_last_modified(&self, timestamp: Instant);
 }
 
+#[derive(Debug)]
 pub(crate) struct KeyHash<K> {
     pub(crate) key: Arc<K>,
     pub(crate) hash: u64,
@@ -60,59 +63,35 @@ impl<K> Clone for KeyHash<K> {
     }
 }
 
-pub(crate) struct KeyDate<K> {
-    key: Arc<K>,
-    entry_info: TrioArc<EntryInfo>,
+pub(crate) struct KeyHashDate<K> {
+    entry_info: TrioArc<EntryInfo<K>>,
 }
 
-impl<K> KeyDate<K> {
-    pub(crate) fn new(key: Arc<K>, entry_info: &TrioArc<EntryInfo>) -> Self {
+impl<K> KeyHashDate<K> {
+    pub(crate) fn new(entry_info: &TrioArc<EntryInfo<K>>) -> Self {
         Self {
-            key,
             entry_info: TrioArc::clone(entry_info),
         }
     }
 
     pub(crate) fn key(&self) -> &Arc<K> {
-        &self.key
+        &self.entry_info.key_hash().key
     }
 
-    #[cfg(any(feature = "sync", feature = "future"))]
+    pub(crate) fn hash(&self) -> u64 {
+        self.entry_info.key_hash().hash
+    }
+
+    pub(crate) fn entry_info(&self) -> &EntryInfo<K> {
+        &self.entry_info
+    }
+
     pub(crate) fn last_modified(&self) -> Option<Instant> {
         self.entry_info.last_modified()
     }
 
-    #[cfg(any(feature = "sync", feature = "future"))]
     pub(crate) fn is_dirty(&self) -> bool {
         self.entry_info.is_dirty()
-    }
-}
-
-pub(crate) struct KeyHashDate<K> {
-    key: Arc<K>,
-    hash: u64,
-    entry_info: TrioArc<EntryInfo>,
-}
-
-impl<K> KeyHashDate<K> {
-    pub(crate) fn new(kh: KeyHash<K>, entry_info: &TrioArc<EntryInfo>) -> Self {
-        Self {
-            key: kh.key,
-            hash: kh.hash,
-            entry_info: TrioArc::clone(entry_info),
-        }
-    }
-
-    pub(crate) fn key(&self) -> &Arc<K> {
-        &self.key
-    }
-
-    pub(crate) fn hash(&self) -> u64 {
-        self.hash
-    }
-
-    pub(crate) fn entry_info(&self) -> &EntryInfo {
-        &self.entry_info
     }
 }
 
@@ -124,28 +103,6 @@ pub(crate) struct KvEntry<K, V> {
 impl<K, V> KvEntry<K, V> {
     pub(crate) fn new(key: Arc<K>, entry: TrioArc<ValueEntry<K, V>>) -> Self {
         Self { key, entry }
-    }
-}
-
-impl<K> AccessTime for DeqNode<KeyDate<K>> {
-    #[inline]
-    fn last_accessed(&self) -> Option<Instant> {
-        None
-    }
-
-    #[inline]
-    fn set_last_accessed(&self, _timestamp: Instant) {
-        unreachable!();
-    }
-
-    #[inline]
-    fn last_modified(&self) -> Option<Instant> {
-        self.element.entry_info.last_modified()
-    }
-
-    #[inline]
-    fn set_last_modified(&self, timestamp: Instant) {
-        self.element.entry_info.set_last_modified(timestamp);
     }
 }
 
@@ -162,12 +119,12 @@ impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
 
     #[inline]
     fn last_modified(&self) -> Option<Instant> {
-        None
+        self.element.entry_info.last_modified()
     }
 
     #[inline]
-    fn set_last_modified(&self, _timestamp: Instant) {
-        unreachable!();
+    fn set_last_modified(&self, timestamp: Instant) {
+        self.element.entry_info.set_last_modified(timestamp);
     }
 }
 
@@ -175,56 +132,65 @@ impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
 type KeyDeqNodeAo<K> = TagNonNull<DeqNode<KeyHashDate<K>>, 2>;
 
 // DeqNode for the write order queue.
-type KeyDeqNodeWo<K> = NonNull<DeqNode<KeyDate<K>>>;
+type KeyDeqNodeWo<K> = NonNull<DeqNode<KeyHashDate<K>>>;
+
+// DeqNode for the timer wheel.
+type DeqNodeTimer<K> = NonNull<DeqNode<TimerNode<K>>>;
 
 pub(crate) struct DeqNodes<K> {
     access_order_q_node: Option<KeyDeqNodeAo<K>>,
     write_order_q_node: Option<KeyDeqNodeWo<K>>,
+    timer_node: Option<DeqNodeTimer<K>>,
+}
+
+impl<K> Default for DeqNodes<K> {
+    fn default() -> Self {
+        Self {
+            access_order_q_node: None,
+            write_order_q_node: None,
+            timer_node: None,
+        }
+    }
 }
 
 // We need this `unsafe impl` as DeqNodes have NonNull pointers.
 unsafe impl<K> Send for DeqNodes<K> {}
 
+impl<K> DeqNodes<K> {
+    pub(crate) fn set_timer_node(&mut self, timer_node: Option<DeqNodeTimer<K>>) {
+        self.timer_node = timer_node;
+    }
+}
+
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: V,
-    info: TrioArc<EntryInfo>,
-    nodes: Mutex<DeqNodes<K>>,
+    info: TrioArc<EntryInfo<K>>,
+    nodes: TrioArc<Mutex<DeqNodes<K>>>,
 }
 
 impl<K, V> ValueEntry<K, V> {
-    pub(crate) fn new(value: V, entry_info: TrioArc<EntryInfo>) -> Self {
+    pub(crate) fn new(value: V, entry_info: TrioArc<EntryInfo<K>>) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
         self::debug_counters::InternalGlobalDebugCounters::value_entry_created();
 
         Self {
             value,
             info: entry_info,
-            nodes: Mutex::new(DeqNodes {
-                access_order_q_node: None,
-                write_order_q_node: None,
-            }),
+            nodes: TrioArc::new(Mutex::new(DeqNodes::default())),
         }
     }
 
-    pub(crate) fn new_from(value: V, entry_info: TrioArc<EntryInfo>, other: &Self) -> Self {
+    pub(crate) fn new_from(value: V, entry_info: TrioArc<EntryInfo<K>>, other: &Self) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
         self::debug_counters::InternalGlobalDebugCounters::value_entry_created();
-
-        let nodes = {
-            let other_nodes = other.nodes.lock();
-            DeqNodes {
-                access_order_q_node: other_nodes.access_order_q_node,
-                write_order_q_node: other_nodes.write_order_q_node,
-            }
-        };
         Self {
             value,
             info: entry_info,
-            nodes: Mutex::new(nodes),
+            nodes: TrioArc::clone(&other.nodes),
         }
     }
 
-    pub(crate) fn entry_info(&self) -> &TrioArc<EntryInfo> {
+    pub(crate) fn entry_info(&self) -> &TrioArc<EntryInfo<K>> {
         &self.info
     }
 
@@ -249,6 +215,10 @@ impl<K, V> ValueEntry<K, V> {
         self.info.policy_weight()
     }
 
+    pub(crate) fn deq_nodes(&self) -> &TrioArc<Mutex<DeqNodes<K>>> {
+        &self.nodes
+    }
+
     pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
         self.nodes.lock().access_order_q_node
     }
@@ -271,6 +241,18 @@ impl<K, V> ValueEntry<K, V> {
 
     pub(crate) fn take_write_order_q_node(&self) -> Option<KeyDeqNodeWo<K>> {
         self.nodes.lock().write_order_q_node.take()
+    }
+
+    pub(crate) fn timer_node(&self) -> Option<DeqNodeTimer<K>> {
+        self.nodes.lock().timer_node
+    }
+
+    pub(crate) fn set_timer_node(&self, node: Option<DeqNodeTimer<K>>) {
+        self.nodes.lock().timer_node = node;
+    }
+
+    pub(crate) fn take_timer_node(&self) -> Option<DeqNodeTimer<K>> {
+        self.nodes.lock().timer_node.take()
     }
 
     pub(crate) fn unset_q_nodes(&self) {
@@ -310,8 +292,12 @@ impl<K, V> AccessTime for TrioArc<ValueEntry<K, V>> {
 }
 
 pub(crate) enum ReadOp<K, V> {
+    Hit {
+        value_entry: TrioArc<ValueEntry<K, V>>,
+        timestamp: Instant,
+        is_expiry_modified: bool,
+    },
     // u64 is the hash of the key.
-    Hit(u64, TrioArc<ValueEntry<K, V>>, Instant),
     Miss(u64),
 }
 

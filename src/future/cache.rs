@@ -13,6 +13,7 @@ use crate::{
         time::Instant,
     },
     notification::{self, EvictionListener},
+    policy::ExpirationPolicy,
     sync_base::base_cache::{BaseCache, HouseKeeperArc},
     Entry, Policy, PredicateError,
 };
@@ -79,7 +80,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.10", features = ["future"] }
+/// // moka = { version = "0.11", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures-util = "0.3"
 ///
@@ -163,7 +164,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.10", features = ["future"] }
+/// // moka = { version = "0.11", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures-util = "0.3"
 ///
@@ -225,7 +226,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.10", features = ["future"] }
+/// // moka = { version = "0.11", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures-util = "0.3"
 ///
@@ -589,7 +590,7 @@ impl<K, V, S> Cache<K, V, S> {
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.10", features = ["future"] }
+    /// // moka = { version = "0.11", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
     ///
@@ -661,8 +662,7 @@ where
             None,
             None,
             None,
-            None,
-            None,
+            Default::default(),
             false,
             housekeeper::Configuration::new_thread_pool(true),
         )
@@ -693,8 +693,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
         eviction_listener_conf: Option<notification::Configuration>,
-        time_to_live: Option<Duration>,
-        time_to_idle: Option<Duration>,
+        expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
         housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
@@ -707,8 +706,7 @@ where
                 weigher,
                 eviction_listener,
                 eviction_listener_conf,
-                time_to_live,
-                time_to_idle,
+                expiration_policy,
                 invalidator_enabled,
                 housekeeper_conf,
             ),
@@ -763,7 +761,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.10", features = ["future"] }
+    /// // moka = { version = "0.11", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -803,7 +801,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.10", features = ["future"] }
+    /// // moka = { version = "0.11", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -848,7 +846,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.10", features = ["future"] }
+    /// // moka = { version = "0.11", features = ["future"] }
     /// // futures-util = "0.3"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
@@ -975,7 +973,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.10", features = ["future"] }
+    /// // moka = { version = "0.11", features = ["future"] }
     /// // futures-util = "0.3"
     /// // reqwest = "0.11"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
@@ -1099,7 +1097,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.10", features = ["future"] }
+    /// // moka = { version = "0.11", features = ["future"] }
     /// // futures-util = "0.3"
     /// // reqwest = "0.11"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
@@ -1369,7 +1367,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.10", features = ["future"] }
+    /// // moka = { version = "0.11", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
     ///
@@ -1448,7 +1446,7 @@ where
     ) -> Entry<K, V> {
         let maybe_entry =
             self.base
-                .get_with_hash_but_ignore_if(&key, hash, replace_if.as_mut(), need_key);
+                .get_with_hash_and_ignore_if(&key, hash, replace_if.as_mut(), need_key);
         if let Some(entry) = maybe_entry {
             entry
         } else {
@@ -1471,7 +1469,7 @@ where
     {
         let maybe_entry =
             self.base
-                .get_with_hash_but_ignore_if(key, hash, replace_if.as_mut(), need_key);
+                .get_with_hash_and_ignore_if(key, hash, replace_if.as_mut(), need_key);
         if let Some(entry) = maybe_entry {
             entry
         } else {
@@ -1493,7 +1491,7 @@ where
 
         let get = || {
             self.base
-                .get_with_hash_but_no_recording(&key, hash, replace_if.as_mut())
+                .get_with_hash_without_recording(&key, hash, replace_if.as_mut())
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
 
@@ -1615,7 +1613,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_but_no_recording(&key, hash, ignore_if)
+                .get_with_hash_without_recording(&key, hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
 
@@ -1698,7 +1696,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_but_no_recording(&key, hash, ignore_if)
+                .get_with_hash_without_recording(&key, hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
 
@@ -1860,11 +1858,18 @@ where
 #[cfg(test)]
 mod tests {
     use super::{Cache, ConcurrentCacheExt};
-    use crate::{common::time::Clock, notification::RemovalCause};
+    use crate::{
+        common::time::Clock, notification::RemovalCause, policy::test_utils::ExpiryCallCounters,
+        Expiry,
+    };
 
     use async_io::Timer;
     use parking_lot::Mutex;
-    use std::{convert::Infallible, sync::Arc, time::Duration};
+    use std::{
+        convert::Infallible,
+        sync::Arc,
+        time::{Duration, Instant as StdInstant},
+    };
 
     #[tokio::test]
     async fn max_capacity_zero() {
@@ -2514,6 +2519,323 @@ mod tests {
         assert!(cache.is_table_empty());
 
         verify_notification_vec(&cache, actual, &expected);
+    }
+
+    #[tokio::test]
+    async fn time_to_live_by_expiry_type() {
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Define an expiry type.
+        struct MyExpiry {
+            counters: Arc<ExpiryCallCounters>,
+        }
+
+        impl MyExpiry {
+            fn new(counters: Arc<ExpiryCallCounters>) -> Self {
+                Self { counters }
+            }
+        }
+
+        impl Expiry<&str, &str> for MyExpiry {
+            fn expire_after_create(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_creations();
+                Some(Duration::from_secs(10))
+            }
+
+            fn expire_after_update(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+                _current_duration: Option<Duration>,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_updates();
+                Some(Duration::from_secs(10))
+            }
+        }
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+
+        // Create expiry counters and the expiry.
+        let expiry_counters = Arc::new(ExpiryCallCounters::default());
+        let expiry = MyExpiry::new(Arc::clone(&expiry_counters));
+
+        // Create a cache with the expiry and eviction listener.
+        let mut cache = Cache::builder()
+            .max_capacity(100)
+            .expire_after(expiry)
+            .eviction_listener_with_queued_delivery_mode(listener)
+            .build();
+        cache.reconfigure_for_testing();
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice").await;
+        expiry_counters.incl_expected_creations();
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert!(cache.contains_key(&"a"));
+
+        mock.increment(Duration::from_secs(5)); // 10 secs.
+        expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
+        assert_eq!(cache.get(&"a"), None);
+        assert!(!cache.contains_key(&"a"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
+        assert!(cache.is_table_empty());
+
+        cache.insert("b", "bob").await;
+        expiry_counters.incl_expected_creations();
+        cache.sync();
+
+        assert_eq!(cache.entry_count(), 1);
+
+        mock.increment(Duration::from_secs(5)); // 15 secs.
+        cache.sync();
+
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert!(cache.contains_key(&"b"));
+        assert_eq!(cache.entry_count(), 1);
+
+        cache.insert("b", "bill").await;
+        expected.push((Arc::new("b"), "bob", RemovalCause::Replaced));
+        expiry_counters.incl_expected_updates();
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 20 secs
+        cache.sync();
+
+        assert_eq!(cache.get(&"b"), Some("bill"));
+        assert!(cache.contains_key(&"b"));
+        assert_eq!(cache.entry_count(), 1);
+
+        mock.increment(Duration::from_secs(5)); // 25 secs
+        expected.push((Arc::new("b"), "bill", RemovalCause::Expired));
+
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), None);
+        assert!(!cache.contains_key(&"a"));
+        assert!(!cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
+        assert!(cache.is_table_empty());
+
+        expiry_counters.verify();
+        verify_notification_vec(&cache, actual, &expected);
+    }
+
+    #[tokio::test]
+    async fn time_to_idle_by_expiry_type() {
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Define an expiry type.
+        struct MyExpiry {
+            counters: Arc<ExpiryCallCounters>,
+        }
+
+        impl MyExpiry {
+            fn new(counters: Arc<ExpiryCallCounters>) -> Self {
+                Self { counters }
+            }
+        }
+
+        impl Expiry<&str, &str> for MyExpiry {
+            fn expire_after_read(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+                _current_duration: Option<Duration>,
+                _last_modified_at: StdInstant,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_reads();
+                Some(Duration::from_secs(10))
+            }
+        }
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+
+        // Create expiry counters and the expiry.
+        let expiry_counters = Arc::new(ExpiryCallCounters::default());
+        let expiry = MyExpiry::new(Arc::clone(&expiry_counters));
+
+        // Create a cache with the expiry and eviction listener.
+        let mut cache = Cache::builder()
+            .max_capacity(100)
+            .expire_after(expiry)
+            .eviction_listener_with_queued_delivery_mode(listener)
+            .build();
+        cache.reconfigure_for_testing();
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice").await;
+        cache.sync();
+
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        cache.sync();
+
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        expiry_counters.incl_expected_reads();
+
+        mock.increment(Duration::from_secs(5)); // 10 secs.
+        cache.sync();
+
+        cache.insert("b", "bob").await;
+        cache.sync();
+
+        assert_eq!(cache.entry_count(), 2);
+
+        mock.increment(Duration::from_secs(2)); // 12 secs.
+        cache.sync();
+
+        // contains_key does not reset the idle timer for the key.
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        cache.sync();
+
+        assert_eq!(cache.entry_count(), 2);
+
+        mock.increment(Duration::from_secs(3)); // 15 secs.
+        expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
+
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        expiry_counters.incl_expected_reads();
+        assert!(!cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 1);
+
+        cache.sync();
+        assert_eq!(cache.entry_count(), 1);
+
+        mock.increment(Duration::from_secs(10)); // 25 secs
+        expected.push((Arc::new("b"), "bob", RemovalCause::Expired));
+
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"b"), None);
+        assert!(!cache.contains_key(&"a"));
+        assert!(!cache.contains_key(&"b"));
+
+        assert_eq!(cache.iter().count(), 0);
+
+        cache.sync();
+        assert!(cache.is_table_empty());
+
+        expiry_counters.verify();
+        verify_notification_vec(&cache, actual, &expected);
+    }
+
+    /// Verify that the `Expiry::expire_after_read()` method is called in `get_with`
+    /// only when the key was already present in the cache.
+    #[tokio::test]
+    async fn test_expiry_using_get_with() {
+        // Define an expiry type, which always return `None`.
+        struct NoExpiry {
+            counters: Arc<ExpiryCallCounters>,
+        }
+
+        impl NoExpiry {
+            fn new(counters: Arc<ExpiryCallCounters>) -> Self {
+                Self { counters }
+            }
+        }
+
+        impl Expiry<&str, &str> for NoExpiry {
+            fn expire_after_create(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_creations();
+                None
+            }
+
+            fn expire_after_read(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+                _current_duration: Option<Duration>,
+                _last_modified_at: StdInstant,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_reads();
+                None
+            }
+
+            fn expire_after_update(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+                _current_duration: Option<Duration>,
+            ) -> Option<Duration> {
+                unreachable!("The `expire_after_update()` method should not be called.");
+            }
+        }
+
+        // Create expiry counters and the expiry.
+        let expiry_counters = Arc::new(ExpiryCallCounters::default());
+        let expiry = NoExpiry::new(Arc::clone(&expiry_counters));
+
+        // Create a cache with the expiry and eviction listener.
+        let mut cache = Cache::builder()
+            .max_capacity(100)
+            .expire_after(expiry)
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        // The key is not present.
+        cache.get_with("a", async { "alice" }).await;
+        expiry_counters.incl_expected_creations();
+        cache.sync();
+
+        // The key is present.
+        cache.get_with("a", async { "alex" }).await;
+        expiry_counters.incl_expected_reads();
+        cache.sync();
+
+        // The key is not present.
+        cache.invalidate("a").await;
+        cache.get_with("a", async { "amanda" }).await;
+        expiry_counters.incl_expected_creations();
+        cache.sync();
+
+        expiry_counters.verify();
     }
 
     #[tokio::test]

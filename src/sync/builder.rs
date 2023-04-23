@@ -2,6 +2,8 @@ use super::{Cache, SegmentedCache};
 use crate::{
     common::{builder_utils, concurrent::Weigher},
     notification::{self, EvictionListener, RemovalCause},
+    policy::ExpirationPolicy,
+    Expiry,
 };
 
 use std::{
@@ -53,8 +55,7 @@ pub struct CacheBuilder<K, V, C> {
     weigher: Option<Weigher<K, V>>,
     eviction_listener: Option<EvictionListener<K, V>>,
     eviction_listener_conf: Option<notification::Configuration>,
-    time_to_live: Option<Duration>,
-    time_to_idle: Option<Duration>,
+    expiration_policy: ExpirationPolicy<K, V>,
     invalidator_enabled: bool,
     thread_pool_enabled: bool,
     cache_type: PhantomData<C>,
@@ -74,10 +75,9 @@ where
             weigher: None,
             eviction_listener: None,
             eviction_listener_conf: None,
-            time_to_live: None,
-            time_to_idle: None,
+            expiration_policy: Default::default(),
             invalidator_enabled: false,
-            // TODO: Change this to `false` in Moka 0.10.0.
+            // TODO: Change this to `false` in Moka v0.12.0 or v0.13.0.
             thread_pool_enabled: true,
             cache_type: Default::default(),
         }
@@ -117,8 +117,7 @@ where
             weigher: self.weigher,
             eviction_listener: self.eviction_listener,
             eviction_listener_conf: self.eviction_listener_conf,
-            time_to_live: self.time_to_live,
-            time_to_idle: self.time_to_idle,
+            expiration_policy: self.expiration_policy,
             invalidator_enabled: self.invalidator_enabled,
             thread_pool_enabled: self.thread_pool_enabled,
             cache_type: PhantomData::default(),
@@ -137,7 +136,8 @@ where
     /// expiration.
     pub fn build(self) -> Cache<K, V, RandomState> {
         let build_hasher = RandomState::default();
-        builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
+        let exp = &self.expiration_policy;
+        builder_utils::ensure_expirations_or_panic(exp.time_to_live(), exp.time_to_idle());
         Cache::with_everything(
             self.name,
             self.max_capacity,
@@ -146,8 +146,7 @@ where
             self.weigher,
             self.eviction_listener,
             self.eviction_listener_conf,
-            self.time_to_live,
-            self.time_to_idle,
+            self.expiration_policy,
             self.invalidator_enabled,
             builder_utils::housekeeper_conf(self.thread_pool_enabled),
         )
@@ -225,7 +224,8 @@ where
     where
         S: BuildHasher + Clone + Send + Sync + 'static,
     {
-        builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
+        let exp = &self.expiration_policy;
+        builder_utils::ensure_expirations_or_panic(exp.time_to_live(), exp.time_to_idle());
         Cache::with_everything(
             self.name,
             self.max_capacity,
@@ -234,8 +234,7 @@ where
             self.weigher,
             self.eviction_listener,
             self.eviction_listener_conf,
-            self.time_to_live,
-            self.time_to_idle,
+            self.expiration_policy,
             self.invalidator_enabled,
             builder_utils::housekeeper_conf(self.thread_pool_enabled),
         )
@@ -259,7 +258,8 @@ where
     /// expiration.
     pub fn build(self) -> SegmentedCache<K, V, RandomState> {
         let build_hasher = RandomState::default();
-        builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
+        let exp = &self.expiration_policy;
+        builder_utils::ensure_expirations_or_panic(exp.time_to_live(), exp.time_to_idle());
         SegmentedCache::with_everything(
             self.name,
             self.max_capacity,
@@ -269,8 +269,7 @@ where
             self.weigher,
             self.eviction_listener,
             self.eviction_listener_conf,
-            self.time_to_live,
-            self.time_to_idle,
+            self.expiration_policy,
             self.invalidator_enabled,
             builder_utils::housekeeper_conf(self.thread_pool_enabled),
         )
@@ -349,7 +348,8 @@ where
     where
         S: BuildHasher + Clone + Send + Sync + 'static,
     {
-        builder_utils::ensure_expirations_or_panic(self.time_to_live, self.time_to_idle);
+        let exp = &self.expiration_policy;
+        builder_utils::ensure_expirations_or_panic(exp.time_to_live(), exp.time_to_idle());
         SegmentedCache::with_everything(
             self.name,
             self.max_capacity,
@@ -359,8 +359,7 @@ where
             self.weigher,
             self.eviction_listener,
             self.eviction_listener_conf,
-            self.time_to_live,
-            self.time_to_idle,
+            self.expiration_policy,
             self.invalidator_enabled,
             builder_utils::housekeeper_conf(true),
         )
@@ -469,10 +468,9 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     /// than 1000 years. This is done to protect against overflow when computing key
     /// expiration.
     pub fn time_to_live(self, duration: Duration) -> Self {
-        Self {
-            time_to_live: Some(duration),
-            ..self
-        }
+        let mut builder = self;
+        builder.expiration_policy.set_time_to_live(duration);
+        builder
     }
 
     /// Sets the time to idle of the cache.
@@ -486,10 +484,15 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     /// than 1000 years. This is done to protect against overflow when computing key
     /// expiration.
     pub fn time_to_idle(self, duration: Duration) -> Self {
-        Self {
-            time_to_idle: Some(duration),
-            ..self
-        }
+        let mut builder = self;
+        builder.expiration_policy.set_time_to_idle(duration);
+        builder
+    }
+
+    pub fn expire_after(self, expiry: impl Expiry<K, V> + Send + Sync + 'static) -> Self {
+        let mut builder = self;
+        builder.expiration_policy.set_expiry(Arc::new(expiry));
+        builder
     }
 
     /// Enables support for [Cache::invalidate_entries_if][cache-invalidate-if]
@@ -514,7 +517,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     /// necessary.
     ///
     /// NOTE: The default value will be changed to `false` in a future release
-    /// (v0.10.0 or v0.11.0).
+    /// (v0.12.0 or v0.13.0).
     pub fn thread_pool_enabled(self, v: bool) -> Self {
         Self {
             thread_pool_enabled: v,

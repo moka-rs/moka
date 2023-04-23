@@ -4,6 +4,7 @@ use super::{
 use crate::{
     common::concurrent::{housekeeper, Weigher},
     notification::{self, EvictionListener},
+    policy::ExpirationPolicy,
     sync_base::iter::{Iter, ScanningGet},
     Entry, Policy, PredicateError,
 };
@@ -14,7 +15,6 @@ use std::{
     fmt,
     hash::{BuildHasher, Hash, Hasher},
     sync::Arc,
-    time::Duration,
 };
 
 /// A thread-safe concurrent in-memory cache, with multiple internal segments.
@@ -106,8 +106,7 @@ where
             None,
             None,
             None,
-            None,
-            None,
+            Default::default(),
             false,
             housekeeper::Configuration::new_thread_pool(true),
         )
@@ -216,8 +215,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
         eviction_listener_conf: Option<notification::Configuration>,
-        time_to_live: Option<Duration>,
-        time_to_idle: Option<Duration>,
+        expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
         housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
@@ -231,8 +229,7 @@ where
                 weigher,
                 eviction_listener,
                 eviction_listener_conf,
-                time_to_live,
-                time_to_idle,
+                expiration_policy,
                 invalidator_enabled,
                 housekeeper_conf,
             )),
@@ -678,7 +675,7 @@ struct MockExpirationClock {
 
 #[cfg(test)]
 impl MockExpirationClock {
-    fn increment(&mut self, duration: Duration) {
+    fn increment(&mut self, duration: std::time::Duration) {
         for mock in &mut self.mocks {
             mock.increment(duration);
         }
@@ -711,8 +708,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
         eviction_listener_conf: Option<notification::Configuration>,
-        time_to_live: Option<Duration>,
-        time_to_idle: Option<Duration>,
+        expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
         housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
@@ -736,8 +732,7 @@ where
                     weigher.as_ref().map(Arc::clone),
                     eviction_listener.as_ref().map(Arc::clone),
                     eviction_listener_conf.clone(),
-                    time_to_live,
-                    time_to_idle,
+                    expiration_policy.clone(),
                     invalidator_enabled,
                     housekeeper_conf.clone(),
                 )

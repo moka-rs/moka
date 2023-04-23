@@ -12,6 +12,7 @@ use crate::{
         time::Instant,
     },
     notification::{self, EvictionListener},
+    policy::ExpirationPolicy,
     sync::{Iter, PredicateId},
     sync_base::{
         base_cache::{BaseCache, HouseKeeperArc},
@@ -814,8 +815,7 @@ where
             None,
             None,
             None,
-            None,
-            None,
+            Default::default(),
             false,
             housekeeper_conf,
         )
@@ -846,8 +846,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
         eviction_listener_conf: Option<notification::Configuration>,
-        time_to_live: Option<Duration>,
-        time_to_idle: Option<Duration>,
+        expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
         housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
@@ -860,8 +859,7 @@ where
                 weigher,
                 eviction_listener,
                 eviction_listener_conf,
-                time_to_live,
-                time_to_idle,
+                expiration_policy,
                 invalidator_enabled,
                 housekeeper_conf,
             ),
@@ -1104,7 +1102,7 @@ where
         need_key: bool,
     ) -> Entry<K, V> {
         self.base
-            .get_with_hash_but_ignore_if(&key, hash, replace_if.as_mut(), need_key)
+            .get_with_hash_and_ignore_if(&key, hash, replace_if.as_mut(), need_key)
             .unwrap_or_else(|| self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key))
     }
 
@@ -1126,7 +1124,7 @@ where
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
         self.base
-            .get_with_hash_but_ignore_if(key, hash, replace_if.as_mut(), need_key)
+            .get_with_hash_and_ignore_if(key, hash, replace_if.as_mut(), need_key)
             .unwrap_or_else(|| {
                 let key = Arc::new(key.to_owned());
                 self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key)
@@ -1143,7 +1141,7 @@ where
     ) -> Entry<K, V> {
         let get = || {
             self.base
-                .get_with_hash_but_no_recording(&key, hash, replace_if.as_mut())
+                .get_with_hash_without_recording(&key, hash, replace_if.as_mut())
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 
@@ -1368,7 +1366,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_but_no_recording(&key, hash, ignore_if)
+                .get_with_hash_without_recording(&key, hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 
@@ -1563,7 +1561,7 @@ where
         let get = || {
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             self.base
-                .get_with_hash_but_no_recording(&key, hash, ignore_if)
+                .get_with_hash_without_recording(&key, hash, ignore_if)
         };
         let insert = |v| self.insert_with_hash(key.clone(), hash, v);
 
@@ -1911,10 +1909,16 @@ mod tests {
             macros::{assert_eq_with_mode, assert_with_mode},
             DeliveryMode, RemovalCause,
         },
+        policy::test_utils::ExpiryCallCounters,
+        Expiry,
     };
 
     use parking_lot::Mutex;
-    use std::{convert::Infallible, sync::Arc, time::Duration};
+    use std::{
+        convert::Infallible,
+        sync::Arc,
+        time::{Duration, Instant as StdInstant},
+    };
 
     #[test]
     fn max_capacity_zero() {
@@ -2525,6 +2529,339 @@ mod tests {
 
             verify_notification_vec(&cache, actual, &expected, delivery_mode);
         }
+    }
+
+    #[test]
+    fn time_to_live_by_expiry_type() {
+        run_test(DeliveryMode::Immediate);
+        run_test(DeliveryMode::Queued);
+
+        // Define an expiry type.
+        struct MyExpiry {
+            counters: Arc<ExpiryCallCounters>,
+        }
+
+        impl MyExpiry {
+            fn new(counters: Arc<ExpiryCallCounters>) -> Self {
+                Self { counters }
+            }
+        }
+
+        impl Expiry<&str, &str> for MyExpiry {
+            fn expire_after_create(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_creations();
+                Some(Duration::from_secs(10))
+            }
+
+            fn expire_after_update(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+                _current_duration: Option<Duration>,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_updates();
+                Some(Duration::from_secs(10))
+            }
+        }
+
+        fn run_test(delivery_mode: DeliveryMode) {
+            // The following `Vec`s will hold actual and expected notifications.
+            let actual = Arc::new(Mutex::new(Vec::new()));
+            let mut expected = Vec::new();
+
+            // Create expiry counters and the expiry.
+            let expiry_counters = Arc::new(ExpiryCallCounters::default());
+            let expiry = MyExpiry::new(Arc::clone(&expiry_counters));
+
+            // Create an eviction listener.
+            let a1 = Arc::clone(&actual);
+            let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(delivery_mode)
+                .build();
+
+            // Create a cache with the eviction listener.
+            let mut cache = Cache::builder()
+                .max_capacity(100)
+                .expire_after(expiry)
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.reconfigure_for_testing();
+
+            let (clock, mock) = Clock::mock();
+            cache.set_expiration_clock(Some(clock));
+
+            // Make the cache exterior immutable.
+            let cache = cache;
+
+            cache.insert("a", "alice");
+            expiry_counters.incl_expected_creations();
+            cache.sync();
+
+            mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+            cache.sync();
+
+            assert_eq_with_mode!(cache.get(&"a"), Some("alice"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"a"), delivery_mode);
+
+            mock.increment(Duration::from_secs(5)); // 10 secs.
+            expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
+            assert_eq_with_mode!(cache.get(&"a"), None, delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"a"), delivery_mode);
+
+            assert_eq_with_mode!(cache.iter().count(), 0, delivery_mode);
+
+            cache.sync();
+            assert_with_mode!(cache.is_table_empty(), delivery_mode);
+
+            cache.insert("b", "bob");
+            expiry_counters.incl_expected_creations();
+            cache.sync();
+
+            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
+
+            mock.increment(Duration::from_secs(5)); // 15 secs.
+            cache.sync();
+
+            assert_eq_with_mode!(cache.get(&"b"), Some("bob"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
+
+            cache.insert("b", "bill");
+            expected.push((Arc::new("b"), "bob", RemovalCause::Replaced));
+            expiry_counters.incl_expected_updates();
+            cache.sync();
+
+            mock.increment(Duration::from_secs(5)); // 20 secs
+            cache.sync();
+
+            assert_eq_with_mode!(cache.get(&"b"), Some("bill"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
+
+            mock.increment(Duration::from_secs(5)); // 25 secs
+            expected.push((Arc::new("b"), "bill", RemovalCause::Expired));
+
+            assert_eq_with_mode!(cache.get(&"a"), None, delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), None, delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
+
+            assert_eq_with_mode!(cache.iter().count(), 0, delivery_mode);
+
+            cache.sync();
+            assert_with_mode!(cache.is_table_empty(), delivery_mode);
+
+            expiry_counters.verify();
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
+        }
+    }
+
+    #[test]
+    fn time_to_idle_by_expiry_type() {
+        run_test(DeliveryMode::Immediate);
+        run_test(DeliveryMode::Queued);
+
+        // Define an expiry type.
+        struct MyExpiry {
+            counters: Arc<ExpiryCallCounters>,
+        }
+
+        impl MyExpiry {
+            fn new(counters: Arc<ExpiryCallCounters>) -> Self {
+                Self { counters }
+            }
+        }
+
+        impl Expiry<&str, &str> for MyExpiry {
+            fn expire_after_read(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+                _current_duration: Option<Duration>,
+                _last_modified_at: StdInstant,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_reads();
+                Some(Duration::from_secs(10))
+            }
+        }
+
+        fn run_test(delivery_mode: DeliveryMode) {
+            // The following `Vec`s will hold actual and expected notifications.
+            let actual = Arc::new(Mutex::new(Vec::new()));
+            let mut expected = Vec::new();
+
+            // Create expiry counters and the expiry.
+            let expiry_counters = Arc::new(ExpiryCallCounters::default());
+            let expiry = MyExpiry::new(Arc::clone(&expiry_counters));
+
+            // Create an eviction listener.
+            let a1 = Arc::clone(&actual);
+            let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+            let listener_conf = notification::Configuration::builder()
+                .delivery_mode(delivery_mode)
+                .build();
+
+            // Create a cache with the eviction listener.
+            let mut cache = Cache::builder()
+                .max_capacity(100)
+                .expire_after(expiry)
+                .eviction_listener_with_conf(listener, listener_conf)
+                .build();
+            cache.reconfigure_for_testing();
+
+            let (clock, mock) = Clock::mock();
+            cache.set_expiration_clock(Some(clock));
+
+            // Make the cache exterior immutable.
+            let cache = cache;
+
+            cache.insert("a", "alice");
+            cache.sync();
+
+            mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+            cache.sync();
+
+            assert_eq_with_mode!(cache.get(&"a"), Some("alice"), delivery_mode);
+            expiry_counters.incl_expected_reads();
+
+            mock.increment(Duration::from_secs(5)); // 10 secs.
+            cache.sync();
+
+            cache.insert("b", "bob");
+            cache.sync();
+
+            assert_eq_with_mode!(cache.entry_count(), 2, delivery_mode);
+
+            mock.increment(Duration::from_secs(2)); // 12 secs.
+            cache.sync();
+
+            // contains_key does not reset the idle timer for the key.
+            assert_with_mode!(cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+            cache.sync();
+
+            assert_eq_with_mode!(cache.entry_count(), 2, delivery_mode);
+
+            mock.increment(Duration::from_secs(3)); // 15 secs.
+            expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
+
+            assert_eq_with_mode!(cache.get(&"a"), None, delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), Some("bob"), delivery_mode);
+            expiry_counters.incl_expected_reads();
+            assert_with_mode!(!cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(cache.contains_key(&"b"), delivery_mode);
+
+            assert_eq_with_mode!(cache.iter().count(), 1, delivery_mode);
+
+            cache.sync();
+            assert_eq_with_mode!(cache.entry_count(), 1, delivery_mode);
+
+            mock.increment(Duration::from_secs(10)); // 25 secs
+            expected.push((Arc::new("b"), "bob", RemovalCause::Expired));
+
+            assert_eq_with_mode!(cache.get(&"a"), None, delivery_mode);
+            assert_eq_with_mode!(cache.get(&"b"), None, delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"a"), delivery_mode);
+            assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
+
+            assert_eq_with_mode!(cache.iter().count(), 0, delivery_mode);
+
+            cache.sync();
+            assert_with_mode!(cache.is_table_empty(), delivery_mode);
+
+            expiry_counters.verify();
+            verify_notification_vec(&cache, actual, &expected, delivery_mode);
+        }
+    }
+
+    /// Verify that the `Expiry::expire_after_read()` method is called in `get_with`
+    /// only when the key was already present in the cache.
+    #[test]
+    fn test_expiry_using_get_with() {
+        // Define an expiry type, which always return `None`.
+        struct NoExpiry {
+            counters: Arc<ExpiryCallCounters>,
+        }
+
+        impl NoExpiry {
+            fn new(counters: Arc<ExpiryCallCounters>) -> Self {
+                Self { counters }
+            }
+        }
+
+        impl Expiry<&str, &str> for NoExpiry {
+            fn expire_after_create(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_creations();
+                None
+            }
+
+            fn expire_after_read(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+                _current_duration: Option<Duration>,
+                _last_modified_at: StdInstant,
+            ) -> Option<Duration> {
+                self.counters.incl_actual_reads();
+                None
+            }
+
+            fn expire_after_update(
+                &self,
+                _key: &&str,
+                _value: &&str,
+                _current_time: StdInstant,
+                _current_duration: Option<Duration>,
+            ) -> Option<Duration> {
+                unreachable!("The `expire_after_update()` method should not be called.");
+            }
+        }
+
+        // Create expiry counters and the expiry.
+        let expiry_counters = Arc::new(ExpiryCallCounters::default());
+        let expiry = NoExpiry::new(Arc::clone(&expiry_counters));
+
+        // Create a cache with the expiry and eviction listener.
+        let mut cache = Cache::builder()
+            .max_capacity(100)
+            .expire_after(expiry)
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        // The key is not present.
+        cache.get_with("a", || "alice");
+        expiry_counters.incl_expected_creations();
+        cache.sync();
+
+        // The key is present.
+        cache.get_with("a", || "alex");
+        expiry_counters.incl_expected_reads();
+        cache.sync();
+
+        // The key is not present.
+        cache.invalidate("a");
+        cache.get_with("a", || "amanda");
+        expiry_counters.incl_expected_creations();
+        cache.sync();
+
+        expiry_counters.verify();
     }
 
     #[test]

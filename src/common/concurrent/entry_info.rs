@@ -1,9 +1,11 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use super::AccessTime;
+use super::{AccessTime, KeyHash};
 use crate::common::{concurrent::atomic_time::AtomicInstant, time::Instant};
 
-pub(crate) struct EntryInfo {
+#[derive(Debug)]
+pub(crate) struct EntryInfo<K> {
+    key_hash: KeyHash<K>,
     /// `is_admitted` indicates that the entry has been admitted to the
     /// cache. When `false`, it means the entry is _temporary_ admitted to
     /// the cache or evicted from the cache (so it should not have LRU nodes).
@@ -14,22 +16,30 @@ pub(crate) struct EntryInfo {
     is_dirty: AtomicBool,
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
+    expiration_time: AtomicInstant,
     policy_weight: AtomicU32,
 }
 
-impl EntryInfo {
+impl<K> EntryInfo<K> {
     #[inline]
-    pub(crate) fn new(timestamp: Instant, policy_weight: u32) -> Self {
+    pub(crate) fn new(key_hash: KeyHash<K>, timestamp: Instant, policy_weight: u32) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
         super::debug_counters::InternalGlobalDebugCounters::entry_info_created();
 
         Self {
+            key_hash,
             is_admitted: Default::default(),
             is_dirty: AtomicBool::new(true),
             last_accessed: AtomicInstant::new(timestamp),
             last_modified: AtomicInstant::new(timestamp),
+            expiration_time: AtomicInstant::default(),
             policy_weight: AtomicU32::new(policy_weight),
         }
+    }
+
+    #[inline]
+    pub(crate) fn key_hash(&self) -> &KeyHash<K> {
+        &self.key_hash
     }
 
     #[inline]
@@ -60,16 +70,29 @@ impl EntryInfo {
     pub(crate) fn set_policy_weight(&self, size: u32) {
         self.policy_weight.store(size, Ordering::Release);
     }
+
+    #[inline]
+    pub(crate) fn expiration_time(&self) -> Option<Instant> {
+        self.expiration_time.instant()
+    }
+
+    pub(crate) fn set_expiration_time(&self, time: Option<Instant>) {
+        if let Some(t) = time {
+            self.expiration_time.set_instant(t);
+        } else {
+            self.expiration_time.clear();
+        }
+    }
 }
 
 #[cfg(feature = "unstable-debug-counters")]
-impl Drop for EntryInfo {
+impl<K> Drop for EntryInfo<K> {
     fn drop(&mut self) {
         super::debug_counters::InternalGlobalDebugCounters::entry_info_dropped();
     }
 }
 
-impl AccessTime for EntryInfo {
+impl<K> AccessTime for EntryInfo<K> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
         self.last_accessed.instant()
@@ -135,12 +158,12 @@ mod test {
         };
 
         let expected_sizes = match (arch, is_quanta_enabled) {
-            (Linux64, true) => vec![("1.51", 24)],
-            (Linux32, true) => vec![("1.51", 24)],
-            (MacOS64, true) => vec![("1.62", 24)],
-            (Linux64, false) => vec![("1.66", 56), ("1.51", 72)],
-            (Linux32, false) => vec![("1.66", 56), ("1.62", 72), ("1.51", 40)],
-            (MacOS64, false) => vec![("1.62", 56)],
+            (Linux64, true) => vec![("1.51", 48)],
+            (Linux32, true) => vec![("1.51", 48)],
+            (MacOS64, true) => vec![("1.62", 48)],
+            (Linux64, false) => vec![("1.66", 96), ("1.60", 120)],
+            (Linux32, false) => vec![("1.66", 96), ("1.62", 120), ("1.60", 72)],
+            (MacOS64, false) => vec![("1.62", 96)],
         };
 
         let mut expected = None;
@@ -152,7 +175,7 @@ mod test {
         }
 
         if let Some(size) = expected {
-            assert_eq!(size_of::<EntryInfo>(), size);
+            assert_eq!(size_of::<EntryInfo<()>>(), size);
         } else {
             panic!("No expected size for {:?} with Rust version {}", arch, ver);
         }
