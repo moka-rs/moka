@@ -5,13 +5,10 @@ use std::{collections::HashMap, sync::Arc};
 
 static REGISTRY: Lazy<ThreadPoolRegistry> = Lazy::new(ThreadPoolRegistry::default);
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
-#[cfg_attr(any(feature = "sync", feature = "future"), derive(Debug))]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum PoolName {
     Housekeeper,
-    #[cfg(any(feature = "sync", feature = "future"))]
     Invalidator,
-    #[cfg(any(feature = "sync", feature = "future"))]
     RemovalNotifier,
 }
 
@@ -19,9 +16,7 @@ impl PoolName {
     fn thread_name_template(&self) -> &'static str {
         match self {
             PoolName::Housekeeper => "moka-housekeeper-{}",
-            #[cfg(any(feature = "sync", feature = "future"))]
             PoolName::Invalidator => "moka-invalidator-{}",
-            #[cfg(any(feature = "sync", feature = "future"))]
             PoolName::RemovalNotifier => "moka-notifier-{}",
         }
     }

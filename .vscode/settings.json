@@ -1,5 +1,5 @@
 {
-    "rust-analyzer.cargo.features": ["future", "logging", "unstable-debug-counters"],
+    "rust-analyzer.cargo.features": ["sync", "future", "logging", "unstable-debug-counters"],
     "rust-analyzer.server.extraEnv": {
         "CARGO_TARGET_DIR": "target/ra"
     },

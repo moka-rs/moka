@@ -1,21 +1,15 @@
 use std::convert::TryInto;
 
-#[cfg(any(feature = "sync", feature = "future"))]
-pub(crate) mod concurrent;
-
-#[cfg(any(feature = "sync", feature = "future"))]
-pub(crate) mod error;
-
-#[cfg(any(feature = "sync", feature = "future"))]
-pub(crate) mod entry;
-
 pub(crate) mod builder_utils;
+pub(crate) mod concurrent;
 pub(crate) mod deque;
+pub(crate) mod entry;
+pub(crate) mod error;
 pub(crate) mod frequency_sketch;
 pub(crate) mod time;
 pub(crate) mod timer_wheel;
 
-#[cfg(all(test, any(feature = "sync", feature = "future")))]
+#[cfg(test)]
 pub(crate) mod test_utils;
 
 // Note: `CacheRegion` cannot have more than four enum variants. This is because
