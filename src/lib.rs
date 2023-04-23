@@ -161,42 +161,41 @@
 //!
 //! [timer-wheel]: http://www.cs.columbia.edu/~nahum/w6998/papers/ton97-timing-wheels.pdf
 
-pub(crate) mod common;
-pub(crate) mod policy;
-
-#[cfg(any(feature = "sync", feature = "future"))]
-pub(crate) mod cht;
-
 #[cfg(feature = "future")]
 #[cfg_attr(docsrs, doc(cfg(feature = "future")))]
 pub mod future;
-
-#[cfg(any(feature = "sync", feature = "future"))]
-#[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
-pub mod notification;
 
 #[cfg(feature = "sync")]
 #[cfg_attr(docsrs, doc(cfg(feature = "sync")))]
 pub mod sync;
 
 #[cfg(any(feature = "sync", feature = "future"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
+pub mod notification;
+
+#[cfg(any(feature = "sync", feature = "future"))]
+pub(crate) mod cht;
+
+#[cfg(any(feature = "sync", feature = "future"))]
+pub(crate) mod common;
+
+#[cfg(any(feature = "sync", feature = "future"))]
+pub(crate) mod policy;
+
+#[cfg(any(feature = "sync", feature = "future"))]
 pub(crate) mod sync_base;
 
 #[cfg(any(feature = "sync", feature = "future"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
 pub use common::error::PredicateError;
 
 #[cfg(any(feature = "sync", feature = "future"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
 pub use common::entry::Entry;
 
+#[cfg(any(feature = "sync", feature = "future"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
 pub use policy::{Expiry, Policy};
-
-#[cfg(feature = "dash")]
-compile_error!(
-    "`dash::Cache` has been moved to `mini-moka` crate. Use `mini_moka::sync::Cache` instead"
-);
-
-// Deprecated since v0.10.0. Use `mini_moka::unsync` instead.
-pub mod unsync;
 
 #[cfg(feature = "unstable-debug-counters")]
 #[cfg_attr(docsrs, doc(cfg(feature = "unstable-debug-counters")))]
