@@ -550,7 +550,7 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
     - `time_to_live()` → `policy().time_to_live()`
 - [x] Notifications on eviction. (`v0.9.0` via [#145][gh-pull-145])
 - [x] The variable (per-entry) expiration, using a hierarchical timer wheel.
-  (`v0.12.0` via [#248][gh-pull-248])
+  (`v0.11.0` via [#248][gh-pull-248])
 - [ ] Cache statistics. (Hit rate, etc.)
 - [ ] Upgrade TinyLFU to Window-TinyLFU. ([details][tiny-lfu])
 

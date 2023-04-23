@@ -975,8 +975,6 @@ pub(crate) struct Inner<K, V, S> {
     key_locks: Option<KeyLockMap<K, S>>,
     invalidator_enabled: bool,
     invalidator: RwLock<Option<Invalidator<K, V, S>>>,
-    // has_expiration_clock: AtomicBool,
-    // expiration_clock: RwLock<Option<Clock>>,
     clocks: Clocks,
 }
 
@@ -2446,9 +2444,7 @@ where
 #[inline]
 fn is_expired_by_per_entry_ttl<K>(entry_info: &TrioArc<EntryInfo<K>>, now: Instant) -> bool {
     if let Some(ts) = entry_info.expiration_time() {
-        if ts <= now {
-            return true;
-        }
+        return ts <= now;
     }
     false
 }
