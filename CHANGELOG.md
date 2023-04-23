@@ -13,6 +13,10 @@
       apply to all entries in the cache, the `sync` and `future` caches can now allow
       different expiration times for individual entries.
 
+### Removed
+
+- Removed `unsync` cache that was marked as deprecated in [v0.10.0](#version-0100).
+
 
 ## Version 0.10.2
 
