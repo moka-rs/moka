@@ -1,5 +1,19 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.11.0
+
+### Breaking Changes
+
+- (Will change the return type of the `invalidate` method from `()` to `Option<V>`)
+
+### Added
+
+- Added support for per-entry expiration. ([#248][gh-pull-0248])
+    - In addition to the existing TTL and TTI (time-to-idle) expiration times that
+      apply to all entries in the cache, the `sync` and `future` caches can now allow
+      different expiration times for individual entries.
+
+
 ## Version 0.10.2
 
 Bumped the minimum supported Rust version (MSRV) to 1.60 (2022-04-07).
@@ -624,6 +638,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
 [gh-pull-0251]: https://github.com/moka-rs/moka/pull/251/
+[gh-pull-0248]: https://github.com/moka-rs/moka/pull/248
 [gh-pull-0216]: https://github.com/moka-rs/moka/pull/216/
 [gh-pull-0199]: https://github.com/moka-rs/moka/pull/199/
 [gh-pull-0195]: https://github.com/moka-rs/moka/pull/195/
