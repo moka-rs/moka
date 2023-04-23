@@ -1618,6 +1618,9 @@ where
 
     /// Discards any cached value for the key.
     ///
+    /// If you need to get a the value that has been discarded, use the
+    /// [`remove`](#method.remove) method instead.
+    ///
     /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
     /// on the borrowed form _must_ match those for the key type.
     pub fn invalidate<Q>(&self, key: &Q)
@@ -1626,10 +1629,26 @@ where
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.base.hash(key);
-        self.invalidate_with_hash(key, hash);
+        self.invalidate_with_hash(key, hash, false);
     }
 
-    pub(crate) fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64)
+    /// Discards any cached value for the key and returns a _clone_ of the value.
+    ///
+    /// If you do not need to get the value that has been discarded, use the
+    /// [`invalidate`](#method.invalidate) method instead.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
+    /// on the borrowed form _must_ match those for the key type.
+    pub fn remove<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        let hash = self.base.hash(key);
+        self.invalidate_with_hash(key, hash, true)
+    }
+
+    pub(crate) fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64, need_value: bool) -> Option<V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -1654,28 +1673,38 @@ where
             }
         }
 
-        if let Some(kv) = self.base.remove_entry(key, hash) {
-            if self.base.is_removal_notifier_enabled() {
-                self.base.notify_invalidate(&kv.key, &kv.entry)
-            }
-            // Drop the locks before scheduling write op to avoid a potential dead lock.
-            // (Scheduling write can do spin lock when the queue is full, and queue will
-            // be drained by the housekeeping thread that can lock the same key)
-            std::mem::drop(klg);
-            std::mem::drop(kl);
+        match self.base.remove_entry(key, hash) {
+            None => None,
+            Some(kv) => {
+                if self.base.is_removal_notifier_enabled() {
+                    self.base.notify_invalidate(&kv.key, &kv.entry)
+                }
+                // Drop the locks before scheduling write op to avoid a potential dead lock.
+                // (Scheduling write can do spin lock when the queue is full, and queue will
+                // be drained by the housekeeping thread that can lock the same key)
+                std::mem::drop(klg);
+                std::mem::drop(kl);
 
-            let op = WriteOp::Remove(kv);
-            let now = self.base.current_time_from_expiration_clock();
-            let hk = self.base.housekeeper.as_ref();
-            Self::schedule_write_op(
-                self.base.inner.as_ref(),
-                &self.base.write_op_ch,
-                op,
-                now,
-                hk,
-            )
-            .expect("Failed to remove");
-            crossbeam_epoch::pin().flush();
+                let maybe_v = if need_value {
+                    Some(kv.entry.value.clone())
+                } else {
+                    None
+                };
+
+                let op = WriteOp::Remove(kv);
+                let now = self.base.current_time_from_expiration_clock();
+                let hk = self.base.housekeeper.as_ref();
+                Self::schedule_write_op(
+                    self.base.inner.as_ref(),
+                    &self.base.write_op_ch,
+                    op,
+                    now,
+                    hk,
+                )
+                .expect("Failed to remove");
+                crossbeam_epoch::pin().flush();
+                maybe_v
+            }
         }
     }
 
@@ -2019,6 +2048,13 @@ mod tests {
             cache.sync();
             assert_eq_with_mode!(cache.get(&"b"), None, delivery_mode);
             assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
+
+            assert!(cache.remove(&"b").is_none());
+            assert_eq!(cache.remove(&"d"), Some("dennis"));
+            expected.push((Arc::new("d"), "dennis", RemovalCause::Explicit));
+            cache.sync();
+            assert_eq!(cache.get(&"d"), None);
+            assert!(!cache.contains_key(&"d"));
 
             verify_notification_vec(&cache, actual, &expected, delivery_mode);
         }
