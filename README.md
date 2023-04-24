@@ -75,7 +75,7 @@ The following table shows the trade-offs between the different cache implementat
 | Bounded by the maximum number of entries | ✅ | ✅ | ✅ |
 | Bounded by the total weighted size of entries | ✅ | ✅ | ✅ |
 | Near optimal hit ratio | ✅ TinyLFU | ✅ TinyLFU | ✅ CLOCK-Pro |
-| Cache-level expiration policies (Time-to-live and time-to-idle) | ✅ | ✅ | ❌ |
+| Cache-level expiration policies (time-to-live and time-to-idle) | ✅ | ✅ | ❌ |
 | Per-entry variable expiration | ✅ | ❌ | ❌ |
 | Eviction listener | ✅ | ❌ | ❌ |
 | Per-key, atomic insertion | ✅ `get_with` family methods | ❌ | ❌ |

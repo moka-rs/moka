@@ -1232,6 +1232,9 @@ where
 
     /// Discards any cached value for the key.
     ///
+    /// If you need to get the value that has been discarded, use the
+    /// [`remove`](#method.remove) method instead.
+    ///
     /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
     /// on the borrowed form _must_ match those for the key type.
     pub async fn invalidate<Q>(&self, key: &Q)
@@ -1240,23 +1243,58 @@ where
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.base.hash(key);
-        if let Some(kv) = self.base.remove_entry(key, hash) {
-            if self.base.is_removal_notifier_enabled() {
-                self.base.notify_invalidate(&kv.key, &kv.entry)
+        self.invalidate_with_hash(key, hash, false).await;
+    }
+
+    /// Discards any cached value for the key and returns a _clone_ of the value.
+    ///
+    /// If you do not need to get the value that has been discarded, use the
+    /// [`invalidate`](#method.invalidate) method instead.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
+    /// on the borrowed form _must_ match those for the key type.
+    pub async fn remove<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        let hash = self.base.hash(key);
+        self.invalidate_with_hash(key, hash, true).await
+    }
+
+    pub async fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64, need_value: bool) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        match self.base.remove_entry(key, hash) {
+            None => None,
+            Some(kv) => {
+                let maybe_v = if need_value {
+                    Some(kv.entry.value.clone())
+                } else {
+                    None
+                };
+
+                if self.base.is_removal_notifier_enabled() {
+                    self.base.notify_invalidate(&kv.key, &kv.entry)
+                }
+
+                let op = WriteOp::Remove(kv);
+                let now = self.base.current_time_from_expiration_clock();
+                let hk = self.base.housekeeper.as_ref();
+                Self::schedule_write_op(
+                    self.base.inner.as_ref(),
+                    &self.base.write_op_ch,
+                    op,
+                    now,
+                    hk,
+                )
+                .await
+                .expect("Failed to remove");
+                crossbeam_epoch::pin().flush();
+                maybe_v
             }
-            let op = WriteOp::Remove(kv);
-            let now = self.base.current_time_from_expiration_clock();
-            let hk = self.base.housekeeper.as_ref();
-            Self::schedule_write_op(
-                self.base.inner.as_ref(),
-                &self.base.write_op_ch,
-                op,
-                now,
-                hk,
-            )
-            .await
-            .expect("Failed to remove");
-            crossbeam_epoch::pin().flush();
         }
     }
 
@@ -1965,6 +2003,13 @@ mod tests {
         cache.sync();
         assert_eq!(cache.get(&"b"), None);
         assert!(!cache.contains_key(&"b"));
+
+        assert!(cache.remove(&"b").await.is_none());
+        assert_eq!(cache.remove(&"d").await, Some("dennis"));
+        expected.push((Arc::new("d"), "dennis", RemovalCause::Explicit));
+        cache.sync();
+        assert_eq!(cache.get(&"d"), None);
+        assert!(!cache.contains_key(&"d"));
 
         verify_notification_vec(&cache, actual, &expected);
     }

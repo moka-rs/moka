@@ -468,6 +468,9 @@ where
 
     /// Discards any cached value for the key.
     ///
+    /// If you need to get a the value that has been discarded, use the
+    /// [`remove`](#method.remove) method instead.
+    ///
     /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
     /// on the borrowed form _must_ match those for the key type.
     pub fn invalidate<Q>(&self, key: &Q)
@@ -476,7 +479,27 @@ where
         Q: Hash + Eq + ?Sized,
     {
         let hash = self.inner.hash(key);
-        self.inner.select(hash).invalidate_with_hash(key, hash);
+        self.inner
+            .select(hash)
+            .invalidate_with_hash(key, hash, false);
+    }
+
+    /// Discards any cached value for the key and returns a clone of the value.
+    ///
+    /// If you do not need to get the value that has been discarded, use the
+    /// [`invalidate`](#method.invalidate) method instead.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
+    /// on the borrowed form _must_ match those for the key type.
+    pub fn remove<Q>(&self, key: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        let hash = self.inner.hash(key);
+        self.inner
+            .select(hash)
+            .invalidate_with_hash(key, hash, true)
     }
 
     /// Discards all cached values.
@@ -884,6 +907,13 @@ mod tests {
             cache.sync();
             assert_eq_with_mode!(cache.get(&"b"), None, delivery_mode);
             assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
+
+            assert!(cache.remove(&"b").is_none());
+            assert_eq!(cache.remove(&"d"), Some("dennis"));
+            expected.push((Arc::new("d"), "dennis", RemovalCause::Explicit));
+            cache.sync();
+            assert_eq!(cache.get(&"d"), None);
+            assert!(!cache.contains_key(&"d"));
 
             verify_notification_vec(&cache, actual, &expected, delivery_mode);
         }
