@@ -2,16 +2,16 @@
 
 ## Version 0.11.0
 
-### Breaking Changes
-
-- (Will change the return type of the `invalidate` method from `()` to `Option<V>`)
-
 ### Added
 
-- Added support for per-entry expiration. ([#248][gh-pull-0248])
+- Added support for per-entry expiration ([#248][gh-pull-0248]):
     - In addition to the existing TTL and TTI (time-to-idle) expiration times that
       apply to all entries in the cache, the `sync` and `future` caches can now allow
       different expiration times for individual entries.
+- Added the `remove` method to the `sync` and `future` caches
+  ([#255](gh-issue-0255)):
+    - Like the `invalidate` method, this method discards any cached value for the
+      key, but returns a clone of the value.
 
 ### Removed
 
@@ -623,6 +623,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-tinou98]: https://github.com/tinou98
 
+[gh-issue-0255]: https://github.com/moka-rs/moka/issues/255/
 [gh-issue-0252]: https://github.com/moka-rs/moka/issues/252/
 [gh-issue-0243]: https://github.com/moka-rs/moka/issues/243/
 [gh-issue-0242]: https://github.com/moka-rs/moka/issues/242/
