@@ -1728,7 +1728,7 @@ where
             }
             if let Some(victim) = next_victim.take() {
                 next_victim = DeqNode::next_node_ptr(victim);
-                let vic_elem = &unsafe {victim.as_ref()}.element;
+                let vic_elem = &unsafe { victim.as_ref() }.element;
 
                 if let Some(vic_entry) = cache.get(vic_elem.hash(), |k| k == vic_elem.key()) {
                     victims.add_policy_weight(vic_entry.policy_weight());
