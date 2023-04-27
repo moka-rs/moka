@@ -13,6 +13,11 @@
     - Like the `invalidate` method, this method discards any cached value for the
       key, but returns a clone of the value.
 
+### Fixed
+
+- Fixed the caches mutating a deque node through a `NonNull` pointer derived from a
+  shared reference. ([#259][gh-pull-0259])
+
 ### Removed
 
 - Removed `unsync` cache that was marked as deprecated in [v0.10.0](#version-0100).
@@ -642,6 +647,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0259]: https://github.com/moka-rs/moka/pull/259/
 [gh-pull-0251]: https://github.com/moka-rs/moka/pull/251/
 [gh-pull-0248]: https://github.com/moka-rs/moka/pull/248/
 [gh-pull-0216]: https://github.com/moka-rs/moka/pull/216/
