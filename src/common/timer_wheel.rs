@@ -322,32 +322,20 @@ impl<K> TimerWheel<K> {
     }
 
     /// Reset the positions of the nodes in the queue at the given level and index.
+    /// When done, the sentinel is at the back of the queue.
     fn reset_timer_node_positions(&mut self, level: usize, index: usize) {
         let deque = &mut self.wheels[level][index];
-        if let Some(node) = deque.peek_back() {
-            if node.element.is_sentinel() {
-                // The sentinel is at the back of the queue. We are already set.
-                return;
-            }
-        } else {
-            panic!(
-                "BUG: The queue is empty. level: {}, index: {}",
-                level, index
-            )
-        }
+        debug_assert!(
+            deque.len() > 0,
+            "BUG: The queue is empty. level: {}, index: {}",
+            level,
+            index
+        );
 
         // Rotate the nodes in the queue until we see the sentinel at the back of the
         // queue.
-        loop {
-            // Safe to unwrap because we already checked the queue is not empty.
-            let node = deque.peek_front().unwrap();
-            let is_sentinel = node.element.is_sentinel();
+        while !deque.peek_back().unwrap().element.is_sentinel() {
             deque.move_front_to_back();
-
-            // If the node we just moved was the sentinel, we are done.
-            if is_sentinel {
-                break;
-            }
         }
     }
 
