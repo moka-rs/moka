@@ -335,6 +335,8 @@ impl<T> Deque<T> {
 
 #[cfg(test)]
 mod tests {
+    use std::ptr::NonNull;
+
     use super::{CacheRegion::MainProbation, DeqNode, Deque};
 
     #[test]
@@ -712,6 +714,32 @@ mod tests {
         let node2a = node1a.next_node().unwrap();
         assert_eq!(node2a.element, "b".to_string());
         assert!(node2a.next_node().is_none());
+    }
+
+    #[test]
+    fn peek_and_move_to_back() {
+        let mut deque: Deque<String> = Deque::new(MainProbation);
+
+        let node1 = DeqNode::new("a".into());
+        deque.push_back(Box::new(node1));
+        let node2 = DeqNode::new("b".into());
+        let _ = deque.push_back(Box::new(node2));
+        let node3 = DeqNode::new("c".into());
+        let _ = deque.push_back(Box::new(node3));
+        // "a" -> "b" -> "c"
+
+        let node1a = deque.peek_front().unwrap();
+        assert_eq!(node1a.element, "a".to_string());
+        unsafe { deque.move_to_back(NonNull::from(node1a)) };
+        // "b" -> "c" -> "a"
+
+        let node2a = deque.peek_front().unwrap();
+        assert_eq!(node2a.element, "b".to_string());
+
+        let node3a = DeqNode::next_node(node2a).unwrap();
+        assert_eq!(node3a.element, "c".to_string());
+        unsafe { deque.move_to_back(NonNull::from(node3a)) };
+        // "b" -> "a" -> "c"
     }
 
     #[test]
