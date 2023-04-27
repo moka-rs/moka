@@ -311,18 +311,20 @@ impl<K> TimerWheel<K> {
     /// Returns a pointer to the timer event (cache entry) at the front of the queue.
     /// Returns `None` if the front node is a sentinel.
     fn pop_timer_node(&mut self, level: usize, index: usize) -> Option<Box<DeqNode<TimerNode<K>>>> {
-        if let Some(node) = self.wheels[level][index].peek_front() {
+        let deque = &mut self.wheels[level][index];
+        if let Some(node) = deque.peek_front() {
             if node.element.is_sentinel() {
                 return None;
             }
         }
 
-        self.wheels[level][index].pop_front()
+        deque.pop_front()
     }
 
     /// Reset the positions of the nodes in the queue at the given level and index.
     fn reset_timer_node_positions(&mut self, level: usize, index: usize) {
-        if let Some(node) = self.wheels[level][index].peek_back() {
+        let deque = &mut self.wheels[level][index];
+        if let Some(node) = deque.peek_back() {
             if node.element.is_sentinel() {
                 // The sentinel is at the back of the queue. We are already set.
                 return;
@@ -338,11 +340,9 @@ impl<K> TimerWheel<K> {
         // queue.
         loop {
             // Safe to unwrap because we already checked the queue is not empty.
-            let node = self.wheels[level][index].pop_front().unwrap();
+            let node = deque.peek_front().unwrap();
             let is_sentinel = node.element.is_sentinel();
-
-            // Move the front node to the back.
-            self.wheels[level][index].push_back(node);
+            deque.move_front_to_back();
 
             // If the node we just moved was the sentinel, we are done.
             if is_sentinel {
