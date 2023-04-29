@@ -49,14 +49,16 @@ use std::{
 ///
 /// - [Example: `insert`, `get` and `invalidate`](#example-insert-get-and-invalidate)
 /// - [Avoiding to clone the value at `get`](#avoiding-to-clone-the-value-at-get)
+/// - [Sharing a cache across asynchronous tasks](#sharing-a-cache-across-asynchronous-tasks)
+///     - [No lock is needed](#no-lock-is-needed)
+/// - [Hashing Algorithm](#hashing-algorithm)
 /// - [Example: Size-based Eviction](#example-size-based-eviction)
 /// - [Example: Time-based Expirations](#example-time-based-expirations)
+///     - [Cache-level TTL and TTI policies](#cache-level-ttl-and-tti-policies)
+///     - [Per-entry expiration policy](#per-entry-expiration-policy)
 /// - [Example: Eviction Listener](#example-eviction-listener)
 ///     - [You should avoid eviction listener to panic](#you-should-avoid-eviction-listener-to-panic)
-///     - [Delivery Modes for Eviction Listener](#delivery-modes-for-eviction-listener)
-/// - [Thread Safety](#thread-safety)
-/// - [Sharing a cache across threads](#sharing-a-cache-across-threads)
-/// - [Hashing Algorithm](#hashing-algorithm)
+///     - [Delivery modes for eviction listener](#delivery-modes-for-eviction-listener)
 ///
 /// # Example: `insert`, `get` and `invalidate`
 ///
@@ -158,6 +160,52 @@ use std::{
 ///
 /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
 ///
+/// # Sharing a cache across asynchronous tasks
+///
+/// To share a cache across async tasks (or OS threads), do one of the followings:
+///
+/// - Create a clone of the cache by calling its `clone` method and pass it to other
+///   task.
+/// - If you are using a web application framework such as Actix Web or Axum,
+///   you can store a cache in Actix Web's [`web::Data`][actix-web-data] or Axum's
+///   [shared state][axum-state-extractor], and access it from each request handler.
+/// - Wrap the cache by a `sync::OnceCell` or `sync::Lazy` from
+///   [once_cell][once-cell-crate] create, and set it to a `static` variable.
+///
+/// Cloning is a cheap operation for `Cache` as it only creates thread-safe
+/// reference-counted pointers to the internal data structures.
+///
+/// [once-cell-crate]: https://crates.io/crates/once_cell
+/// [actix-web-data]: https://docs.rs/actix-web/4.3.1/actix_web/web/struct.Data.html
+/// [axum-state-extractor]: https://docs.rs/axum/latest/axum/#sharing-state-with-handlers
+///
+/// ## No lock is needed
+///
+/// Don't wrap a `Cache` by a lock such as `Mutex` or `RwLock`. All methods provided
+/// by the `Cache` are considered thread-safe, and can be safely called by multiple
+/// async tasks at the same time. No lock is needed.
+///
+/// [once-cell-crate]: https://crates.io/crates/once_cell
+///
+/// # Hashing Algorithm
+///
+/// By default, `Cache` uses a hashing algorithm selected to provide resistance
+/// against HashDoS attacks. It will be the same one used by
+/// `std::collections::HashMap`, which is currently SipHash 1-3.
+///
+/// While SipHash's performance is very competitive for medium sized keys, other
+/// hashing algorithms will outperform it for small keys such as integers as well as
+/// large keys such as long strings. However those algorithms will typically not
+/// protect against attacks such as HashDoS.
+///
+/// The hashing algorithm can be replaced on a per-`Cache` basis using the
+/// [`build_with_hasher`][build-with-hasher-method] method of the `CacheBuilder`.
+/// Many alternative algorithms are available on crates.io, such as the
+/// [AHash][ahash-crate] crate.
+///
+/// [build-with-hasher-method]: ./struct.CacheBuilder.html#method.build_with_hasher
+/// [ahash-crate]: https://crates.io/crates/ahash
+///
 /// # Example: Size-based Eviction
 ///
 /// ```rust
@@ -215,12 +263,18 @@ use std::{
 ///
 /// # Example: Time-based Expirations
 ///
-/// `Cache` supports the following expiration policies:
+/// ## Cache-level TTL and TTI policies
 ///
-/// - **Time to live**: A cached entry will be expired after the specified duration
-///   past from `insert`.
-/// - **Time to idle**: A cached entry will be expired after the specified duration
-///   past from `get` or `insert`.
+/// `Cache` supports the following cache-level expiration policies:
+///
+/// - **Time to live (TTL)**: A cached entry will be expired after the specified
+///   duration past from `insert`.
+/// - **Time to idle (TTI)**: A cached entry will be expired after the specified
+///   duration past from `get` or `insert`.
+///
+/// They are a cache-level expiration policies; all entries in the cache will have
+/// the same TTL and/or TTI durations. If you want to set different expiration
+/// durations for different entries, see the next section.
 ///
 /// ```rust
 /// // Cargo.toml
@@ -253,6 +307,144 @@ use std::{
 ///     // after 30 minutes (TTL) from the insert().
 /// }
 /// ```
+///
+/// ## Per-entry expiration policy
+///
+/// `Cache` supports per-entry expiration policy via the [`Expiry`][expiry-trait]
+/// trait.
+///
+/// When a cached entry is inserted, read or updated, a duration can be specified for
+/// that individual entry. The entry will be expired after the specified duration
+/// past from the operation.
+///
+/// [expiry-trait]: ../trait.Expiry.html
+///
+/// ```rust
+/// // Cargo.toml
+/// //
+/// // [dependencies]
+/// // moka = { version = "0.11", features = ["future"] }
+/// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+///
+/// use moka::{future::Cache, Expiry};
+/// use std::time::{Duration, Instant};
+///
+/// // In this example, we will create a `future::Cache` with `u32` as the key, and
+/// // `(Expiration, String)` as the value. `Expiration` is an enum to represent the
+/// // expiration of the value, and `String` is the application data of the value.
+///
+/// /// An enum to represent the expiration of a value.
+/// #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// pub enum Expiration {
+///     /// The value never expires.
+///     Never,
+///     /// The value expires after a short time. (5 seconds in this example)
+///     AfterShortTime,
+///     /// The value expires after a long time. (15 seconds in this example)
+///     AfterLongTime,
+/// }
+///
+/// impl Expiration {
+///     /// Returns the duration of this expiration.
+///     pub fn as_duration(&self) -> Option<Duration> {
+///         match self {
+///             Expiration::Never => None,
+///             Expiration::AfterShortTime => Some(Duration::from_secs(5)),
+///             Expiration::AfterLongTime => Some(Duration::from_secs(15)),
+///         }
+///     }
+/// }
+///
+/// /// An expiry that implements `moka::Expiry` trait. `Expiry` trait provides the
+/// /// default implementations of three callback methods `expire_after_create`,
+/// /// `expire_after_read`, and `expire_after_update`.
+/// ///
+/// /// In this example, we only override the `expire_after_create` method.
+/// pub struct MyExpiry;
+///
+/// impl Expiry<u32, (Expiration, String)> for MyExpiry {
+///     /// Returns the duration of the expiration of the value that was just
+///     /// created.
+///     fn expire_after_create(
+///         &self,
+///         _key: &u32,
+///         value: &(Expiration, String),
+///         _current_time: Instant,
+///     ) -> Option<Duration> {
+///         let duration = value.0.as_duration();
+///         println!("MyExpiry: expire_after_create called with key {_key} and value {value:?}. Returning {duration:?}.");
+///         duration
+///     }
+/// }
+///
+/// #[tokio::main]
+/// async fn main() {
+///     // Create a `Cache<u32, (Expiration, String)>` with an expiry `MyExpiry` and
+///     // eviction listener.
+///     let expiry = MyExpiry;
+///
+///     let eviction_listener = |key, _value, cause| {
+///         println!("Evicted key {key}. Cause: {cause:?}");
+///     };
+///
+///     let cache = Cache::builder()
+///         .max_capacity(100)
+///         .expire_after(expiry)
+///         .eviction_listener_with_queued_delivery_mode(eviction_listener)
+///         .build();
+///
+///     // Insert some entries into the cache with different expirations.
+///     cache
+///         .get_with(0, async { (Expiration::AfterShortTime, "a".to_string()) })
+///         .await;
+///
+///     cache
+///         .get_with(1, async { (Expiration::AfterLongTime, "b".to_string()) })
+///         .await;
+///
+///     cache
+///         .get_with(2, async { (Expiration::Never, "c".to_string()) })
+///         .await;
+///
+///     // Verify that all the inserted entries exist.
+///     assert!(cache.contains_key(&0));
+///     assert!(cache.contains_key(&1));
+///     assert!(cache.contains_key(&2));
+///
+///     // Sleep for 6 seconds. Key 0 should expire.
+///     println!("\nSleeping for 6 seconds...\n");
+///     tokio::time::sleep(Duration::from_secs(6)).await;
+///     println!("Entry count: {}", cache.entry_count());
+///
+///     // Verify that key 0 has been evicted.
+///     assert!(!cache.contains_key(&0));
+///     assert!(cache.contains_key(&1));
+///     assert!(cache.contains_key(&2));
+///
+///     // Sleep for 10 more seconds. Key 1 should expire.
+///     println!("\nSleeping for 10 seconds...\n");
+///     tokio::time::sleep(Duration::from_secs(10)).await;
+///     println!("Entry count: {}", cache.entry_count());
+///
+///     // Verify that key 1 has been evicted.
+///     assert!(!cache.contains_key(&1));
+///     assert!(cache.contains_key(&2));
+///
+///     // Manually invalidate key 2.
+///     cache.invalidate(&2).await;
+///     assert!(!cache.contains_key(&2));
+///
+///     println!("\nSleeping for a second...\n");
+///     tokio::time::sleep(Duration::from_secs(1)).await;
+///     println!("Entry count: {}", cache.entry_count());
+///
+///     println!("\nDone!");
+/// }
+/// ```
+///
+/// The `Expiry` trait provides three methods `expire_after_create`,
+/// `expire_after_read` and `expire_after_update` with default implementations. See
+/// [its document][expiry-trait] for more details.
 ///
 /// # Example: Eviction Listener
 ///
@@ -444,7 +636,7 @@ use std::{
 ///
 /// [builder-name-method]: ./struct.CacheBuilder.html#method.name
 ///
-/// ## Delivery Modes for Eviction Listener
+/// ## Delivery Modes for eviction listener
 ///
 /// The [`DeliveryMode`][delivery-mode] specifies how and when an eviction
 /// notification should be delivered to an eviction listener. Currently, the
@@ -465,48 +657,6 @@ use std::{
 ///
 /// [delivery-mode]: ../notification/enum.DeliveryMode.html
 /// [sync-delivery-modes]: ../sync/struct.Cache.html#delivery-modes-for-eviction-listener
-///
-/// # Thread Safety
-///
-/// All methods provided by the `Cache` are considered thread-safe, and can be safely
-/// accessed by multiple concurrent threads.
-///
-/// - `Cache<K, V, S>` requires trait bounds `Send`, `Sync` and `'static` for `K`
-///   (key), `V` (value) and `S` (hasher state).
-/// - `Cache<K, V, S>` will implement `Send` and `Sync`.
-///
-/// # Sharing a cache across asynchronous tasks
-///
-/// To share a cache across async tasks (or OS threads), do one of the followings:
-///
-/// - Create a clone of the cache by calling its `clone` method and pass it to other
-///   task.
-/// - Wrap the cache by a `sync::OnceCell` or `sync::Lazy` from
-///   [once_cell][once-cell-crate] create, and set it to a `static` variable.
-///
-/// Cloning is a cheap operation for `Cache` as it only creates thread-safe
-/// reference-counted pointers to the internal data structures.
-///
-/// [once-cell-crate]: https://crates.io/crates/once_cell
-///
-/// # Hashing Algorithm
-///
-/// By default, `Cache` uses a hashing algorithm selected to provide resistance
-/// against HashDoS attacks. It will be the same one used by
-/// `std::collections::HashMap`, which is currently SipHash 1-3.
-///
-/// While SipHash's performance is very competitive for medium sized keys, other
-/// hashing algorithms will outperform it for small keys such as integers as well as
-/// large keys such as long strings. However those algorithms will typically not
-/// protect against attacks such as HashDoS.
-///
-/// The hashing algorithm can be replaced on a per-`Cache` basis using the
-/// [`build_with_hasher`][build-with-hasher-method] method of the `CacheBuilder`.
-/// Many alternative algorithms are available on crates.io, such as the
-/// [AHash][ahash-crate] crate.
-///
-/// [build-with-hasher-method]: ./struct.CacheBuilder.html#method.build_with_hasher
-/// [ahash-crate]: https://crates.io/crates/ahash
 ///
 pub struct Cache<K, V, S = RandomState> {
     base: BaseCache<K, V, S>,

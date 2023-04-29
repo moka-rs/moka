@@ -116,7 +116,6 @@ impl<T> Deque<T> {
         self.region
     }
 
-    #[cfg(any(test, feature = "sync", feature = "future"))]
     pub(crate) fn len(&self) -> usize {
         self.len
     }
