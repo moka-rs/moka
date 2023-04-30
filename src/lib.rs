@@ -4,8 +4,8 @@
 // #![deny(rustdoc::broken_intra_doc_links)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-//! Moka is a fast, concurrent cache library for Rust. Moka is inspired by
-//! the [Caffeine][caffeine-git] library for Java.
+//! Moka is a fast, concurrent cache library for Rust. Moka is inspired by the
+//! [Caffeine][caffeine-git] library for Java.
 //!
 //! Moka provides in-memory concurrent cache implementations on top of hash maps.
 //! They support full concurrency of retrievals and a high expected concurrency for
@@ -29,13 +29,16 @@
 //!     - The total weighted size of entries. (Size aware eviction)
 //! - Maintains good hit rate by using entry replacement algorithms inspired by
 //!   [Caffeine][caffeine-git]:
-//!     - Admission to a cache is controlled by the Least Frequently Used (LFU) policy.
-//!     - Eviction from a cache is controlled by the Least Recently Used (LRU) policy.
+//!     - Admission to a cache is controlled by the Least Frequently Used (LFU)
+//!       policy.
+//!     - Eviction from a cache is controlled by the Least Recently Used (LRU)
+//!       policy.
 //! - Supports expiration policies:
-//!     - Time to live
-//!     - Time to idle
-//! - Supports eviction listener, a callback function that will be called when an entry
-//!   is removed from the cache.
+//!     - Time to live.
+//!     - Time to idle.
+//!     - Per-entry variable expiration.
+//! - Supports eviction listener, a callback function that will be called when an
+//!   entry is removed from the cache.
 //!
 //! # Examples
 //!
@@ -60,8 +63,10 @@
 //!     - `moka::dash::Cache` → [`mini_moka::sync::Cache`][dash-cache-struct]
 //!
 //! [mini-moka-crate]: https://crates.io/crates/mini-moka
-//! [unsync-cache-struct]: https://docs.rs/mini-moka/latest/mini_moka/unsync/struct.Cache.html
-//! [dash-cache-struct]: https://docs.rs/mini-moka/latest/mini_moka/sync/struct.Cache.html
+//! [unsync-cache-struct]:
+//!     https://docs.rs/mini-moka/latest/mini_moka/unsync/struct.Cache.html
+//! [dash-cache-struct]:
+//!     https://docs.rs/mini-moka/latest/mini_moka/sync/struct.Cache.html
 //!
 //! # Minimum Supported Rust Versions
 //!
@@ -82,10 +87,10 @@
 //!
 //! ## Concurrency
 //!
-//! In a concurrent cache (`sync` or `future` cache), the entry replacement
-//! algorithms are kept eventually consistent with the map. While updates to the
-//! cache are immediately applied to the map, recording of reads and writes may not
-//! be immediately reflected on the cache policy's data structures.
+//! The entry replacement algorithms are kept eventually consistent with the map.
+//! While updates to the cache are immediately applied to the map, recording of reads
+//! and writes may not be immediately reflected on the cache policy's data
+//! structures.
 //!
 //! These structures are guarded by a lock and operations are applied in batches to
 //! avoid lock contention. There are bounded inter-thread channels to hold these
@@ -107,11 +112,10 @@
 //!   the draining task catches up.
 //!
 //! `Cache` does its best to avoid blocking updates by adjusting the interval of
-//! draining. But since it has only one worker
-//! thread, it cannot always avoid blocking. If this happens very often in your cache
-//! (in the future, you can check the statistics of the cache), you may want to
-//! switch to `SegmentedCache`. It has multiple internal cache segments and each
-//! segment has dedicated draining thread.
+//! draining. But since it has only one worker thread, it cannot always avoid
+//! blocking. If this happens very often in your cache (in the future, you can check
+//! the statistics of the cache), you may want to switch to `SegmentedCache`. It has
+//! multiple internal cache segments and each segment has dedicated draining thread.
 //!
 //! ## Admission and Eviction
 //!
@@ -144,9 +148,6 @@
 //!
 //! - The time-to-live policy
 //! - The time-to-idle policy
-//!
-//! A future release will support the following:
-//!
 //! - The variable expiration (which allows to set different expiration on each
 //!   cached entry)
 //!
@@ -154,12 +155,14 @@
 //!
 //! - The time-to-live policy uses a write-order queue.
 //! - The time-to-idle policy uses an access-order queue.
-//! - The variable expiration will use a [hierarchical timer wheel][timer-wheel] (*1).
+//! - The variable expiration will use a [hierarchical timer wheel][timer-wheel]
+//!   (*1).
 //!
 //! *1: If you get 404 page not found when you click on the link to the hierarchical
 //! timer wheel paper, try to change the URL from `https:` to `http:`.
 //!
-//! [timer-wheel]: http://www.cs.columbia.edu/~nahum/w6998/papers/ton97-timing-wheels.pdf
+//! [timer-wheel]:
+//!     http://www.cs.columbia.edu/~nahum/w6998/papers/ton97-timing-wheels.pdf
 
 #[cfg(feature = "future")]
 #[cfg_attr(docsrs, doc(cfg(feature = "future")))]

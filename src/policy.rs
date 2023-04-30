@@ -80,7 +80,7 @@ pub trait Expiry<K, V> {
     /// Specifies that the entry should be automatically removed from the cache once
     /// the duration has elapsed after the entry's creation. This method is called
     /// for cache write methods such as `insert` and `get_with` but only when the key
-    /// is not present in the cache.
+    /// was not present in the cache.
     ///
     /// # Parameters
     ///

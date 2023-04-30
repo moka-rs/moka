@@ -489,6 +489,13 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         builder
     }
 
+    /// Sets the given `expiry` to the cache.
+    ///
+    /// See [the example][per-entry-expiration-example] for per-entry expiration
+    /// policy in the `Cache` documentation.
+    ///
+    /// [per-entry-expiration-example]:
+    ///     ./struct.Cache.html#per-entry-expiration-policy
     pub fn expire_after(self, expiry: impl Expiry<K, V> + Send + Sync + 'static) -> Self {
         let mut builder = self;
         builder.expiration_policy.set_expiry(Arc::new(expiry));

@@ -135,10 +135,9 @@ The `unsync::Cache` and `dash::Cache` have been moved to a separate crate called
     - [Synchronous Cache](#example-synchronous-cache)
     - [Asynchronous Cache](#example-asynchronous-cache)
 - [Avoiding to clone the value at `get`](#avoiding-to-clone-the-value-at-get)
-- Examples (Part 2)
+- Example (Part 2)
     - [Size Aware Eviction](#example-size-aware-eviction)
-    - [Expiration Policies](#example-expiration-policies)
-- [Hashing Algorithm](#hashing-algorithm)
+- [Expiration Policies](#expiration-policies)
 - [Minimum Supported Rust Versions](#minimum-supported-rust-versions)
 - Troubleshooting
     - [Integer Overflow in Quanta Crate on Some x86_64 Machines](#integer-overflow-in-quanta-crate-on-some-x86_64-machines)
@@ -392,67 +391,26 @@ fn main() {
 Note that weighted sizes are not used when making eviction selections.
 
 
-## Example: Expiration Policies
+## Expiration Policies
 
 Moka supports the following expiration policies:
 
-- **Time to live**: A cached entry will be expired after the specified duration past
-  from `insert`.
-- **Time to idle**: A cached entry will be expired after the specified duration past
-  from `get` or `insert`.
+- **Cache-level expiration policies:**
+    - Cache-level policies are applied to all entries in the cache.
+    - **Time to live (TTL)**: A cached entry will be expired after the specified
+      duration past from `insert`.
+    - **Time to idle (TTI)**: A cached entry will be expired after the specified
+      duration past from `get` or `insert`.
+- **Per-entry expiration policy:**
+    - The per-entry expiration lets you sets a different expiration time for each
+      entry.
 
-To set them, use the `CacheBuilder`.
+For details and examples of above policies, see the "Example: Time-based Expiration"
+section ([`sync::Cache`][doc-sync-cache-expiration],
+[`future::Cache`][doc-future-cache-expiration]) of the document.
 
-```rust
-use moka::sync::Cache;
-use std::time::Duration;
-
-fn main() {
-    let cache = Cache::builder()
-        // Time to live (TTL): 30 minutes
-        .time_to_live(Duration::from_secs(30 * 60))
-        // Time to idle (TTI):  5 minutes
-        .time_to_idle(Duration::from_secs( 5 * 60))
-        // Create the cache.
-        .build();
-
-    // This entry will expire after 5 minutes (TTI) if there is no get().
-    cache.insert(0, "zero");
-
-    // This get() will extend the entry life for another 5 minutes.
-    cache.get(&0);
-
-    // Even though we keep calling get(), the entry will expire
-    // after 30 minutes (TTL) from the insert().
-}
-```
-
-### A note on expiration policies
-
-The cache builders will panic if configured with either `time_to_live` or `time to idle`
-longer than 1000 years. This is done to protect against overflow when computing key
-expiration.
-
-
-## Hashing Algorithm
-
-By default, a cache uses a hashing algorithm selected to provide resistance against
-HashDoS attacks.
-
-The default hashing algorithm is the one used by `std::collections::HashMap`, which
-is currently SipHash 1-3, though this is subject to change at any point in the
-future.
-
-While its performance is very competitive for medium sized keys, other hashing
-algorithms will outperform it for small keys such as integers as well as large keys
-such as long strings. However those algorithms will typically not protect against
-attacks such as HashDoS.
-
-The hashing algorithm can be replaced on a per-`Cache` basis using the
-`build_with_hasher` method of the `CacheBuilder`. Many alternative algorithms are
-available on crates.io, such as the [AHash][ahash-crate] crate.
-
-[ahash-crate]: https://crates.io/crates/ahash
+[doc-sync-cache-expiration]: https://docs.rs/moka/latest/moka/sync/struct.Cache.html#example-time-based-expirations
+[doc-future-cache-expiration]: https://docs.rs/moka/latest/moka/future/struct.Cache.html#example-time-based-expirations
 
 
 ## Minimum Supported Rust Versions
@@ -504,7 +462,7 @@ to the dependency declaration.
 
 ```toml:Cargo.toml
 [dependencies]
-moka = { version = "0.11", default-features = false }
+moka = { version = "0.11", default-features = false, features = ["sync"] }
 # Or
 moka = { version = "0.11", default-features = false, features = ["future"] }
 ```
@@ -534,7 +492,7 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
 
 ```console
 $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' \
-    doc --no-deps --features 'future, dash'
+    doc --no-deps --features future
 ```
 
 ## Road Map
