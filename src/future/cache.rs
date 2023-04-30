@@ -310,14 +310,20 @@ use std::{
 ///
 /// ## Per-entry expiration policy
 ///
-/// `Cache` supports per-entry expiration policy via the [`Expiry`][expiry-trait]
-/// trait.
+/// `Cache` supports per-entry expiration policy through the `Expiry` trait.
 ///
-/// When a cached entry is inserted, read or updated, a duration can be specified for
-/// that individual entry. The entry will be expired after the specified duration
-/// past from the operation.
+/// `Expiry` trait provides three callback methods:
+/// [`expire_after_create`][exp-create], [`expire_after_read`][exp-read] and
+/// [`expire_after_update`][exp-update]. When a an cache entry is inserted, read or
+/// updated, one of these methods is called. These methods return an
+/// `Option<Duration>`, which is used as the expiration duration of the entry.
 ///
-/// [expiry-trait]: ../trait.Expiry.html
+/// `Expiry` trait provides the default implementations of these methods, so you
+/// will implement only the methods you want to customize.
+///
+/// [exp-create]: ../trait.Expiry.html#method.expire_after_create
+/// [exp-read]: ../trait.Expiry.html#method.expire_after_read
+/// [exp-update]: ../trait.Expiry.html#method.expire_after_update
 ///
 /// ```rust
 /// // Cargo.toml
@@ -441,10 +447,6 @@ use std::{
 ///     println!("\nDone!");
 /// }
 /// ```
-///
-/// The `Expiry` trait provides three methods `expire_after_create`,
-/// `expire_after_read` and `expire_after_update` with default implementations. See
-/// [its document][expiry-trait] for more details.
 ///
 /// # Example: Eviction Listener
 ///
