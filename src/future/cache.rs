@@ -314,7 +314,7 @@ use std::{
 ///
 /// `Expiry` trait provides three callback methods:
 /// [`expire_after_create`][exp-create], [`expire_after_read`][exp-read] and
-/// [`expire_after_update`][exp-update]. When a an cache entry is inserted, read or
+/// [`expire_after_update`][exp-update]. When a cache entry is inserted, read or
 /// updated, one of these methods is called. These methods return an
 /// `Option<Duration>`, which is used as the expiration duration of the entry.
 ///
