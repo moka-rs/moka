@@ -2647,9 +2647,9 @@ mod tests {
         }
 
         macro_rules! assert_expiry {
-            ($cache:ident, $key:ident, $hash:ident, $mock:ident, $duration:expr) => {
+            ($cache:ident, $key:ident, $hash:ident, $mock:ident, $duration_secs:expr) => {
                 // Increment the time.
-                $mock.increment(Duration::from_millis($duration - 1));
+                $mock.increment(Duration::from_millis($duration_secs * 1000 - 1));
                 $cache.inner.sync(1);
                 assert!($cache.contains_key_with_hash(&$key, $hash));
                 assert_eq!($cache.entry_count(), 1);
@@ -2949,7 +2949,7 @@ mod tests {
         cache.inner.sync(1);
         assert_eq!(cache.entry_count(), 1);
 
-        assert_expiry!(cache, key, hash, mock, 1000);
+        assert_expiry!(cache, key, hash, mock, 1);
 
         // ----------------------------------------------------
         // Case 2
@@ -2994,7 +2994,7 @@ mod tests {
         );
         cache.inner.sync(1);
 
-        assert_expiry!(cache, key, hash, mock, 3000);
+        assert_expiry!(cache, key, hash, mock, 3);
 
         // ----------------------------------------------------
         // Case 3
@@ -3060,7 +3060,7 @@ mod tests {
         cache.inner.sync(1);
         assert_eq!(cache.entry_count(), 1);
 
-        assert_expiry!(cache, key, hash, mock, 3000);
+        assert_expiry!(cache, key, hash, mock, 3);
 
         // ----------------------------------------------------
         // Case 4
@@ -3127,7 +3127,7 @@ mod tests {
         cache.inner.sync(1);
         assert_eq!(cache.entry_count(), 1);
 
-        assert_expiry!(cache, key, hash, mock, 7000);
+        assert_expiry!(cache, key, hash, mock, 7);
 
         // ----------------------------------------------------
         // Case 5
@@ -3173,7 +3173,7 @@ mod tests {
         );
         cache.inner.sync(1);
 
-        assert_expiry!(cache, key, hash, mock, 7000);
+        assert_expiry!(cache, key, hash, mock, 7);
 
         // ----------------------------------------------------
         // Case 6
@@ -3244,7 +3244,7 @@ mod tests {
         );
         cache.inner.sync(1);
 
-        assert_expiry!(cache, key, hash, mock, 5000);
+        assert_expiry!(cache, key, hash, mock, 5);
 
         // ----------------------------------------------------
         // Case 7
@@ -3335,6 +3335,6 @@ mod tests {
         );
         cache.inner.sync(1);
 
-        assert_expiry!(cache, key, hash, mock, 4000);
+        assert_expiry!(cache, key, hash, mock, 4);
     }
 }
