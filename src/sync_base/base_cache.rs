@@ -2676,24 +2676,24 @@ mod tests {
                 key: Key,
                 value: Value,
                 current_time: StdInstant,
-                new_duration: Option<Duration>,
+                new_duration_secs: Option<u64>,
             },
             AfterRead {
                 caller_line: u32,
                 key: Key,
                 value: Value,
                 current_time: StdInstant,
-                current_duration: Option<Duration>,
+                current_duration_secs: Option<u64>,
                 last_modified_at: StdInstant,
-                new_duration: Option<Duration>,
+                new_duration_secs: Option<u64>,
             },
             AfterUpdate {
                 caller_line: u32,
                 key: Key,
                 value: Value,
                 current_time: StdInstant,
-                current_duration: Option<Duration>,
-                new_duration: Option<Duration>,
+                current_duration_secs: Option<u64>,
+                new_duration_secs: Option<u64>,
             },
         }
 
@@ -2703,14 +2703,14 @@ mod tests {
                 key: Key,
                 value: Value,
                 current_time: StdInstant,
-                new_duration: Option<Duration>,
+                new_duration_secs: Option<u64>,
             ) -> Self {
                 Self::AfterCreate {
                     caller_line,
                     key,
                     value,
                     current_time,
-                    new_duration,
+                    new_duration_secs,
                 }
             }
 
@@ -2719,18 +2719,18 @@ mod tests {
                 key: Key,
                 value: Value,
                 current_time: StdInstant,
-                current_duration: Option<Duration>,
+                current_duration_secs: Option<u64>,
                 last_modified_at: StdInstant,
-                new_duration: Option<Duration>,
+                new_duration_secs: Option<u64>,
             ) -> Self {
                 Self::AfterRead {
                     caller_line,
                     key,
                     value,
                     current_time,
-                    current_duration,
+                    current_duration_secs,
                     last_modified_at,
-                    new_duration,
+                    new_duration_secs,
                 }
             }
 
@@ -2739,16 +2739,16 @@ mod tests {
                 key: Key,
                 value: Value,
                 current_time: StdInstant,
-                current_duration: Option<Duration>,
-                new_duration: Option<Duration>,
+                current_duration_secs: Option<u64>,
+                new_duration_secs: Option<u64>,
             ) -> Self {
                 Self::AfterUpdate {
                     caller_line,
                     key,
                     value,
                     current_time,
-                    current_duration,
-                    new_duration,
+                    current_duration_secs,
+                    new_duration_secs,
                 }
             }
         }
@@ -2776,7 +2776,7 @@ mod tests {
                         key,
                         value,
                         current_time,
-                        new_duration,
+                        new_duration_secs: new_duration,
                     } => {
                         assert_params_eq!(*actual_key, key, "key", caller_line);
                         assert_params_eq!(*actual_value, value, "value", caller_line);
@@ -2786,7 +2786,7 @@ mod tests {
                             "current_time",
                             caller_line
                         );
-                        new_duration
+                        new_duration.map(Duration::from_secs)
                     }
                     expected => {
                         panic!("Unexpected call to expire_after_create: caller_line {}, expected: {:?}",
@@ -2814,9 +2814,9 @@ mod tests {
                         key,
                         value,
                         current_time,
-                        current_duration,
+                        current_duration_secs,
                         last_modified_at,
-                        new_duration,
+                        new_duration_secs,
                     } => {
                         assert_params_eq!(*actual_key, key, "key", caller_line);
                         assert_params_eq!(*actual_value, value, "value", caller_line);
@@ -2828,7 +2828,7 @@ mod tests {
                         );
                         assert_params_eq!(
                             actual_current_duration,
-                            current_duration,
+                            current_duration_secs.map(Duration::from_secs),
                             "current_duration",
                             caller_line
                         );
@@ -2838,7 +2838,7 @@ mod tests {
                             "last_modified_at",
                             caller_line
                         );
-                        new_duration
+                        new_duration_secs.map(Duration::from_secs)
                     }
                     expected => {
                         panic!(
@@ -2867,8 +2867,8 @@ mod tests {
                         key,
                         value,
                         current_time,
-                        current_duration,
-                        new_duration,
+                        current_duration_secs,
+                        new_duration_secs,
                     } => {
                         assert_params_eq!(*actual_key, key, "key", caller_line);
                         assert_params_eq!(*actual_value, value, "value", caller_line);
@@ -2880,11 +2880,11 @@ mod tests {
                         );
                         assert_params_eq!(
                             actual_current_duration,
-                            current_duration,
+                            current_duration_secs.map(Duration::from_secs),
                             "current_duration",
                             caller_line
                         );
-                        new_duration
+                        new_duration_secs.map(Duration::from_secs)
                     }
                     expected => {
                         panic!("Unexpected call to expire_after_update: caller_line {}, expected: {:?}",
@@ -2940,13 +2940,8 @@ mod tests {
         let hash = cache.hash(&key);
         let value = 'a';
 
-        *expectation.lock().unwrap() = ExpiryExpectation::after_create(
-            line!(),
-            key,
-            value,
-            current_time(&cache),
-            Some(Duration::from_secs(1)),
-        );
+        *expectation.lock().unwrap() =
+            ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(1));
 
         insert(&cache, key, hash, value);
         // Run a sync to register the entry to the internal data structures including
@@ -2987,9 +2982,9 @@ mod tests {
             key,
             value,
             current_time(&cache),
-            Some(Duration::from_secs(TTI - 1)),
+            Some(TTI - 1),
             inserted_at,
-            Some(Duration::from_secs(3)),
+            Some(3),
         );
         assert_eq!(
             cache
@@ -3033,7 +3028,7 @@ mod tests {
             key,
             value,
             current_time(&cache),
-            Some(Duration::from_secs(TTI - 1)),
+            Some(TTI - 1),
             inserted_at,
             None,
         );
@@ -3058,8 +3053,8 @@ mod tests {
             value,
             current_time(&cache),
             // TTI should be reset by this update.
-            Some(Duration::from_secs(TTI)),
-            Some(Duration::from_secs(3)),
+            Some(TTI),
+            Some(3),
         );
         insert(&cache, key, hash, value);
         cache.inner.sync(1);
@@ -3100,7 +3095,7 @@ mod tests {
             key,
             value,
             current_time(&cache),
-            Some(Duration::from_secs(TTI - 1)),
+            Some(TTI - 1),
             inserted_at,
             None,
         );
@@ -3125,7 +3120,7 @@ mod tests {
             value,
             current_time(&cache),
             // TTI should be reset by this update.
-            Some(Duration::from_secs(TTI)),
+            Some(TTI),
             None,
         );
         insert(&cache, key, hash, value);
@@ -3147,13 +3142,8 @@ mod tests {
         let hash = cache.hash(&key);
         let value = 'e';
 
-        *expectation.lock().unwrap() = ExpiryExpectation::after_create(
-            line!(),
-            key,
-            value,
-            current_time(&cache),
-            Some(Duration::from_secs(8)),
-        );
+        *expectation.lock().unwrap() =
+            ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(8));
         let inserted_at = current_time(&cache);
         insert(&cache, key, hash, value);
         cache.inner.sync(1);
@@ -3171,9 +3161,9 @@ mod tests {
             key,
             value,
             current_time(&cache),
-            Some(Duration::from_secs(TTI - 5)),
+            Some(TTI - 5),
             inserted_at,
-            Some(Duration::from_secs(8)),
+            Some(8),
         );
         assert_eq!(
             cache
@@ -3199,13 +3189,8 @@ mod tests {
         let hash = cache.hash(&key);
         let value = 'f';
 
-        *expectation.lock().unwrap() = ExpiryExpectation::after_create(
-            line!(),
-            key,
-            value,
-            current_time(&cache),
-            Some(Duration::from_secs(8)),
-        );
+        *expectation.lock().unwrap() =
+            ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(8));
         let inserted_at = current_time(&cache);
         insert(&cache, key, hash, value);
         cache.inner.sync(1);
@@ -3223,9 +3208,9 @@ mod tests {
             key,
             value,
             current_time(&cache),
-            Some(Duration::from_secs(TTI - 5)),
+            Some(TTI - 5),
             inserted_at,
-            Some(Duration::from_secs(9)),
+            Some(9),
         );
         assert_eq!(
             cache
@@ -3247,9 +3232,9 @@ mod tests {
             key,
             value,
             current_time(&cache),
-            Some(Duration::from_secs(TTI - 6)),
+            Some(TTI - 6),
             inserted_at,
-            Some(Duration::from_secs(10)),
+            Some(10),
         );
         assert_eq!(
             cache
@@ -3275,13 +3260,8 @@ mod tests {
         let hash = cache.hash(&key);
         let value = 'g';
 
-        *expectation.lock().unwrap() = ExpiryExpectation::after_create(
-            line!(),
-            key,
-            value,
-            current_time(&cache),
-            Some(Duration::from_secs(9)),
-        );
+        *expectation.lock().unwrap() =
+            ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(9));
         insert(&cache, key, hash, value);
         cache.inner.sync(1);
         assert_eq!(cache.entry_count(), 1);
@@ -3299,8 +3279,8 @@ mod tests {
             value,
             current_time(&cache),
             // From the per-entry TTL.
-            Some(Duration::from_secs(9 - 6)),
-            Some(Duration::from_secs(8)),
+            Some(9 - 6),
+            Some(8),
         );
         let updated_at = current_time(&cache);
         insert(&cache, key, hash, value);
@@ -3319,9 +3299,9 @@ mod tests {
             key,
             value,
             current_time(&cache),
-            Some(Duration::from_secs(TTI - 6)),
+            Some(TTI - 6),
             updated_at,
-            Some(Duration::from_secs(9)),
+            Some(9),
         );
         assert_eq!(
             cache
@@ -3343,9 +3323,9 @@ mod tests {
             key,
             value,
             current_time(&cache),
-            Some(Duration::from_secs(TTI - 6)),
+            Some(TTI - 6),
             updated_at,
-            Some(Duration::from_secs(5)),
+            Some(5),
         );
         assert_eq!(
             cache
