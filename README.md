@@ -67,22 +67,22 @@ and can be overkill for your use case. Sometimes simpler caches like
 
 The following table shows the trade-offs between the different cache implementations:
 
-| Feature | Moka v0.11 | Mini Moka v0.10 | Quick Cache v0.2 |
+| Feature | Moka v0.11 | Mini Moka v0.10 | Quick Cache v0.3 |
 |:------- |:---- |:--------- |:----------- |
 | Thread-safe, sync cache | ✅ | ✅ | ✅ |
-| Thread-safe, async cache | ✅ | ❌ | ❌ |
+| Thread-safe, async cache | ✅ | ❌ | ✅ |
 | Non-concurrent cache | ❌ | ✅ | ✅ |
 | Bounded by the maximum number of entries | ✅ | ✅ | ✅ |
 | Bounded by the total weighted size of entries | ✅ | ✅ | ✅ |
 | Near optimal hit ratio | ✅ TinyLFU | ✅ TinyLFU | ✅ CLOCK-Pro |
+| Per-key, atomic insertion. (e.g. `get_with` method) | ✅ | ❌ | ✅ |
 | Cache-level expiration policies (time-to-live and time-to-idle) | ✅ | ✅ | ❌ |
 | Per-entry variable expiration | ✅ | ❌ | ❌ |
 | Eviction listener | ✅ | ❌ | ❌ |
-| Per-key, atomic insertion | ✅ `get_with` family methods | ❌ | ❌ |
 | Lock-free, concurrent iterator | ✅ | ❌ | ❌ |
 | Lock-per-shard, concurrent iterator | ❌ | ✅ | ❌ |
 
-| Performance | Moka v0.11 | Mini Moka v0.10 | Quick Cache v0.2 |
+| Performance, etc. | Moka v0.11 | Mini Moka v0.10 | Quick Cache v0.3 |
 |:------- |:---- |:--------- |:----------- |
 | Small overhead compared to a concurrent hash table | ❌ | ❌ | ✅ |
 | Does not use background threads | ❌ Will be removed from v0.12 or v0.13 | ✅ | ✅ |
@@ -140,7 +140,6 @@ The `unsync::Cache` and `dash::Cache` have been moved to a separate crate called
 - [Expiration Policies](#expiration-policies)
 - [Minimum Supported Rust Versions](#minimum-supported-rust-versions)
 - Troubleshooting
-    - [Integer Overflow in Quanta Crate on Some x86_64 Machines](#integer-overflow-in-quanta-crate-on-some-x86_64-machines)
     - [Compile Errors on Some 32-bit Platforms](#compile-errors-on-some-32-bit-platforms)
 - [Developing Moka](#developing-moka)
 - [Road Map](#road-map)
@@ -497,7 +496,6 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
 
 ## Road Map
 
-- [x] `async` optimized caches. (`v0.2.0`)
 - [x] Size-aware eviction. (`v0.7.0` via [#24][gh-pull-024])
 - [x] API stabilization. (Smaller core cache API, shorter names for frequently
       used methods) (`v0.8.0` via [#105][gh-pull-105])
@@ -507,7 +505,7 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
     - `blocking_insert(K, V)` → `blocking().insert(K, V)`
     - `time_to_live()` → `policy().time_to_live()`
 - [x] Notifications on eviction. (`v0.9.0` via [#145][gh-pull-145])
-- [x] The variable (per-entry) expiration, using a hierarchical timer wheel.
+- [x] Variable (per-entry) expiration, using a hierarchical timer wheel.
   (`v0.11.0` via [#248][gh-pull-248])
 - [ ] Cache statistics. (Hit rate, etc.)
 - [ ] Upgrade TinyLFU to Window-TinyLFU. ([details][tiny-lfu])
