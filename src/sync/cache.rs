@@ -2081,6 +2081,7 @@ mod tests {
             DeliveryMode, RemovalCause,
         },
         policy::test_utils::ExpiryCallCounters,
+        stats::{ConcurrentStatsCounter, StatsCounter},
         Expiry,
     };
 
@@ -3040,6 +3041,129 @@ mod tests {
         cache.sync();
 
         expiry_counters.verify();
+    }
+
+    #[test]
+    fn test_cache_stats() {
+        let sc = ConcurrentStatsCounter::default();
+
+        let mut cache = Cache::builder()
+            .max_capacity(4)
+            .time_to_idle(Duration::from_secs(10))
+            .build();
+        cache.reconfigure_for_testing();
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        let actual = cache.stats();
+        assert_eq!(actual.request_count(), 0);
+        assert_eq!(actual.hit_rate(), 1.0);
+        assert_eq!(actual.miss_rate(), 0.0);
+
+        assert!(cache.get("a").is_none());
+        sc.record_misses(1);
+
+        cache.insert("a", "alice");
+        cache.sync();
+        assert!(cache.get("a").is_some());
+        sc.record_hits(1);
+
+        // This should not increment the hit count.
+        cache.contains_key("a");
+
+        mock.increment(Duration::from_secs(5));
+
+        cache.get_with("b", || "bob");
+        cache.sync();
+        sc.record_misses(1);
+        // We cannot get the actual loading time, so we set the load time nanos to 1000 here.
+        sc.record_load_success(1000);
+        assert!(cache.get("b").is_some());
+        sc.record_hits(1);
+
+        cache.get_with("b", || "bill");
+        cache.sync();
+        sc.record_hits(1);
+
+        cache.optionally_get_with("c", || None);
+        cache.sync();
+        sc.record_misses(1);
+        sc.record_load_failure(1000);
+        assert!(cache.get("c").is_none());
+        sc.record_misses(1);
+
+        cache.optionally_get_with("c", || Some("cindy"));
+        cache.sync();
+        sc.record_misses(1);
+        sc.record_load_success(1000);
+        assert!(cache.get("c").is_some());
+        sc.record_hits(1);
+
+        cache.optionally_get_with("c", || Some("cathy"));
+        cache.sync();
+        sc.record_hits(1);
+
+        let _ = cache.try_get_with("d", || Err(()));
+        cache.sync();
+        sc.record_misses(1);
+        sc.record_load_failure(1000);
+
+        let _ = cache.try_get_with("d", || Ok("dennis") as Result<_, Infallible>);
+        cache.sync();
+        sc.record_misses(1);
+        sc.record_load_success(1000);
+
+        // Key "a" should expire.
+        mock.increment(Duration::from_secs(6));
+        cache.sync();
+
+        assert!(cache.get("a").is_none());
+        sc.record_misses(1);
+        sc.record_eviction(1, RemovalCause::Expired);
+
+        cache.insert("a", "amanda");
+        cache.sync();
+
+        // This should evict another entry.
+        cache.insert("e", "emily");
+        cache.sync();
+        sc.record_eviction(1, RemovalCause::Size);
+
+        // This updates the value for key "a".
+        cache.insert("a", "alice");
+        cache.sync();
+        sc.record_eviction(1, RemovalCause::Replaced);
+
+        cache.invalidate("a");
+        cache.sync();
+        sc.record_eviction(1, RemovalCause::Explicit);
+
+        cache.remove("e");
+        cache.sync();
+        sc.record_eviction(1, RemovalCause::Explicit);
+
+        //
+        // Verify the cache stats.
+        //
+
+        let expected = sc.snapshot();
+
+        let mut actual = cache.stats();
+        assert!(actual.total_load_time_nanos() > 0);
+        assert!(actual.average_load_penalty_nanos() > 0.0);
+
+        // Reset the total load time nanos.
+        actual.set_load_counts(
+            actual.load_success_count(),
+            actual.load_failure_count(),
+            expected.total_load_time_nanos(),
+        );
+
+        assert_eq!(actual, expected);
     }
 
     #[test]

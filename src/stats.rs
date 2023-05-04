@@ -336,9 +336,9 @@ impl ConcurrentStatsCounter {
 /// A `StatsCounter` that wraps an array of another `StatsCounter` type to improve
 /// concurrency.
 pub struct StripedStatsCounter<C> {
-    // In order to prevents processors from invalidating the cache line of each
-    // other on every modifications, we pad each counter with enough bytes calculated
-    // by `crossbeam_utils::CachePadded`.
+    // In order to reduce the chances that processors invalidate the cache line of
+    // each other on every modifications, we pad each counter with enough bytes
+    // calculated by `crossbeam_utils::CachePadded`.
     counters: Box<[CachePadded<C>]>,
 }
 

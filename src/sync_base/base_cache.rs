@@ -1637,9 +1637,11 @@ where
 
                 let removed = self.cache.remove(kh.hash, |k| k == &kh.key);
                 if let Some(entry) = removed {
+                    let cause = RemovalCause::Size;
+                    self.stats_counter.record_eviction(new_weight, cause);
                     if eviction_state.is_notifier_enabled() {
                         let key = Arc::clone(&kh.key);
-                        eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
+                        eviction_state.add_removed_entry(key, &entry, cause);
                     }
                 }
                 return;
@@ -1668,12 +1670,11 @@ where
                         .cache
                         .remove_entry(element.hash(), |k| k == element.key())
                     {
+                        let cause = RemovalCause::Size;
+                        self.stats_counter
+                            .record_eviction(vic_entry.policy_weight(), cause);
                         if eviction_state.is_notifier_enabled() {
-                            eviction_state.add_removed_entry(
-                                vic_key,
-                                &vic_entry,
-                                RemovalCause::Size,
-                            );
+                            eviction_state.add_removed_entry(vic_key, &vic_entry, cause);
                         }
                         // And then remove the victim from the deques.
                         Self::handle_remove(
@@ -1710,8 +1711,11 @@ where
                 // Remove the candidate from the cache (hash map).
                 let key = Arc::clone(&kh.key);
                 self.cache.remove(kh.hash, |k| k == &key);
+
+                let cause = RemovalCause::Size;
+                self.stats_counter.record_eviction(new_weight, cause);
                 if eviction_state.is_notifier_enabled() {
-                    eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
+                    eviction_state.add_removed_entry(key, &entry, cause);
                 }
             }
         };
@@ -1962,9 +1966,12 @@ where
                 );
 
                 if let Some(entry) = maybe_entry {
+                    let cause = RemovalCause::Expired;
+                    self.stats_counter
+                        .record_eviction(entry.policy_weight(), cause);
                     if eviction_state.is_notifier_enabled() {
                         let key = Arc::clone(key);
-                        eviction_state.add_removed_entry(key, &entry, RemovalCause::Expired);
+                        eviction_state.add_removed_entry(key, &entry, cause);
                     }
                     Self::handle_remove_without_timer_wheel(
                         deqs,
@@ -2075,6 +2082,8 @@ where
             );
 
             if let Some(entry) = maybe_entry {
+                self.stats_counter
+                    .record_eviction(entry.policy_weight(), cause);
                 if eviction_state.is_notifier_enabled() {
                     let key = Arc::clone(key);
                     eviction_state.add_removed_entry(key, &entry, cause);
@@ -2163,6 +2172,8 @@ where
             );
 
             if let Some(entry) = maybe_entry {
+                self.stats_counter
+                    .record_eviction(entry.policy_weight(), *cause);
                 if eviction_state.is_notifier_enabled() {
                     let key = Arc::clone(key);
                     eviction_state.add_removed_entry(key, &entry, *cause);
@@ -2327,8 +2338,11 @@ where
             );
 
             if let Some(entry) = maybe_entry {
+                let cause = RemovalCause::Size;
+                self.stats_counter
+                    .record_eviction(entry.policy_weight(), cause);
                 if eviction_state.is_notifier_enabled() {
-                    eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
+                    eviction_state.add_removed_entry(key, &entry, cause);
                 }
                 let weight = entry.policy_weight();
                 Self::handle_remove_with_deques(
@@ -2358,6 +2372,8 @@ where
         entry: &TrioArc<ValueEntry<K, V>>,
         cause: RemovalCause,
     ) {
+        self.stats_counter
+            .record_eviction(entry.policy_weight(), cause);
         if let Some(notifier) = &self.removal_notifier {
             notifier.notify(key, entry.value.clone(), cause)
         }

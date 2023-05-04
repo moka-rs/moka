@@ -140,7 +140,10 @@ impl<K, V, S> SegmentedCache<K, V, S> {
     }
 
     pub fn stats(&self) -> CacheStats {
-        todo!()
+        self.inner
+            .segments
+            .iter()
+            .fold(CacheStats::default(), |acc, seg| &acc + &seg.stats())
     }
 
     /// Returns an approximate number of entries in this cache.
