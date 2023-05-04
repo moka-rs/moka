@@ -13,6 +13,7 @@ use crate::{
     },
     notification::{self, EvictionListener},
     policy::ExpirationPolicy,
+    stats::CacheStats,
     sync::{Iter, PredicateId},
     sync_base::{
         base_cache::{BaseCache, HouseKeeperArc},
@@ -872,6 +873,10 @@ impl<K, V, S> Cache<K, V, S> {
         self.base.policy()
     }
 
+    pub fn stats(&self) -> CacheStats {
+        self.base.stats()
+    }
+
     /// Returns an approximate number of entries in this cache.
     ///
     /// The value returned is _an estimate_; the actual count may differ if there are
@@ -1283,12 +1288,14 @@ where
         let type_id = ValueInitializer::<K, V, S>::type_id_for_get_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_get_with;
 
+        let start = self.base.now();
         match self
             .value_initializer
             .try_init_or_read(&key, type_id, get, init, insert, post_init)
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
+                self.base.sc().record_load_success(start.elapsed_nanos());
                 Entry::new(k, v, true)
             }
             InitResult::ReadExisting(v) => Entry::new(k, v, false),
@@ -1508,17 +1515,20 @@ where
         let type_id = ValueInitializer::<K, V, S>::type_id_for_optionally_get_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_optionally_get_with;
 
+        let start: Instant = self.base.now();
         match self
             .value_initializer
             .try_init_or_read(&key, type_id, get, init, insert, post_init)
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
+                self.base.sc().record_load_success(start.elapsed_nanos());
                 Some(Entry::new(k, v, true))
             }
             InitResult::ReadExisting(v) => Some(Entry::new(k, v, false)),
             InitResult::InitErr(_) => {
                 crossbeam_epoch::pin().flush();
+                self.base.sc().record_load_failure(start.elapsed_nanos());
                 None
             }
         }
@@ -1703,17 +1713,20 @@ where
         let type_id = ValueInitializer::<K, V, S>::type_id_for_try_get_with::<E>();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_try_get_with;
 
+        let start = self.base.now();
         match self
             .value_initializer
             .try_init_or_read(&key, type_id, get, init, insert, post_init)
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
+                self.base.sc().record_load_success(start.elapsed_nanos());
                 Ok(Entry::new(k, v, true))
             }
             InitResult::ReadExisting(v) => Ok(Entry::new(k, v, false)),
             InitResult::InitErr(e) => {
                 crossbeam_epoch::pin().flush();
+                self.base.sc().record_load_failure(start.elapsed_nanos());
                 Err(e)
             }
         }

@@ -51,3 +51,14 @@ impl PartialEq<usize> for CacheRegion {
 pub(crate) fn sketch_capacity(max_capacity: u64) -> u32 {
     max_capacity.try_into().unwrap_or(u32::MAX).max(128)
 }
+
+pub(crate) fn available_parallelism() -> usize {
+    // TODO: When we upgrade the MSRV to 1.64 or newer, replace num_cpus crate with
+    // `thread::available_parallelism` in std.
+    // https://github.com/moka-rs/moka/issues/257
+
+    // Some platforms may return 0. In that case, use 1.
+    // https://github.com/moka-rs/moka/pull/39#issuecomment-916888859
+    // https://github.com/seanmonstar/num_cpus/issues/69
+    num_cpus::get().max(1)
+}

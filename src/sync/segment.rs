@@ -5,6 +5,7 @@ use crate::{
     common::concurrent::{housekeeper, Weigher},
     notification::{self, EvictionListener},
     policy::ExpirationPolicy,
+    stats::CacheStats,
     sync_base::iter::{Iter, ScanningGet},
     Entry, Policy, PredicateError,
 };
@@ -136,6 +137,10 @@ impl<K, V, S> SegmentedCache<K, V, S> {
         policy.set_max_capacity(self.inner.desired_capacity);
         policy.set_num_segments(self.inner.segments.len());
         policy
+    }
+
+    pub fn stats(&self) -> CacheStats {
+        todo!()
     }
 
     /// Returns an approximate number of entries in this cache.

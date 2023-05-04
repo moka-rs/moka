@@ -168,6 +168,9 @@
 #[cfg_attr(docsrs, doc(cfg(feature = "future")))]
 pub mod future;
 
+#[cfg(any(feature = "sync", feature = "future"))]
+pub mod stats;
+
 #[cfg(feature = "sync")]
 #[cfg_attr(docsrs, doc(cfg(feature = "sync")))]
 pub mod sync;

@@ -31,6 +31,7 @@ use crate::{
         EvictionListener, RemovalCause,
     },
     policy::ExpirationPolicy,
+    stats::{CacheStats, ConcurrentStatsCounter, StatsCounter, StripedStatsCounter},
     Entry, Expiry, Policy, PredicateError,
 };
 
@@ -93,6 +94,19 @@ impl<K, V, S> BaseCache<K, V, S> {
 
     pub(crate) fn policy(&self) -> Policy {
         self.inner.policy()
+    }
+
+    pub(crate) fn stats(&self) -> CacheStats {
+        self.inner.stats()
+    }
+
+    /// Returns a reference to the stats counter.
+    pub(crate) fn sc(&self) -> &dyn StatsCounter<Stats = CacheStats> {
+        self.inner.sc()
+    }
+
+    pub(crate) fn now(&self) -> Instant {
+        self.inner.current_time_from_expiration_clock()
     }
 
     pub(crate) fn entry_count(&self) -> u64 {
@@ -240,7 +254,13 @@ where
                 .expect("Failed to record a get op");
         };
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
-        self.do_get_with_hash(key, hash, record, ignore_if, need_key)
+        let maybe_entry = self.do_get_with_hash(key, hash, record, ignore_if, need_key);
+        if maybe_entry.is_some() {
+            self.inner.sc().record_hits(1);
+        } else {
+            self.inner.sc().record_misses(1);
+        }
+        maybe_entry
     }
 
     pub(crate) fn get_with_hash_and_ignore_if<Q, I>(
@@ -260,7 +280,13 @@ where
             self.record_read_op(op, now)
                 .expect("Failed to record a get op");
         };
-        self.do_get_with_hash(key, hash, record, ignore_if, need_key)
+        let maybe_entry = self.do_get_with_hash(key, hash, record, ignore_if, need_key);
+        if maybe_entry.is_some() {
+            self.inner.sc().record_hits(1);
+        } else {
+            self.inner.sc().record_misses(1);
+        }
+        maybe_entry
     }
 
     pub(crate) fn get_with_hash_without_recording<Q, I>(
@@ -975,6 +1001,7 @@ pub(crate) struct Inner<K, V, S> {
     key_locks: Option<KeyLockMap<K, S>>,
     invalidator_enabled: bool,
     invalidator: RwLock<Option<Invalidator<K, V, S>>>,
+    stats_counter: Box<dyn StatsCounter<Stats = CacheStats> + Send + Sync>,
     clocks: Clocks,
 }
 
@@ -990,6 +1017,14 @@ impl<K, V, S> Inner<K, V, S> {
     fn policy(&self) -> Policy {
         let exp = &self.expiration_policy;
         Policy::new(self.max_capacity, 1, exp.time_to_live(), exp.time_to_idle())
+    }
+
+    fn stats(&self) -> CacheStats {
+        self.stats_counter.snapshot()
+    }
+
+    fn sc(&self) -> &dyn StatsCounter<Stats = CacheStats> {
+        &*self.stats_counter
     }
 
     #[inline]
@@ -1178,6 +1213,7 @@ where
             invalidator_enabled,
             // When enabled, this field will be set later via the set_invalidator method.
             invalidator: Default::default(),
+            stats_counter: Box::<StripedStatsCounter<ConcurrentStatsCounter>>::default(),
             clocks,
         }
     }
