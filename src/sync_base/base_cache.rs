@@ -109,6 +109,16 @@ impl<K, V, S> BaseCache<K, V, S> {
         self.inner.current_time_from_expiration_clock()
     }
 
+    pub(crate) fn elapsed_nanos_since(&self, start: Instant) -> u64 {
+        use std::convert::TryInto;
+        self.now()
+            .checked_duration_since(start)
+            .unwrap_or_default()
+            .as_nanos()
+            .try_into()
+            .unwrap_or(u64::MAX)
+    }
+
     pub(crate) fn entry_count(&self) -> u64 {
         self.inner.entry_count()
     }

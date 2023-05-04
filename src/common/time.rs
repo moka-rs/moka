@@ -33,16 +33,6 @@ impl Instant {
         Instant(clock::Instant::now())
     }
 
-    pub(crate) fn elapsed_nanos(&self) -> u64 {
-        use std::convert::TryInto;
-        Self::now()
-            .checked_duration_since(*self)
-            .unwrap_or_default()
-            .as_nanos()
-            .try_into()
-            .unwrap_or(u64::MAX)
-    }
-
     #[cfg(feature = "quanta")]
     pub(crate) fn inner_clock(&self) -> clock::Instant {
         self.0
