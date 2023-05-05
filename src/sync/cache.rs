@@ -13,7 +13,7 @@ use crate::{
     },
     notification::{self, EvictionListener},
     policy::ExpirationPolicy,
-    stats::CacheStats,
+    stats::{CacheStats, DisabledStatsCounter, StatsCounter},
     sync::{Iter, PredicateId},
     sync_base::{
         base_cache::{BaseCache, HouseKeeperArc},
@@ -804,14 +804,14 @@ use std::{
 /// overwrite the file created at step 1 and the eviction lister will never remove a
 /// wrong file.
 ///
-pub struct Cache<K, V, S = RandomState> {
-    base: BaseCache<K, V, S>,
+pub struct Cache<K, V, S = RandomState, CS = CacheStats> {
+    base: BaseCache<K, V, S, CS>,
     value_initializer: Arc<ValueInitializer<K, V, S>>,
 }
 
 // TODO: https://github.com/moka-rs/moka/issues/54
 #[allow(clippy::non_send_fields_in_send_ty)]
-unsafe impl<K, V, S> Send for Cache<K, V, S>
+unsafe impl<K, V, S, CS> Send for Cache<K, V, S, CS>
 where
     K: Send + Sync,
     V: Send + Sync,
@@ -819,7 +819,7 @@ where
 {
 }
 
-unsafe impl<K, V, S> Sync for Cache<K, V, S>
+unsafe impl<K, V, S, CS> Sync for Cache<K, V, S, CS>
 where
     K: Send + Sync,
     V: Send + Sync,
@@ -828,7 +828,7 @@ where
 }
 
 // NOTE: We cannot do `#[derive(Clone)]` because it will add `Clone` bound to `K`.
-impl<K, V, S> Clone for Cache<K, V, S> {
+impl<K, V, S, CS> Clone for Cache<K, V, S, CS> {
     /// Makes a clone of this shared cache.
     ///
     /// This operation is cheap as it only creates thread-safe reference counted
@@ -841,12 +841,13 @@ impl<K, V, S> Clone for Cache<K, V, S> {
     }
 }
 
-impl<K, V, S> fmt::Debug for Cache<K, V, S>
+impl<K, V, S, CS> fmt::Debug for Cache<K, V, S, CS>
 where
     K: fmt::Debug + Eq + Hash + Send + Sync + 'static,
     V: fmt::Debug + Clone + Send + Sync + 'static,
     // TODO: Remove these bounds from S.
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d_map = f.debug_map();
@@ -859,7 +860,7 @@ where
     }
 }
 
-impl<K, V, S> Cache<K, V, S> {
+impl<K, V, S, CS> Cache<K, V, S, CS> {
     /// Returns cache’s name.
     pub fn name(&self) -> Option<&str> {
         self.base.name()
@@ -873,8 +874,8 @@ impl<K, V, S> Cache<K, V, S> {
         self.base.policy()
     }
 
-    pub fn stats(&self) -> CacheStats {
-        self.base.stats()
+    pub fn stats(&self) -> CS {
+        self.base.sc().snapshot()
     }
 
     /// Returns an approximate number of entries in this cache.
@@ -927,7 +928,7 @@ impl<K, V, S> Cache<K, V, S> {
     }
 }
 
-impl<K, V> Cache<K, V, RandomState>
+impl<K, V> Cache<K, V, RandomState, CacheStats>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -940,6 +941,7 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: u64) -> Self {
         let build_hasher = RandomState::default();
+        let stats_counter = Arc::<DisabledStatsCounter>::default();
         let housekeeper_conf = housekeeper::Configuration::new_thread_pool(true);
         Self::with_everything(
             None,
@@ -950,6 +952,7 @@ where
             None,
             None,
             Default::default(),
+            stats_counter,
             false,
             housekeeper_conf,
         )
@@ -959,16 +962,17 @@ where
     /// `SegmentedCache` with various configuration knobs.
     ///
     /// [builder-struct]: ./struct.CacheBuilder.html
-    pub fn builder() -> CacheBuilder<K, V, Cache<K, V, RandomState>> {
+    pub fn builder() -> CacheBuilder<K, V, Cache<K, V, RandomState>, CacheStats> {
         CacheBuilder::default()
     }
 }
 
-impl<K, V, S> Cache<K, V, S>
+impl<K, V, S, CS> Cache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
     #[allow(clippy::too_many_arguments)]
@@ -981,6 +985,7 @@ where
         eviction_listener: Option<EvictionListener<K, V>>,
         eviction_listener_conf: Option<notification::Configuration>,
         expiration_policy: ExpirationPolicy<K, V>,
+        stats_counter: Arc<dyn StatsCounter<Stats = CS> + Send + Sync>,
         invalidator_enabled: bool,
         housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
@@ -994,6 +999,7 @@ where
                 eviction_listener,
                 eviction_listener_conf,
                 expiration_policy,
+                stats_counter,
                 invalidator_enabled,
                 housekeeper_conf,
             ),
@@ -1076,7 +1082,7 @@ where
     /// assert!(!entry.is_fresh());
     /// assert_eq!(entry.into_value(), 3);
     /// ```
-    pub fn entry(&self, key: K) -> OwnedKeyEntrySelector<'_, K, V, S>
+    pub fn entry(&self, key: K) -> OwnedKeyEntrySelector<'_, K, V, S, CS>
     where
         K: Hash + Eq,
     {
@@ -1107,7 +1113,7 @@ where
     /// assert!(!entry.is_fresh());
     /// assert_eq!(entry.into_value(), 3);
     /// ```
-    pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
+    pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S, CS>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
@@ -1756,16 +1762,18 @@ where
             return;
         }
 
-        let (op, now) = self.base.do_insert_with_hash(key, hash, value);
+        let (op, ts) = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
-        Self::schedule_write_op(
-            self.base.inner.as_ref(),
-            &self.base.write_op_ch,
-            op,
-            now,
-            hk,
-        )
-        .expect("Failed to insert");
+        let result =
+            Self::schedule_write_op(self.base.inner.as_ref(), &self.base.write_op_ch, op, ts, hk);
+        match result {
+            Ok(false) => (),
+            Ok(true) => {
+                let write_time_nanos = self.base.elapsed_nanos_since(ts);
+                self.base.sc().record_write_wait(write_time_nanos);
+            }
+            Err(_) => panic!("Failed to insert"),
+        }
     }
 
     /// Discards any cached value for the key.
@@ -1843,17 +1851,19 @@ where
                     None
                 };
 
+                let inner = self.base.inner.as_ref();
                 let op = WriteOp::Remove(kv);
-                let now = self.base.current_time_from_expiration_clock();
+                let ts = self.base.current_time_from_expiration_clock();
                 let hk = self.base.housekeeper.as_ref();
-                Self::schedule_write_op(
-                    self.base.inner.as_ref(),
-                    &self.base.write_op_ch,
-                    op,
-                    now,
-                    hk,
-                )
-                .expect("Failed to remove");
+                let result = Self::schedule_write_op(inner, &self.base.write_op_ch, op, ts, hk);
+                match result {
+                    Ok(false) => (),
+                    Ok(true) => {
+                        let write_time_nanos = self.base.elapsed_nanos_since(ts);
+                        self.base.sc().record_write_wait(write_time_nanos);
+                    }
+                    Err(_) => panic!("Failed to remove"),
+                }
                 crossbeam_epoch::pin().flush();
                 maybe_v
             }
@@ -1968,11 +1978,12 @@ where
     }
 }
 
-impl<'a, K, V, S> IntoIterator for &'a Cache<K, V, S>
+impl<'a, K, V, S, CS> IntoIterator for &'a Cache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     type Item = (Arc<K>, V);
 
@@ -1983,11 +1994,12 @@ where
     }
 }
 
-impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
+impl<K, V, S, CS> ConcurrentCacheExt<K, V> for Cache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     fn sync(&self) {
         self.base.inner.sync(MAX_SYNC_REPEATS);
@@ -1997,11 +2009,12 @@ where
 //
 // Iterator support
 //
-impl<K, V, S> ScanningGet<K, V> for Cache<K, V, S>
+impl<K, V, S, CS> ScanningGet<K, V> for Cache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     fn num_cht_segments(&self) -> usize {
         self.base.num_cht_segments()
@@ -2019,38 +2032,43 @@ where
 //
 // private methods
 //
-impl<K, V, S> Cache<K, V, S>
+impl<K, V, S, CS> Cache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
+    /// Push a write operation to the channel. Returns `Ok(true)` if the channel was
+    /// full and we were blocked for a moment.
     #[inline]
     fn schedule_write_op(
         inner: &impl InnerSync,
         ch: &Sender<WriteOp<K, V>>,
         op: WriteOp<K, V>,
-        now: Instant,
-        housekeeper: Option<&HouseKeeperArc<K, V, S>>,
-    ) -> Result<(), TrySendError<WriteOp<K, V>>> {
+        ts: Instant,
+        housekeeper: Option<&HouseKeeperArc<K, V, S, CS>>,
+    ) -> Result<bool, TrySendError<WriteOp<K, V>>> {
         let mut op = op;
+        let mut was_blocked = false;
 
         // NOTES:
         // - This will block when the channel is full.
         // - We are doing a busy-loop here. We were originally calling `ch.send(op)?`,
         //   but we got a notable performance degradation.
         loop {
-            BaseCache::apply_reads_writes_if_needed(inner, ch, now, housekeeper);
+            BaseCache::apply_reads_writes_if_needed(inner, ch, ts, housekeeper);
             match ch.try_send(op) {
                 Ok(()) => break,
                 Err(TrySendError::Full(op1)) => {
                     op = op1;
+                    was_blocked = true;
                     std::thread::sleep(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS));
                 }
                 Err(e @ TrySendError::Disconnected(_)) => return Err(e),
             }
         }
-        Ok(())
+        Ok(was_blocked)
     }
 }
 
@@ -3059,6 +3077,7 @@ mod tests {
 
         let mut cache = Cache::builder()
             .max_capacity(4)
+            .enable_stats()
             .time_to_idle(Duration::from_secs(10))
             .build();
         cache.reconfigure_for_testing();

@@ -19,19 +19,20 @@ use std::{
 ///
 /// [`Entry`]: ../struct.Entry.html
 /// [entry-method]: ./struct.Cache.html#method.entry
-pub struct OwnedKeyEntrySelector<'a, K, V, S> {
+pub struct OwnedKeyEntrySelector<'a, K, V, S, CS> {
     owned_key: K,
     hash: u64,
-    cache: &'a Cache<K, V, S>,
+    cache: &'a Cache<K, V, S, CS>,
 }
 
-impl<'a, K, V, S> OwnedKeyEntrySelector<'a, K, V, S>
+impl<'a, K, V, S, CS> OwnedKeyEntrySelector<'a, K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
-    pub(crate) fn new(owned_key: K, hash: u64, cache: &'a Cache<K, V, S>) -> Self {
+    pub(crate) fn new(owned_key: K, hash: u64, cache: &'a Cache<K, V, S, CS>) -> Self {
         Self {
             owned_key,
             hash,
@@ -365,23 +366,24 @@ where
 ///
 /// [`Entry`]: ../struct.Entry.html
 /// [entry-by-ref-method]: ./struct.Cache.html#method.entry_by_ref
-pub struct RefKeyEntrySelector<'a, K, Q, V, S>
+pub struct RefKeyEntrySelector<'a, K, Q, V, S, CS>
 where
     Q: ?Sized,
 {
     ref_key: &'a Q,
     hash: u64,
-    cache: &'a Cache<K, V, S>,
+    cache: &'a Cache<K, V, S, CS>,
 }
 
-impl<'a, K, Q, V, S> RefKeyEntrySelector<'a, K, Q, V, S>
+impl<'a, K, Q, V, S, CS> RefKeyEntrySelector<'a, K, Q, V, S, CS>
 where
     K: Borrow<Q> + Hash + Eq + Send + Sync + 'static,
     Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
-    pub(crate) fn new(ref_key: &'a Q, hash: u64, cache: &'a Cache<K, V, S>) -> Self {
+    pub(crate) fn new(ref_key: &'a Q, hash: u64, cache: &'a Cache<K, V, S, CS>) -> Self {
         Self {
             ref_key,
             hash,

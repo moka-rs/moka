@@ -3,6 +3,9 @@ use crate::{
     common::{builder_utils, concurrent::Weigher},
     notification::{self, DeliveryMode, EvictionListener, RemovalCause},
     policy::ExpirationPolicy,
+    stats::{
+        CacheStats, ConcurrentStatsCounter, DisabledStatsCounter, StatsCounter, StripedStatsCounter,
+    },
     Expiry,
 };
 
@@ -55,7 +58,7 @@ use std::{
 /// ```
 ///
 #[must_use]
-pub struct CacheBuilder<K, V, C> {
+pub struct CacheBuilder<K, V, C, CS> {
     name: Option<String>,
     max_capacity: Option<u64>,
     initial_capacity: Option<usize>,
@@ -63,11 +66,12 @@ pub struct CacheBuilder<K, V, C> {
     eviction_listener: Option<EvictionListener<K, V>>,
     eviction_listener_conf: Option<notification::Configuration>,
     expiration_policy: ExpirationPolicy<K, V>,
+    stats_counter: Arc<dyn StatsCounter<Stats = CS> + Send + Sync>,
     invalidator_enabled: bool,
     cache_type: PhantomData<C>,
 }
 
-impl<K, V> Default for CacheBuilder<K, V, Cache<K, V, RandomState>>
+impl<K, V> Default for CacheBuilder<K, V, Cache<K, V, RandomState, CacheStats>, CacheStats>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -81,13 +85,14 @@ where
             eviction_listener: None,
             eviction_listener_conf: None,
             expiration_policy: Default::default(),
+            stats_counter: Arc::new(DisabledStatsCounter::default()),
             invalidator_enabled: false,
             cache_type: Default::default(),
         }
     }
 }
 
-impl<K, V> CacheBuilder<K, V, Cache<K, V, RandomState>>
+impl<K, V> CacheBuilder<K, V, Cache<K, V, RandomState, CacheStats>, CacheStats>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -101,6 +106,20 @@ where
         }
     }
 
+    pub fn enable_stats(self) -> Self {
+        Self {
+            stats_counter: Arc::<StripedStatsCounter<ConcurrentStatsCounter>>::default(),
+            ..self
+        }
+    }
+}
+
+impl<K, V, CS> CacheBuilder<K, V, Cache<K, V, RandomState, CS>, CS>
+where
+    K: Eq + Hash + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    CS: 'static,
+{
     /// Builds a `Cache<K, V>`.
     ///
     /// # Panics
@@ -108,7 +127,7 @@ where
     /// Panics if configured with either `time_to_live` or `time_to_idle` higher than
     /// 1000 years. This is done to protect against overflow when computing key
     /// expiration.
-    pub fn build(self) -> Cache<K, V, RandomState> {
+    pub fn build(self) -> Cache<K, V, RandomState, CS> {
         let build_hasher = RandomState::default();
         let exp = &self.expiration_policy;
         builder_utils::ensure_expirations_or_panic(exp.time_to_live(), exp.time_to_idle());
@@ -121,6 +140,7 @@ where
             self.eviction_listener,
             self.eviction_listener_conf,
             self.expiration_policy,
+            self.stats_counter,
             self.invalidator_enabled,
             builder_utils::housekeeper_conf(true),
         )
@@ -204,7 +224,7 @@ where
     /// Panics if configured with either `time_to_live` or `time_to_idle` higher than
     /// 1000 years. This is done to protect against overflow when computing key
     /// expiration.
-    pub fn build_with_hasher<S>(self, hasher: S) -> Cache<K, V, S>
+    pub fn build_with_hasher<S>(self, hasher: S) -> Cache<K, V, S, CS>
     where
         S: BuildHasher + Clone + Send + Sync + 'static,
     {
@@ -219,13 +239,35 @@ where
             self.eviction_listener,
             self.eviction_listener_conf,
             self.expiration_policy,
+            self.stats_counter,
             self.invalidator_enabled,
             builder_utils::housekeeper_conf(true),
         )
     }
 }
 
-impl<K, V, C> CacheBuilder<K, V, C> {
+impl<K, V, S, CS> CacheBuilder<K, V, Cache<K, V, S, CS>, CS> {
+    pub fn stats_counter<CO, CS1>(self, counter: CO) -> CacheBuilder<K, V, Cache<K, V, S, CS1>, CS1>
+    where
+        CO: StatsCounter<Stats = CS1> + Send + Sync + 'static,
+    {
+        let stats_counter = Arc::new(counter);
+        CacheBuilder {
+            name: self.name,
+            max_capacity: self.max_capacity,
+            initial_capacity: self.initial_capacity,
+            weigher: self.weigher,
+            eviction_listener: self.eviction_listener,
+            eviction_listener_conf: self.eviction_listener_conf,
+            expiration_policy: self.expiration_policy,
+            stats_counter,
+            invalidator_enabled: self.invalidator_enabled,
+            cache_type: PhantomData,
+        }
+    }
+}
+
+impl<K, V, C, CS> CacheBuilder<K, V, C, CS> {
     /// Sets the name of the cache. Currently the name is used for identification
     /// only in logging messages.
     pub fn name(self, name: &str) -> Self {
@@ -353,7 +395,14 @@ impl<K, V, C> CacheBuilder<K, V, C> {
 
 #[cfg(test)]
 mod tests {
+    use crossbeam_utils::atomic::AtomicCell;
+
     use super::CacheBuilder;
+    use crate::{
+        future::{Cache, ConcurrentCacheExt},
+        notification::RemovalCause,
+        stats::StatsCounter,
+    };
 
     use std::time::Duration;
 
@@ -387,24 +436,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn build_with_stats_counter() {
+        // A cache with stats counter disabled.
+        let cache: Cache<i32, ()> = Cache::builder().build();
+        assert!(cache.get(&1).is_none());
+        cache.sync();
+        let stats = cache.stats();
+        assert_eq!(stats.request_count(), 0);
+        assert_eq!(stats.miss_count(), 0);
+        assert_eq!(stats, Default::default());
+
+        // A cache with stats counter enabled.
+        let cache: Cache<i32, ()> = Cache::builder().enable_stats().build();
+        assert!(cache.get(&1).is_none());
+        cache.sync();
+        let stats = cache.stats();
+        assert_eq!(stats.request_count(), 1);
+        assert_eq!(stats.miss_count(), 1);
+
+        // A cache with a custom stats counter.
+        let cache: Cache<i32, (), _, MyCacheStats> = Cache::builder()
+            .stats_counter(MyStatsCounter::default())
+            .build();
+        assert!(cache.get(&1).is_none());
+        cache.sync();
+        let stats = cache.stats();
+        assert_eq!(stats.request_count, 10);
+        assert_eq!(stats.miss_count, 20);
+    }
+
+    #[test]
     #[should_panic(expected = "time_to_live is longer than 1000 years")]
-    async fn build_cache_too_long_ttl() {
+    fn build_cache_too_long_ttl() {
         let thousand_years_secs: u64 = 1000 * 365 * 24 * 3600;
-        let builder: CacheBuilder<char, String, _> = CacheBuilder::new(100);
+        let builder: CacheBuilder<char, String, _, _> = CacheBuilder::new(100);
         let duration = Duration::from_secs(thousand_years_secs);
         builder
             .time_to_live(duration + Duration::from_secs(1))
             .build();
     }
 
-    #[tokio::test]
+    #[test]
     #[should_panic(expected = "time_to_idle is longer than 1000 years")]
-    async fn build_cache_too_long_tti() {
+    fn build_cache_too_long_tti() {
         let thousand_years_secs: u64 = 1000 * 365 * 24 * 3600;
-        let builder: CacheBuilder<char, String, _> = CacheBuilder::new(100);
+        let builder: CacheBuilder<char, String, _, _> = CacheBuilder::new(100);
         let duration = Duration::from_secs(thousand_years_secs);
         builder
             .time_to_idle(duration + Duration::from_secs(1))
             .build();
+    }
+
+    /// A custom cache stats.
+    struct MyCacheStats {
+        request_count: u64,
+        miss_count: u64,
+    }
+
+    /// A custom stats counter.
+    #[derive(Default)]
+    struct MyStatsCounter {
+        request_count: AtomicCell<u64>,
+        miss_count: AtomicCell<u64>,
+    }
+
+    impl StatsCounter for MyStatsCounter {
+        type Stats = MyCacheStats;
+
+        fn record_hits(&self, _count: u32) {}
+
+        fn record_misses(&self, _count: u32) {
+            self.request_count.fetch_add(1);
+            self.miss_count.fetch_add(1);
+        }
+
+        fn record_load_success(&self, _load_time_nanos: u64) {}
+        fn record_load_failure(&self, _load_time_nanos: u64) {}
+        fn record_eviction(&self, _weight: u32, _cause: RemovalCause) {}
+        fn record_read_drop(&self) {}
+        fn record_write_wait(&self, _write_time_nanos: u64) {}
+
+        fn snapshot(&self) -> Self::Stats {
+            MyCacheStats {
+                request_count: self.request_count.load() * 10,
+                miss_count: self.miss_count.load() * 20,
+            }
+        }
     }
 }

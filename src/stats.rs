@@ -34,6 +34,9 @@ use once_cell::sync::Lazy;
 ///   `eviction_weight`.
 /// - No stats are modified when a cache entry is manually invalidated, removed or
 ///   replaced. (Removed with a cause `Explicit` or `Replaced`).
+
+// TODO: Add doc about `read_drop_count`, `write_wait_count` and
+// `total_write_wait_time_nanos`.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct CacheStats {
     hit_count: u64,
@@ -41,8 +44,13 @@ pub struct CacheStats {
     load_success_count: u64,
     load_failure_count: u64,
     total_load_time_nanos: u64,
-    eviction_count: u64,
-    eviction_weight: u64,
+    eviction_by_size_count: u64,
+    eviction_by_size_weight: u64,
+    eviction_by_expiration_count: u64,
+    eviction_by_expiration_weight: u64,
+    read_drop_count: u64,
+    write_wait_count: u64,
+    total_write_wait_time_nanos: u64,
 }
 
 impl Debug for CacheStats {
@@ -62,8 +70,26 @@ impl Debug for CacheStats {
                 "average_load_penalty_nanos",
                 &self.average_load_penalty_nanos(),
             )
-            .field("eviction_count", &self.eviction_count)
-            .field("eviction_weight", &self.eviction_weight)
+            .field("eviction_by_size_count", &self.eviction_by_size_count)
+            .field("eviction_by_size_weight", &self.eviction_by_size_weight)
+            .field(
+                "eviction_by_expiration_count",
+                &self.eviction_by_expiration_count,
+            )
+            .field(
+                "eviction_by_expiration_weight",
+                &self.eviction_by_expiration_weight,
+            )
+            .field("read_drop_count", &self.read_drop_count)
+            .field("write_wait_count", &self.write_wait_count)
+            .field(
+                "total_write_wait_time_nanos",
+                &self.total_write_wait_time_nanos,
+            )
+            .field(
+                "average_write_wait_time_nanos",
+                &self.average_write_wait_time_nanos(),
+            )
             .finish()
     }
 }
@@ -87,9 +113,32 @@ impl CacheStats {
         self
     }
 
-    pub fn set_eviction_count(&mut self, eviction_count: u64, eviction_weight: u64) -> &mut Self {
-        self.eviction_count = eviction_count;
-        self.eviction_weight = eviction_weight;
+    pub fn set_eviction_counts(
+        &mut self,
+        eviction_by_size_count: u64,
+        eviction_by_size_weight: u64,
+        eviction_by_expiration_count: u64,
+        eviction_by_expiration_weight: u64,
+    ) -> &mut Self {
+        self.eviction_by_size_count = eviction_by_size_count;
+        self.eviction_by_size_weight = eviction_by_size_weight;
+        self.eviction_by_expiration_count = eviction_by_expiration_count;
+        self.eviction_by_expiration_weight = eviction_by_expiration_weight;
+        self
+    }
+
+    pub fn set_read_drop_count(&mut self, count: u64) -> &mut Self {
+        self.read_drop_count = count;
+        self
+    }
+
+    pub fn set_write_wait_count(
+        &mut self,
+        write_wait_count: u64,
+        total_write_wait_time_nanos: u64,
+    ) -> &mut Self {
+        self.write_wait_count = write_wait_count;
+        self.total_write_wait_time_nanos = total_write_wait_time_nanos;
         self
     }
 
@@ -158,12 +207,41 @@ impl CacheStats {
         }
     }
 
-    pub fn eviction_count(&self) -> u64 {
-        self.eviction_count
+    pub fn eviction_by_size_count(&self) -> u64 {
+        self.eviction_by_size_count
     }
 
-    pub fn eviction_weight(&self) -> u64 {
-        self.eviction_weight
+    pub fn eviction_by_size_weight(&self) -> u64 {
+        self.eviction_by_size_weight
+    }
+
+    pub fn eviction_by_expiration_count(&self) -> u64 {
+        self.eviction_by_expiration_count
+    }
+
+    pub fn eviction_by_expiration_weight(&self) -> u64 {
+        self.eviction_by_expiration_weight
+    }
+
+    pub fn read_drop_count(&self) -> u64 {
+        self.read_drop_count
+    }
+
+    pub fn write_wait_count(&self) -> u64 {
+        self.write_wait_count
+    }
+
+    pub fn total_write_wait_time_nanos(&self) -> u64 {
+        self.total_write_wait_time_nanos
+    }
+
+    pub fn average_write_wait_time_nanos(&self) -> f64 {
+        let write_wait_count = self.write_wait_count();
+        if write_wait_count == 0 {
+            0.0
+        } else {
+            self.total_write_wait_time_nanos as f64 / write_wait_count as f64
+        }
     }
 }
 
@@ -192,8 +270,23 @@ impl Add for &CacheStats {
             total_load_time_nanos: self
                 .total_load_time_nanos
                 .saturating_add(rhs.total_load_time_nanos),
-            eviction_count: self.eviction_count.saturating_add(rhs.eviction_count),
-            eviction_weight: self.eviction_weight.saturating_add(rhs.eviction_weight),
+            eviction_by_size_count: self
+                .eviction_by_size_count
+                .saturating_add(rhs.eviction_by_size_count),
+            eviction_by_size_weight: self
+                .eviction_by_size_weight
+                .saturating_add(rhs.eviction_by_size_weight),
+            eviction_by_expiration_count: self
+                .eviction_by_expiration_count
+                .saturating_add(rhs.eviction_by_expiration_count),
+            eviction_by_expiration_weight: self
+                .eviction_by_expiration_weight
+                .saturating_add(rhs.eviction_by_expiration_weight),
+            read_drop_count: self.read_drop_count.saturating_add(rhs.read_drop_count),
+            write_wait_count: self.write_wait_count.saturating_add(rhs.write_wait_count),
+            total_write_wait_time_nanos: self
+                .total_write_wait_time_nanos
+                .saturating_add(rhs.total_write_wait_time_nanos),
         }
     }
 }
@@ -214,20 +307,36 @@ impl Sub for CacheStats {
             total_load_time_nanos: self
                 .total_load_time_nanos
                 .saturating_sub(rhs.total_load_time_nanos),
-            eviction_count: self.eviction_count.saturating_sub(rhs.eviction_count),
-            eviction_weight: self.eviction_weight.saturating_sub(rhs.eviction_weight),
+            eviction_by_size_count: self
+                .eviction_by_size_count
+                .saturating_sub(rhs.eviction_by_size_count),
+            eviction_by_size_weight: self
+                .eviction_by_size_weight
+                .saturating_sub(rhs.eviction_by_size_weight),
+            eviction_by_expiration_count: self
+                .eviction_by_expiration_count
+                .saturating_sub(rhs.eviction_by_expiration_count),
+            eviction_by_expiration_weight: self
+                .eviction_by_expiration_weight
+                .saturating_sub(rhs.eviction_by_expiration_weight),
+            read_drop_count: self.read_drop_count.saturating_sub(rhs.read_drop_count),
+            write_wait_count: self.write_wait_count.saturating_sub(rhs.write_wait_count),
+            total_write_wait_time_nanos: self
+                .total_write_wait_time_nanos
+                .saturating_sub(rhs.total_write_wait_time_nanos),
         }
     }
 }
 pub trait StatsCounter {
-    // We cannot use `AddAssign` bound here because it is not object-safe.
-    type Stats: Default;
+    type Stats;
 
     fn record_hits(&self, count: u32);
     fn record_misses(&self, count: u32);
     fn record_load_success(&self, load_time_nanos: u64);
     fn record_load_failure(&self, load_time_nanos: u64);
     fn record_eviction(&self, weight: u32, cause: RemovalCause);
+    fn record_read_drop(&self);
+    fn record_write_wait(&self, write_time_nanos: u64);
     fn snapshot(&self) -> Self::Stats;
 }
 
@@ -238,29 +347,16 @@ pub struct DisabledStatsCounter;
 impl StatsCounter for DisabledStatsCounter {
     type Stats = CacheStats;
 
-    fn record_hits(&self, _count: u32) {
-        // Do nothing.
-    }
-
-    fn record_misses(&self, _count: u32) {
-        // Do nothing.
-    }
-
-    fn record_load_success(&self, _load_time_nanos: u64) {
-        // Do nothing.
-    }
-
-    fn record_load_failure(&self, _load_time_nanos: u64) {
-        // Do nothing.
-    }
-
-    fn record_eviction(&self, _weight: u32, _cause: RemovalCause) {
-        // Do nothing.
-    }
-
+    fn record_hits(&self, _count: u32) {}
+    fn record_misses(&self, _count: u32) {}
+    fn record_load_success(&self, _load_time_nanos: u64) {}
+    fn record_load_failure(&self, _load_time_nanos: u64) {}
+    fn record_eviction(&self, _weight: u32, _cause: RemovalCause) {}
+    fn record_read_drop(&self) {}
+    fn record_write_wait(&self, _write_time_nanos: u64) {}
     fn snapshot(&self) -> Self::Stats {
         // Return a `CacheStats` with all fields set to 0.
-        Self::Stats::default()
+        CacheStats::default()
     }
 }
 
@@ -272,8 +368,13 @@ pub struct ConcurrentStatsCounter {
     load_success_count: AtomicCell<u64>,
     load_failure_count: AtomicCell<u64>,
     total_load_time: AtomicCell<u64>,
-    eviction_count: AtomicCell<u64>,
-    eviction_weight: AtomicCell<u64>,
+    eviction_by_size_count: AtomicCell<u64>,
+    eviction_by_size_weight: AtomicCell<u64>,
+    eviction_by_expiration_count: AtomicCell<u64>,
+    eviction_by_expiration_weight: AtomicCell<u64>,
+    read_drop_count: AtomicCell<u64>,
+    write_wait_count: AtomicCell<u64>,
+    total_write_wait_time_nanos: AtomicCell<u64>,
 }
 
 impl StatsCounter for ConcurrentStatsCounter {
@@ -284,8 +385,7 @@ impl StatsCounter for ConcurrentStatsCounter {
     }
 
     fn record_misses(&self, count: u32) {
-        let counter = &self.miss_count;
-        Self::saturating_add(counter, count as u64);
+        Self::saturating_add(&self.miss_count, count as u64);
     }
 
     fn record_load_success(&self, load_time_nanos: u64) {
@@ -301,13 +401,29 @@ impl StatsCounter for ConcurrentStatsCounter {
     /// Increments the `eviction_count` and `eviction_weight` only when the `cause`
     /// is `Expired` or `Size`.
     fn record_eviction(&self, weight: u32, cause: RemovalCause) {
-        if matches!(cause, RemovalCause::Expired | RemovalCause::Size) {
-            Self::saturating_add(&self.eviction_count, 1);
-            Self::saturating_add(&self.eviction_weight, weight as u64);
+        match cause {
+            RemovalCause::Size => {
+                Self::saturating_add(&self.eviction_by_size_count, 1);
+                Self::saturating_add(&self.eviction_by_size_weight, weight as u64);
+            }
+            RemovalCause::Expired => {
+                Self::saturating_add(&self.eviction_by_expiration_count, 1);
+                Self::saturating_add(&self.eviction_by_expiration_weight, weight as u64);
+            }
+            _ => (),
         }
     }
 
-    fn snapshot(&self) -> Self::Stats {
+    fn record_read_drop(&self) {
+        Self::saturating_add(&self.read_drop_count, 1);
+    }
+
+    fn record_write_wait(&self, write_time_nanos: u64) {
+        Self::saturating_add(&self.write_wait_count, 1);
+        Self::saturating_add(&self.total_write_wait_time_nanos, write_time_nanos);
+    }
+
+    fn snapshot(&self) -> CacheStats {
         let mut stats = CacheStats::default();
         stats.set_req_counts(self.hit_count.load(), self.miss_count.load());
         stats.set_load_counts(
@@ -315,7 +431,17 @@ impl StatsCounter for ConcurrentStatsCounter {
             self.load_failure_count.load(),
             self.total_load_time.load(),
         );
-        stats.set_eviction_count(self.eviction_count.load(), self.eviction_weight.load());
+        stats.set_eviction_counts(
+            self.eviction_by_size_count.load(),
+            self.eviction_by_size_weight.load(),
+            self.eviction_by_expiration_count.load(),
+            self.eviction_by_expiration_weight.load(),
+        );
+        stats.set_read_drop_count(self.read_drop_count.load());
+        stats.set_write_wait_count(
+            self.write_wait_count.load(),
+            self.total_write_wait_time_nanos.load(),
+        );
         stats
     }
 }
@@ -397,12 +523,18 @@ where
         self.counter().record_eviction(weight, _cause);
     }
 
+    fn record_read_drop(&self) {
+        self.counter().record_read_drop();
+    }
+
+    fn record_write_wait(&self, write_time_nanos: u64) {
+        self.counter().record_write_wait(write_time_nanos);
+    }
+
     fn snapshot(&self) -> Self::Stats {
-        self.counters
-            .iter()
-            .fold(Self::Stats::default(), |acc, counter| {
-                &acc + &counter.snapshot()
-            })
+        let mut iter = self.counters.iter();
+        let first = iter.next().expect("There is no counter").snapshot();
+        iter.fold(first, |acc, counter| &acc + &counter.snapshot())
     }
 }
 

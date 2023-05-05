@@ -31,7 +31,7 @@ use crate::{
         EvictionListener, RemovalCause,
     },
     policy::ExpirationPolicy,
-    stats::{CacheStats, ConcurrentStatsCounter, StatsCounter, StripedStatsCounter},
+    stats::{CacheStats, StatsCounter},
     Entry, Expiry, Policy, PredicateError,
 };
 
@@ -56,16 +56,16 @@ use std::{
 };
 use triomphe::Arc as TrioArc;
 
-pub(crate) type HouseKeeperArc<K, V, S> = Arc<Housekeeper<Inner<K, V, S>>>;
+pub(crate) type HouseKeeperArc<K, V, S, CS> = Arc<Housekeeper<Inner<K, V, S, CS>>>;
 
-pub(crate) struct BaseCache<K, V, S = RandomState> {
-    pub(crate) inner: Arc<Inner<K, V, S>>,
+pub(crate) struct BaseCache<K, V, S = RandomState, CS = CacheStats> {
+    pub(crate) inner: Arc<Inner<K, V, S, CS>>,
     read_op_ch: Sender<ReadOp<K, V>>,
     pub(crate) write_op_ch: Sender<WriteOp<K, V>>,
-    pub(crate) housekeeper: Option<HouseKeeperArc<K, V, S>>,
+    pub(crate) housekeeper: Option<HouseKeeperArc<K, V, S, CS>>,
 }
 
-impl<K, V, S> Clone for BaseCache<K, V, S> {
+impl<K, V, S, CS> Clone for BaseCache<K, V, S, CS> {
     /// Makes a clone of this shared cache.
     ///
     /// This operation is cheap as it only creates thread-safe reference counted
@@ -80,14 +80,14 @@ impl<K, V, S> Clone for BaseCache<K, V, S> {
     }
 }
 
-impl<K, V, S> Drop for BaseCache<K, V, S> {
+impl<K, V, S, CS> Drop for BaseCache<K, V, S, CS> {
     fn drop(&mut self) {
         // The housekeeper needs to be dropped before the inner is dropped.
         std::mem::drop(self.housekeeper.take());
     }
 }
 
-impl<K, V, S> BaseCache<K, V, S> {
+impl<K, V, S, CS> BaseCache<K, V, S, CS> {
     pub(crate) fn name(&self) -> Option<&str> {
         self.inner.name()
     }
@@ -96,12 +96,12 @@ impl<K, V, S> BaseCache<K, V, S> {
         self.inner.policy()
     }
 
-    pub(crate) fn stats(&self) -> CacheStats {
+    pub(crate) fn stats(&self) -> CS {
         self.inner.stats()
     }
 
     /// Returns a reference to the stats counter.
-    pub(crate) fn sc(&self) -> &dyn StatsCounter<Stats = CacheStats> {
+    pub(crate) fn sc(&self) -> &dyn StatsCounter<Stats = CS> {
         self.inner.sc()
     }
 
@@ -161,7 +161,7 @@ impl<K, V, S> BaseCache<K, V, S> {
     }
 }
 
-impl<K, V, S> BaseCache<K, V, S>
+impl<K, V, S, CS> BaseCache<K, V, S, CS>
 where
     K: Hash + Eq,
     S: BuildHasher,
@@ -171,11 +171,12 @@ where
     }
 }
 
-impl<K, V, S> BaseCache<K, V, S>
+impl<K, V, S, CS> BaseCache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
     #[allow(clippy::too_many_arguments)]
@@ -188,6 +189,7 @@ where
         eviction_listener: Option<EvictionListener<K, V>>,
         eviction_listener_conf: Option<notification::Configuration>,
         expiration_policy: ExpirationPolicy<K, V>,
+        stats_counter: Arc<dyn StatsCounter<Stats = CS> + Send + Sync>,
         invalidator_enabled: bool,
         housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
@@ -208,6 +210,7 @@ where
             weigher,
             eviction_listener,
             eviction_listener_conf,
+            stats_counter,
             r_rcv,
             w_rcv,
             expiration_policy,
@@ -447,7 +450,7 @@ where
         inner: &impl InnerSync,
         ch: &Sender<WriteOp<K, V>>,
         now: Instant,
-        housekeeper: Option<&HouseKeeperArc<K, V, S>>,
+        housekeeper: Option<&HouseKeeperArc<K, V, S, CS>>,
     ) {
         let w_len = ch.len();
 
@@ -475,11 +478,12 @@ where
 //
 // Iterator support
 //
-impl<K, V, S> ScanningGet<K, V> for BaseCache<K, V, S>
+impl<K, V, S, CS> ScanningGet<K, V> for BaseCache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     fn num_cht_segments(&self) -> usize {
         self.inner.num_cht_segments()
@@ -514,11 +518,12 @@ where
 //
 // private methods
 //
-impl<K, V, S> BaseCache<K, V, S>
+impl<K, V, S, CS> BaseCache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     #[inline]
     fn record_read_op(
@@ -529,8 +534,12 @@ where
         self.apply_reads_if_needed(&self.inner, now);
         let ch = &self.read_op_ch;
         match ch.try_send(op) {
+            ok @ Ok(()) => ok,
             // Discard the ReadOp when the channel is full.
-            Ok(()) | Err(TrySendError::Full(_)) => Ok(()),
+            Err(TrySendError::Full(_)) => {
+                self.sc().record_read_drop();
+                Ok(())
+            }
             Err(e @ TrySendError::Disconnected(_)) => Err(e),
         }
     }
@@ -685,7 +694,7 @@ where
     }
 
     #[inline]
-    fn apply_reads_if_needed(&self, inner: &Inner<K, V, S>, now: Instant) {
+    fn apply_reads_if_needed(&self, inner: &Inner<K, V, S, CS>, now: Instant) {
         let len = self.read_op_ch.len();
 
         if let Some(hk) = &self.housekeeper {
@@ -696,17 +705,17 @@ where
     }
 
     #[inline]
-    fn should_apply_reads(hk: &HouseKeeperArc<K, V, S>, ch_len: usize, now: Instant) -> bool {
+    fn should_apply_reads(hk: &HouseKeeperArc<K, V, S, CS>, ch_len: usize, now: Instant) -> bool {
         hk.should_apply_reads(ch_len, now)
     }
 
     #[inline]
-    fn should_apply_writes(hk: &HouseKeeperArc<K, V, S>, ch_len: usize, now: Instant) -> bool {
+    fn should_apply_writes(hk: &HouseKeeperArc<K, V, S, CS>, ch_len: usize, now: Instant) -> bool {
         hk.should_apply_writes(ch_len, now)
     }
 }
 
-impl<K, V, S> BaseCache<K, V, S> {
+impl<K, V, S, CS> BaseCache<K, V, S, CS> {
     #[inline]
     fn new_value_entry(
         &self,
@@ -991,7 +1000,7 @@ impl Clocks {
     }
 }
 
-pub(crate) struct Inner<K, V, S> {
+pub(crate) struct Inner<K, V, S, CS> {
     name: Option<String>,
     max_capacity: Option<u64>,
     entry_count: AtomicCell<u64>,
@@ -1010,8 +1019,8 @@ pub(crate) struct Inner<K, V, S> {
     removal_notifier: Option<RemovalNotifier<K, V>>,
     key_locks: Option<KeyLockMap<K, S>>,
     invalidator_enabled: bool,
-    invalidator: RwLock<Option<Invalidator<K, V, S>>>,
-    stats_counter: Box<dyn StatsCounter<Stats = CacheStats> + Send + Sync>,
+    invalidator: RwLock<Option<Invalidator<K, V, S, CS>>>,
+    stats_counter: Arc<dyn StatsCounter<Stats = CS> + Send + Sync>,
     clocks: Clocks,
 }
 
@@ -1019,7 +1028,7 @@ pub(crate) struct Inner<K, V, S> {
 // functions/methods used by BaseCache
 //
 
-impl<K, V, S> Inner<K, V, S> {
+impl<K, V, S, CS> Inner<K, V, S, CS> {
     fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
@@ -1029,11 +1038,11 @@ impl<K, V, S> Inner<K, V, S> {
         Policy::new(self.max_capacity, 1, exp.time_to_live(), exp.time_to_idle())
     }
 
-    fn stats(&self) -> CacheStats {
+    fn stats(&self) -> CS {
         self.stats_counter.snapshot()
     }
 
-    fn sc(&self) -> &dyn StatsCounter<Stats = CacheStats> {
+    fn sc(&self) -> &dyn StatsCounter<Stats = CS> {
         &*self.stats_counter
     }
 
@@ -1143,7 +1152,7 @@ impl<K, V, S> Inner<K, V, S> {
     }
 }
 
-impl<K, V, S> Inner<K, V, S>
+impl<K, V, S, CS> Inner<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Send + Sync + 'static,
@@ -1160,6 +1169,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
         eviction_listener_conf: Option<notification::Configuration>,
+        stats_counter: Arc<dyn StatsCounter<Stats = CS> + Send + Sync>,
         read_op_ch: Receiver<ReadOp<K, V>>,
         write_op_ch: Receiver<WriteOp<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
@@ -1223,7 +1233,7 @@ where
             invalidator_enabled,
             // When enabled, this field will be set later via the set_invalidator method.
             invalidator: Default::default(),
-            stats_counter: Box::<StripedStatsCounter<ConcurrentStatsCounter>>::default(),
+            stats_counter,
             clocks,
         }
     }
@@ -1315,7 +1325,7 @@ where
     }
 }
 
-impl<K, V, S> GetOrRemoveEntry<K, V> for Arc<Inner<K, V, S>>
+impl<K, V, S, CS> GetOrRemoveEntry<K, V> for Arc<Inner<K, V, S, CS>>
 where
     K: Hash + Eq,
     S: BuildHasher,
@@ -1366,11 +1376,12 @@ mod batch_size {
 // - sync_writes
 // - evict
 // - invalidate_entries
-impl<K, V, S> InnerSync for Inner<K, V, S>
+impl<K, V, S, CS> InnerSync for Inner<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
         if self.max_capacity == Some(0) {
@@ -1478,7 +1489,7 @@ where
 //
 // private methods
 //
-impl<K, V, S> Inner<K, V, S>
+impl<K, V, S, CS> Inner<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Send + Sync + 'static,
@@ -2210,13 +2221,14 @@ where
 
     fn invalidate_entries(
         &self,
-        invalidator: &Invalidator<K, V, S>,
+        invalidator: &Invalidator<K, V, S, CS>,
         deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
         batch_size: usize,
         eviction_state: &mut EvictionState<'_, K, V>,
     ) where
         V: Clone,
+        CS: 'static,
     {
         self.process_invalidation_result(invalidator, deqs, timer_wheel, eviction_state);
         self.submit_invalidation_task(invalidator, &mut deqs.write_order, batch_size);
@@ -2224,7 +2236,7 @@ where
 
     fn process_invalidation_result(
         &self,
-        invalidator: &Invalidator<K, V, S>,
+        invalidator: &Invalidator<K, V, S, CS>,
         deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
         eviction_state: &mut EvictionState<'_, K, V>,
@@ -2247,11 +2259,12 @@ where
 
     fn submit_invalidation_task(
         &self,
-        invalidator: &Invalidator<K, V, S>,
+        invalidator: &Invalidator<K, V, S, CS>,
         write_order: &mut Deque<KeyHashDate<K>>,
         batch_size: usize,
     ) where
         V: Clone,
+        CS: 'static,
     {
         let now = self.current_time_from_expiration_clock();
 
@@ -2296,6 +2309,7 @@ where
         eviction_state: &mut EvictionState<'_, K, V>,
     ) where
         V: Clone,
+        CS: 'static,
     {
         const DEQ_NAME: &str = "probation";
         let mut evicted = 0u64;
@@ -2371,7 +2385,7 @@ where
     }
 }
 
-impl<K, V, S> Inner<K, V, S>
+impl<K, V, S, CS> Inner<K, V, S, CS>
 where
     K: Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -2446,7 +2460,7 @@ where
 // for testing
 //
 #[cfg(test)]
-impl<K, V, S> Inner<K, V, S>
+impl<K, V, S, CS> Inner<K, V, S, CS>
 where
     K: Hash + Eq,
     S: BuildHasher + Clone,
@@ -2604,7 +2618,11 @@ fn is_expired_by_ttl(
 
 #[cfg(test)]
 mod tests {
-    use crate::{common::concurrent::housekeeper, policy::ExpirationPolicy};
+    use std::sync::Arc;
+
+    use crate::{
+        common::concurrent::housekeeper, policy::ExpirationPolicy, stats::DisabledStatsCounter,
+    };
 
     use super::BaseCache;
 
@@ -2617,6 +2635,7 @@ mod tests {
         let pot = |exp| 2u64.pow(exp);
 
         let ensure_sketch_len = |max_capacity, len, name| {
+            let stats_counter = Arc::<DisabledStatsCounter>::default();
             let cache = BaseCache::<u8, u8>::new(
                 None,
                 Some(max_capacity),
@@ -2626,6 +2645,7 @@ mod tests {
                 None,
                 None,
                 Default::default(),
+                stats_counter,
                 false,
                 housekeeper::Configuration::new_thread_pool(true),
             );
@@ -2964,6 +2984,7 @@ mod tests {
                 expectation: Arc::clone(&expectation),
             }));
 
+        let stats_counter = Arc::<DisabledStatsCounter>::default();
         let mut cache = BaseCache::<Key, Value>::new(
             None,
             None,
@@ -2977,6 +2998,7 @@ mod tests {
                 Some(Duration::from_secs(TTI)),
                 expiry,
             ),
+            stats_counter,
             false,
             housekeeper::Configuration::new_blocking(),
         );
