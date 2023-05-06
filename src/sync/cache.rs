@@ -13,7 +13,10 @@ use crate::{
     },
     notification::{self, EvictionListener},
     policy::ExpirationPolicy,
-    stats::{CacheStats, DisabledStatsCounter, StatsCounter},
+    stats::{
+        stats_counter::{DisabledStatsCounter, StatsCounter},
+        CacheStats,
+    },
     sync::{Iter, PredicateId},
     sync_base::{
         base_cache::{BaseCache, HouseKeeperArc},
@@ -2109,7 +2112,7 @@ mod tests {
             DeliveryMode, RemovalCause,
         },
         policy::test_utils::ExpiryCallCounters,
-        stats::{ConcurrentStatsCounter, StatsCounter},
+        stats::stats_counter::{DefaultStatsCounter, StatsCounter},
         Expiry,
     };
 
@@ -3073,7 +3076,7 @@ mod tests {
 
     #[test]
     fn test_cache_stats() {
-        let sc = ConcurrentStatsCounter::default();
+        let sc = DefaultStatsCounter::default();
 
         let mut cache = Cache::builder()
             .max_capacity(4)

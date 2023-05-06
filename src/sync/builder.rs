@@ -4,7 +4,10 @@ use crate::{
     notification::{self, EvictionListener, RemovalCause},
     policy::ExpirationPolicy,
     stats::{
-        CacheStats, ConcurrentStatsCounter, DisabledStatsCounter, StatsCounter, StripedStatsCounter,
+        stats_counter::{
+            DefaultStatsCounter, DisabledStatsCounter, StatsCounter, StripedStatsCounter,
+        },
+        CacheStats,
     },
     Expiry,
 };
@@ -105,7 +108,7 @@ where
 
     pub fn enable_stats(self) -> Self {
         Self {
-            stats_counter: Arc::<StripedStatsCounter<ConcurrentStatsCounter>>::default(),
+            stats_counter: Arc::<StripedStatsCounter<DefaultStatsCounter>>::default(),
             ..self
         }
     }
@@ -293,7 +296,7 @@ where
 {
     pub fn enable_stats(self) -> Self {
         Self {
-            stats_counter: Arc::<StripedStatsCounter<ConcurrentStatsCounter>>::default(),
+            stats_counter: Arc::<StripedStatsCounter<DefaultStatsCounter>>::default(),
             ..self
         }
     }
@@ -627,7 +630,10 @@ mod tests {
     use super::CacheBuilder;
     use crate::{
         notification::RemovalCause,
-        stats::StatsCounter,
+        stats::{
+            cache_stats::DetailedCacheStats,
+            stats_counter::{DetailedStatsCounter, StatsCounter, StripedStatsCounter},
+        },
         sync::{Cache, ConcurrentCacheExt, SegmentedCache},
     };
 
@@ -729,6 +735,17 @@ mod tests {
         assert_eq!(stats.request_count(), 1);
         assert_eq!(stats.miss_count(), 1);
 
+        // A cache with a non-default stats counter.
+        let cache: Cache<i32, (), _, DetailedCacheStats> = Cache::builder()
+            .stats_counter(StripedStatsCounter::<DetailedStatsCounter>::default())
+            .build();
+        assert!(cache.get(&1).is_none());
+        cache.sync();
+        let stats = cache.stats();
+        assert_eq!(stats.request_count(), 1);
+        assert_eq!(stats.miss_count(), 1);
+        assert_eq!(stats.read_drop_count(), 0);
+
         // A cache with a custom stats counter.
         let cache: Cache<i32, (), _, MyCacheStats> = Cache::builder()
             .stats_counter(MyStatsCounter::default())
@@ -759,12 +776,23 @@ mod tests {
         assert_eq!(stats.request_count(), 1);
         assert_eq!(stats.miss_count(), 1);
 
+        // A cache with a non-default stats counter.
+        let cache: SegmentedCache<i32, (), _, DetailedCacheStats> = SegmentedCache::builder(4)
+            .stats_counter(StripedStatsCounter::<DetailedStatsCounter>::default())
+            .build();
+        assert!(cache.get(&1).is_none());
+        cache.sync();
+        let stats = cache.stats();
+        assert_eq!(stats.request_count(), 1);
+        assert_eq!(stats.miss_count(), 1);
+        assert_eq!(stats.read_drop_count(), 0);
+
         // A cache with a custom stats counter.
         let cache: SegmentedCache<i32, (), _, MyCacheStats> = SegmentedCache::builder(4)
             .stats_counter(MyStatsCounter::default())
             .build();
         assert!(cache.get(&1).is_none());
-        // cache.sync();
+        cache.sync();
         let stats = cache.stats();
         assert_eq!(stats.request_count, 10);
         assert_eq!(stats.miss_count, 20);

@@ -31,7 +31,7 @@ use crate::{
         EvictionListener, RemovalCause,
     },
     policy::ExpirationPolicy,
-    stats::{CacheStats, StatsCounter},
+    stats::{stats_counter::StatsCounter, CacheStats},
     Entry, Expiry, Policy, PredicateError,
 };
 
@@ -2621,7 +2621,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{
-        common::concurrent::housekeeper, policy::ExpirationPolicy, stats::DisabledStatsCounter,
+        common::concurrent::housekeeper, policy::ExpirationPolicy,
+        stats::stats_counter::DisabledStatsCounter,
     };
 
     use super::BaseCache;

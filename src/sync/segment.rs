@@ -5,7 +5,10 @@ use crate::{
     common::concurrent::{housekeeper, Weigher},
     notification::{self, EvictionListener},
     policy::ExpirationPolicy,
-    stats::{CacheStats, DisabledStatsCounter, StatsCounter},
+    stats::{
+        stats_counter::{DisabledStatsCounter, StatsCounter},
+        CacheStats,
+    },
     sync_base::iter::{Iter, ScanningGet},
     Entry, Policy, PredicateError,
 };
@@ -651,11 +654,12 @@ where
     }
 }
 
-impl<K, V, S> ConcurrentCacheExt<K, V> for SegmentedCache<K, V, S>
+impl<K, V, S, CS> ConcurrentCacheExt<K, V> for SegmentedCache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     fn sync(&self) {
         for segment in self.inner.segments.iter() {

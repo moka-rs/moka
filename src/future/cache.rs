@@ -14,7 +14,10 @@ use crate::{
     },
     notification::{self, EvictionListener},
     policy::ExpirationPolicy,
-    stats::{CacheStats, DisabledStatsCounter, StatsCounter},
+    stats::{
+        stats_counter::{DisabledStatsCounter, StatsCounter},
+        CacheStats,
+    },
     sync_base::base_cache::{BaseCache, HouseKeeperArc},
     Entry, Policy, PredicateError,
 };
@@ -2096,7 +2099,7 @@ mod tests {
         common::time::Clock,
         notification::RemovalCause,
         policy::test_utils::ExpiryCallCounters,
-        stats::{ConcurrentStatsCounter, StatsCounter},
+        stats::stats_counter::{DefaultStatsCounter, StatsCounter},
         Expiry,
     };
 
@@ -3084,7 +3087,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_stats() {
-        let sc = ConcurrentStatsCounter::default();
+        let sc = DefaultStatsCounter::default();
 
         let mut cache = Cache::builder()
             .max_capacity(4)
