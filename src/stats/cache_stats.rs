@@ -40,9 +40,6 @@ pub struct CacheStats {
     eviction_by_size_weight: u64,
     eviction_by_expiration_count: u64,
     eviction_by_expiration_weight: u64,
-    read_drop_count: u64,
-    write_wait_count: u64,
-    total_write_wait_time_nanos: u64,
 }
 
 impl Debug for CacheStats {
@@ -71,16 +68,6 @@ impl Debug for CacheStats {
             .field(
                 "eviction_by_expiration_weight",
                 &self.eviction_by_expiration_weight,
-            )
-            .field("read_drop_count", &self.read_drop_count)
-            .field("write_wait_count", &self.write_wait_count)
-            .field(
-                "total_write_wait_time_nanos",
-                &self.total_write_wait_time_nanos,
-            )
-            .field(
-                "average_write_wait_time_nanos",
-                &self.average_write_wait_time_nanos(),
             )
             .finish()
     }
@@ -116,21 +103,6 @@ impl CacheStats {
         self.eviction_by_size_weight = eviction_by_size_weight;
         self.eviction_by_expiration_count = eviction_by_expiration_count;
         self.eviction_by_expiration_weight = eviction_by_expiration_weight;
-        self
-    }
-
-    pub fn set_read_drop_count(&mut self, count: u64) -> &mut Self {
-        self.read_drop_count = count;
-        self
-    }
-
-    pub fn set_write_wait_count(
-        &mut self,
-        write_wait_count: u64,
-        total_write_wait_time_nanos: u64,
-    ) -> &mut Self {
-        self.write_wait_count = write_wait_count;
-        self.total_write_wait_time_nanos = total_write_wait_time_nanos;
         self
     }
 
@@ -214,27 +186,6 @@ impl CacheStats {
     pub fn eviction_by_expiration_weight(&self) -> u64 {
         self.eviction_by_expiration_weight
     }
-
-    pub fn read_drop_count(&self) -> u64 {
-        self.read_drop_count
-    }
-
-    pub fn write_wait_count(&self) -> u64 {
-        self.write_wait_count
-    }
-
-    pub fn total_write_wait_time_nanos(&self) -> u64 {
-        self.total_write_wait_time_nanos
-    }
-
-    pub fn average_write_wait_time_nanos(&self) -> f64 {
-        let write_wait_count = self.write_wait_count();
-        if write_wait_count == 0 {
-            0.0
-        } else {
-            self.total_write_wait_time_nanos as f64 / write_wait_count as f64
-        }
-    }
 }
 
 // NOTES:
@@ -274,11 +225,6 @@ impl Add for &CacheStats {
             eviction_by_expiration_weight: self
                 .eviction_by_expiration_weight
                 .saturating_add(rhs.eviction_by_expiration_weight),
-            read_drop_count: self.read_drop_count.saturating_add(rhs.read_drop_count),
-            write_wait_count: self.write_wait_count.saturating_add(rhs.write_wait_count),
-            total_write_wait_time_nanos: self
-                .total_write_wait_time_nanos
-                .saturating_add(rhs.total_write_wait_time_nanos),
         }
     }
 }
@@ -311,11 +257,6 @@ impl Sub for CacheStats {
             eviction_by_expiration_weight: self
                 .eviction_by_expiration_weight
                 .saturating_sub(rhs.eviction_by_expiration_weight),
-            read_drop_count: self.read_drop_count.saturating_sub(rhs.read_drop_count),
-            write_wait_count: self.write_wait_count.saturating_sub(rhs.write_wait_count),
-            total_write_wait_time_nanos: self
-                .total_write_wait_time_nanos
-                .saturating_sub(rhs.total_write_wait_time_nanos),
         }
     }
 }
