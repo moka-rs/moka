@@ -403,7 +403,6 @@ mod tests {
     use super::CacheBuilder;
     use crate::{
         future::{Cache, ConcurrentCacheExt},
-        notification::RemovalCause,
         stats::{
             cache_stats::DetailedCacheStats,
             stats_counter::{DetailedStatsCounter, StatsCounter, StripedStatsCounter},
@@ -448,7 +447,7 @@ mod tests {
         assert!(cache.get(&1).is_none());
         cache.sync();
         let stats = cache.stats();
-        assert_eq!(stats.request_count(), 0);
+        assert_eq!(stats.read_request_count(), 0);
         assert_eq!(stats.miss_count(), 0);
         assert_eq!(stats, Default::default());
 
@@ -457,7 +456,7 @@ mod tests {
         assert!(cache.get(&1).is_none());
         cache.sync();
         let stats = cache.stats();
-        assert_eq!(stats.request_count(), 1);
+        assert_eq!(stats.read_request_count(), 1);
         assert_eq!(stats.miss_count(), 1);
 
         // A cache with a non-default stats counter.
@@ -467,7 +466,7 @@ mod tests {
         assert!(cache.get(&1).is_none());
         cache.sync();
         let stats = cache.stats();
-        assert_eq!(stats.request_count(), 1);
+        assert_eq!(stats.read_request_count(), 1);
         assert_eq!(stats.miss_count(), 1);
         assert_eq!(stats.read_drop_count(), 0);
 
@@ -520,18 +519,10 @@ mod tests {
     impl StatsCounter for MyStatsCounter {
         type Stats = MyCacheStats;
 
-        fn record_hits(&self, _count: u32) {}
-
         fn record_misses(&self, _count: u32) {
             self.request_count.fetch_add(1);
             self.miss_count.fetch_add(1);
         }
-
-        fn record_load_success(&self, _load_time_nanos: u64) {}
-        fn record_load_failure(&self, _load_time_nanos: u64) {}
-        fn record_eviction(&self, _weight: u32, _cause: RemovalCause) {}
-        fn record_read_drop(&self) {}
-        fn record_write_wait(&self, _write_time_nanos: u64) {}
 
         fn snapshot(&self) -> Self::Stats {
             MyCacheStats {

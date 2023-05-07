@@ -147,12 +147,12 @@ impl<K, V, S, CS> BaseCache<K, V, S, CS> {
         self.inner.current_time_from_expiration_clock()
     }
 
-    pub(crate) fn notify_invalidate(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>)
+    pub(crate) fn notify_invalidation(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>)
     where
         K: Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
     {
-        self.inner.notify_invalidate(key, entry);
+        self.inner.notify_invalidation(key, entry);
     }
 
     #[cfg(feature = "unstable-debug-counters")]
@@ -264,14 +264,19 @@ where
         // Define a closure to record a read op.
         let record = |op, now| {
             self.record_read_op(op, now)
-                .expect("Failed to record a get op");
+                .expect("Failed to record a get op")
         };
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
-        let maybe_entry = self.do_get_with_hash(key, hash, record, ignore_if, need_key);
-        if maybe_entry.is_some() {
-            self.inner.sc().record_hits(1);
-        } else {
-            self.inner.sc().record_misses(1);
+        let (maybe_entry, is_recorded) =
+            self.do_get_with_hash(key, hash, record, ignore_if, need_key);
+        // When `is_recorded` is `false`, we need to call a `StatsCounter`'s method
+        // now. (If `true`, it will be called later by `apply_reads`)
+        if !is_recorded {
+            if maybe_entry.is_some() {
+                self.inner.sc().record_hits(1);
+            } else {
+                self.inner.sc().record_misses(1);
+            }
         }
         maybe_entry
     }
@@ -291,13 +296,18 @@ where
         // Define a closure to record a read op.
         let record = |op, now| {
             self.record_read_op(op, now)
-                .expect("Failed to record a get op");
+                .expect("Failed to record a get op")
         };
-        let maybe_entry = self.do_get_with_hash(key, hash, record, ignore_if, need_key);
-        if maybe_entry.is_some() {
-            self.inner.sc().record_hits(1);
-        } else {
-            self.inner.sc().record_misses(1);
+        let (maybe_entry, is_recorded) =
+            self.do_get_with_hash(key, hash, record, ignore_if, need_key);
+        // When `is_recorded` is `false`, we need to call a `StatsCounter`'s method
+        // now. (If `true`, it will be called later by `apply_reads`)
+        if !is_recorded {
+            if maybe_entry.is_some() {
+                self.inner.sc().record_hits(1);
+            } else {
+                self.inner.sc().record_misses(1);
+            }
         }
         maybe_entry
     }
@@ -314,11 +324,14 @@ where
         I: FnMut(&V) -> bool,
     {
         // Define a closure that skips to record a read op.
-        let record = |_op, _now| {};
+        let record = |_op, _now| true;
         self.do_get_with_hash(key, hash, record, ignore_if, false)
+            .0
             .map(Entry::into_value)
     }
 
+    /// Returns `(Option<Entry<K, V>>, bool)` where `.0` is the unexpired entry and
+    /// `.1` is whether read op is recorded (`true`) or not (`false`).
     fn do_get_with_hash<Q, R, I>(
         &self,
         key: &Q,
@@ -326,15 +339,15 @@ where
         read_recorder: R,
         mut ignore_if: Option<&mut I>,
         need_key: bool,
-    ) -> Option<Entry<K, V>>
+    ) -> (Option<Entry<K, V>>, bool)
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
-        R: Fn(ReadOp<K, V>, Instant),
+        R: Fn(ReadOp<K, V>, Instant) -> bool,
         I: FnMut(&V) -> bool,
     {
         if self.is_map_disabled() {
-            return None;
+            return (None, true);
         }
 
         let mut now = self.current_time_from_expiration_clock();
@@ -418,11 +431,11 @@ where
                 timestamp: now,
                 is_expiry_modified,
             };
-            read_recorder(op, now);
-            Some(Entry::new(maybe_key, v, false))
+            let is_recorded = read_recorder(op, now);
+            (Some(Entry::new(maybe_key, v, false)), is_recorded)
         } else {
-            read_recorder(ReadOp::Miss(hash), now);
-            None
+            let is_recorded = read_recorder(ReadOp::Miss(hash), now);
+            (None, is_recorded)
         }
     }
 
@@ -525,20 +538,27 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
     CS: 'static,
 {
+    /// Tries to push the given `ReadOp` to the channel, and returns the one of the
+    /// followings:
+    ///
+    /// - `Ok(true)` when the `ReadOp` is recorded.
+    /// - `Ok(false)` when the `ReadOp` is discarded because the channel is full.
+    /// - `Err(TrySendError::Disconnected(_))` when the `ReadOp` is discarded because
+    ///   the channel is disconnected.
     #[inline]
     fn record_read_op(
         &self,
         op: ReadOp<K, V>,
         now: Instant,
-    ) -> Result<(), TrySendError<ReadOp<K, V>>> {
+    ) -> Result<bool, TrySendError<ReadOp<K, V>>> {
         self.apply_reads_if_needed(&self.inner, now);
         let ch = &self.read_op_ch;
         match ch.try_send(op) {
-            ok @ Ok(()) => ok,
+            Ok(()) => Ok(true),
             // Discard the ReadOp when the channel is full.
             Err(TrySendError::Full(_)) => {
                 self.sc().record_read_drop();
-                Ok(())
+                Ok(false)
             }
             Err(e @ TrySendError::Disconnected(_)) => Err(e),
         }
@@ -638,7 +658,9 @@ where
                     );
                 }
 
-                if self.is_removal_notifier_enabled() {
+                if self.is_removal_notifier_enabled()
+                    || self.sc().is_recording_evictions_supported()
+                {
                     self.inner
                         .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified);
                 }
@@ -677,7 +699,9 @@ where
                         );
                     }
 
-                    if self.is_removal_notifier_enabled() {
+                    if self.is_removal_notifier_enabled()
+                        || self.sc().is_recording_evictions_supported()
+                    {
                         self.inner.notify_upsert(
                             key,
                             &old_entry,
@@ -808,11 +832,12 @@ impl<K, V, S, CS> BaseCache<K, V, S, CS> {
 // for testing
 //
 #[cfg(test)]
-impl<K, V, S> BaseCache<K, V, S>
+impl<K, V, S, CS> BaseCache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     pub(crate) fn invalidation_predicate_count(&self) -> usize {
         self.inner.invalidation_predicate_count()
@@ -1552,6 +1577,9 @@ where
         use ReadOp::*;
         let mut freq = self.frequency_sketch.write();
         let ch = &self.read_op_ch;
+        let mut hit_count = 0;
+        let mut miss_count = 0;
+
         for _ in 0..count {
             match ch.try_recv() {
                 Ok(Hit {
@@ -1559,6 +1587,7 @@ where
                     timestamp,
                     is_expiry_modified,
                 }) => {
+                    hit_count += 1;
                     let kh = value_entry.entry_info().key_hash();
                     freq.increment(kh.hash);
                     value_entry.set_last_accessed(timestamp);
@@ -1567,10 +1596,15 @@ where
                     }
                     deqs.move_to_back_ao(&value_entry);
                 }
-                Ok(Miss(hash)) => freq.increment(hash),
+                Ok(Miss(hash)) => {
+                    miss_count += 1;
+                    freq.increment(hash);
+                }
                 Err(_) => break,
             }
         }
+        self.stats_counter.record_hits(hit_count);
+        self.stats_counter.record_misses(miss_count);
     }
 
     fn apply_writes(
@@ -1585,6 +1619,7 @@ where
         use WriteOp::*;
         let freq = self.frequency_sketch.read();
         let ch = &self.write_op_ch;
+        let mut insertion_count = 0;
 
         for _ in 0..count {
             match ch.try_recv() {
@@ -1593,22 +1628,26 @@ where
                     value_entry: entry,
                     old_weight,
                     new_weight,
-                }) => self.handle_upsert(
-                    kh,
-                    entry,
-                    old_weight,
-                    new_weight,
-                    deqs,
-                    timer_wheel,
-                    &freq,
-                    eviction_state,
-                ),
+                }) => {
+                    insertion_count += 1;
+                    self.handle_upsert(
+                        kh,
+                        entry,
+                        old_weight,
+                        new_weight,
+                        deqs,
+                        timer_wheel,
+                        &freq,
+                        eviction_state,
+                    );
+                }
                 Ok(Remove(KvEntry { key: _key, entry })) => {
                     Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters)
                 }
                 Err(_) => break,
             };
         }
+        self.stats_counter.record_insertions(insertion_count);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2434,7 +2473,7 @@ where
     }
 
     #[inline]
-    fn notify_invalidate(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>) {
+    fn notify_invalidation(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>) {
         let now = self.current_time_from_expiration_clock();
         let exp = &self.expiration_policy;
 

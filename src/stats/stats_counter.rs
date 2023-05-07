@@ -27,6 +27,10 @@ pub trait StatsCounter {
         false
     }
 
+    fn is_recording_evictions_supported(&self) -> bool {
+        false
+    }
+
     fn is_write_wait_time_supported(&self) -> bool {
         false
     }
@@ -36,6 +40,9 @@ pub trait StatsCounter {
 
     #[allow(unused_variables)]
     fn record_misses(&self, count: u32) {}
+
+    #[allow(unused_variables)]
+    fn record_insertions(&self, count: u32) {}
 
     #[allow(unused_variables)]
     fn record_load_success(&self, load_time_nanos: u64) {}
@@ -81,10 +88,20 @@ pub struct DefaultStatsCounter {
     eviction_by_expiration_weight: AtomicCell<u64>,
 }
 
+impl DefaultStatsCounter {
+    pub fn striped() -> StripedStatsCounter<Self> {
+        Default::default()
+    }
+}
+
 impl StatsCounter for DefaultStatsCounter {
     type Stats = CacheStats;
 
     fn is_load_time_supported(&self) -> bool {
+        true
+    }
+
+    fn is_recording_evictions_supported(&self) -> bool {
         true
     }
 
@@ -143,15 +160,27 @@ impl StatsCounter for DefaultStatsCounter {
 #[derive(Default)]
 pub struct DetailedStatsCounter {
     base: DefaultStatsCounter,
+    insertion_count: AtomicCell<u64>,
+    invalidation_count: AtomicCell<u64>,
     read_drop_count: AtomicCell<u64>,
     write_wait_count: AtomicCell<u64>,
     total_write_wait_time_nanos: AtomicCell<u64>,
+}
+
+impl DetailedStatsCounter {
+    pub fn striped() -> StripedStatsCounter<Self> {
+        Default::default()
+    }
 }
 
 impl StatsCounter for DetailedStatsCounter {
     type Stats = DetailedCacheStats;
 
     fn is_load_time_supported(&self) -> bool {
+        true
+    }
+
+    fn is_recording_evictions_supported(&self) -> bool {
         true
     }
 
@@ -167,6 +196,10 @@ impl StatsCounter for DetailedStatsCounter {
         self.base.record_misses(count);
     }
 
+    fn record_insertions(&self, count: u32) {
+        saturating_add(&self.insertion_count, count as u64);
+    }
+
     fn record_load_success(&self, load_time_nanos: u64) {
         self.base.record_load_success(load_time_nanos);
     }
@@ -178,7 +211,11 @@ impl StatsCounter for DetailedStatsCounter {
     /// Increments the `eviction_count` and `eviction_weight` only when the `cause`
     /// is `Expired` or `Size`.
     fn record_eviction(&self, weight: u32, cause: RemovalCause) {
-        self.base.record_eviction(weight, cause);
+        if cause == RemovalCause::Explicit {
+            saturating_add(&self.invalidation_count, 1);
+        } else {
+            self.base.record_eviction(weight, cause);
+        }
     }
 
     fn record_read_drop(&self) {
@@ -192,6 +229,10 @@ impl StatsCounter for DetailedStatsCounter {
 
     fn snapshot(&self) -> DetailedCacheStats {
         let mut stats: DetailedCacheStats = self.base.snapshot().into();
+        stats.set_insertion_and_invalidation_counts(
+            self.insertion_count.load(),
+            self.invalidation_count.load(),
+        );
         stats.set_read_drop_count(self.read_drop_count.load());
         stats.set_write_wait_count(
             self.write_wait_count.load(),
@@ -262,6 +303,10 @@ where
         self.counter().is_load_time_supported()
     }
 
+    fn is_recording_evictions_supported(&self) -> bool {
+        self.counter().is_recording_evictions_supported()
+    }
+
     fn is_write_wait_time_supported(&self) -> bool {
         self.counter().is_write_wait_time_supported()
     }
@@ -274,6 +319,10 @@ where
         self.counter().record_misses(count);
     }
 
+    fn record_insertions(&self, count: u32) {
+        self.counter().record_insertions(count);
+    }
+
     fn record_load_success(&self, load_time_nanos: u64) {
         self.counter().record_load_success(load_time_nanos);
     }
@@ -282,8 +331,8 @@ where
         self.counter().record_load_failure(load_time_nanos)
     }
 
-    fn record_eviction(&self, weight: u32, _cause: RemovalCause) {
-        self.counter().record_eviction(weight, _cause);
+    fn record_eviction(&self, weight: u32, cause: RemovalCause) {
+        self.counter().record_eviction(weight, cause);
     }
 
     fn record_read_drop(&self) {

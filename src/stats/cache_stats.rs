@@ -45,7 +45,7 @@ pub struct CacheStats {
 impl Debug for CacheStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("CacheStats")
-            .field("request_count", &self.request_count())
+            .field("read_request_count", &self.read_request_count())
             .field("hit_count", &self.hit_count)
             .field("hit_rate", &self.hit_rate())
             .field("miss_count", &self.miss_count)
@@ -106,7 +106,7 @@ impl CacheStats {
         self
     }
 
-    pub fn request_count(&self) -> u64 {
+    pub fn read_request_count(&self) -> u64 {
         self.hit_count.saturating_add(self.miss_count)
     }
 
@@ -115,7 +115,7 @@ impl CacheStats {
     }
 
     pub fn hit_rate(&self) -> f64 {
-        let req_count = self.request_count();
+        let req_count = self.read_request_count();
         if req_count == 0 {
             1.0
         } else {
@@ -128,7 +128,7 @@ impl CacheStats {
     }
 
     pub fn miss_rate(&self) -> f64 {
-        let req_count = self.request_count();
+        let req_count = self.read_request_count();
         if req_count == 0 {
             0.0
         } else {
@@ -264,6 +264,8 @@ impl Sub for CacheStats {
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct DetailedCacheStats {
     base: CacheStats,
+    insertion_count: u64,
+    invalidation_count: u64,
     read_drop_count: u64,
     write_wait_count: u64,
     total_write_wait_time_nanos: u64,
@@ -272,11 +274,12 @@ pub struct DetailedCacheStats {
 impl Debug for DetailedCacheStats {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DetailedCacheStats")
-            .field("request_count", &self.request_count())
+            .field("read_request_count", &self.read_request_count())
             .field("hit_count", &self.hit_count())
             .field("hit_rate", &self.hit_rate())
             .field("miss_count", &self.miss_count())
             .field("miss_rate", &self.miss_rate())
+            .field("insertion_count", &self.insertion_count())
             .field("load_count", &self.load_count())
             .field("load_success_count", &self.load_success_count())
             .field("load_failure_count", &self.load_failure_count())
@@ -286,6 +289,7 @@ impl Debug for DetailedCacheStats {
                 "average_load_penalty_nanos",
                 &self.average_load_penalty_nanos(),
             )
+            .field("invalidation_count", &self.invalidation_count())
             .field("eviction_by_size_count", &self.eviction_by_size_count())
             .field("eviction_by_size_weight", &self.eviction_by_size_weight())
             .field(
@@ -311,6 +315,51 @@ impl Debug for DetailedCacheStats {
 }
 
 impl DetailedCacheStats {
+    pub fn set_req_counts(&mut self, hit_count: u64, miss_count: u64) -> &mut Self {
+        self.base.set_req_counts(hit_count, miss_count);
+        self
+    }
+
+    pub fn set_load_counts(
+        &mut self,
+        load_success_count: u64,
+        load_failure_count: u64,
+        total_load_time_nanos: u64,
+    ) -> &mut Self {
+        self.base.set_load_counts(
+            load_success_count,
+            load_failure_count,
+            total_load_time_nanos,
+        );
+        self
+    }
+
+    pub fn set_eviction_counts(
+        &mut self,
+        eviction_by_size_count: u64,
+        eviction_by_size_weight: u64,
+        eviction_by_expiration_count: u64,
+        eviction_by_expiration_weight: u64,
+    ) -> &mut Self {
+        self.base.set_eviction_counts(
+            eviction_by_size_count,
+            eviction_by_size_weight,
+            eviction_by_expiration_count,
+            eviction_by_expiration_weight,
+        );
+        self
+    }
+
+    pub fn set_insertion_and_invalidation_counts(
+        &mut self,
+        insertion_count: u64,
+        invalidation_count: u64,
+    ) -> &mut Self {
+        self.insertion_count = insertion_count;
+        self.invalidation_count = invalidation_count;
+        self
+    }
+
     pub fn set_read_drop_count(&mut self, count: u64) -> &mut Self {
         self.read_drop_count = count;
         self
@@ -326,8 +375,8 @@ impl DetailedCacheStats {
         self
     }
 
-    pub fn request_count(&self) -> u64 {
-        self.base.request_count()
+    pub fn read_request_count(&self) -> u64 {
+        self.base.read_request_count()
     }
 
     pub fn hit_count(&self) -> u64 {
@@ -344,6 +393,10 @@ impl DetailedCacheStats {
 
     pub fn miss_rate(&self) -> f64 {
         self.base.miss_rate()
+    }
+
+    pub fn insertion_count(&self) -> u64 {
+        self.insertion_count
     }
 
     pub fn load_count(&self) -> u64 {
@@ -368,6 +421,10 @@ impl DetailedCacheStats {
 
     pub fn average_load_penalty_nanos(&self) -> f64 {
         self.base.average_load_penalty_nanos()
+    }
+
+    pub fn invalidation_count(&self) -> u64 {
+        self.invalidation_count
     }
 
     pub fn eviction_by_size_count(&self) -> u64 {
@@ -412,9 +469,7 @@ impl From<CacheStats> for DetailedCacheStats {
     fn from(stats: CacheStats) -> Self {
         Self {
             base: stats,
-            read_drop_count: 0,
-            write_wait_count: 0,
-            total_write_wait_time_nanos: 0,
+            ..Default::default()
         }
     }
 }
@@ -425,6 +480,10 @@ impl Add for &DetailedCacheStats {
     fn add(self, rhs: Self) -> Self::Output {
         DetailedCacheStats {
             base: &self.base + &rhs.base,
+            insertion_count: self.insertion_count.saturating_add(rhs.insertion_count),
+            invalidation_count: self
+                .invalidation_count
+                .saturating_add(rhs.invalidation_count),
             read_drop_count: self.read_drop_count.saturating_add(rhs.read_drop_count),
             write_wait_count: self.write_wait_count.saturating_add(rhs.write_wait_count),
             total_write_wait_time_nanos: self
@@ -440,6 +499,10 @@ impl Sub for DetailedCacheStats {
     fn sub(self, rhs: Self) -> Self::Output {
         Self {
             base: self.base - rhs.base,
+            insertion_count: self.insertion_count.saturating_sub(rhs.insertion_count),
+            invalidation_count: self
+                .invalidation_count
+                .saturating_sub(rhs.invalidation_count),
             read_drop_count: self.read_drop_count.saturating_sub(rhs.read_drop_count),
             write_wait_count: self.write_wait_count.saturating_sub(rhs.write_wait_count),
             total_write_wait_time_nanos: self

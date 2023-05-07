@@ -1442,8 +1442,10 @@ where
                     None
                 };
 
-                if self.base.is_removal_notifier_enabled() {
-                    self.base.notify_invalidate(&kv.key, &kv.entry)
+                if self.base.is_removal_notifier_enabled()
+                    || self.base.sc().is_recording_evictions_supported()
+                {
+                    self.base.notify_invalidation(&kv.key, &kv.entry)
                 }
 
                 let inner = self.base.inner.as_ref();
@@ -1476,8 +1478,10 @@ where
     {
         let hash = self.base.hash(key);
         if let Some(kv) = self.base.remove_entry(key, hash) {
-            if self.base.is_removal_notifier_enabled() {
-                self.base.notify_invalidate(&kv.key, &kv.entry)
+            if self.base.is_removal_notifier_enabled()
+                || self.base.sc().is_recording_evictions_supported()
+            {
+                self.base.notify_invalidation(&kv.key, &kv.entry)
             }
             let op = WriteOp::Remove(kv);
             let now = self.base.current_time_from_expiration_clock();
@@ -2064,11 +2068,12 @@ where
 
 // For unit tests.
 #[cfg(test)]
-impl<K, V, S> Cache<K, V, S>
+impl<K, V, S, CS> Cache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     fn is_table_empty(&self) -> bool {
         self.entry_count() == 0
@@ -2129,14 +2134,19 @@ mod tests {
         common::time::Clock,
         notification::RemovalCause,
         policy::test_utils::ExpiryCallCounters,
-        stats::stats_counter::{DefaultStatsCounter, StatsCounter},
+        stats::{
+            stats_counter::{DetailedStatsCounter, StatsCounter},
+            CacheStats, DetailedCacheStats,
+        },
         Expiry,
     };
 
     use async_io::Timer;
     use parking_lot::Mutex;
     use std::{
+        any::{Any, TypeId},
         convert::Infallible,
+        hash::BuildHasher,
         sync::Arc,
         time::{Duration, Instant as StdInstant},
     };
@@ -3117,136 +3127,178 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_stats() {
-        let sc = DefaultStatsCounter::default();
-
-        let mut cache = Cache::builder()
+        // Test with `DefaultStatsCounter`.
+        let cache = Cache::builder()
             .max_capacity(4)
             .enable_stats()
             .time_to_idle(Duration::from_secs(10))
             .build();
-        cache.reconfigure_for_testing();
+        run_tests(cache).await;
 
-        let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
+        // Test with `DetailedStatsCounter`.
+        let cache = Cache::builder()
+            .max_capacity(4)
+            .stats_counter(DetailedStatsCounter::default())
+            .time_to_idle(Duration::from_secs(10))
+            .build();
+        run_tests(cache).await;
 
-        // Make the cache exterior immutable.
-        let cache = cache;
+        async fn run_tests<S, CS>(mut cache: Cache<&'static str, &'static str, S, CS>)
+        where
+            S: BuildHasher + Clone + Send + Sync + 'static,
+            CS: Into<DetailedCacheStats> + Clone + 'static,
+        {
+            cache.reconfigure_for_testing();
 
-        let actual = cache.stats();
-        assert_eq!(actual.request_count(), 0);
-        assert_eq!(actual.hit_rate(), 1.0);
-        assert_eq!(actual.miss_rate(), 0.0);
+            let (clock, mock) = Clock::mock();
+            cache.set_expiration_clock(Some(clock));
 
-        assert!(cache.get("a").is_none());
-        sc.record_misses(1);
+            // Make the cache exterior immutable.
+            let cache = cache;
 
-        cache.insert("a", "alice").await;
-        cache.sync();
-        assert!(cache.get("a").is_some());
-        sc.record_hits(1);
+            let sc = DetailedStatsCounter::default();
 
-        // This should not increment the hit count.
-        cache.contains_key("a");
+            let actual: DetailedCacheStats = cache.stats().into();
+            assert_eq!(actual.read_request_count(), 0);
+            assert_eq!(actual.hit_rate(), 1.0);
+            assert_eq!(actual.miss_rate(), 0.0);
 
-        mock.increment(Duration::from_secs(5));
+            assert!(cache.get("a").is_none());
+            sc.record_misses(1);
 
-        cache.get_with("b", async { "bob" }).await;
-        cache.sync();
-        sc.record_misses(1);
-        // We cannot get the actual loading time, so we set the load time nanos to 1000 here.
-        sc.record_load_success(1000);
-        assert!(cache.get("b").is_some());
-        sc.record_hits(1);
+            cache.insert("a", "alice").await;
+            sc.record_insertions(1);
+            cache.sync();
+            assert!(cache.get("a").is_some());
+            sc.record_hits(1);
 
-        cache.get_with("b", async { "bill" }).await;
-        cache.sync();
-        sc.record_hits(1);
+            // This should not increment the hit count.
+            cache.contains_key("a");
 
-        cache.optionally_get_with("c", async { None }).await;
-        cache.sync();
-        sc.record_misses(1);
-        sc.record_load_failure(1000);
-        assert!(cache.get("c").is_none());
-        sc.record_misses(1);
+            mock.increment(Duration::from_secs(5));
 
-        cache
-            .optionally_get_with("c", async { Some("cindy") })
-            .await;
-        cache.sync();
-        sc.record_misses(1);
-        sc.record_load_success(1000);
-        assert!(cache.get("c").is_some());
-        sc.record_hits(1);
+            cache.get_with("b", async { "bob" }).await;
+            cache.sync();
+            sc.record_misses(1);
+            sc.record_insertions(1);
+            // We cannot get the actual loading time, so we set the load time nanos to 1000 here.
+            sc.record_load_success(1000);
+            assert!(cache.get("b").is_some());
+            sc.record_hits(1);
 
-        cache
-            .optionally_get_with("c", async { Some("cathy") })
-            .await;
-        cache.sync();
-        sc.record_hits(1);
+            cache.get_with("b", async { "bill" }).await;
+            cache.sync();
+            sc.record_hits(1);
 
-        let _ = cache.try_get_with("d", async { Err(()) }).await;
-        cache.sync();
-        sc.record_misses(1);
-        sc.record_load_failure(1000);
+            cache.optionally_get_with("c", async { None }).await;
+            cache.sync();
+            sc.record_misses(1);
+            sc.record_insertions(1);
+            sc.record_load_failure(1000);
+            assert!(cache.get("c").is_none());
+            sc.record_misses(1);
 
-        let _ = cache
-            .try_get_with("d", async { Ok("dennis") as Result<_, Infallible> })
-            .await;
-        cache.sync();
-        sc.record_misses(1);
-        sc.record_load_success(1000);
+            cache
+                .optionally_get_with("c", async { Some("cindy") })
+                .await;
+            cache.sync();
+            sc.record_misses(1);
+            sc.record_load_success(1000);
+            assert!(cache.get("c").is_some());
+            sc.record_hits(1);
 
-        // Key "a" should expire.
-        mock.increment(Duration::from_secs(6));
-        cache.sync();
+            cache
+                .optionally_get_with("c", async { Some("cathy") })
+                .await;
+            cache.sync();
+            sc.record_hits(1);
 
-        assert!(cache.get("a").is_none());
-        sc.record_misses(1);
-        sc.record_eviction(1, RemovalCause::Expired);
+            let _ = cache.try_get_with("d", async { Err(()) }).await;
+            cache.sync();
+            sc.record_misses(1);
+            sc.record_insertions(1);
+            sc.record_load_failure(1000);
 
-        cache.insert("a", "amanda").await;
-        cache.sync();
+            let _ = cache
+                .try_get_with("d", async { Ok("dennis") as Result<_, Infallible> })
+                .await;
+            cache.sync();
+            sc.record_misses(1);
+            sc.record_load_success(1000);
 
-        // This should evict another entry.
-        cache.insert("e", "emily").await;
-        cache.sync();
-        sc.record_eviction(1, RemovalCause::Size);
+            // Key "a" should expire.
+            mock.increment(Duration::from_secs(6));
+            cache.sync();
 
-        // This updates the value for key "a".
-        cache.insert("a", "alice").await;
-        cache.sync();
-        sc.record_eviction(1, RemovalCause::Replaced);
+            assert!(cache.get("a").is_none());
+            sc.record_misses(1);
+            sc.record_eviction(1, RemovalCause::Expired);
 
-        cache.invalidate("a").await;
-        cache.sync();
-        sc.record_eviction(1, RemovalCause::Explicit);
+            cache.insert("a", "amanda").await;
+            sc.record_insertions(1);
+            cache.sync();
 
-        cache.remove("e").await;
-        cache.sync();
-        sc.record_eviction(1, RemovalCause::Explicit);
+            // This should evict another entry.
+            cache.insert("e", "emily").await;
+            sc.record_insertions(1);
+            cache.sync();
+            sc.record_eviction(1, RemovalCause::Size);
 
-        //
-        // Verify the cache stats.
-        //
+            // This updates the value for key "a".
+            cache.insert("a", "alice").await;
+            sc.record_insertions(1);
+            cache.sync();
+            sc.record_eviction(1, RemovalCause::Replaced);
 
-        let expected = sc.snapshot();
+            assert!(cache.contains_key("a"));
+            cache.invalidate("a").await;
+            cache.sync();
+            sc.record_eviction(1, RemovalCause::Explicit);
 
-        let mut actual = cache.stats();
+            assert!(cache.contains_key("b"));
+            cache.remove("b").await;
+            cache.sync();
+            sc.record_eviction(1, RemovalCause::Explicit);
 
-        // TODO: Use the actual values once we can get the load time nanos.
-        assert_eq!(actual.total_load_time_nanos(), 0);
-        assert_eq!(actual.average_load_penalty_nanos(), 0.0);
-        // assert!(actual.total_load_time_nanos() > 0);
-        // assert!(actual.average_load_penalty_nanos() > 0.0);
+            //
+            // Verify the cache stats.
+            //
 
-        // Reset the total load time nanos.
-        actual.set_load_counts(
-            actual.load_success_count(),
-            actual.load_failure_count(),
-            expected.total_load_time_nanos(),
-        );
+            let mut expected = sc.snapshot();
+            let mut actual: DetailedCacheStats = cache.stats().into();
 
-        assert_eq!(actual, expected);
+            // TODO: Use the actual values once we can get the load time nanos.
+            assert_eq!(actual.total_load_time_nanos(), 0);
+            assert_eq!(actual.average_load_penalty_nanos(), 0.0);
+            // assert!(actual.total_load_time_nanos() > 0);
+            // assert!(actual.average_load_penalty_nanos() > 0.0);
+
+            // Reset the total load time nanos.
+            actual.set_load_counts(
+                actual.load_success_count(),
+                actual.load_failure_count(),
+                expected.total_load_time_nanos(),
+            );
+
+            let type_id = cache.stats().type_id();
+            let type_name = if type_id == TypeId::of::<CacheStats>() {
+                "CacheStats"
+            } else if type_id == TypeId::of::<DetailedCacheStats>() {
+                "DetailedCacheStats"
+            } else {
+                unreachable!()
+            };
+
+            // If the cache's CS is `CacheStats`, reset the some counters in
+            // the expectation.
+            if type_name == "CacheStats" {
+                expected.set_insertion_and_invalidation_counts(0, 0);
+                expected.set_read_drop_count(0);
+                expected.set_write_wait_count(0, 0);
+            }
+
+            assert_eq!(actual, expected, "CS type: {}", type_name);
+        }
     }
 
     #[tokio::test]

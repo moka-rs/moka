@@ -639,11 +639,12 @@ where
     // }
 }
 
-impl<'a, K, V, S> IntoIterator for &'a SegmentedCache<K, V, S>
+impl<'a, K, V, S, CS> IntoIterator for &'a SegmentedCache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     type Item = (Arc<K>, V);
 
@@ -670,11 +671,12 @@ where
 
 // For unit tests.
 #[cfg(test)]
-impl<K, V, S> SegmentedCache<K, V, S>
+impl<K, V, S, CS> SegmentedCache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     fn invalidation_predicate_count(&self) -> usize {
         self.inner
