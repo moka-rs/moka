@@ -1455,8 +1455,11 @@ where
                 match result {
                     Ok(false) => (),
                     Ok(true) => {
-                        let write_time_nanos = self.base.elapsed_nanos_since(ts);
-                        self.base.sc().record_write_wait(write_time_nanos);
+                        let sc = self.base.sc();
+                        if sc.is_write_wait_time_supported() {
+                            let write_time_nanos = self.base.elapsed_nanos_since(ts);
+                            sc.record_write_wait(write_time_nanos);
+                        }
                     }
                     Err(_) => panic!("Failed to remove"),
                 }
@@ -1713,7 +1716,12 @@ where
         let type_id = ValueInitializer::<K, V, S>::type_id_for_get_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_get_with;
 
-        let start = self.base.now();
+        let start = if self.base.sc().is_load_time_supported() {
+            Some(self.base.now())
+        } else {
+            None
+        };
+
         match self
             .value_initializer
             .try_init_or_read(&key, type_id, get, init, insert, post_init)
@@ -1721,9 +1729,11 @@ where
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
-                self.base
-                    .sc()
-                    .record_load_success(self.base.elapsed_nanos_since(start));
+                if let Some(start) = start {
+                    self.base
+                        .sc()
+                        .record_load_success(self.base.elapsed_nanos_since(start));
+                }
                 Entry::new(k, v, true)
             }
             InitResult::ReadExisting(v) => Entry::new(k, v, false),
@@ -1839,7 +1849,11 @@ where
         let type_id = ValueInitializer::<K, V, S>::type_id_for_optionally_get_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_optionally_get_with;
 
-        let start: Instant = self.base.now();
+        let start = if self.base.sc().is_load_time_supported() {
+            Some(self.base.now())
+        } else {
+            None
+        };
         match self
             .value_initializer
             .try_init_or_read(&key, type_id, get, init, insert, post_init)
@@ -1847,17 +1861,21 @@ where
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
-                self.base
-                    .sc()
-                    .record_load_success(self.base.elapsed_nanos_since(start));
+                if let Some(start) = start {
+                    self.base
+                        .sc()
+                        .record_load_success(self.base.elapsed_nanos_since(start));
+                }
                 Some(Entry::new(k, v, true))
             }
             InitResult::ReadExisting(v) => Some(Entry::new(k, v, false)),
             InitResult::InitErr(_) => {
                 crossbeam_epoch::pin().flush();
-                self.base
-                    .sc()
-                    .record_load_failure(self.base.elapsed_nanos_since(start));
+                if let Some(start) = start {
+                    self.base
+                        .sc()
+                        .record_load_failure(self.base.elapsed_nanos_since(start));
+                }
                 None
             }
         }
@@ -1932,7 +1950,12 @@ where
         let type_id = ValueInitializer::<K, V, S>::type_id_for_try_get_with::<E>();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_try_get_with;
 
-        let start = self.base.now();
+        let start = if self.base.sc().is_load_time_supported() {
+            Some(self.base.now())
+        } else {
+            None
+        };
+
         match self
             .value_initializer
             .try_init_or_read(&key, type_id, get, init, insert, post_init)
@@ -1940,17 +1963,21 @@ where
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
-                self.base
-                    .sc()
-                    .record_load_success(self.base.elapsed_nanos_since(start));
+                if let Some(start) = start {
+                    self.base
+                        .sc()
+                        .record_load_success(self.base.elapsed_nanos_since(start));
+                }
                 Ok(Entry::new(k, v, true))
             }
             InitResult::ReadExisting(v) => Ok(Entry::new(k, v, false)),
             InitResult::InitErr(e) => {
                 crossbeam_epoch::pin().flush();
-                self.base
-                    .sc()
-                    .record_load_failure(self.base.elapsed_nanos_since(start));
+                if let Some(start) = start {
+                    self.base
+                        .sc()
+                        .record_load_failure(self.base.elapsed_nanos_since(start));
+                }
                 Err(e)
             }
         }
@@ -1969,8 +1996,11 @@ where
         match result {
             Ok(false) => (),
             Ok(true) => {
-                let write_time_nanos = self.base.elapsed_nanos_since(ts);
-                self.base.sc().record_write_wait(write_time_nanos);
+                let sc = self.base.sc();
+                if sc.is_write_wait_time_supported() {
+                    let write_time_nanos = self.base.elapsed_nanos_since(ts);
+                    sc.record_write_wait(write_time_nanos);
+                }
             }
             Err(_) => panic!("Failed to insert"),
         }

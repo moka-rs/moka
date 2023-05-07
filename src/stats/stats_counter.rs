@@ -23,6 +23,14 @@ pub fn saturating_add(counter: &AtomicCell<u64>, value: u64) {
 pub trait StatsCounter {
     type Stats;
 
+    fn is_load_time_supported(&self) -> bool {
+        false
+    }
+
+    fn is_write_wait_time_supported(&self) -> bool {
+        false
+    }
+
     #[allow(unused_variables)]
     fn record_hits(&self, count: u32) {}
 
@@ -75,6 +83,10 @@ pub struct DefaultStatsCounter {
 
 impl StatsCounter for DefaultStatsCounter {
     type Stats = CacheStats;
+
+    fn is_load_time_supported(&self) -> bool {
+        true
+    }
 
     fn record_hits(&self, count: u32) {
         saturating_add(&self.hit_count, count as u64);
@@ -138,6 +150,14 @@ pub struct DetailedStatsCounter {
 
 impl StatsCounter for DetailedStatsCounter {
     type Stats = DetailedCacheStats;
+
+    fn is_load_time_supported(&self) -> bool {
+        true
+    }
+
+    fn is_write_wait_time_supported(&self) -> bool {
+        true
+    }
 
     fn record_hits(&self, count: u32) {
         self.base.record_hits(count);
@@ -237,6 +257,14 @@ where
     for<'a> &'a C::Stats: Add<Output = C::Stats>,
 {
     type Stats = C::Stats;
+
+    fn is_load_time_supported(&self) -> bool {
+        self.counter().is_load_time_supported()
+    }
+
+    fn is_write_wait_time_supported(&self) -> bool {
+        self.counter().is_write_wait_time_supported()
+    }
 
     fn record_hits(&self, count: u32) {
         self.counter().record_hits(count);
