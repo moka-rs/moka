@@ -1,10 +1,3 @@
-// Cargo.toml
-//
-// [dependencies]
-// moka = { version = "0.11", features = ["future"] }
-// tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
-// futures-util = "0.3"
-
 // Use the asynchronous cache.
 use moka::future::Cache;
 
