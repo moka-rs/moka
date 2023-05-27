@@ -230,6 +230,13 @@ fn main() {
 }
 ```
 
+You can try the synchronous example by cloning the repository and running the following
+cargo instruction:
+
+```
+cargo run --example sync_example
+```
+
 If you want to atomically initialize and insert a value when the key is not present,
 you might want to check [the document][doc-sync-cache] for other insertion methods
 `get_with` and `try_get_with`.
@@ -323,6 +330,12 @@ async fn main() {
 }
 ```
 
+You can try the asynchronous example by cloning the repository and running the following
+cargo instruction:
+```
+cargo run --features="future" --example async_example
+```
+
 If you want to atomically initialize and insert a value when the key is not present,
 you might want to check [the document][doc-future-cache] for other insertion methods
 `get_with` and `try_get_with`.
@@ -388,6 +401,12 @@ fn main() {
 ```
 
 Note that weighted sizes are not used when making eviction selections.
+
+You can try the size aware eviction example by cloning the repository and running the following
+cargo instruction:
+```
+cargo run  --example size_aware_eviction
+```
 
 
 ## Expiration Policies

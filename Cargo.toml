@@ -120,3 +120,19 @@ rustc_version = "0.4.0"
 # Build the doc with some features enabled.
 features = ["future"]
 rustdoc-args = ["--cfg", "docsrs"]
+
+[[example]]
+name = "async_example"
+required-features = ["future"]
+
+[[example]]
+name = "sync_example"
+required-features = ["sync"]
+
+[[example]]
+name = "eviction_listener"
+required-features = ["sync"]
+
+[[example]]
+name = "size_aware_eviction"
+required-features = ["sync"]
