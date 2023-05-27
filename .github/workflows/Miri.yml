@@ -29,7 +29,9 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: nightly
+          # For now, use a specific version of nightly.
+          # https://github.com/moka-rs/moka/issues/269
+          toolchain: nightly-2023-05-24
           override: true
           components: miri
 
