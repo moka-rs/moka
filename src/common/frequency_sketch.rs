@@ -180,7 +180,7 @@ impl FrequencySketch {
     fn index_of(&self, hash: u64, depth: u8) -> usize {
         let i = depth as usize;
         let mut hash = hash.wrapping_add(SEED[i]).wrapping_mul(SEED[i]);
-        hash += hash >> 32;
+        hash = hash.wrapping_add(hash >> 32);
         (hash & self.table_mask) as usize
     }
 
