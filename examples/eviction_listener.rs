@@ -1,10 +1,9 @@
 use moka::sync::Cache;
-use moka::sync::ConcurrentCacheExt;
 use std::thread::sleep;
 use std::time::Duration;
 
 fn main() {
-    // Make an artifically small cache and 1-second ttl to observe eviction listener.
+    // Make an artificially small cache and 1-second ttl to observe eviction listener.
     {
         let cache = Cache::builder()
             .max_capacity(2)
@@ -25,24 +24,34 @@ fn main() {
         println!("Wake up!");
         cache.insert(&3, "three".to_string());
         cache.insert(&4, "four".to_string());
-        cache.insert(&5, "five".to_string());
         let _ = cache.remove(&3);
         cache.invalidate(&4);
+        cache.insert(&5, "five".to_string());
+
+        // invalidate_all() removes entries using a background thread, so there will
+        // be some delay before entries are removed and the eviction listener is
+        // called. If you want to remove all entries immediately, call sync() method
+        // repeatedly like the loop below.
         cache.invalidate_all();
+        // This trait provides sync() method.
+        use moka::sync::ConcurrentCacheExt;
         loop {
             // Synchronization is limited to at most 500 entries for each call.
             cache.sync();
-            // Check if all is done. Calling entry_count() requires calling sync() first!
+            // Check if all is done. Calling entry_count() requires calling sync()
+            // first!
             if cache.entry_count() == 0 {
                 break;
             }
         }
+
         cache.insert(&6, "six".to_string());
-        // When cache is dropped eviction listener is not called. Eiher
-        // call invalidate_all() or wait longer than ttl.
+        // When cache is dropped eviction listener is not called. Either call
+        // invalidate_all() or wait longer than ttl.
         sleep(Duration::from_secs(2));
-        println!("Cache structure removed.");
-    }
+    } // cache is dropped here.
+
+    println!("Cache structure removed.");
     sleep(Duration::from_secs(1));
     println!("Exit program.");
 }
