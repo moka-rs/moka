@@ -328,3 +328,73 @@ mod tests {
         }
     }
 }
+
+// Verify that some properties hold such as no panic occurs on any possible inputs.
+#[cfg(kani)]
+mod kani {
+    use super::FrequencySketch;
+
+    const CAPACITIES: &[u32] = &[
+        0,
+        1,
+        1024,
+        1025,
+        2u32.pow(24),
+        2u32.pow(24) + 1,
+        2u32.pow(30),
+        2u32.pow(30) + 1,
+        u32::MAX,
+    ];
+
+    #[kani::proof]
+    fn verify_ensure_capacity() {
+        // Check for arbitrary capacities.
+        let capacity = kani::any();
+        let mut sketch = FrequencySketch::default();
+        sketch.ensure_capacity(capacity);
+    }
+
+    #[kani::proof]
+    fn verify_frequency() {
+        // Check for some selected capacities.
+        for capacity in CAPACITIES {
+            let mut sketch = FrequencySketch::default();
+            sketch.ensure_capacity(*capacity);
+
+            // Check for arbitrary hashes.
+            let hash = kani::any();
+            let frequency = sketch.frequency(hash);
+            assert!(frequency <= 15);
+        }
+    }
+
+    #[kani::proof]
+    fn verify_increment() {
+        // Only check for small capacities. Because Kani Rust Verifier is a model
+        // checking tool, it will take much longer time (exponential) to check larger
+        // capacities here.
+        for capacity in &[0, 1, 128] {
+            let mut sketch = FrequencySketch::default();
+            sketch.ensure_capacity(*capacity);
+
+            // Check for arbitrary hashes.
+            let hash = kani::any();
+            sketch.increment(hash);
+        }
+    }
+
+    #[kani::proof]
+    fn verify_index_of() {
+        // Check for arbitrary capacities.
+        let capacity = kani::any();
+        let mut sketch = FrequencySketch::default();
+        sketch.ensure_capacity(capacity);
+
+        // Check for arbitrary hashes.
+        let hash = kani::any();
+        for i in 0..4 {
+            let index = sketch.index_of(hash, i);
+            assert!(index < sketch.table.len());
+        }
+    }
+}
