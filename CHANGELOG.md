@@ -2,6 +2,11 @@
 
 ## Version 0.11.1
 
+### Fixed
+
+-  Fixed occasional panic in internal `FrequencySketch` in debug build.
+   ([#272][gh-pull-0272])
+
 ### Added
 
 - Added some example programs to the `examples` directory. ([#268][gh-pull-0268], by
@@ -655,6 +660,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0272]: https://github.com/moka-rs/moka/pull/272/
 [gh-pull-0268]: https://github.com/moka-rs/moka/pull/268/
 [gh-pull-0259]: https://github.com/moka-rs/moka/pull/259/
 [gh-pull-0251]: https://github.com/moka-rs/moka/pull/251/
