@@ -230,11 +230,11 @@ fn main() {
 }
 ```
 
-You can try the synchronous example by cloning the repository and running the following
-cargo instruction:
+You can try the synchronous example by cloning the repository and running the
+following cargo instruction:
 
-```
-cargo run --example sync_example
+```console
+$ cargo run --example sync_example
 ```
 
 If you want to atomically initialize and insert a value when the key is not present,
@@ -330,10 +330,11 @@ async fn main() {
 }
 ```
 
-You can try the asynchronous example by cloning the repository and running the following
-cargo instruction:
-```
-cargo run --features="future" --example async_example
+You can try the asynchronous example by cloning the repository and running the
+following cargo instruction:
+
+```console
+$ cargo run --example async_example --features future
 ```
 
 If you want to atomically initialize and insert a value when the key is not present,
@@ -402,10 +403,11 @@ fn main() {
 
 Note that weighted sizes are not used when making eviction selections.
 
-You can try the size aware eviction example by cloning the repository and running the following
-cargo instruction:
-```
-cargo run  --example size_aware_eviction
+You can try the size aware eviction example by cloning the repository and running the
+following cargo instruction:
+
+```console
+$ cargo run --example size_aware_eviction
 ```
 
 
