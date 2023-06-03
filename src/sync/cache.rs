@@ -13,6 +13,10 @@ use crate::{
     },
     notification::{self, EvictionListener},
     policy::ExpirationPolicy,
+    stats::{
+        stats_counter::{DisabledStatsCounter, StatsCounter},
+        CacheStats,
+    },
     sync::{Iter, PredicateId},
     sync_base::{
         base_cache::{BaseCache, HouseKeeperArc},
@@ -803,14 +807,14 @@ use std::{
 /// overwrite the file created at step 1 and the eviction lister will never remove a
 /// wrong file.
 ///
-pub struct Cache<K, V, S = RandomState> {
-    base: BaseCache<K, V, S>,
+pub struct Cache<K, V, S = RandomState, CS = CacheStats> {
+    base: BaseCache<K, V, S, CS>,
     value_initializer: Arc<ValueInitializer<K, V, S>>,
 }
 
 // TODO: https://github.com/moka-rs/moka/issues/54
 #[allow(clippy::non_send_fields_in_send_ty)]
-unsafe impl<K, V, S> Send for Cache<K, V, S>
+unsafe impl<K, V, S, CS> Send for Cache<K, V, S, CS>
 where
     K: Send + Sync,
     V: Send + Sync,
@@ -818,7 +822,7 @@ where
 {
 }
 
-unsafe impl<K, V, S> Sync for Cache<K, V, S>
+unsafe impl<K, V, S, CS> Sync for Cache<K, V, S, CS>
 where
     K: Send + Sync,
     V: Send + Sync,
@@ -827,7 +831,7 @@ where
 }
 
 // NOTE: We cannot do `#[derive(Clone)]` because it will add `Clone` bound to `K`.
-impl<K, V, S> Clone for Cache<K, V, S> {
+impl<K, V, S, CS> Clone for Cache<K, V, S, CS> {
     /// Makes a clone of this shared cache.
     ///
     /// This operation is cheap as it only creates thread-safe reference counted
@@ -840,12 +844,13 @@ impl<K, V, S> Clone for Cache<K, V, S> {
     }
 }
 
-impl<K, V, S> fmt::Debug for Cache<K, V, S>
+impl<K, V, S, CS> fmt::Debug for Cache<K, V, S, CS>
 where
     K: fmt::Debug + Eq + Hash + Send + Sync + 'static,
     V: fmt::Debug + Clone + Send + Sync + 'static,
     // TODO: Remove these bounds from S.
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d_map = f.debug_map();
@@ -858,7 +863,7 @@ where
     }
 }
 
-impl<K, V, S> Cache<K, V, S> {
+impl<K, V, S, CS> Cache<K, V, S, CS> {
     /// Returns cache’s name.
     pub fn name(&self) -> Option<&str> {
         self.base.name()
@@ -870,6 +875,10 @@ impl<K, V, S> Cache<K, V, S> {
     /// A future version may support to modify it.
     pub fn policy(&self) -> Policy {
         self.base.policy()
+    }
+
+    pub fn stats(&self) -> CS {
+        self.base.sc().snapshot()
     }
 
     /// Returns an approximate number of entries in this cache.
@@ -922,7 +931,7 @@ impl<K, V, S> Cache<K, V, S> {
     }
 }
 
-impl<K, V> Cache<K, V, RandomState>
+impl<K, V> Cache<K, V, RandomState, CacheStats>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -935,6 +944,7 @@ where
     /// [builder-struct]: ./struct.CacheBuilder.html
     pub fn new(max_capacity: u64) -> Self {
         let build_hasher = RandomState::default();
+        let stats_counter = Arc::<DisabledStatsCounter>::default();
         let housekeeper_conf = housekeeper::Configuration::new_thread_pool(true);
         Self::with_everything(
             None,
@@ -945,6 +955,7 @@ where
             None,
             None,
             Default::default(),
+            stats_counter,
             false,
             housekeeper_conf,
         )
@@ -954,16 +965,17 @@ where
     /// `SegmentedCache` with various configuration knobs.
     ///
     /// [builder-struct]: ./struct.CacheBuilder.html
-    pub fn builder() -> CacheBuilder<K, V, Cache<K, V, RandomState>> {
+    pub fn builder() -> CacheBuilder<K, V, Cache<K, V, RandomState>, CacheStats> {
         CacheBuilder::default()
     }
 }
 
-impl<K, V, S> Cache<K, V, S>
+impl<K, V, S, CS> Cache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
     #[allow(clippy::too_many_arguments)]
@@ -976,6 +988,7 @@ where
         eviction_listener: Option<EvictionListener<K, V>>,
         eviction_listener_conf: Option<notification::Configuration>,
         expiration_policy: ExpirationPolicy<K, V>,
+        stats_counter: Arc<dyn StatsCounter<Stats = CS> + Send + Sync>,
         invalidator_enabled: bool,
         housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
@@ -989,6 +1002,7 @@ where
                 eviction_listener,
                 eviction_listener_conf,
                 expiration_policy,
+                stats_counter,
                 invalidator_enabled,
                 housekeeper_conf,
             ),
@@ -1071,7 +1085,7 @@ where
     /// assert!(!entry.is_fresh());
     /// assert_eq!(entry.into_value(), 3);
     /// ```
-    pub fn entry(&self, key: K) -> OwnedKeyEntrySelector<'_, K, V, S>
+    pub fn entry(&self, key: K) -> OwnedKeyEntrySelector<'_, K, V, S, CS>
     where
         K: Hash + Eq,
     {
@@ -1102,7 +1116,7 @@ where
     /// assert!(!entry.is_fresh());
     /// assert_eq!(entry.into_value(), 3);
     /// ```
-    pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
+    pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S, CS>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
@@ -1283,12 +1297,23 @@ where
         let type_id = ValueInitializer::<K, V, S>::type_id_for_get_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_get_with;
 
+        let start = if self.base.sc().is_load_time_supported() {
+            Some(self.base.now())
+        } else {
+            None
+        };
+
         match self
             .value_initializer
             .try_init_or_read(&key, type_id, get, init, insert, post_init)
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
+                if let Some(start) = start {
+                    self.base
+                        .sc()
+                        .record_load_success(self.base.elapsed_nanos_since(start));
+                }
                 Entry::new(k, v, true)
             }
             InitResult::ReadExisting(v) => Entry::new(k, v, false),
@@ -1508,17 +1533,33 @@ where
         let type_id = ValueInitializer::<K, V, S>::type_id_for_optionally_get_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_optionally_get_with;
 
+        let start = if self.base.sc().is_load_time_supported() {
+            Some(self.base.now())
+        } else {
+            None
+        };
+
         match self
             .value_initializer
             .try_init_or_read(&key, type_id, get, init, insert, post_init)
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
+                if let Some(start) = start {
+                    self.base
+                        .sc()
+                        .record_load_success(self.base.elapsed_nanos_since(start));
+                }
                 Some(Entry::new(k, v, true))
             }
             InitResult::ReadExisting(v) => Some(Entry::new(k, v, false)),
             InitResult::InitErr(_) => {
                 crossbeam_epoch::pin().flush();
+                if let Some(start) = start {
+                    self.base
+                        .sc()
+                        .record_load_failure(self.base.elapsed_nanos_since(start));
+                }
                 None
             }
         }
@@ -1703,17 +1744,33 @@ where
         let type_id = ValueInitializer::<K, V, S>::type_id_for_try_get_with::<E>();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_try_get_with;
 
+        let start = if self.base.sc().is_load_time_supported() {
+            Some(self.base.now())
+        } else {
+            None
+        };
+
         match self
             .value_initializer
             .try_init_or_read(&key, type_id, get, init, insert, post_init)
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
+                if let Some(start) = start {
+                    self.base
+                        .sc()
+                        .record_load_success(self.base.elapsed_nanos_since(start));
+                }
                 Ok(Entry::new(k, v, true))
             }
             InitResult::ReadExisting(v) => Ok(Entry::new(k, v, false)),
             InitResult::InitErr(e) => {
                 crossbeam_epoch::pin().flush();
+                if let Some(start) = start {
+                    self.base
+                        .sc()
+                        .record_load_failure(self.base.elapsed_nanos_since(start));
+                }
                 Err(e)
             }
         }
@@ -1733,16 +1790,21 @@ where
             return;
         }
 
-        let (op, now) = self.base.do_insert_with_hash(key, hash, value);
+        let (op, ts) = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
-        Self::schedule_write_op(
-            self.base.inner.as_ref(),
-            &self.base.write_op_ch,
-            op,
-            now,
-            hk,
-        )
-        .expect("Failed to insert");
+        let result =
+            Self::schedule_write_op(self.base.inner.as_ref(), &self.base.write_op_ch, op, ts, hk);
+        match result {
+            Ok(false) => (),
+            Ok(true) => {
+                let sc = self.base.sc();
+                if sc.is_write_wait_time_supported() {
+                    let write_time_nanos = self.base.elapsed_nanos_since(ts);
+                    sc.record_write_wait(write_time_nanos);
+                }
+            }
+            Err(_) => panic!("Failed to insert"),
+        }
     }
 
     /// Discards any cached value for the key.
@@ -1805,8 +1867,10 @@ where
         match self.base.remove_entry(key, hash) {
             None => None,
             Some(kv) => {
-                if self.base.is_removal_notifier_enabled() {
-                    self.base.notify_invalidate(&kv.key, &kv.entry)
+                if self.base.is_removal_notifier_enabled()
+                    || self.base.sc().is_recording_evictions_supported()
+                {
+                    self.base.notify_invalidation(&kv.key, &kv.entry)
                 }
                 // Drop the locks before scheduling write op to avoid a potential dead lock.
                 // (Scheduling write can do spin lock when the queue is full, and queue will
@@ -1820,17 +1884,22 @@ where
                     None
                 };
 
+                let inner = self.base.inner.as_ref();
                 let op = WriteOp::Remove(kv);
-                let now = self.base.current_time_from_expiration_clock();
+                let ts = self.base.current_time_from_expiration_clock();
                 let hk = self.base.housekeeper.as_ref();
-                Self::schedule_write_op(
-                    self.base.inner.as_ref(),
-                    &self.base.write_op_ch,
-                    op,
-                    now,
-                    hk,
-                )
-                .expect("Failed to remove");
+                let result = Self::schedule_write_op(inner, &self.base.write_op_ch, op, ts, hk);
+                match result {
+                    Ok(false) => (),
+                    Ok(true) => {
+                        let sc = self.base.sc();
+                        if sc.is_write_wait_time_supported() {
+                            let write_time_nanos = self.base.elapsed_nanos_since(ts);
+                            sc.record_write_wait(write_time_nanos);
+                        }
+                    }
+                    Err(_) => panic!("Failed to remove"),
+                }
                 crossbeam_epoch::pin().flush();
                 maybe_v
             }
@@ -1945,11 +2014,12 @@ where
     }
 }
 
-impl<'a, K, V, S> IntoIterator for &'a Cache<K, V, S>
+impl<'a, K, V, S, CS> IntoIterator for &'a Cache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     type Item = (Arc<K>, V);
 
@@ -1960,11 +2030,12 @@ where
     }
 }
 
-impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
+impl<K, V, S, CS> ConcurrentCacheExt<K, V> for Cache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     fn sync(&self) {
         self.base.inner.sync(MAX_SYNC_REPEATS);
@@ -1974,11 +2045,12 @@ where
 //
 // Iterator support
 //
-impl<K, V, S> ScanningGet<K, V> for Cache<K, V, S>
+impl<K, V, S, CS> ScanningGet<K, V> for Cache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     fn num_cht_segments(&self) -> usize {
         self.base.num_cht_segments()
@@ -1996,48 +2068,54 @@ where
 //
 // private methods
 //
-impl<K, V, S> Cache<K, V, S>
+impl<K, V, S, CS> Cache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
+    /// Push a write operation to the channel. Returns `Ok(true)` if the channel was
+    /// full and we were blocked for a moment.
     #[inline]
     fn schedule_write_op(
         inner: &impl InnerSync,
         ch: &Sender<WriteOp<K, V>>,
         op: WriteOp<K, V>,
-        now: Instant,
-        housekeeper: Option<&HouseKeeperArc<K, V, S>>,
-    ) -> Result<(), TrySendError<WriteOp<K, V>>> {
+        ts: Instant,
+        housekeeper: Option<&HouseKeeperArc<K, V, S, CS>>,
+    ) -> Result<bool, TrySendError<WriteOp<K, V>>> {
         let mut op = op;
+        let mut was_blocked = false;
 
         // NOTES:
         // - This will block when the channel is full.
         // - We are doing a busy-loop here. We were originally calling `ch.send(op)?`,
         //   but we got a notable performance degradation.
         loop {
-            BaseCache::apply_reads_writes_if_needed(inner, ch, now, housekeeper);
+            BaseCache::apply_reads_writes_if_needed(inner, ch, ts, housekeeper);
             match ch.try_send(op) {
                 Ok(()) => break,
                 Err(TrySendError::Full(op1)) => {
                     op = op1;
+                    was_blocked = true;
                     std::thread::sleep(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS));
                 }
                 Err(e @ TrySendError::Disconnected(_)) => return Err(e),
             }
         }
-        Ok(())
+        Ok(was_blocked)
     }
 }
 
 // For unit tests.
 #[cfg(test)]
-impl<K, V, S> Cache<K, V, S>
+impl<K, V, S, CS> Cache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     pub(crate) fn is_table_empty(&self) -> bool {
         self.entry_count() == 0
@@ -2068,12 +2146,18 @@ mod tests {
             DeliveryMode, RemovalCause,
         },
         policy::test_utils::ExpiryCallCounters,
+        stats::{
+            stats_counter::{DetailedStatsCounter, StatsCounter},
+            CacheStats, DetailedCacheStats,
+        },
         Expiry,
     };
 
     use parking_lot::Mutex;
     use std::{
+        any::{Any, TypeId},
         convert::Infallible,
+        hash::BuildHasher,
         sync::Arc,
         time::{Duration, Instant as StdInstant},
     };
@@ -3027,6 +3111,176 @@ mod tests {
         cache.sync();
 
         expiry_counters.verify();
+    }
+
+    #[test]
+    fn test_cache_stats() {
+        // Test with `DefaultStatsCounter`.
+        let cache = Cache::builder()
+            .max_capacity(4)
+            .enable_stats()
+            .time_to_idle(Duration::from_secs(10))
+            .build();
+        run_tests(cache);
+
+        // Test with `DetailedStatsCounter`.
+        let cache = Cache::builder()
+            .max_capacity(4)
+            .stats_counter(DetailedStatsCounter::default())
+            .time_to_idle(Duration::from_secs(10))
+            .build();
+        run_tests(cache);
+
+        fn run_tests<S, CS>(mut cache: Cache<&'static str, &'static str, S, CS>)
+        where
+            S: BuildHasher + Clone + Send + Sync + 'static,
+            CS: Into<DetailedCacheStats> + Clone + 'static,
+        {
+            cache.reconfigure_for_testing();
+
+            let (clock, mock) = Clock::mock();
+            cache.set_expiration_clock(Some(clock));
+
+            // Make the cache exterior immutable.
+            let cache = cache;
+
+            let sc = DetailedStatsCounter::default();
+
+            let actual: DetailedCacheStats = cache.stats().into();
+            assert_eq!(actual.read_request_count(), 0);
+            assert_eq!(actual.hit_rate(), 1.0);
+            assert_eq!(actual.miss_rate(), 0.0);
+
+            assert!(cache.get("a").is_none());
+            sc.record_misses(1);
+
+            cache.insert("a", "alice");
+            sc.record_insertions(1);
+            cache.sync();
+            assert!(cache.get("a").is_some());
+            sc.record_hits(1);
+
+            // This should not increment the hit count.
+            cache.contains_key("a");
+
+            mock.increment(Duration::from_secs(5));
+
+            cache.get_with("b", || "bob");
+            cache.sync();
+            sc.record_misses(1);
+            sc.record_insertions(1);
+            // We cannot get the actual loading time, so we set the load time nanos to 1000 here.
+            sc.record_load_success(1000);
+            assert!(cache.get("b").is_some());
+            sc.record_hits(1);
+
+            cache.get_with("b", || "bill");
+            cache.sync();
+            sc.record_hits(1);
+
+            cache.optionally_get_with("c", || None);
+            cache.sync();
+            sc.record_misses(1);
+            sc.record_load_failure(1000);
+            assert!(cache.get("c").is_none());
+            sc.record_misses(1);
+
+            cache.optionally_get_with("c", || Some("cindy"));
+            cache.sync();
+            sc.record_misses(1);
+            sc.record_insertions(1);
+            sc.record_load_success(1000);
+            assert!(cache.get("c").is_some());
+            sc.record_hits(1);
+
+            cache.optionally_get_with("c", || Some("cathy"));
+            cache.sync();
+            sc.record_hits(1);
+
+            let _ = cache.try_get_with("d", || Err(()));
+            cache.sync();
+            sc.record_misses(1);
+            sc.record_load_failure(1000);
+
+            let _ = cache.try_get_with("d", || Ok("dennis") as Result<_, Infallible>);
+            cache.sync();
+            sc.record_misses(1);
+            sc.record_insertions(1);
+            sc.record_load_success(1000);
+
+            // Key "a" should expire.
+            mock.increment(Duration::from_secs(6));
+            cache.sync();
+
+            assert!(cache.get("a").is_none());
+            sc.record_misses(1);
+            sc.record_eviction(1, RemovalCause::Expired);
+
+            cache.insert("a", "amanda");
+            sc.record_insertions(1);
+            cache.sync();
+
+            // This should evict another entry.
+            cache.insert("e", "emily");
+            sc.record_insertions(1);
+            cache.sync();
+            sc.record_eviction(1, RemovalCause::Size);
+
+            // This updates the value for key "a".
+            cache.insert("a", "alice");
+            sc.record_insertions(1);
+            cache.sync();
+            sc.record_eviction(1, RemovalCause::Replaced);
+
+            assert!(cache.contains_key("a"));
+            cache.invalidate("a");
+            cache.sync();
+            sc.record_eviction(1, RemovalCause::Explicit);
+
+            assert!(cache.contains_key("b"));
+            cache.remove("b");
+            cache.sync();
+            sc.record_eviction(1, RemovalCause::Explicit);
+
+            //
+            // Verify the cache stats.
+            //
+
+            let mut expected: DetailedCacheStats = sc.snapshot();
+            let mut actual: DetailedCacheStats = cache.stats().into();
+
+            // TODO: Use the actual values once we can get the load time nanos.
+            assert!(actual.total_load_time_nanos() == 0); // TODO
+            assert!(actual.average_load_penalty_nanos() == 0.0);
+            // assert!(actual.total_load_time_nanos() > 0);
+            // assert!(actual.average_load_penalty_nanos() > 0.0);
+
+            // Reset the total load time nanos.
+            actual.set_load_counts(
+                actual.load_success_count(),
+                actual.load_failure_count(),
+                expected.total_load_time_nanos(),
+            );
+
+            let type_id = cache.stats().type_id();
+            let type_name = if type_id == TypeId::of::<CacheStats>() {
+                "CacheStats"
+            } else if type_id == TypeId::of::<DetailedCacheStats>() {
+                "DetailedCacheStats"
+            } else {
+                unreachable!()
+            };
+
+            // If the cache's CS is `CacheStats`, reset the some counters in
+            // the expectation.
+            if type_name == "CacheStats" {
+                expected.set_insertion_and_invalidation_counts(0, 0);
+                expected.set_read_drop_count(0);
+                expected.set_write_wait_count(0, 0);
+            }
+
+            assert_eq!(actual, expected, "CS type: {}", type_name);
+        }
     }
 
     #[test]

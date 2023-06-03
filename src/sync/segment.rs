@@ -5,6 +5,10 @@ use crate::{
     common::concurrent::{housekeeper, Weigher},
     notification::{self, EvictionListener},
     policy::ExpirationPolicy,
+    stats::{
+        stats_counter::{DisabledStatsCounter, StatsCounter},
+        CacheStats,
+    },
     sync_base::iter::{Iter, ScanningGet},
     Entry, Policy, PredicateError,
 };
@@ -27,13 +31,13 @@ use std::{
 ///
 /// [cache-struct]: ./struct.Cache.html
 ///
-pub struct SegmentedCache<K, V, S = RandomState> {
-    inner: Arc<Inner<K, V, S>>,
+pub struct SegmentedCache<K, V, S = RandomState, CS = CacheStats> {
+    inner: Arc<Inner<K, V, S, CS>>,
 }
 
 // TODO: https://github.com/moka-rs/moka/issues/54
 #[allow(clippy::non_send_fields_in_send_ty)]
-unsafe impl<K, V, S> Send for SegmentedCache<K, V, S>
+unsafe impl<K, V, S, CS> Send for SegmentedCache<K, V, S, CS>
 where
     K: Send + Sync,
     V: Send + Sync,
@@ -41,7 +45,7 @@ where
 {
 }
 
-unsafe impl<K, V, S> Sync for SegmentedCache<K, V, S>
+unsafe impl<K, V, S, CS> Sync for SegmentedCache<K, V, S, CS>
 where
     K: Send + Sync,
     V: Send + Sync,
@@ -49,7 +53,7 @@ where
 {
 }
 
-impl<K, V, S> Clone for SegmentedCache<K, V, S> {
+impl<K, V, S, CS> Clone for SegmentedCache<K, V, S, CS> {
     /// Makes a clone of this shared cache.
     ///
     /// This operation is cheap as it only creates thread-safe reference counted
@@ -61,12 +65,13 @@ impl<K, V, S> Clone for SegmentedCache<K, V, S> {
     }
 }
 
-impl<K, V, S> fmt::Debug for SegmentedCache<K, V, S>
+impl<K, V, S, CS> fmt::Debug for SegmentedCache<K, V, S, CS>
 where
     K: fmt::Debug + Eq + Hash + Send + Sync + 'static,
     V: fmt::Debug + Clone + Send + Sync + 'static,
     // TODO: Remove these bounds from S.
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d_map = f.debug_map();
@@ -79,7 +84,7 @@ where
     }
 }
 
-impl<K, V> SegmentedCache<K, V, RandomState>
+impl<K, V> SegmentedCache<K, V, RandomState, CacheStats>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -97,6 +102,7 @@ where
     /// Panics if `num_segments` is 0.
     pub fn new(max_capacity: u64, num_segments: usize) -> Self {
         let build_hasher = RandomState::default();
+        let stats_counter = Arc::<DisabledStatsCounter>::default();
         Self::with_everything(
             None,
             Some(max_capacity),
@@ -107,6 +113,7 @@ where
             None,
             None,
             Default::default(),
+            stats_counter,
             false,
             housekeeper::Configuration::new_thread_pool(true),
         )
@@ -116,12 +123,14 @@ where
     /// `SegmentedCache` with various configuration knobs.
     ///
     /// [builder-struct]: ./struct.CacheBuilder.html
-    pub fn builder(num_segments: usize) -> CacheBuilder<K, V, SegmentedCache<K, V, RandomState>> {
+    pub fn builder(
+        num_segments: usize,
+    ) -> CacheBuilder<K, V, SegmentedCache<K, V, RandomState, CacheStats>, CacheStats> {
         CacheBuilder::default().segments(num_segments)
     }
 }
 
-impl<K, V, S> SegmentedCache<K, V, S> {
+impl<K, V, S, CS> SegmentedCache<K, V, S, CS> {
     /// Returns cache’s name.
     pub fn name(&self) -> Option<&str> {
         self.inner.segments[0].name()
@@ -136,6 +145,10 @@ impl<K, V, S> SegmentedCache<K, V, S> {
         policy.set_max_capacity(self.inner.desired_capacity);
         policy.set_num_segments(self.inner.segments.len());
         policy
+    }
+
+    pub fn stats(&self) -> CS {
+        self.inner.stats()
     }
 
     /// Returns an approximate number of entries in this cache.
@@ -196,11 +209,12 @@ impl<K, V, S> SegmentedCache<K, V, S> {
     }
 }
 
-impl<K, V, S> SegmentedCache<K, V, S>
+impl<K, V, S, CS> SegmentedCache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     /// # Panics
     ///
@@ -216,6 +230,7 @@ where
         eviction_listener: Option<EvictionListener<K, V>>,
         eviction_listener_conf: Option<notification::Configuration>,
         expiration_policy: ExpirationPolicy<K, V>,
+        stats_counter: Arc<dyn StatsCounter<Stats = CS> + Send + Sync>,
         invalidator_enabled: bool,
         housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
@@ -230,6 +245,7 @@ where
                 eviction_listener,
                 eviction_listener_conf,
                 expiration_policy,
+                stats_counter,
                 invalidator_enabled,
                 housekeeper_conf,
             )),
@@ -275,7 +291,7 @@ where
             .map(Entry::into_value)
     }
 
-    pub fn entry(&self, key: K) -> OwnedKeyEntrySelector<'_, K, V, S>
+    pub fn entry(&self, key: K) -> OwnedKeyEntrySelector<'_, K, V, S, CS>
     where
         K: Hash + Eq,
     {
@@ -284,7 +300,7 @@ where
         OwnedKeyEntrySelector::new(key, hash, cache)
     }
 
-    pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
+    pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S, CS>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
@@ -623,11 +639,12 @@ where
     // }
 }
 
-impl<'a, K, V, S> IntoIterator for &'a SegmentedCache<K, V, S>
+impl<'a, K, V, S, CS> IntoIterator for &'a SegmentedCache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     type Item = (Arc<K>, V);
 
@@ -638,11 +655,12 @@ where
     }
 }
 
-impl<K, V, S> ConcurrentCacheExt<K, V> for SegmentedCache<K, V, S>
+impl<K, V, S, CS> ConcurrentCacheExt<K, V> for SegmentedCache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     fn sync(&self) {
         for segment in self.inner.segments.iter() {
@@ -653,11 +671,12 @@ where
 
 // For unit tests.
 #[cfg(test)]
-impl<K, V, S> SegmentedCache<K, V, S>
+impl<K, V, S, CS> SegmentedCache<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     fn invalidation_predicate_count(&self) -> usize {
         self.inner
@@ -705,18 +724,26 @@ impl MockExpirationClock {
     }
 }
 
-struct Inner<K, V, S> {
+struct Inner<K, V, S, CS> {
     desired_capacity: Option<u64>,
-    segments: Box<[Cache<K, V, S>]>,
+    segments: Box<[Cache<K, V, S, CS>]>,
     build_hasher: S,
     segment_shift: u32,
+    stats_counter: Arc<dyn StatsCounter<Stats = CS>>,
 }
 
-impl<K, V, S> Inner<K, V, S>
+impl<K, V, S, CS> Inner<K, V, S, CS> {
+    fn stats(&self) -> CS {
+        self.stats_counter.snapshot()
+    }
+}
+
+impl<K, V, S, CS> Inner<K, V, S, CS>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
+    CS: 'static,
 {
     /// # Panics
     ///
@@ -732,6 +759,7 @@ where
         eviction_listener: Option<EvictionListener<K, V>>,
         eviction_listener_conf: Option<notification::Configuration>,
         expiration_policy: ExpirationPolicy<K, V>,
+        stats_counter: Arc<dyn StatsCounter<Stats = CS> + Send + Sync>,
         invalidator_enabled: bool,
         housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
@@ -756,6 +784,7 @@ where
                     eviction_listener.as_ref().map(Arc::clone),
                     eviction_listener_conf.clone(),
                     expiration_policy.clone(),
+                    Arc::clone(&stats_counter),
                     invalidator_enabled,
                     housekeeper_conf.clone(),
                 )
@@ -767,6 +796,7 @@ where
             segments: segments.into_boxed_slice(),
             build_hasher,
             segment_shift,
+            stats_counter,
         }
     }
 
@@ -782,7 +812,7 @@ where
     }
 
     #[inline]
-    fn select(&self, hash: u64) -> &Cache<K, V, S> {
+    fn select(&self, hash: u64) -> &Cache<K, V, S, CS> {
         let index = self.segment_index_from_hash(hash);
         &self.segments[index]
     }

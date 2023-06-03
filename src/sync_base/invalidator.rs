@@ -81,14 +81,14 @@ impl<K, V> InvalidationResult<K, V> {
     }
 }
 
-pub(crate) struct Invalidator<K, V, S> {
+pub(crate) struct Invalidator<K, V, S, CS> {
     predicates: RwLock<HashMap<PredicateId, Predicate<K, V>>>,
     is_empty: AtomicBool,
-    scan_context: Arc<ScanContext<K, V, S>>,
+    scan_context: Arc<ScanContext<K, V, S, CS>>,
     thread_pool: Arc<ThreadPool>,
 }
 
-impl<K, V, S> Drop for Invalidator<K, V, S> {
+impl<K, V, S, CS> Drop for Invalidator<K, V, S, CS> {
     fn drop(&mut self) {
         let ctx = &self.scan_context;
         // Disallow to create and run a scanning task by now.
@@ -106,8 +106,8 @@ impl<K, V, S> Drop for Invalidator<K, V, S> {
 //
 // Crate public methods.
 //
-impl<K, V, S> Invalidator<K, V, S> {
-    pub(crate) fn new(cache: Weak<Inner<K, V, S>>) -> Self {
+impl<K, V, S, CS> Invalidator<K, V, S, CS> {
+    pub(crate) fn new(cache: Weak<Inner<K, V, S, CS>>) -> Self {
         let thread_pool = ThreadPoolRegistry::acquire_pool(PoolName::Invalidator);
         Self {
             predicates: RwLock::new(HashMap::new()),
@@ -190,6 +190,7 @@ impl<K, V, S> Invalidator<K, V, S> {
         K: Hash + Eq + Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
         S: BuildHasher + Send + Sync + 'static,
+        CS: 'static,
     {
         let ctx = &self.scan_context;
 
@@ -233,7 +234,7 @@ impl<K, V, S> Invalidator<K, V, S> {
 //
 // Private methods.
 //
-impl<K, V, S> Invalidator<K, V, S> {
+impl<K, V, S, CS> Invalidator<K, V, S, CS> {
     #[inline]
     fn do_apply_predicates<'a, I>(predicates: I, key: &'a K, value: &'a V, ts: Instant) -> bool
     where
@@ -247,7 +248,11 @@ impl<K, V, S> Invalidator<K, V, S> {
         false
     }
 
-    fn remove_finished_predicates(&self, ctx: &ScanContext<K, V, S>, result: &ScanResult<K, V>) {
+    fn remove_finished_predicates(
+        &self,
+        ctx: &ScanContext<K, V, S, CS>,
+        result: &ScanResult<K, V>,
+    ) {
         let mut predicates = ctx.predicates.lock();
 
         if result.is_truncated {
@@ -282,23 +287,23 @@ impl<K, V, S> Invalidator<K, V, S> {
 // for testing
 //
 #[cfg(test)]
-impl<K, V, S> Invalidator<K, V, S> {
+impl<K, V, S, CS> Invalidator<K, V, S, CS> {
     pub(crate) fn predicate_count(&self) -> usize {
         self.predicates.read().len()
     }
 }
 
-struct ScanContext<K, V, S> {
+struct ScanContext<K, V, S, CS> {
     predicates: Mutex<Vec<Predicate<K, V>>>,
-    cache: Mutex<UnsafeWeakPointer<Inner<K, V, S>>>,
+    cache: Mutex<UnsafeWeakPointer<Inner<K, V, S, CS>>>,
     result: Mutex<Option<ScanResult<K, V>>>,
     is_running: AtomicBool,
     is_shutting_down: AtomicBool,
     _marker: PhantomData<S>,
 }
 
-impl<K, V, S> ScanContext<K, V, S> {
-    fn new(cache: Weak<Inner<K, V, S>>) -> Self {
+impl<K, V, S, CS> ScanContext<K, V, S, CS> {
+    fn new(cache: Weak<Inner<K, V, S, CS>>) -> Self {
         Self {
             predicates: Mutex::new(Vec::default()),
             cache: Mutex::new(UnsafeWeakPointer::from_weak_arc(cache)),
@@ -348,19 +353,19 @@ impl<K, V> Predicate<K, V> {
     }
 }
 
-struct ScanTask<K, V, S> {
-    scan_context: Arc<ScanContext<K, V, S>>,
+struct ScanTask<K, V, S, CS> {
+    scan_context: Arc<ScanContext<K, V, S, CS>>,
     candidates: Vec<KeyDateLite<K>>,
     is_truncated: bool,
 }
 
-impl<K, V, S> ScanTask<K, V, S>
+impl<K, V, S, CS> ScanTask<K, V, S, CS>
 where
     K: Hash + Eq,
     S: BuildHasher,
 {
     fn new(
-        scan_context: &Arc<ScanContext<K, V, S>>,
+        scan_context: &Arc<ScanContext<K, V, S, CS>>,
         candidates: Vec<KeyDateLite<K>>,
         is_truncated: bool,
     ) -> Self {
@@ -444,7 +449,7 @@ where
         if let Some(entry) = cache.get_value_entry(key, hash) {
             if let Some(lm) = entry.last_modified() {
                 if lm == ts {
-                    return Invalidator::<_, _, S>::do_apply_predicates(
+                    return Invalidator::<_, _, S, CS>::do_apply_predicates(
                         predicates.iter(),
                         key,
                         &entry.value,
