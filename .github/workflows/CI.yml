@@ -23,7 +23,7 @@ jobs:
         rust:
           - stable
           - beta
-          - 1.60.0  # MSRV
+          - 1.65.0  # MSRV
           - nightly # For checking minimum version dependencies.
 
     steps:
@@ -66,7 +66,7 @@ jobs:
           cargo update -p cc --precise 1.0.61
 
       # - name: Pin some dependencies to specific versions (MSRV only)
-      #   if: ${{ matrix.rust == '1.60.0' }}
+      #   if: ${{ matrix.rust == '1.65.0' }}
       #   run: |
       #     cargo update -p <crate> --precise <version>
 
