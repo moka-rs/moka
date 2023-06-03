@@ -108,7 +108,7 @@ impl<T> Deque<T> {
             head: None,
             tail: None,
             cursor: None,
-            marker: PhantomData::default(),
+            marker: PhantomData,
         }
     }
 

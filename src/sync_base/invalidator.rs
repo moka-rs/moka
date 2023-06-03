@@ -305,7 +305,7 @@ impl<K, V, S> ScanContext<K, V, S> {
             result: Mutex::new(None),
             is_running: AtomicBool::new(false),
             is_shutting_down: AtomicBool::new(false),
-            _marker: PhantomData::default(),
+            _marker: PhantomData,
         }
     }
 }
