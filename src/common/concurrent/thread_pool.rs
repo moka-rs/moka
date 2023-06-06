@@ -69,15 +69,7 @@ impl ThreadPoolRegistry {
                 // and insert a new pool.
                 let mut pools = REGISTRY.pools.write();
                 pools.entry(name).or_insert_with(|| {
-                    // TODO: When we upgrade the MSRV to 1.59 (2022-02-24) or newer,
-                    // replace num_cpus crate with `thread::available_parallelism` in
-                    // std.
-                    //
-                    // NOTE: On some platforms, `num_cpus::get` may return 0. In that
-                    // case, use 1.
-                    // https://github.com/moka-rs/moka/pull/39#issuecomment-916888859
-                    // https://github.com/seanmonstar/num_cpus/issues/69
-                    let num_threads = num_cpus::get().max(1);
+                    let num_threads = crate::common::available_parallelism();
                     let pool = ThreadPool::new(name, num_threads);
                     Arc::new(pool)
                 });
