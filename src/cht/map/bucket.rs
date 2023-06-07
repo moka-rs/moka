@@ -401,7 +401,9 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
     fn probe(&self, guard: &'g Guard, hash: u64) -> Probe<'_, 'g, K, V> {
         let buckets = &self.buckets;
         let offset = hash as usize & (buckets.len() - 1);
-        // FIXME: this will panic if `len() == 0`
+        // SAFETY: `len()` is never be 0 so this index access will never panic.
+        // This invariant is ensured by the `assert!()` at the beginning of
+        // `with_length()` because 0 is not a power of two.
         let this_bucket = (offset, &buckets[offset]);
         Probe {
             buckets,
