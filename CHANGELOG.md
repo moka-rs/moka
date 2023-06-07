@@ -9,6 +9,12 @@ Bumped the minimum supported Rust version (MSRV) to 1.65 (Nov 3, 2022).
 
 - Removed `num_cpus` crate from the dependency. ([#277][gh-pull-0277])
 
+### Changed
+
+- Refactored internal methods of the concurrent hash table to reduce compile times.
+  ([#265][gh-pull-0265], by [@Swatinem][gh-Swatinem])
+
+
 ## Version 0.11.1
 
 ### Fixed
@@ -20,6 +26,7 @@ Bumped the minimum supported Rust version (MSRV) to 1.65 (Nov 3, 2022).
 
 - Added some example programs to the `examples` directory. ([#268][gh-pull-0268], by
   [@peter-scholtens][gh-peter-scholtens])
+
 
 ## Version 0.11.0
 
@@ -673,6 +680,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-pull-0275]: https://github.com/moka-rs/moka/pull/275/
 [gh-pull-0272]: https://github.com/moka-rs/moka/pull/272/
 [gh-pull-0268]: https://github.com/moka-rs/moka/pull/268/
+[gh-pull-0265]: https://github.com/moka-rs/moka/pull/265/
 [gh-pull-0259]: https://github.com/moka-rs/moka/pull/259/
 [gh-pull-0251]: https://github.com/moka-rs/moka/pull/251/
 [gh-pull-0248]: https://github.com/moka-rs/moka/pull/248/
