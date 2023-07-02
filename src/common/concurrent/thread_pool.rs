@@ -35,7 +35,10 @@ pub(crate) struct ThreadPool {
 
 impl ThreadPool {
     fn new(name: PoolName, num_threads: usize) -> Self {
-        let pool = ScheduledThreadPool::with_name(name.thread_name_template(), num_threads);
+        let pool = ScheduledThreadPool::builder()
+            .num_threads(num_threads)
+            .thread_name_pattern(name.thread_name_template())
+            .build();
         Self {
             name,
             pool,
