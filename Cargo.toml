@@ -1,9 +1,9 @@
 [package]
 name = "moka"
-version = "0.9.7"
+version = "0.9.8"
 edition = "2018"
-rust-version = "1.51"
-
+# Rust 1.60 was released on Apr 7, 2022.
+rust-version = "1.60"
 description = "A fast and concurrent cache library inspired by Java Caffeine"
 license = "MIT OR Apache-2.0"
 # homepage = "https://"

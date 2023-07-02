@@ -423,10 +423,10 @@ available on crates.io, such as the [AHash][ahash-crate] crate.
 
 Moka's minimum supported Rust versions (MSRV) are the followings:
 
-| Feature          | MSRV                     |
-|:-----------------|:------------------------:|
-| default features | Rust 1.51.0 (2021-03-25) |
-| `future`         | Rust 1.51.0 (2021-03-25) |
+| Feature          | MSRV                      |
+|:-----------------|:-------------------------:|
+| default features | Rust 1.60.0 (Apr 7, 2022) |
+| `future`         | Rust 1.60.0 (Apr 7, 2022) |
 
 It will keep a rolling MSRV policy of at least 6 months. If only the default features
 are enabled, MSRV will be updated conservatively. When using other features, like
@@ -434,9 +434,7 @@ are enabled, MSRV will be updated conservatively. When using other features, lik
 cases, increasing MSRV is _not_ considered a semver-breaking change.
 
 <!--
-- tagptr 0.2.0 requires 1.51.
-- socket2 0.4.0 requires 1.46.
-- quanta requires 1.45.
+- quanta v0.11.0 requires 1.60.
 -->
 
 

@@ -64,13 +64,13 @@
 //!
 //! This crate's minimum supported Rust versions (MSRV) are the followings:
 //!
-//! | Feature    | Enabled by default? | MSRV        |
-//! |:-----------|:-------------------:|:-----------:|
-//! | no feature |                     | Rust 1.51.0 |
-//! | `atomic64` |       yes           | Rust 1.51.0 |
-//! | `quanta`   |       yes           | Rust 1.51.0 |
-//! | `future`   |                     | Rust 1.51.0 |
-//! | `dash`     |                     | Rust 1.51.0 |
+//! | Feature    | Enabled by default? | MSRV                      |
+//! |:-----------|:-------------------:|:-------------------------:|
+//! | no feature |                     | Rust 1.60.0 (Apr 7, 2022) |
+//! | `atomic64` |       yes           | Rust 1.60.0 (Apr 7, 2022) |
+//! | `quanta`   |       yes           | Rust 1.60.0 (Apr 7, 2022) |
+//! | `future`   |                     | Rust 1.60.0 (Apr 7, 2022) |
+//! | `dash`     |                     | Rust 1.60.0 (Apr 7, 2022) |
 //!
 //! If only the default features are enabled, MSRV will be updated conservatively.
 //! When using other features, like `future`, MSRV might be updated more frequently,
