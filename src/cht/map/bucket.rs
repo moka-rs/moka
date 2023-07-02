@@ -409,9 +409,8 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
         H: BuildHasher,
     {
         // Ensure that the rehashing is not performed concurrently.
-        let lock;
-        match self.rehash_lock.try_lock() {
-            Ok(lk) => lock = lk,
+        let lock = match self.rehash_lock.try_lock() {
+            Ok(lk) => lk,
             Err(TryLockError::WouldBlock) => {
                 // Wait until the lock become available.
                 std::mem::drop(self.rehash_lock.lock());

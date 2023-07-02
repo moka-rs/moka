@@ -121,7 +121,7 @@ where
             time_to_idle: self.time_to_idle,
             invalidator_enabled: self.invalidator_enabled,
             thread_pool_enabled: self.thread_pool_enabled,
-            cache_type: PhantomData::default(),
+            cache_type: PhantomData,
         }
     }
 
