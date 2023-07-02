@@ -116,6 +116,7 @@ impl<T> Deque<T> {
         self.region
     }
 
+    #[cfg(any(test, feature = "sync", feature = "future"))]
     pub(crate) fn len(&self) -> usize {
         self.len
     }
@@ -272,6 +273,7 @@ impl<T> Deque<T> {
         std::mem::drop(Box::from_raw(node.as_ptr()));
     }
 
+    #[cfg(any(test, feature = "sync", feature = "future"))]
     pub(crate) fn reset_cursor(&mut self) {
         self.cursor = None;
     }

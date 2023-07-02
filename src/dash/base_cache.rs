@@ -1120,10 +1120,7 @@ where
             // invalidated ValueEntry (which should be still in the write op
             // queue) has a pointer to this node, move the node to the back of
             // the deque instead of popping (dropping) it.
-            if let Some(node) = deq.peek_front() {
-                let node = NonNull::from(node);
-                unsafe { deq.move_to_back(node) };
-            }
+            deq.move_front_to_back();
             true
         }
     }
@@ -1173,10 +1170,7 @@ where
                 // invalidated ValueEntry (which should be still in the write op
                 // queue) has a pointer to this node, move the node to the back of
                 // the deque instead of popping (dropping) it.
-                if let Some(node) = deqs.write_order.peek_front() {
-                    let node = NonNull::from(node);
-                    unsafe { deqs.write_order.move_to_back(node) };
-                }
+                deqs.write_order.move_front_to_back();
             }
         }
     }
