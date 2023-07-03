@@ -745,7 +745,7 @@ where
         let mut victim_nodes = SmallVec::default();
 
         // Get first potential victim at the LRU position.
-        let mut next_victim = deqs.probation.peek_front();
+        let mut next_victim = deqs.probation.peek_front_ptr();
 
         // Aggregate potential victims.
         while victims.weight < candidate.weight {
@@ -753,14 +753,15 @@ where
                 break;
             }
             if let Some(victim) = next_victim.take() {
-                next_victim = victim.next_node();
+                next_victim = DeqNode::next_node_ptr(victim);
 
+                let vic_elem = &unsafe { victim.as_ref() }.element;
                 let vic_entry = cache
-                    .get(&victim.element.key)
+                    .get(&vic_elem.key)
                     .expect("Cannot get an victim entry");
-                victims.add_policy_weight(victim.element.key.as_ref(), &vic_entry.value, weigher);
-                victims.add_frequency(freq, victim.element.hash);
-                victim_nodes.push(NonNull::from(victim));
+                victims.add_policy_weight(vic_elem.key.as_ref(), &vic_entry.value, weigher);
+                victims.add_frequency(freq, vic_elem.hash);
+                victim_nodes.push(victim);
             } else {
                 // No more potential victims.
                 break;

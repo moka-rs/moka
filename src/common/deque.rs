@@ -52,8 +52,8 @@ impl<T> DeqNode<T> {
         }
     }
 
-    pub(crate) fn next_node(&self) -> Option<&DeqNode<T>> {
-        self.next.as_ref().map(|node| unsafe { node.as_ref() })
+    pub(crate) fn next_node_ptr(this: NonNull<Self>) -> Option<NonNull<DeqNode<T>>> {
+        unsafe { this.as_ref() }.next
     }
 }
 
@@ -126,9 +126,11 @@ impl<T> Deque<T> {
     }
 
     pub(crate) fn peek_front(&self) -> Option<&DeqNode<T>> {
-        // This method takes care not to create mutable references to whole nodes,
-        // to maintain validity of aliasing pointers into `element`.
         self.head.as_ref().map(|node| unsafe { node.as_ref() })
+    }
+
+    pub(crate) fn peek_front_ptr(&self) -> Option<NonNull<DeqNode<T>>> {
+        self.head.as_ref().cloned()
     }
 
     /// Removes and returns the node at the front of the list.
@@ -159,8 +161,6 @@ impl<T> Deque<T> {
 
     #[cfg(test)]
     fn peek_back(&self) -> Option<&DeqNode<T>> {
-        // This method takes care not to create mutable references to whole nodes,
-        // to maintain validity of aliasing pointers into `element`.
         self.tail.as_ref().map(|node| unsafe { node.as_ref() })
     }
 
@@ -222,12 +222,20 @@ impl<T> Deque<T> {
         }
     }
 
+    pub(crate) fn move_front_to_back(&mut self) {
+        if let Some(node) = self.head {
+            unsafe { self.move_to_back(node) };
+        }
+    }
+
     /// Unlinks the specified node from the current list.
     ///
     /// This method takes care not to create mutable references to `element`, to
     /// maintain validity of aliasing pointers.
     ///
-    /// Panics:
+    /// IMPORTANT: This method does not drop the node. If the node is no longer
+    /// needed, use `unlink_and_drop` instead, or drop it at the caller side.
+    /// Otherwise, the node will leak.
     pub(crate) unsafe fn unlink(&mut self, mut node: NonNull<DeqNode<T>>) {
         if self.is_at_cursor(node.as_ref()) {
             self.advance_cursor();
@@ -265,7 +273,7 @@ impl<T> Deque<T> {
         std::mem::drop(Box::from_raw(node.as_ptr()));
     }
 
-    #[allow(unused)]
+    #[cfg(any(test, feature = "sync", feature = "future"))]
     pub(crate) fn reset_cursor(&mut self) {
         self.cursor = None;
     }
@@ -683,35 +691,67 @@ mod tests {
         // -------------------------------------------------------
         // First iteration.
         // peek_front() -> node1
-        let node1a = deque.peek_front().unwrap();
-        assert_eq!(node1a.element, "a".to_string());
-        let node2a = node1a.next_node().unwrap();
-        assert_eq!(node2a.element, "b".to_string());
-        let node3a = node2a.next_node().unwrap();
-        assert_eq!(node3a.element, "c".to_string());
-        assert!(node3a.next_node().is_none());
+        let node1a = deque.peek_front_ptr().unwrap();
+        assert_eq!(unsafe { node1a.as_ref() }.element, "a".to_string());
+        let node2a = DeqNode::next_node_ptr(node1a).unwrap();
+        assert_eq!(unsafe { node2a.as_ref() }.element, "b".to_string());
+        let node3a = DeqNode::next_node_ptr(node2a).unwrap();
+        assert_eq!(unsafe { node3a.as_ref() }.element, "c".to_string());
+        assert!(DeqNode::next_node_ptr(node3a).is_none());
 
         // -------------------------------------------------------
         // Iterate after a move_to_back.
         // Move "b" to the back. So now "a" -> "c" -> "b".
         unsafe { deque.move_to_back(node2_ptr) };
-        let node1a = deque.peek_front().unwrap();
-        assert_eq!(node1a.element, "a".to_string());
-        let node3a = node1a.next_node().unwrap();
-        assert_eq!(node3a.element, "c".to_string());
-        let node2a = node3a.next_node().unwrap();
-        assert_eq!(node2a.element, "b".to_string());
-        assert!(node2a.next_node().is_none());
+        let node1a = deque.peek_front_ptr().unwrap();
+        assert_eq!(unsafe { node1a.as_ref() }.element, "a".to_string());
+        let node3a = DeqNode::next_node_ptr(node1a).unwrap();
+        assert_eq!(unsafe { node3a.as_ref() }.element, "c".to_string());
+        let node2a = DeqNode::next_node_ptr(node3a).unwrap();
+        assert_eq!(unsafe { node2a.as_ref() }.element, "b".to_string());
+        assert!(DeqNode::next_node_ptr(node2a).is_none());
 
         // -------------------------------------------------------
         // Iterate after an unlink.
         // Unlink the second node "c". Now "a" -> "c".
         unsafe { deque.unlink_and_drop(node3_ptr) };
-        let node1a = deque.peek_front().unwrap();
-        assert_eq!(node1a.element, "a".to_string());
-        let node2a = node1a.next_node().unwrap();
-        assert_eq!(node2a.element, "b".to_string());
-        assert!(node2a.next_node().is_none());
+        let node1a = deque.peek_front_ptr().unwrap();
+        assert_eq!(unsafe { node1a.as_ref() }.element, "a".to_string());
+        let node2a = DeqNode::next_node_ptr(node1a).unwrap();
+        assert_eq!(unsafe { node2a.as_ref() }.element, "b".to_string());
+        assert!(DeqNode::next_node_ptr(node2a).is_none());
+    }
+
+    #[test]
+    fn peek_and_move_to_back() {
+        let mut deque: Deque<String> = Deque::new(MainProbation);
+
+        let node1 = DeqNode::new("a".into());
+        deque.push_back(Box::new(node1));
+        let node2 = DeqNode::new("b".into());
+        let _ = deque.push_back(Box::new(node2));
+        let node3 = DeqNode::new("c".into());
+        let _ = deque.push_back(Box::new(node3));
+        // "a" -> "b" -> "c"
+
+        let node1a = deque.peek_front_ptr().unwrap();
+        assert_eq!(unsafe { node1a.as_ref() }.element, "a".to_string());
+        unsafe { deque.move_to_back(node1a) };
+        // "b" -> "c" -> "a"
+
+        let node2a = deque.peek_front_ptr().unwrap();
+        assert_eq!(unsafe { node2a.as_ref() }.element, "b".to_string());
+
+        let node3a = DeqNode::next_node_ptr(node2a).unwrap();
+        assert_eq!(unsafe { node3a.as_ref() }.element, "c".to_string());
+        unsafe { deque.move_to_back(node3a) };
+        // "b" -> "a" -> "c"
+
+        deque.move_front_to_back();
+        // "a" -> "c" -> "b"
+
+        let node1b = deque.peek_front().unwrap();
+        assert_eq!(node1b.element, "a".to_string());
     }
 
     #[test]

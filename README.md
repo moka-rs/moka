@@ -86,7 +86,10 @@ routers. Here are some highlights:
 
 ## Change Log
 
-- [CHANGELOG.md](https://github.com/moka-rs/moka/blob/master/CHANGELOG.md)
+- For v0.9.x releases:
+  [CHANGELOG.md (`maint-09` branch)](https://github.com/moka-rs/moka/blob/maint-09/CHANGELOG.md)
+- For the latest release:
+  [CHANGELOG.md (`master` branch)](https://github.com/moka-rs/moka/blob/master/CHANGELOG.md)
 
 
 ## Table of Contents

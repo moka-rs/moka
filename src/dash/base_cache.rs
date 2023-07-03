@@ -921,7 +921,7 @@ where
         let mut skipped_nodes = SmallVec::default();
 
         // Get first potential victim at the LRU position.
-        let mut next_victim = deqs.probation.peek_front();
+        let mut next_victim = deqs.probation.peek_front_ptr();
 
         // Aggregate potential victims.
         while victims.policy_weight < candidate.policy_weight {
@@ -929,17 +929,18 @@ where
                 break;
             }
             if let Some(victim) = next_victim.take() {
-                next_victim = victim.next_node();
+                next_victim = DeqNode::next_node_ptr(victim);
+                let vic_elem = &unsafe { victim.as_ref() }.element;
 
-                if let Some(vic_entry) = cache.get(victim.element.key()) {
+                if let Some(vic_entry) = cache.get(vic_elem.key()) {
                     victims.add_policy_weight(vic_entry.policy_weight());
-                    victims.add_frequency(freq, victim.element.hash());
-                    victim_nodes.push(NonNull::from(victim));
+                    victims.add_frequency(freq, vic_elem.hash());
+                    victim_nodes.push(victim);
                     retries = 0;
                 } else {
                     // Could not get the victim from the cache (hash map). Skip this node
                     // as its ValueEntry might have been invalidated.
-                    skipped_nodes.push(NonNull::from(victim));
+                    skipped_nodes.push(victim);
 
                     retries += 1;
                     if retries > MAX_CONSECUTIVE_RETRIES {
@@ -1119,10 +1120,7 @@ where
             // invalidated ValueEntry (which should be still in the write op
             // queue) has a pointer to this node, move the node to the back of
             // the deque instead of popping (dropping) it.
-            if let Some(node) = deq.peek_front() {
-                let node = NonNull::from(node);
-                unsafe { deq.move_to_back(node) };
-            }
+            deq.move_front_to_back();
             true
         }
     }
@@ -1172,10 +1170,7 @@ where
                 // invalidated ValueEntry (which should be still in the write op
                 // queue) has a pointer to this node, move the node to the back of
                 // the deque instead of popping (dropping) it.
-                if let Some(node) = deqs.write_order.peek_front() {
-                    let node = NonNull::from(node);
-                    unsafe { deqs.write_order.move_to_back(node) };
-                }
+                deqs.write_order.move_front_to_back();
             }
         }
     }
