@@ -8,7 +8,8 @@ Bumped the minimum supported Rust version (MSRV) to 1.60 (Apr 7, 2022).
 ### Fixed
 
 - Fixed the caches mutating a deque node through a `NonNull` pointer derived from a
-  shared reference. ([#283][gh-pull-0283])
+  shared reference. ([#283][gh-pull-0283]) (Backported [#259](gh-pull-0259) from
+  v0.11.0)
 
 ### Changed
 
@@ -550,6 +551,8 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [ghsa-qc84-gqf4-9926]: https://github.com/advisories/GHSA-qc84-gqf4-9926
 [gh-rust-issue-62958]: https://github.com/rust-lang/rust/issues/62958
 
+[RUSTSEC-2020-0168]: https://rustsec.org/advisories/RUSTSEC-2020-0168.html
+
 [gh-06chaynes]: https://github.com/06chaynes
 [gh-aspect]: https://github.com/aspect
 [gh-barkanido]: https://github.com/barkanido
@@ -562,6 +565,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-tinou98]: https://github.com/tinou98
 
+[gh-issue-0243]: https://github.com/moka-rs/moka/issues/243/
 [gh-issue-0212]: https://github.com/moka-rs/moka/issues/212/
 [gh-issue-0207]: https://github.com/moka-rs/moka/issues/207/
 [gh-issue-0162]: https://github.com/moka-rs/moka/issues/162/
@@ -578,6 +582,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 
 [gh-pull-0283]: https://github.com/moka-rs/moka/pull/283/
 [gh-pull-0282]: https://github.com/moka-rs/moka/pull/282/
+[gh-pull-0259]: https://github.com/moka-rs/moka/pull/259/
 [gh-pull-0216]: https://github.com/moka-rs/moka/pull/216/
 [gh-pull-0195]: https://github.com/moka-rs/moka/pull/195/
 [gh-pull-0190]: https://github.com/moka-rs/moka/pull/190/
