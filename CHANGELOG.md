@@ -578,7 +578,6 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 
 [gh-pull-0283]: https://github.com/moka-rs/moka/pull/283/
 [gh-pull-0282]: https://github.com/moka-rs/moka/pull/282/
-[gh-pull-0259]: https://github.com/moka-rs/moka/pull/259/
 [gh-pull-0216]: https://github.com/moka-rs/moka/pull/216/
 [gh-pull-0195]: https://github.com/moka-rs/moka/pull/195/
 [gh-pull-0190]: https://github.com/moka-rs/moka/pull/190/
