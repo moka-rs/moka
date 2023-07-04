@@ -8,7 +8,7 @@ Bumped the minimum supported Rust version (MSRV) to 1.60 (Apr 7, 2022).
 ### Fixed
 
 - Fixed the caches mutating a deque node through a `NonNull` pointer derived from a
-  shared reference. ([#283][gh-pull-0283]) (Backported [#259](gh-pull-0259) from
+  shared reference. ([#283][gh-pull-0283]) (Backported [#259][gh-pull-0259] from
   v0.11.0)
 
 ### Changed
