@@ -1,5 +1,14 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.10.3
+
+### Fixed
+
+- Fixed the caches mutating a deque node through a `NonNull` pointer derived from a
+  shared reference. ([#286][gh-pull-0286]) (Backported [#259][gh-pull-0259] from
+  v0.11.0)
+
+
 ## Version 0.10.2
 
 Bumped the minimum supported Rust version (MSRV) to 1.60 (2022-04-07).
@@ -623,6 +632,8 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (2021-03-25).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0286]: https://github.com/moka-rs/moka/pull/286/
+[gh-pull-0259]: https://github.com/moka-rs/moka/pull/259/
 [gh-pull-0251]: https://github.com/moka-rs/moka/pull/251/
 [gh-pull-0216]: https://github.com/moka-rs/moka/pull/216/
 [gh-pull-0199]: https://github.com/moka-rs/moka/pull/199/
