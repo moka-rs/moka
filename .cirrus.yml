@@ -11,8 +11,9 @@ linux_arm64_task:
     cpu: $NUM_CPUS
     matrix:
       - image: rust:slim  # docker's official latest rust stable version
-      - image: rustlang/rust:nightly-slim # nightly hosted by rustlang
-      - image: rust:1.60.0-slim # MSRV
+      ## Disable jobs for nightly and the MSRV to avoid to hit the concurrency limit.
+      # - image: rustlang/rust:nightly-slim # nightly hosted by rustlang
+      # - image: rust:1.60.0-slim # MSRV
       # no rust-beta image found in docker hub, won't be tested
 
   ## Disable caching as there is no Cargo.lock file in Moka repository.
