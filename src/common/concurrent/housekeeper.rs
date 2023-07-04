@@ -262,7 +262,7 @@ where
             periodical_sync_job: Mutex::new(maybe_sync_job),
             periodical_sync_running,
             on_demand_sync_scheduled: Arc::new(AtomicBool::new(false)),
-            _marker: PhantomData::default(),
+            _marker: PhantomData,
         }
     }
 
