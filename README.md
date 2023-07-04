@@ -110,7 +110,10 @@ routers. Here are some highlights:
 
 ## Change Log
 
-- [CHANGELOG.md](https://github.com/moka-rs/moka/blob/master/CHANGELOG.md)
+- For v0.10.x releases:
+  [CHANGELOG.md (`maint-010` branch)](https://github.com/moka-rs/moka/blob/maint-010/CHANGELOG.md)
+- For the latest release:
+  [CHANGELOG.md (`master` branch)](https://github.com/moka-rs/moka/blob/master/CHANGELOG.md)
 
 The `unsync::Cache` and `dash::Cache` have been moved to a separate crate called
 [Mini Moka][mini-moka-crate]:
