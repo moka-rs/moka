@@ -8,8 +8,6 @@ use std::{
     },
 };
 
-use crossbeam_epoch::Owned;
-
 #[derive(Clone, Debug)]
 pub(crate) struct NoisyDropper<T: ?Sized> {
     parent: Arc<DropNotifier>,
@@ -103,12 +101,16 @@ impl DropNotifier {
     }
 }
 
+#[cfg(not(miri))]
 pub(crate) fn run_deferred() {
+    use crossbeam_epoch::Owned;
+
     for _ in 0..65536 {
         let guard = crossbeam_epoch::pin();
-
         unsafe { guard.defer_destroy(Owned::new(0).into_shared(&guard)) };
-
         guard.flush();
     }
 }
+
+#[cfg(miri)]
+pub(crate) fn run_deferred() {}

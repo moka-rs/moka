@@ -33,6 +33,7 @@
         "Hasher",
         "Kawano",
         "mapref",
+        "miri",
         "Moka",
         "mpsc",
         "MSRV",
