@@ -17,13 +17,18 @@ on:
     # Run against the last commit on the default branch on Friday at 9pm (UTC?)
     - cron:  '0 21 * * 5'
 
+env:
+  # Enable Miri's Tree Borrows aliasing rules instead of the default Stacked Borrows.
+  MIRIFLAGS: -Zmiri-tree-borrows
+  CARGO_TERM_COLOR: always
+
 jobs:
   test:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Moka
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Install Rust nightly toolchain with Miri
         uses: actions-rs/toolchain@v1
@@ -33,7 +38,17 @@ jobs:
           override: true
           components: miri
 
+      - name: Install latest nextest release
+        uses: taiki-e/install-action@nextest
+
       - uses: Swatinem/rust-cache@v1
+
+      - name: Replace crossbeam-epoch with an unreleased version.
+        run: |
+          sed -i 's/crossbeam-epoch = { version =.* }/crossbeam-epoch = { git = "https:\/\/github.com\/crossbeam-rs\/crossbeam.git", branch = "master", optional = true }/' Cargo.toml
+          cat Cargo.toml
+          cargo update -p crossbeam-epoch
+          cargo tree -i crossbeam-epoch
 
       - name: cargo clean
         uses: actions-rs/cargo@v1
@@ -44,10 +59,16 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: miri
-          args: test deque
+          args: nextest run deque
 
       - name: Run Miri test (timer_wheel)
         uses: actions-rs/cargo@v1
         with:
           command: miri
-          args: test timer_wheel
+          args: nextest run timer_wheel
+
+      - name: Run Miri test (cht)
+        uses: actions-rs/cargo@v1
+        with:
+          command: miri
+          args: nextest run cht
