@@ -140,7 +140,7 @@ type Bucket<K> = Deque<TimerNode<K>>;
 #[must_use = "this `ReschedulingResult` may be an `Removed` variant, which should be handled"]
 pub(crate) enum ReschedulingResult<K> {
     /// The timer event was rescheduled.
-    Rescheduled,
+    Rescheduled(TrioArc<EntryInfo<K>>),
     /// The timer event was not rescheduled because the entry has no expiration time.
     Removed(Box<DeqNode<TimerNode<K>>>),
 }
@@ -242,9 +242,10 @@ impl<K> TimerWheel<K> {
             if let Some(t) = entry.entry_info().expiration_time() {
                 let (level, index) = self.bucket_indices(t);
                 entry.set_position(level, index);
-                let node = unsafe { Box::from_raw(node.as_ptr()) };
-                self.wheels[level][index].push_back(node);
-                ReschedulingResult::Rescheduled
+                let entry_info = TrioArc::clone(&entry.entry_info());
+                let node1 = unsafe { Box::from_raw(node.as_ptr()) };
+                self.wheels[level][index].push_back(node1);
+                ReschedulingResult::Rescheduled(entry_info)
             } else {
                 entry.unset_position();
                 entry.unset_timer_node_in_deq_nodes();
@@ -515,12 +516,8 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
                             // The cache entry has not expired. Reschedule it.
                             let node_p = NonNull::new(Box::into_raw(node)).expect("Got a null ptr");
                             match self.timer_wheel.schedule_existing_node(node_p) {
-                                ReschedulingResult::Rescheduled => {
-                                    let entry_info =
-                                        unsafe { node_p.as_ref() }.element.entry_info();
-                                    return Some(TimerEvent::Rescheduled(TrioArc::clone(
-                                        entry_info,
-                                    )));
+                                ReschedulingResult::Rescheduled(entry_info) => {
+                                    return Some(TimerEvent::Rescheduled(entry_info));
                                 }
                                 ReschedulingResult::Removed(node) => {
                                     // The timer event has been removed from the timer
