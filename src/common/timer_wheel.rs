@@ -242,7 +242,7 @@ impl<K> TimerWheel<K> {
             if let Some(t) = entry.entry_info().expiration_time() {
                 let (level, index) = self.bucket_indices(t);
                 entry.set_position(level, index);
-                let entry_info = TrioArc::clone(&entry.entry_info());
+                let entry_info = TrioArc::clone(entry.entry_info());
                 let node1 = unsafe { Box::from_raw(node.as_ptr()) };
                 self.wheels[level][index].push_back(node1);
                 ReschedulingResult::Rescheduled(entry_info)
