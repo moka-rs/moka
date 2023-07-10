@@ -643,8 +643,8 @@ mod tests {
     #[cfg_attr(mips, ignore)]
     #[test]
     fn concurrent_insert_if_not_present() {
-        const MAX_VALUE: usize = if cfg!(miri) { 32 } else { 512 };
-        const NUM_THREADS: usize = if cfg!(miri) { 4 } else { 64 };
+        const MAX_VALUE: usize = if cfg!(miri) { 128 } else { 512 };
+        const NUM_THREADS: usize = if cfg!(miri) { 6 } else { 64 };
 
         let hashmap = Arc::new(HashMap::with_capacity(0));
         let barrier = Arc::new(Barrier::new(NUM_THREADS));
@@ -711,7 +711,7 @@ mod tests {
 
     #[test]
     fn insertion() {
-        const MAX_VALUE: i32 = if cfg!(miri) { 64 } else { 512 };
+        const MAX_VALUE: i32 = if cfg!(miri) { 32 } else { 512 };
 
         let map = HashMap::with_capacity(MAX_VALUE as usize);
 
@@ -737,7 +737,7 @@ mod tests {
 
     #[test]
     fn growth() {
-        const MAX_VALUE: i32 = if cfg!(miri) { 64 } else { 512 };
+        const MAX_VALUE: i32 = if cfg!(miri) { 32 } else { 512 };
 
         let map = HashMap::with_capacity(0);
 
@@ -769,8 +769,8 @@ mod tests {
     #[cfg_attr(mips, ignore)]
     #[test]
     fn concurrent_insertion() {
-        const MAX_VALUE: i32 = if cfg!(miri) { 32 } else { 512 };
-        const NUM_THREADS: usize = if cfg!(miri) { 4 } else { 64 };
+        const MAX_VALUE: i32 = if cfg!(miri) { 128 } else { 512 };
+        const NUM_THREADS: usize = if cfg!(miri) { 6 } else { 64 };
         const MAX_INSERTED_VALUE: i32 = (NUM_THREADS as i32) * MAX_VALUE;
 
         let map = Arc::new(HashMap::with_capacity(MAX_INSERTED_VALUE as usize));
@@ -809,8 +809,8 @@ mod tests {
     #[cfg_attr(mips, ignore)]
     #[test]
     fn concurrent_growth() {
-        const MAX_VALUE: i32 = if cfg!(miri) { 32 } else { 512 };
-        const NUM_THREADS: usize = if cfg!(miri) { 4 } else { 64 };
+        const MAX_VALUE: i32 = if cfg!(miri) { 64 } else { 512 };
+        const NUM_THREADS: usize = if cfg!(miri) { 6 } else { 64 };
         const MAX_INSERTED_VALUE: i32 = (NUM_THREADS as i32) * MAX_VALUE;
 
         let map = Arc::new(HashMap::with_capacity(0));
@@ -848,7 +848,7 @@ mod tests {
 
     #[test]
     fn removal() {
-        const MAX_VALUE: i32 = if cfg!(miri) { 64 } else { 512 };
+        const MAX_VALUE: i32 = if cfg!(miri) { 128 } else { 512 };
 
         let map = HashMap::with_capacity(MAX_VALUE as usize);
 
@@ -1084,8 +1084,8 @@ mod tests {
     #[cfg_attr(mips, ignore)]
     #[test]
     fn concurrent_insert_with_or_modify() {
-        const MAX_VALUE: i32 = if cfg!(miri) { 32 } else { 512 };
-        const NUM_THREADS: usize = if cfg!(miri) { 4 } else { 64 };
+        const MAX_VALUE: i32 = if cfg!(miri) { 128 } else { 512 };
+        const NUM_THREADS: usize = if cfg!(miri) { 6 } else { 64 };
 
         let map = Arc::new(HashMap::with_capacity(0));
         let barrier = Arc::new(Barrier::new(NUM_THREADS));
@@ -1122,8 +1122,8 @@ mod tests {
     #[cfg_attr(mips, ignore)]
     #[test]
     fn concurrent_overlapped_insertion() {
-        const MAX_VALUE: i32 = if cfg!(miri) { 32 } else { 512 };
-        const NUM_THREADS: usize = if cfg!(miri) { 4 } else { 64 };
+        const MAX_VALUE: i32 = if cfg!(miri) { 128 } else { 512 };
+        const NUM_THREADS: usize = if cfg!(miri) { 6 } else { 64 };
 
         let map = Arc::new(HashMap::with_capacity(MAX_VALUE as usize));
         let barrier = Arc::new(Barrier::new(NUM_THREADS));
@@ -1208,8 +1208,8 @@ mod tests {
     #[cfg_attr(mips, ignore)]
     #[test]
     fn concurrent_overlapped_removal() {
-        const MAX_VALUE: i32 = if cfg!(miri) { 32 } else { 512 };
-        const NUM_THREADS: usize = if cfg!(miri) { 4 } else { 64 };
+        const MAX_VALUE: i32 = if cfg!(miri) { 128 } else { 512 };
+        const NUM_THREADS: usize = if cfg!(miri) { 6 } else { 64 };
 
         let map = HashMap::with_capacity(MAX_VALUE as usize);
 
@@ -1702,7 +1702,7 @@ mod tests {
 
     #[test]
     fn remove_if() {
-        const NUM_VALUES: i32 = if cfg!(miri) { 64 } else { 512 };
+        const NUM_VALUES: i32 = if cfg!(miri) { 128 } else { 512 };
 
         let is_even = |_: &i32, v: &i32| *v % 2 == 0;
 
