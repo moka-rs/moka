@@ -1,0 +1,4 @@
+[profile.default-miri]
+# Run miri tests in parallel.
+test-threads = "num-cpus"
+slow-timeout = { period = "120s", terminate-after = 2 }
