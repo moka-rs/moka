@@ -1471,7 +1471,7 @@ mod tests {
             })
         };
 
-        for t in vec![thread1, thread2, thread3, thread4, thread5] {
+        for t in [thread1, thread2, thread3, thread4, thread5] {
             t.join().expect("Failed to join");
         }
     }
@@ -1598,7 +1598,7 @@ mod tests {
             })
         };
 
-        for t in vec![
+        for t in [
             thread1, thread2, thread3, thread4, thread5, thread6, thread7,
         ] {
             t.join().expect("Failed to join");
@@ -1736,7 +1736,7 @@ mod tests {
             })
         };
 
-        for t in vec![
+        for t in [
             thread1, thread2, thread3, thread4, thread5, thread6, thread7, thread8,
         ] {
             t.join().expect("Failed to join");
@@ -1865,7 +1865,7 @@ mod tests {
             })
         };
 
-        for t in vec![
+        for t in [
             thread1, thread2, thread3, thread4, thread5, thread6, thread7, thread8,
         ] {
             t.join().expect("Failed to join");

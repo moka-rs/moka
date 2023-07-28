@@ -112,6 +112,7 @@ impl<K, V, S> Invalidator<K, V, S> {
         Self {
             predicates: RwLock::new(HashMap::new()),
             is_empty: AtomicBool::new(true),
+            #[allow(clippy::arc_with_non_send_sync)]
             scan_context: Arc::new(ScanContext::new(cache)),
             thread_pool,
         }
