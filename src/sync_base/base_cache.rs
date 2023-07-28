@@ -176,7 +176,6 @@ where
         let (r_snd, r_rcv) = crossbeam_channel::bounded(r_size);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(w_size);
 
-        #[allow(clippy::arc_with_non_send_sync)]
         let inner = Arc::new(Inner::new(
             name,
             max_capacity,
@@ -193,13 +192,12 @@ where
         if invalidator_enabled {
             inner.set_invalidator(&inner);
         }
-        #[allow(clippy::arc_with_non_send_sync)]
-        let housekeeper = Arc::new(Housekeeper::new(Arc::downgrade(&inner), housekeeper_conf));
+        let housekeeper = Housekeeper::new(Arc::downgrade(&inner), housekeeper_conf);
         Self {
             inner,
             read_op_ch: r_snd,
             write_op_ch: w_snd,
-            housekeeper: Some(housekeeper),
+            housekeeper: Some(Arc::new(housekeeper)),
         }
     }
 
