@@ -970,7 +970,7 @@ mod tests {
 
         for result in insert_threads
             .into_iter()
-            .chain(remove_threads.into_iter())
+            .chain(remove_threads)
             .map(|t| t.join())
         {
             assert!(result.is_ok());
@@ -1042,7 +1042,7 @@ mod tests {
 
         for result in insert_threads
             .into_iter()
-            .chain(remove_threads.into_iter())
+            .chain(remove_threads)
             .map(JoinHandle::join)
         {
             assert!(result.is_ok());
