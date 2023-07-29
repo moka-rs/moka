@@ -54,7 +54,7 @@ linux_arm64_task:
   # pin_deps_script: |
   #   if [ "v$RUST_VERSION" == "v1.60.0" ]; then
   #     echo 'Pinning some dependencies to specific versions'
-  #     cargo update -p <crate> --precise <version>
+  #     ./.ci_extras/pin-crate-vers-msrv.sh
   #   else
   #     echo 'Skipped'
   #   fi
