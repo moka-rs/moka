@@ -16,8 +16,9 @@ jobs:
     strategy:
       matrix:
         rust:
-          - stable
-          - beta
+          - toolchain: stable
+          - toolchain: beta
+            rustflags: '--cfg beta_clippy'
 
     steps:
       - name: Checkout Moka
@@ -27,7 +28,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: minimal
-          toolchain: ${{ matrix.rust }}
+          toolchain: ${{ matrix.rust.toolchain }}
           override: true
           components: rustfmt, clippy
 
@@ -40,14 +41,15 @@ jobs:
 
       - name: Run Clippy
         uses: actions-rs/clippy-check@v1
-        if: ${{ matrix.rust == 'stable' || matrix.rust == 'beta' }}
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           args: --lib --tests --all-features --all-targets -- -D warnings
+        env:
+          RUSTFLAGS: ${{ matrix.rust.rustflags }}
 
       - name: Run Rustfmt
         uses: actions-rs/cargo@v1
-        if: ${{ matrix.rust == 'stable' }}
+        if: ${{ matrix.rust.toolchain == 'stable' }}
         with:
           command: fmt
           args: --all -- --check
