@@ -257,7 +257,7 @@ mod tests {
         let mut sketch = FrequencySketch::default();
         sketch.ensure_capacity(512);
         let mut indexes = std::collections::HashSet::new();
-        let hashes = vec![std::u64::MAX, 0, 1];
+        let hashes = [std::u64::MAX, 0, 1];
         for hash in hashes.iter() {
             for depth in 0..4 {
                 indexes.insert(sketch.index_of(*hash, depth));
