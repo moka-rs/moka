@@ -195,7 +195,7 @@ where
     pub async fn or_insert_with_if(
         self,
         init: impl Future<Output = V>,
-        replace_if: impl FnMut(&V) -> bool,
+        replace_if: impl FnMut(&V) -> bool + Send,
     ) -> Entry<K, V> {
         futures_util::pin_mut!(init);
         let key = Arc::new(self.owned_key);
@@ -543,7 +543,7 @@ where
     pub async fn or_insert_with_if(
         self,
         init: impl Future<Output = V>,
-        replace_if: impl FnMut(&V) -> bool,
+        replace_if: impl FnMut(&V) -> bool + Send,
     ) -> Entry<K, V> {
         futures_util::pin_mut!(init);
         self.cache

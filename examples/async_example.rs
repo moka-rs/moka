@@ -28,7 +28,7 @@ async fn main() {
                     // insert() is an async method, so await it.
                     my_cache.insert(key, value(key)).await;
                     // get() returns Option<String>, a clone of the stored value.
-                    assert_eq!(my_cache.get(&key), Some(value(key)));
+                    assert_eq!(my_cache.get(&key).await, Some(value(key)));
                 }
 
                 // Invalidate every 4 element of the inserted entries.
@@ -46,9 +46,9 @@ async fn main() {
     // Verify the result.
     for key in 0..(NUM_TASKS * NUM_KEYS_PER_TASK) {
         if key % 4 == 0 {
-            assert_eq!(cache.get(&key), None);
+            assert_eq!(cache.get(&key).await, None);
         } else {
-            assert_eq!(cache.get(&key), Some(value(key)));
+            assert_eq!(cache.get(&key).await, Some(value(key)));
         }
     }
 }

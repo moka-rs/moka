@@ -74,6 +74,9 @@
 pub(crate) mod map;
 pub(crate) mod segment;
 
+#[cfg(feature = "future")]
+pub(crate) mod iter;
+
 #[cfg(test)]
 #[macro_use]
 pub(crate) mod test_util;

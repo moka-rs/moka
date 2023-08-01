@@ -35,6 +35,9 @@ use crate::cht::map::{
     DefaultHashBuilder,
 };
 
+#[cfg(feature = "future")]
+use super::iter::{Iter, ScanningGet};
+
 use std::{
     borrow::Borrow,
     hash::{BuildHasher, Hash},
@@ -203,7 +206,7 @@ impl<K, V, S> HashMap<K, V, S> {
     ///
     /// This method on its own is safe, but other threads can add or remove
     /// elements at any time.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "future"))]
     pub(crate) fn len(&self) -> usize {
         self.len.load(Ordering::Relaxed)
     }
@@ -214,7 +217,7 @@ impl<K, V, S> HashMap<K, V, S> {
     ///
     /// This method on its own is safe, but other threads can add or remove
     /// elements at any time.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "future"))]
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -249,6 +252,13 @@ impl<K, V, S> HashMap<K, V, S> {
 }
 
 impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
+    #[cfg(feature = "future")]
+    #[inline]
+    pub(crate) fn contains_key(&self, hash: u64, eq: impl FnMut(&K) -> bool) -> bool {
+        self.get_key_value_and_then(hash, eq, |_, _| Some(()))
+            .is_some()
+    }
+
     /// Returns a clone of the value corresponding to the key.
     #[inline]
     pub(crate) fn get(&self, hash: u64, eq: impl FnMut(&K) -> bool) -> Option<V>
@@ -289,7 +299,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     ///
     /// If the map did have this key present, both the key and value are
     /// updated.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "future"))]
     #[inline]
     pub fn insert_entry_and<T>(
         &self,
@@ -484,6 +494,15 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
         Some(bucket_array_ref.keys(with_key))
     }
 
+    #[cfg(feature = "future")]
+    pub(crate) fn iter(&self) -> Iter<'_, K, V>
+    where
+        K: Clone,
+        V: Clone,
+    {
+        Iter::with_single_cache_segment(self, self.actual_num_segments())
+    }
+
     #[inline]
     pub(crate) fn hash<Q>(&self, key: &Q) -> u64
     where
@@ -491,6 +510,23 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
         K: Borrow<Q>,
     {
         bucket::hash(&self.build_hasher, key)
+    }
+}
+
+#[cfg(feature = "future")]
+impl<K, V, S> ScanningGet<K, V> for HashMap<K, V, S>
+where
+    K: Hash + Eq + Clone,
+    V: Clone,
+    S: BuildHasher,
+{
+    fn scanning_get(&self, key: &K) -> Option<V> {
+        let hash = self.hash(key);
+        self.get_key_value_and_then(hash, |k| k == key, |_k, v| Some(v.clone()))
+    }
+
+    fn keys(&self, cht_segment: usize) -> Option<Vec<K>> {
+        self.keys(cht_segment, Clone::clone)
     }
 }
 

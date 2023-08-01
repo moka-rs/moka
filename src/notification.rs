@@ -2,13 +2,19 @@
 
 pub(crate) mod notifier;
 
-use std::sync::Arc;
+use std::{future::Future, pin::Pin, sync::Arc};
+
+pub type ListenerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 pub(crate) type EvictionListener<K, V> =
     Arc<dyn Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static>;
 
 pub(crate) type EvictionListenerRef<'a, K, V> =
     &'a Arc<dyn Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static>;
+
+#[cfg(feature = "future")]
+pub(crate) type AsyncEvictionListener<K, V> =
+    Arc<dyn Fn(Arc<K>, V, RemovalCause) -> ListenerFuture + Send + Sync + 'static>;
 
 // NOTE: Currently, dropping the cache will drop all entries without sending
 // notifications. Calling `invalidate_all` method of the cache will trigger

@@ -35,6 +35,17 @@ impl From<usize> for CacheRegion {
     }
 }
 
+impl CacheRegion {
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Self::Window => "window",
+            Self::MainProbation => "main probation",
+            Self::MainProtected => "main protected",
+            Self::Other => "other",
+        }
+    }
+}
+
 impl PartialEq<Self> for CacheRegion {
     fn eq(&self, other: &Self) -> bool {
         core::mem::discriminant(self) == core::mem::discriminant(other)

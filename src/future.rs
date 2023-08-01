@@ -3,16 +3,24 @@
 //!
 //! To use this module, enable a crate feature called "future".
 
-use std::{hash::Hash, sync::Arc};
+use async_trait::async_trait;
+use futures_util::future::BoxFuture;
+use std::{future::Future, hash::Hash, sync::Arc};
 
+mod base_cache;
 mod builder;
 mod cache;
 mod entry_selector;
+mod housekeeper;
+mod invalidator;
+mod key_lock;
+mod notifier;
 mod value_initializer;
 
 pub use {
     builder::CacheBuilder,
-    cache::{BlockingOp, Cache},
+    // cache::{BlockingOp, Cache},
+    cache::Cache,
     entry_selector::{OwnedKeyEntrySelector, RefKeyEntrySelector},
 };
 
@@ -24,8 +32,21 @@ pub use {
 /// [invalidate-if]: ./struct.Cache.html#method.invalidate_entries_if
 pub type PredicateId = String;
 
+pub(crate) type PredicateIdStr<'a> = &'a str;
+
 // Empty struct to be used in InitResult::InitErr to represent the Option None.
 pub(crate) struct OptionallyNone;
+
+impl<T: ?Sized> FutureExt for T where T: Future {}
+
+pub trait FutureExt: Future {
+    fn boxed<'a, T>(self) -> BoxFuture<'a, T>
+    where
+        Self: Future<Output = T> + Sized + Send + 'a,
+    {
+        Box::pin(self)
+    }
+}
 
 pub struct Iter<'i, K, V>(crate::sync_base::iter::Iter<'i, K, V>);
 
@@ -48,7 +69,8 @@ where
 }
 
 /// Provides extra methods that will be useful for testing.
+#[async_trait]
 pub trait ConcurrentCacheExt<K, V> {
     /// Performs any pending maintenance operations needed by the cache.
-    fn sync(&self);
+    async fn flush(&self);
 }

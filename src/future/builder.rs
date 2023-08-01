@@ -1,7 +1,7 @@
 use super::Cache;
 use crate::{
     common::{builder_utils, concurrent::Weigher},
-    notification::{self, DeliveryMode, EvictionListener, RemovalCause},
+    notification::{AsyncEvictionListener, ListenerFuture, RemovalCause},
     policy::ExpirationPolicy,
     Expiry,
 };
@@ -60,8 +60,7 @@ pub struct CacheBuilder<K, V, C> {
     max_capacity: Option<u64>,
     initial_capacity: Option<usize>,
     weigher: Option<Weigher<K, V>>,
-    eviction_listener: Option<EvictionListener<K, V>>,
-    eviction_listener_conf: Option<notification::Configuration>,
+    eviction_listener: Option<AsyncEvictionListener<K, V>>,
     expiration_policy: ExpirationPolicy<K, V>,
     invalidator_enabled: bool,
     cache_type: PhantomData<C>,
@@ -79,7 +78,6 @@ where
             initial_capacity: None,
             weigher: None,
             eviction_listener: None,
-            eviction_listener_conf: None,
             expiration_policy: Default::default(),
             invalidator_enabled: false,
             cache_type: Default::default(),
@@ -119,10 +117,8 @@ where
             build_hasher,
             self.weigher,
             self.eviction_listener,
-            self.eviction_listener_conf,
             self.expiration_policy,
             self.invalidator_enabled,
-            builder_utils::housekeeper_conf(true),
         )
     }
 
@@ -217,10 +213,8 @@ where
             hasher,
             self.weigher,
             self.eviction_listener,
-            self.eviction_listener_conf,
             self.expiration_policy,
             self.invalidator_enabled,
-            builder_utils::housekeeper_conf(true),
         )
     }
 }
@@ -277,16 +271,12 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     ///
     /// [removal-cause]: ../notification/enum.RemovalCause.html
     /// [queued-mode]: ../notification/enum.DeliveryMode.html#variant.Queued
-    pub fn eviction_listener_with_queued_delivery_mode(
-        self,
-        listener: impl Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
-    ) -> Self {
-        let conf = notification::Configuration::builder()
-            .delivery_mode(DeliveryMode::Queued)
-            .build();
+    pub fn eviction_listener<F>(self, listener: F) -> Self
+    where
+        F: Fn(Arc<K>, V, RemovalCause) -> ListenerFuture + Send + Sync + 'static,
+    {
         Self {
             eviction_listener: Some(Arc::new(listener)),
-            eviction_listener_conf: Some(conf),
             ..self
         }
     }
@@ -369,7 +359,7 @@ mod tests {
         assert_eq!(policy.num_segments(), 1);
 
         cache.insert('a', "Alice").await;
-        assert_eq!(cache.get(&'a'), Some("Alice"));
+        assert_eq!(cache.get(&'a').await, Some("Alice"));
 
         let cache = CacheBuilder::new(100)
             .time_to_live(Duration::from_secs(45 * 60))
@@ -383,7 +373,7 @@ mod tests {
         assert_eq!(policy.num_segments(), 1);
 
         cache.insert('a', "Alice").await;
-        assert_eq!(cache.get(&'a'), Some("Alice"));
+        assert_eq!(cache.get(&'a').await, Some("Alice"));
     }
 
     #[tokio::test]

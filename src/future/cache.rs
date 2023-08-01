@@ -1,5 +1,7 @@
 use super::{
-    value_initializer::{InitResult, ValueInitializer},
+    base_cache::{BaseCache, HouseKeeperArc},
+    housekeeper::InnerSync,
+    value_initializer::{GetOrInsert, InitResult, ValueInitializer},
     CacheBuilder, ConcurrentCacheExt, Iter, OwnedKeyEntrySelector, PredicateId,
     RefKeyEntrySelector,
 };
@@ -7,20 +9,20 @@ use crate::{
     common::{
         concurrent::{
             constants::{MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
-            housekeeper::{self, InnerSync},
             Weigher, WriteOp,
         },
         time::Instant,
     },
-    notification::{self, EvictionListener},
+    notification::AsyncEvictionListener,
     policy::ExpirationPolicy,
-    sync_base::base_cache::{BaseCache, HouseKeeperArc},
     Entry, Policy, PredicateError,
 };
 
 #[cfg(feature = "unstable-debug-counters")]
 use crate::common::concurrent::debug_counters::CacheDebugStats;
 
+use async_lock::Mutex;
+use async_trait::async_trait;
 use crossbeam_channel::{Sender, TrySendError};
 use std::{
     borrow::Borrow,
@@ -115,7 +117,7 @@ use std::{
 ///                     // insert() is an async method, so await it.
 ///                     my_cache.insert(key, value(key)).await;
 ///                     // get() returns Option<String>, a clone of the stored value.
-///                     assert_eq!(my_cache.get(&key), Some(value(key)));
+///                     assert_eq!(my_cache.get(&key).await, Some(value(key)));
 ///                 }
 ///
 ///                 // Invalidate every 4 element of the inserted entries.
@@ -133,9 +135,9 @@ use std::{
 ///     // Verify the result.
 ///     for key in 0..(NUM_TASKS * NUM_KEYS_PER_TASK) {
 ///         if key % 4 == 0 {
-///             assert_eq!(cache.get(&key), None);
+///             assert_eq!(cache.get(&key).await, None);
 ///         } else {
-///             assert_eq!(cache.get(&key), Some(value(key)));
+///             assert_eq!(cache.get(&key).await, Some(value(key)));
 ///         }
 ///     }
 /// }
@@ -332,7 +334,7 @@ use std::{
 /// // moka = { version = "0.11", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 ///
-/// use moka::{future::Cache, Expiry};
+/// use moka::{future::{Cache, FutureExt}, Expiry, notification::ListenerFuture};
 /// use std::time::{Duration, Instant};
 ///
 /// // In this example, we will create a `future::Cache` with `u32` as the key, and
@@ -389,14 +391,15 @@ use std::{
 ///     // eviction listener.
 ///     let expiry = MyExpiry;
 ///
-///     let eviction_listener = |key, _value, cause| {
+///     let eviction_listener = |key, _value, cause| -> ListenerFuture {
 ///         println!("Evicted key {key}. Cause: {cause:?}");
+///         async move {}.boxed()
 ///     };
 ///
 ///     let cache = Cache::builder()
 ///         .max_capacity(100)
 ///         .expire_after(expiry)
-///         .eviction_listener_with_queued_delivery_mode(eviction_listener)
+///         .eviction_listener(eviction_listener)
 ///         .build();
 ///
 ///     // Insert some entries into the cache with different expirations.
@@ -473,7 +476,7 @@ use std::{
 /// // uuid = { version = "1.1", features = ["v4"] }
 /// // tokio = { version = "1.18", features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
 ///
-/// use moka::future::Cache;
+/// use moka::{future::{Cache, FutureExt}, notification::ListenerFuture};
 ///
 /// use anyhow::{anyhow, Context};
 /// use std::{
@@ -553,21 +556,23 @@ use std::{
 ///     let rt = tokio::runtime::Handle::current();
 ///
 ///     // Create an eviction lister closure.
-///     let listener = move |k, v: PathBuf, cause| {
+///     let listener = move |k, v: PathBuf, cause| -> ListenerFuture {
 ///         // Try to remove the data file at the path `v`.
 ///         println!(
 ///             "\n== An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
 ///             k, v, cause
 ///         );
-///         rt.block_on(async {
+///         let file_mgr2 = Arc::clone(&file_mgr1);
+///         async move {
 ///             // Acquire the write lock of the DataFileManager.
-///             let mut mgr = file_mgr1.write().await;
+///             let mut mgr = file_mgr2.write().await;
 ///             // Remove the data file. We must handle error cases here to
 ///             // prevent the listener from panicking.
 ///             if let Err(_e) = mgr.remove_data_file(v.as_path()).await {
 ///                 eprintln!("Failed to remove a data file at {:?}", v);
 ///             }
-///         });
+///         }
+///         .boxed()
 ///     };
 ///
 ///     // Create the cache. Set time to live for two seconds and set the
@@ -575,7 +580,7 @@ use std::{
 ///     let cache = Cache::builder()
 ///         .max_capacity(100)
 ///         .time_to_live(Duration::from_secs(2))
-///         .eviction_listener_with_queued_delivery_mode(listener)
+///         .eviction_listener(listener)
 ///         .build();
 ///
 ///     // Insert an entry to the cache.
@@ -652,7 +657,7 @@ use std::{
 /// `eviction_listener_with_conf` methods will be added to the
 /// `future::CacheBuilder`. The former will use the immediate mode, and the latter
 /// will take a custom configurations to specify the queued mode. The current method
-/// `eviction_listener_with_queued_delivery_mode` will be deprecated.
+/// `eviction_listener` will be deprecated.
 ///
 /// For more details about the delivery modes, see [this section][sync-delivery-modes]
 /// of `sync::Cache` documentation.
@@ -764,7 +769,7 @@ impl<K, V, S> Cache<K, V, S> {
     ///     // the scope so we can use `sync` method.
     ///     use moka::future::ConcurrentCacheExt;
     ///     // Call `sync` to run pending internal tasks.
-    ///     cache.sync();
+    ///     cache.flush().await;
     ///
     ///     // Followings will print the actual numbers.
     ///     println!("{}", cache.entry_count());   // -> 3
@@ -788,8 +793,8 @@ impl<K, V, S> Cache<K, V, S> {
 
     #[cfg(feature = "unstable-debug-counters")]
     #[cfg_attr(docsrs, doc(cfg(feature = "unstable-debug-counters")))]
-    pub fn debug_stats(&self) -> CacheDebugStats {
-        self.base.debug_stats()
+    pub async fn debug_stats(&self) -> CacheDebugStats {
+        self.base.debug_stats().await
     }
 }
 
@@ -813,10 +818,8 @@ where
             build_hasher,
             None,
             None,
-            None,
             Default::default(),
             false,
-            housekeeper::Configuration::new_thread_pool(true),
         )
     }
 
@@ -843,11 +846,9 @@ where
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
-        eviction_listener: Option<EvictionListener<K, V>>,
-        eviction_listener_conf: Option<notification::Configuration>,
+        eviction_listener: Option<AsyncEvictionListener<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
-        housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
         Self {
             base: BaseCache::new(
@@ -857,10 +858,8 @@ where
                 build_hasher.clone(),
                 weigher,
                 eviction_listener,
-                eviction_listener_conf,
                 expiration_policy,
                 invalidator_enabled,
-                housekeeper_conf,
             ),
             value_initializer: Arc::new(ValueInitializer::with_hasher(build_hasher)),
         }
@@ -892,13 +891,16 @@ where
     /// on the borrowed form _must_ match those for the key type.
     ///
     /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
-    pub fn get<Q>(&self, key: &Q) -> Option<V>
+    pub async fn get<Q>(&self, key: &Q) -> Option<V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
+        let ignore_if = None as Option<&mut fn(&V) -> bool>;
+
         self.base
-            .get_with_hash(key, self.base.hash(key), false)
+            .get_with_hash(key, self.base.hash(key), ignore_if, false, true)
+            .await
             .map(Entry::into_value)
     }
 
@@ -1028,7 +1030,7 @@ where
     ///
     ///                 // Ensure the value exists now.
     ///                 assert_eq!(value.len(), TEN_MIB);
-    ///                 assert!(my_cache.get(&"key1").is_some());
+    ///                 assert!(my_cache.get(&"key1").await.is_some());
     ///
     ///                 println!("Task {} got the value. (len: {})", task_id, value.len());
     ///             })
@@ -1098,7 +1100,7 @@ where
         &self,
         key: K,
         init: impl Future<Output = V>,
-        replace_if: impl FnMut(&V) -> bool,
+        replace_if: impl FnMut(&V) -> bool + Send,
     ) -> V {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(&key);
@@ -1159,7 +1161,7 @@ where
     ///
     ///                 // Ensure the value exists now.
     ///                 assert!(value.is_some());
-    ///                 assert!(my_cache.get(&"key1").is_some());
+    ///                 assert!(my_cache.get(&"key1").await.is_some());
     ///
     ///                 println!(
     ///                     "Task {} got the value. (len: {})",
@@ -1283,7 +1285,7 @@ where
     ///
     ///                 // Ensure the value exists now.
     ///                 assert!(value.is_ok());
-    ///                 assert!(my_cache.get(&"key1").is_some());
+    ///                 assert!(my_cache.get(&"key1").await.is_some());
     ///
     ///                 println!(
     ///                     "Task {} got the value. (len: {})",
@@ -1363,24 +1365,24 @@ where
         self.insert_with_hash(key, hash, value).await
     }
 
-    fn do_blocking_insert(&self, key: K, value: V) {
-        if self.base.is_map_disabled() {
-            return;
-        }
+    // fn do_blocking_insert(&self, key: K, value: V) {
+    //     if self.base.is_map_disabled() {
+    //         return;
+    //     }
 
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
-        let (op, now) = self.base.do_insert_with_hash(key, hash, value);
-        let hk = self.base.housekeeper.as_ref();
-        Self::blocking_schedule_write_op(
-            self.base.inner.as_ref(),
-            &self.base.write_op_ch,
-            op,
-            now,
-            hk,
-        )
-        .expect("Failed to insert");
-    }
+    //     let hash = self.base.hash(&key);
+    //     let key = Arc::new(key);
+    //     let (op, now) = self.base.do_insert_with_hash(key, hash, value);
+    //     let hk = self.base.housekeeper.as_ref();
+    //     Self::blocking_schedule_write_op(
+    //         self.base.inner.as_ref(),
+    //         &self.base.write_op_ch,
+    //         op,
+    //         now,
+    //         hk,
+    //     )
+    //     .expect("Failed to insert");
+    // }
 
     /// Discards any cached value for the key.
     ///
@@ -1429,7 +1431,7 @@ where
                 };
 
                 if self.base.is_removal_notifier_enabled() {
-                    self.base.notify_invalidate(&kv.key, &kv.entry)
+                    self.base.notify_invalidate(&kv.key, &kv.entry).await
                 }
 
                 let op = WriteOp::Remove(kv);
@@ -1450,29 +1452,29 @@ where
         }
     }
 
-    fn do_blocking_invalidate<Q>(&self, key: &Q)
-    where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
-    {
-        let hash = self.base.hash(key);
-        if let Some(kv) = self.base.remove_entry(key, hash) {
-            if self.base.is_removal_notifier_enabled() {
-                self.base.notify_invalidate(&kv.key, &kv.entry)
-            }
-            let op = WriteOp::Remove(kv);
-            let now = self.base.current_time_from_expiration_clock();
-            let hk = self.base.housekeeper.as_ref();
-            Self::blocking_schedule_write_op(
-                self.base.inner.as_ref(),
-                &self.base.write_op_ch,
-                op,
-                now,
-                hk,
-            )
-            .expect("Failed to remove");
-        }
-    }
+    // fn do_blocking_invalidate<Q>(&self, key: &Q)
+    // where
+    //     K: Borrow<Q>,
+    //     Q: Hash + Eq + ?Sized,
+    // {
+    //     let hash = self.base.hash(key);
+    //     if let Some(kv) = self.base.remove_entry(key, hash) {
+    //         if self.base.is_removal_notifier_enabled() {
+    //             self.base.notify_invalidate(&kv.key, &kv.entry)
+    //         }
+    //         let op = WriteOp::Remove(kv);
+    //         let now = self.base.current_time_from_expiration_clock();
+    //         let hk = self.base.housekeeper.as_ref();
+    //         Self::blocking_schedule_write_op(
+    //             self.base.inner.as_ref(),
+    //             &self.base.write_op_ch,
+    //             op,
+    //             now,
+    //             hk,
+    //         )
+    //         .expect("Failed to remove");
+    //     }
+    // }
 
     /// Discards all cached values.
     ///
@@ -1582,13 +1584,13 @@ where
         Iter::new(inner)
     }
 
-    /// Returns a `BlockingOp` for this cache. It provides blocking
-    /// [`insert`](./struct.BlockingOp.html#method.insert) and
-    /// [`invalidate`](struct.BlockingOp.html#method.invalidate) methods, which
-    /// can be called outside of asynchronous contexts.
-    pub fn blocking(&self) -> BlockingOp<'_, K, V, S> {
-        BlockingOp(self)
-    }
+    // /// Returns a `BlockingOp` for this cache. It provides blocking
+    // /// [`insert`](./struct.BlockingOp.html#method.insert) and
+    // /// [`invalidate`](struct.BlockingOp.html#method.invalidate) methods, which
+    // /// can be called outside of asynchronous contexts.
+    // pub fn blocking(&self) -> BlockingOp<'_, K, V, S> {
+    //     BlockingOp(self)
+    // }
 }
 
 impl<'a, K, V, S> IntoIterator for &'a Cache<K, V, S>
@@ -1606,14 +1608,15 @@ where
     }
 }
 
+#[async_trait]
 impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    fn sync(&self) {
-        self.base.inner.sync(MAX_SYNC_REPEATS);
+    async fn flush(&self) {
+        self.base.inner.flush(MAX_SYNC_REPEATS).await;
     }
 }
 
@@ -1631,12 +1634,13 @@ where
         key: Arc<K>,
         hash: u64,
         init: Pin<&mut impl Future<Output = V>>,
-        mut replace_if: Option<impl FnMut(&V) -> bool>,
+        mut replace_if: Option<impl FnMut(&V) -> bool + Send>,
         need_key: bool,
     ) -> Entry<K, V> {
-        let maybe_entry =
-            self.base
-                .get_with_hash_and_ignore_if(&key, hash, replace_if.as_mut(), need_key);
+        let maybe_entry = self
+            .base
+            .get_with_hash(&key, hash, replace_if.as_mut(), need_key, true)
+            .await;
         if let Some(entry) = maybe_entry {
             entry
         } else {
@@ -1650,16 +1654,17 @@ where
         key: &Q,
         hash: u64,
         init: Pin<&mut impl Future<Output = V>>,
-        mut replace_if: Option<impl FnMut(&V) -> bool>,
+        mut replace_if: Option<impl FnMut(&V) -> bool + Send>,
         need_key: bool,
     ) -> Entry<K, V>
     where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        let maybe_entry =
-            self.base
-                .get_with_hash_and_ignore_if(key, hash, replace_if.as_mut(), need_key);
+        let maybe_entry = self
+            .base
+            .get_with_hash(key, hash, replace_if.as_mut(), need_key, true)
+            .await;
         if let Some(entry) = maybe_entry {
             entry
         } else {
@@ -1674,29 +1679,22 @@ where
         key: Arc<K>,
         hash: u64,
         init: Pin<&mut impl Future<Output = V>>,
-        mut replace_if: Option<impl FnMut(&V) -> bool>,
+        replace_if: Option<impl FnMut(&V) -> bool + Send>,
         need_key: bool,
     ) -> Entry<K, V> {
-        use futures_util::FutureExt;
-
-        let get = || {
-            self.base
-                .get_with_hash_without_recording(&key, hash, replace_if.as_mut())
-        };
-        let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
-
         let k = if need_key {
             Some(Arc::clone(&key))
         } else {
             None
         };
 
+        let replace_if = Arc::new(Mutex::new(replace_if));
         let type_id = ValueInitializer::<K, V, S>::type_id_for_get_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_get_with;
 
         match self
             .value_initializer
-            .try_init_or_read(&key, type_id, get, init, insert, post_init)
+            .try_init_or_read(&key, hash, type_id, self, replace_if, init, post_init)
             .await
         {
             InitResult::Initialized(v) => {
@@ -1714,7 +1712,11 @@ where
         hash: u64,
         init: impl FnOnce() -> V,
     ) -> Entry<K, V> {
-        match self.base.get_with_hash(&key, hash, true) {
+        match self
+            .base
+            .get_with_hash(&key, hash, never_ignore(), true, true)
+            .await
+        {
             Some(entry) => entry,
             None => {
                 let value = init();
@@ -1735,7 +1737,11 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        match self.base.get_with_hash(key, hash, true) {
+        match self
+            .base
+            .get_with_hash(key, hash, never_ignore(), true, true)
+            .await
+        {
             Some(entry) => entry,
             None => {
                 let key = Arc::new(key.to_owned());
@@ -1757,7 +1763,10 @@ where
     where
         F: Future<Output = Option<V>>,
     {
-        let entry = self.base.get_with_hash(&key, hash, need_key);
+        let entry = self
+            .base
+            .get_with_hash(&key, hash, never_ignore(), need_key, true)
+            .await;
         if entry.is_some() {
             return entry;
         }
@@ -1778,7 +1787,10 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        let entry = self.base.get_with_hash(key, hash, need_key);
+        let entry = self
+            .base
+            .get_with_hash(key, hash, never_ignore(), need_key, true)
+            .await;
         if entry.is_some() {
             return entry;
         }
@@ -1798,27 +1810,19 @@ where
     where
         F: Future<Output = Option<V>>,
     {
-        use futures_util::FutureExt;
-
-        let get = || {
-            let ignore_if = None as Option<&mut fn(&V) -> bool>;
-            self.base
-                .get_with_hash_without_recording(&key, hash, ignore_if)
-        };
-        let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
-
         let k = if need_key {
             Some(Arc::clone(&key))
         } else {
             None
         };
 
+        let ignore_if = Arc::new(Mutex::new(never_ignore()));
         let type_id = ValueInitializer::<K, V, S>::type_id_for_optionally_get_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_optionally_get_with;
 
         match self
             .value_initializer
-            .try_init_or_read(&key, type_id, get, init, insert, post_init)
+            .try_init_or_read(&key, hash, type_id, self, ignore_if, init, post_init)
             .await
         {
             InitResult::Initialized(v) => {
@@ -1841,7 +1845,11 @@ where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
     {
-        if let Some(entry) = self.base.get_with_hash(&key, hash, need_key) {
+        if let Some(entry) = self
+            .base
+            .get_with_hash(&key, hash, never_ignore(), need_key, true)
+            .await
+        {
             return Ok(entry);
         }
 
@@ -1862,7 +1870,11 @@ where
         K: Borrow<Q>,
         Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
     {
-        if let Some(entry) = self.base.get_with_hash(key, hash, need_key) {
+        if let Some(entry) = self
+            .base
+            .get_with_hash(key, hash, never_ignore(), need_key, true)
+            .await
+        {
             return Ok(entry);
         }
         let key = Arc::new(key.to_owned());
@@ -1881,27 +1893,19 @@ where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
     {
-        use futures_util::FutureExt;
-
-        let get = || {
-            let ignore_if = None as Option<&mut fn(&V) -> bool>;
-            self.base
-                .get_with_hash_without_recording(&key, hash, ignore_if)
-        };
-        let insert = |v| self.insert_with_hash(key.clone(), hash, v).boxed();
-
         let k = if need_key {
             Some(Arc::clone(&key))
         } else {
             None
         };
 
+        let ignore_if = Arc::new(Mutex::new(never_ignore()));
         let type_id = ValueInitializer::<K, V, S>::type_id_for_try_get_with::<E>();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_try_get_with;
 
         match self
             .value_initializer
-            .try_init_or_read(&key, type_id, get, init, insert, post_init)
+            .try_init_or_read(&key, hash, type_id, self, ignore_if, init, post_init)
             .await
         {
             InitResult::Initialized(v) => {
@@ -1921,7 +1925,7 @@ where
             return;
         }
 
-        let (op, now) = self.base.do_insert_with_hash(key, hash, value);
+        let (op, now) = self.base.do_insert_with_hash(key, hash, value).await;
         let hk = self.base.housekeeper.as_ref();
         Self::schedule_write_op(
             self.base.inner.as_ref(),
@@ -1940,14 +1944,14 @@ where
         ch: &Sender<WriteOp<K, V>>,
         op: WriteOp<K, V>,
         now: Instant,
-        housekeeper: Option<&HouseKeeperArc<K, V, S>>,
+        housekeeper: Option<&HouseKeeperArc>,
     ) -> Result<(), TrySendError<WriteOp<K, V>>> {
         let mut op = op;
 
         // TODO: Try to replace the timer with an async event listener to see if it
         // can provide better performance.
         loop {
-            BaseCache::apply_reads_writes_if_needed(inner, ch, now, housekeeper);
+            BaseCache::<K, V, S>::apply_reads_writes_if_needed(inner, ch, now, housekeeper).await;
             match ch.try_send(op) {
                 Ok(()) => break,
                 Err(TrySendError::Full(op1)) => {
@@ -1961,28 +1965,55 @@ where
         Ok(())
     }
 
-    #[inline]
-    fn blocking_schedule_write_op(
-        inner: &impl InnerSync,
-        ch: &Sender<WriteOp<K, V>>,
-        op: WriteOp<K, V>,
-        now: Instant,
-        housekeeper: Option<&HouseKeeperArc<K, V, S>>,
-    ) -> Result<(), TrySendError<WriteOp<K, V>>> {
-        let mut op = op;
+    // #[inline]
+    // fn blocking_schedule_write_op(
+    //     inner: &impl InnerSync,
+    //     ch: &Sender<WriteOp<K, V>>,
+    //     op: WriteOp<K, V>,
+    //     now: Instant,
+    //     housekeeper: Option<&HouseKeeperArc>,
+    // ) -> Result<(), TrySendError<WriteOp<K, V>>> {
+    //     let mut op = op;
 
-        loop {
-            BaseCache::apply_reads_writes_if_needed(inner, ch, now, housekeeper);
-            match ch.try_send(op) {
-                Ok(()) => break,
-                Err(TrySendError::Full(op1)) => {
-                    op = op1;
-                    std::thread::sleep(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS));
-                }
-                Err(e @ TrySendError::Disconnected(_)) => return Err(e),
-            }
-        }
-        Ok(())
+    //     loop {
+    //         BaseCache::apply_reads_writes_if_needed(inner, ch, now, housekeeper);
+    //         match ch.try_send(op) {
+    //             Ok(()) => break,
+    //             Err(TrySendError::Full(op1)) => {
+    //                 op = op1;
+    //                 std::thread::sleep(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS));
+    //             }
+    //             Err(e @ TrySendError::Disconnected(_)) => return Err(e),
+    //         }
+    //     }
+    //     Ok(())
+    // }
+}
+
+#[async_trait]
+impl<K, V, S> GetOrInsert<K, V> for Cache<K, V, S>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    async fn get_without_recording<I>(
+        &self,
+        key: &Arc<K>,
+        hash: u64,
+        replace_if: Option<&mut I>,
+    ) -> Option<V>
+    where
+        I: for<'i> FnMut(&'i V) -> bool + Send,
+    {
+        self.base
+            .get_with_hash(key, hash, replace_if, false, false)
+            .await
+            .map(Entry::into_value)
+    }
+
+    async fn insert(&self, key: Arc<K>, hash: u64, value: V) {
+        self.insert_with_hash(key.clone(), hash, value).await;
     }
 }
 
@@ -2002,46 +2033,54 @@ where
         self.base.invalidation_predicate_count()
     }
 
-    fn reconfigure_for_testing(&mut self) {
-        self.base.reconfigure_for_testing();
+    async fn reconfigure_for_testing(&mut self) {
+        self.base.reconfigure_for_testing().await;
     }
 
-    fn set_expiration_clock(&self, clock: Option<crate::common::time::Clock>) {
-        self.base.set_expiration_clock(clock);
+    async fn set_expiration_clock(&self, clock: Option<crate::common::time::Clock>) {
+        self.base.set_expiration_clock(clock).await;
     }
 }
 
-pub struct BlockingOp<'a, K, V, S>(&'a Cache<K, V, S>);
+// pub struct BlockingOp<'a, K, V, S>(&'a Cache<K, V, S>);
 
-impl<'a, K, V, S> BlockingOp<'a, K, V, S>
-where
-    K: Hash + Eq + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + Sync + 'static,
-{
-    /// Inserts a key-value pair into the cache. If the cache has this key present,
-    /// the value is updated.
-    ///
-    /// This method is intended for use cases where you are inserting from
-    /// synchronous code.
-    pub fn insert(&self, key: K, value: V) {
-        self.0.do_blocking_insert(key, value)
-    }
+// impl<'a, K, V, S> BlockingOp<'a, K, V, S>
+// where
+//     K: Hash + Eq + Send + Sync + 'static,
+//     V: Clone + Send + Sync + 'static,
+//     S: BuildHasher + Clone + Send + Sync + 'static,
+// {
+//     /// Inserts a key-value pair into the cache. If the cache has this key present,
+//     /// the value is updated.
+//     ///
+//     /// This method is intended for use cases where you are inserting from
+//     /// synchronous code.
+//     pub fn insert(&self, key: K, value: V) {
+//         self.0.do_blocking_insert(key, value)
+//     }
 
-    /// Discards any cached value for the key.
-    ///
-    /// This method is intended for use cases where you are invalidating from
-    /// synchronous code.
-    ///
-    /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
-    /// on the borrowed form _must_ match those for the key type.
-    pub fn invalidate<Q>(&self, key: &Q)
-    where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
-    {
-        self.0.do_blocking_invalidate(key)
-    }
+//     /// Discards any cached value for the key.
+//     ///
+//     /// This method is intended for use cases where you are invalidating from
+//     /// synchronous code.
+//     ///
+//     /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
+//     /// on the borrowed form _must_ match those for the key type.
+//     pub fn invalidate<Q>(&self, key: &Q)
+//     where
+//         K: Borrow<Q>,
+//         Q: Hash + Eq + ?Sized,
+//     {
+//         self.0.do_blocking_invalidate(key)
+//     }
+// }
+
+// AS of Rust 1.71, we cannot make this function into a `const fn` because mutable
+// references are not allowed.
+// See [#57349](https://github.com/rust-lang/rust/issues/57349).
+#[inline]
+fn never_ignore<'a, V>() -> Option<&'a mut fn(&V) -> bool> {
+    None
 }
 
 // To see the debug prints, run test as `cargo test -- --nocapture`
@@ -2049,12 +2088,15 @@ where
 mod tests {
     use super::{Cache, ConcurrentCacheExt};
     use crate::{
-        common::time::Clock, notification::RemovalCause, policy::test_utils::ExpiryCallCounters,
+        common::time::Clock,
+        future::FutureExt,
+        notification::{ListenerFuture, RemovalCause},
+        policy::test_utils::ExpiryCallCounters,
         Expiry,
     };
 
     use async_io::Timer;
-    use parking_lot::Mutex;
+    use async_lock::Mutex;
     use std::{
         convert::Infallible,
         sync::Arc,
@@ -2064,7 +2106,7 @@ mod tests {
     #[tokio::test]
     async fn max_capacity_zero() {
         let mut cache = Cache::new(0);
-        cache.reconfigure_for_testing();
+        cache.reconfigure_for_testing().await;
 
         // Make the cache exterior immutable.
         let cache = cache;
@@ -2072,10 +2114,10 @@ mod tests {
         cache.insert(0, ()).await;
 
         assert!(!cache.contains_key(&0));
-        assert!(cache.get(&0).is_none());
-        cache.sync();
+        assert!(cache.get(&0).await.is_none());
+        cache.flush().await;
         assert!(!cache.contains_key(&0));
-        assert!(cache.get(&0).is_none());
+        assert!(cache.get(&0).await.is_none());
         assert_eq!(cache.entry_count(), 0)
     }
 
@@ -2087,64 +2129,68 @@ mod tests {
 
         // Create an eviction listener.
         let a1 = Arc::clone(&actual);
-        // We use non-async mutex in the eviction listener (because the listener
-        // is a regular closure).
-        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+        let listener = move |k, v, cause| -> ListenerFuture {
+            let a2 = Arc::clone(&a1);
+            async move {
+                a2.lock().await.push((k, v, cause));
+            }
+            .boxed()
+        };
 
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(3)
-            .eviction_listener_with_queued_delivery_mode(listener)
+            .eviction_listener(listener)
             .build();
-        cache.reconfigure_for_testing();
+        cache.reconfigure_for_testing().await;
 
         // Make the cache exterior immutable.
         let cache = cache;
 
         cache.insert("a", "alice").await;
         cache.insert("b", "bob").await;
-        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"a").await, Some("alice"));
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
-        assert_eq!(cache.get(&"b"), Some("bob"));
-        cache.sync();
+        assert_eq!(cache.get(&"b").await, Some("bob"));
+        cache.flush().await;
         // counts: a -> 1, b -> 1
 
         cache.insert("c", "cindy").await;
-        assert_eq!(cache.get(&"c"), Some("cindy"));
+        assert_eq!(cache.get(&"c").await, Some("cindy"));
         assert!(cache.contains_key(&"c"));
         // counts: a -> 1, b -> 1, c -> 1
-        cache.sync();
+        cache.flush().await;
 
         assert!(cache.contains_key(&"a"));
-        assert_eq!(cache.get(&"a"), Some("alice"));
-        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"a").await, Some("alice"));
+        assert_eq!(cache.get(&"b").await, Some("bob"));
         assert!(cache.contains_key(&"b"));
-        cache.sync();
+        cache.flush().await;
         // counts: a -> 2, b -> 2, c -> 1
 
         // "d" should not be admitted because its frequency is too low.
         cache.insert("d", "david").await; //   count: d -> 0
         expected.push((Arc::new("d"), "david", RemovalCause::Size));
-        cache.sync();
-        assert_eq!(cache.get(&"d"), None); //   d -> 1
+        cache.flush().await;
+        assert_eq!(cache.get(&"d").await, None); //   d -> 1
         assert!(!cache.contains_key(&"d"));
 
         cache.insert("d", "david").await;
         expected.push((Arc::new("d"), "david", RemovalCause::Size));
-        cache.sync();
+        cache.flush().await;
         assert!(!cache.contains_key(&"d"));
-        assert_eq!(cache.get(&"d"), None); //   d -> 2
+        assert_eq!(cache.get(&"d").await, None); //   d -> 2
 
         // "d" should be admitted and "c" should be evicted
         // because d's frequency is higher than c's.
         cache.insert("d", "dennis").await;
         expected.push((Arc::new("c"), "cindy", RemovalCause::Size));
-        cache.sync();
-        assert_eq!(cache.get(&"a"), Some("alice"));
-        assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.get(&"c"), None);
-        assert_eq!(cache.get(&"d"), Some("dennis"));
+        cache.flush().await;
+        assert_eq!(cache.get(&"a").await, Some("alice"));
+        assert_eq!(cache.get(&"b").await, Some("bob"));
+        assert_eq!(cache.get(&"c").await, None);
+        assert_eq!(cache.get(&"d").await, Some("dennis"));
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
         assert!(!cache.contains_key(&"c"));
@@ -2152,86 +2198,86 @@ mod tests {
 
         cache.invalidate(&"b").await;
         expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
-        cache.sync();
-        assert_eq!(cache.get(&"b"), None);
+        cache.flush().await;
+        assert_eq!(cache.get(&"b").await, None);
         assert!(!cache.contains_key(&"b"));
 
         assert!(cache.remove(&"b").await.is_none());
         assert_eq!(cache.remove(&"d").await, Some("dennis"));
         expected.push((Arc::new("d"), "dennis", RemovalCause::Explicit));
-        cache.sync();
-        assert_eq!(cache.get(&"d"), None);
+        cache.flush().await;
+        assert_eq!(cache.get(&"d").await, None);
         assert!(!cache.contains_key(&"d"));
 
-        verify_notification_vec(&cache, actual, &expected);
+        verify_notification_vec(&cache, actual, &expected).await;
     }
 
-    #[test]
-    fn basic_single_blocking_api() {
-        // The following `Vec`s will hold actual and expected notifications.
-        let actual = Arc::new(Mutex::new(Vec::new()));
-        let mut expected = Vec::new();
+    // #[test]
+    // fn basic_single_blocking_api() {
+    //     // The following `Vec`s will hold actual and expected notifications.
+    //     let actual = Arc::new(Mutex::new(Vec::new()));
+    //     let mut expected = Vec::new();
 
-        // Create an eviction listener.
-        let a1 = Arc::clone(&actual);
-        // We use non-async mutex in the eviction listener (because the listener
-        // is a regular closure).
-        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+    //     // Create an eviction listener.
+    //     let a1 = Arc::clone(&actual);
+    //     // We use non-async mutex in the eviction listener (because the listener
+    //     // is a regular closure).
+    //     let listener = move |k, v, cause| a1.lock().push((k, v, cause));
 
-        // Create a cache with the eviction listener.
-        let mut cache = Cache::builder()
-            .max_capacity(3)
-            .eviction_listener_with_queued_delivery_mode(listener)
-            .build();
-        cache.reconfigure_for_testing();
+    //     // Create a cache with the eviction listener.
+    //     let mut cache = Cache::builder()
+    //         .max_capacity(3)
+    //         .eviction_listener(listener)
+    //         .build();
+    //     cache.reconfigure_for_testing();
 
-        // Make the cache exterior immutable.
-        let cache = cache;
+    //     // Make the cache exterior immutable.
+    //     let cache = cache;
 
-        cache.blocking().insert("a", "alice");
-        cache.blocking().insert("b", "bob");
-        assert_eq!(cache.get(&"a"), Some("alice"));
-        assert_eq!(cache.get(&"b"), Some("bob"));
-        cache.sync();
-        // counts: a -> 1, b -> 1
+    //     cache.blocking().insert("a", "alice");
+    //     cache.blocking().insert("b", "bob");
+    //     assert_eq!(cache.get(&"a"), Some("alice"));
+    //     assert_eq!(cache.get(&"b"), Some("bob"));
+    //     cache.flush().await;
+    //     // counts: a -> 1, b -> 1
 
-        cache.blocking().insert("c", "cindy");
-        assert_eq!(cache.get(&"c"), Some("cindy"));
-        // counts: a -> 1, b -> 1, c -> 1
-        cache.sync();
+    //     cache.blocking().insert("c", "cindy");
+    //     assert_eq!(cache.get(&"c"), Some("cindy"));
+    //     // counts: a -> 1, b -> 1, c -> 1
+    //     cache.flush().await;
 
-        assert_eq!(cache.get(&"a"), Some("alice"));
-        assert_eq!(cache.get(&"b"), Some("bob"));
-        cache.sync();
-        // counts: a -> 2, b -> 2, c -> 1
+    //     assert_eq!(cache.get(&"a"), Some("alice"));
+    //     assert_eq!(cache.get(&"b"), Some("bob"));
+    //     cache.flush().await;
+    //     // counts: a -> 2, b -> 2, c -> 1
 
-        // "d" should not be admitted because its frequency is too low.
-        cache.blocking().insert("d", "david"); //   count: d -> 0
-        expected.push((Arc::new("d"), "david", RemovalCause::Size));
-        cache.sync();
-        assert_eq!(cache.get(&"d"), None); //   d -> 1
+    //     // "d" should not be admitted because its frequency is too low.
+    //     cache.blocking().insert("d", "david"); //   count: d -> 0
+    //     expected.push((Arc::new("d"), "david", RemovalCause::Size));
+    //     cache.flush().await;
+    //     assert_eq!(cache.get(&"d"), None); //   d -> 1
 
-        cache.blocking().insert("d", "david");
-        expected.push((Arc::new("d"), "david", RemovalCause::Size));
-        cache.sync();
-        assert_eq!(cache.get(&"d"), None); //   d -> 2
+    //     cache.blocking().insert("d", "david");
+    //     expected.push((Arc::new("d"), "david", RemovalCause::Size));
+    //     cache.flush().await;
+    //     assert_eq!(cache.get(&"d"), None); //   d -> 2
 
-        // "d" should be admitted and "c" should be evicted
-        // because d's frequency is higher than c's.
-        cache.blocking().insert("d", "dennis");
-        expected.push((Arc::new("c"), "cindy", RemovalCause::Size));
-        cache.sync();
-        assert_eq!(cache.get(&"a"), Some("alice"));
-        assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.get(&"c"), None);
-        assert_eq!(cache.get(&"d"), Some("dennis"));
+    //     // "d" should be admitted and "c" should be evicted
+    //     // because d's frequency is higher than c's.
+    //     cache.blocking().insert("d", "dennis");
+    //     expected.push((Arc::new("c"), "cindy", RemovalCause::Size));
+    //     cache.flush().await;
+    //     assert_eq!(cache.get(&"a"), Some("alice"));
+    //     assert_eq!(cache.get(&"b"), Some("bob"));
+    //     assert_eq!(cache.get(&"c"), None);
+    //     assert_eq!(cache.get(&"d"), Some("dennis"));
 
-        cache.blocking().invalidate(&"b");
-        expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
-        assert_eq!(cache.get(&"b"), None);
+    //     cache.blocking().invalidate(&"b");
+    //     expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
+    //     assert_eq!(cache.get(&"b"), None);
 
-        verify_notification_vec(&cache, actual, &expected);
-    }
+    //     verify_notification_vec(&cache, actual, &expected);
+    // }
 
     #[tokio::test]
     async fn size_aware_eviction() {
@@ -2250,39 +2296,45 @@ mod tests {
 
         // Create an eviction listener.
         let a1 = Arc::clone(&actual);
-        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+        let listener = move |k, v, cause| -> ListenerFuture {
+            let a2 = Arc::clone(&a1);
+            async move {
+                a2.lock().await.push((k, v, cause));
+            }
+            .boxed()
+        };
 
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(31)
             .weigher(weigher)
-            .eviction_listener_with_queued_delivery_mode(listener)
+            .eviction_listener(listener)
             .build();
-        cache.reconfigure_for_testing();
+        cache.reconfigure_for_testing().await;
 
         // Make the cache exterior immutable.
         let cache = cache;
 
         cache.insert("a", alice).await;
         cache.insert("b", bob).await;
-        assert_eq!(cache.get(&"a"), Some(alice));
+        assert_eq!(cache.get(&"a").await, Some(alice));
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
-        assert_eq!(cache.get(&"b"), Some(bob));
-        cache.sync();
+        assert_eq!(cache.get(&"b").await, Some(bob));
+        cache.flush().await;
         // order (LRU -> MRU) and counts: a -> 1, b -> 1
 
         cache.insert("c", cindy).await;
-        assert_eq!(cache.get(&"c"), Some(cindy));
+        assert_eq!(cache.get(&"c").await, Some(cindy));
         assert!(cache.contains_key(&"c"));
         // order and counts: a -> 1, b -> 1, c -> 1
-        cache.sync();
+        cache.flush().await;
 
         assert!(cache.contains_key(&"a"));
-        assert_eq!(cache.get(&"a"), Some(alice));
-        assert_eq!(cache.get(&"b"), Some(bob));
+        assert_eq!(cache.get(&"a").await, Some(alice));
+        assert_eq!(cache.get(&"b").await, Some(bob));
         assert!(cache.contains_key(&"b"));
-        cache.sync();
+        cache.flush().await;
         // order and counts: c -> 1, a -> 2, b -> 2
 
         // To enter "d" (weight: 15), it needs to evict "c" (w: 5) and "a" (w: 10).
@@ -2290,37 +2342,37 @@ mod tests {
         // of "a" and "c".
         cache.insert("d", david).await; //   count: d -> 0
         expected.push((Arc::new("d"), david, RemovalCause::Size));
-        cache.sync();
-        assert_eq!(cache.get(&"d"), None); //   d -> 1
+        cache.flush().await;
+        assert_eq!(cache.get(&"d").await, None); //   d -> 1
         assert!(!cache.contains_key(&"d"));
 
         cache.insert("d", david).await;
         expected.push((Arc::new("d"), david, RemovalCause::Size));
-        cache.sync();
+        cache.flush().await;
         assert!(!cache.contains_key(&"d"));
-        assert_eq!(cache.get(&"d"), None); //   d -> 2
+        assert_eq!(cache.get(&"d").await, None); //   d -> 2
 
         cache.insert("d", david).await;
         expected.push((Arc::new("d"), david, RemovalCause::Size));
-        cache.sync();
-        assert_eq!(cache.get(&"d"), None); //   d -> 3
+        cache.flush().await;
+        assert_eq!(cache.get(&"d").await, None); //   d -> 3
         assert!(!cache.contains_key(&"d"));
 
         cache.insert("d", david).await;
         expected.push((Arc::new("d"), david, RemovalCause::Size));
-        cache.sync();
+        cache.flush().await;
         assert!(!cache.contains_key(&"d"));
-        assert_eq!(cache.get(&"d"), None); //   d -> 4
+        assert_eq!(cache.get(&"d").await, None); //   d -> 4
 
         // Finally "d" should be admitted by evicting "c" and "a".
         cache.insert("d", dennis).await;
         expected.push((Arc::new("c"), cindy, RemovalCause::Size));
         expected.push((Arc::new("a"), alice, RemovalCause::Size));
-        cache.sync();
-        assert_eq!(cache.get(&"a"), None);
-        assert_eq!(cache.get(&"b"), Some(bob));
-        assert_eq!(cache.get(&"c"), None);
-        assert_eq!(cache.get(&"d"), Some(dennis));
+        cache.flush().await;
+        assert_eq!(cache.get(&"a").await, None);
+        assert_eq!(cache.get(&"b").await, Some(bob));
+        assert_eq!(cache.get(&"c").await, None);
+        assert_eq!(cache.get(&"d").await, Some(dennis));
         assert!(!cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
         assert!(!cache.contains_key(&"c"));
@@ -2330,9 +2382,9 @@ mod tests {
         cache.insert("b", bill).await;
         expected.push((Arc::new("b"), bob, RemovalCause::Replaced));
         expected.push((Arc::new("d"), dennis, RemovalCause::Size));
-        cache.sync();
-        assert_eq!(cache.get(&"b"), Some(bill));
-        assert_eq!(cache.get(&"d"), None);
+        cache.flush().await;
+        assert_eq!(cache.get(&"b").await, Some(bill));
+        assert_eq!(cache.get(&"d").await, None);
         assert!(cache.contains_key(&"b"));
         assert!(!cache.contains_key(&"d"));
 
@@ -2340,10 +2392,10 @@ mod tests {
         cache.insert("a", alice).await;
         cache.insert("b", bob).await;
         expected.push((Arc::new("b"), bill, RemovalCause::Replaced));
-        cache.sync();
-        assert_eq!(cache.get(&"a"), Some(alice));
-        assert_eq!(cache.get(&"b"), Some(bob));
-        assert_eq!(cache.get(&"d"), None);
+        cache.flush().await;
+        assert_eq!(cache.get(&"a").await, Some(alice));
+        assert_eq!(cache.get(&"b").await, Some(bob));
+        assert_eq!(cache.get(&"d").await, None);
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
         assert!(!cache.contains_key(&"d"));
@@ -2352,42 +2404,42 @@ mod tests {
         assert_eq!(cache.entry_count(), 2);
         assert_eq!(cache.weighted_size(), 25);
 
-        verify_notification_vec(&cache, actual, &expected);
+        verify_notification_vec(&cache, actual, &expected).await;
     }
 
-    #[tokio::test]
-    async fn basic_multi_async_tasks() {
-        let num_tasks = 4;
-        let cache = Cache::new(100);
+    // #[tokio::test]
+    // async fn basic_multi_async_tasks() {
+    //     let num_tasks = 4;
+    //     let cache = Cache::new(100);
 
-        let tasks = (0..num_tasks)
-            .map(|id| {
-                let cache = cache.clone();
-                if id == 0 {
-                    tokio::spawn(async move {
-                        cache.blocking().insert(10, format!("{}-100", id));
-                        cache.get(&10);
-                        cache.blocking().insert(20, format!("{}-200", id));
-                        cache.blocking().invalidate(&10);
-                    })
-                } else {
-                    tokio::spawn(async move {
-                        cache.insert(10, format!("{}-100", id)).await;
-                        cache.get(&10);
-                        cache.insert(20, format!("{}-200", id)).await;
-                        cache.invalidate(&10).await;
-                    })
-                }
-            })
-            .collect::<Vec<_>>();
+    //     let tasks = (0..num_tasks)
+    //         .map(|id| {
+    //             let cache = cache.clone();
+    //             if id == 0 {
+    //                 tokio::spawn(async move {
+    //                     cache.blocking().insert(10, format!("{}-100", id));
+    //                     cache.get(&10);
+    //                     cache.blocking().insert(20, format!("{}-200", id));
+    //                     cache.blocking().invalidate(&10);
+    //                 })
+    //             } else {
+    //                 tokio::spawn(async move {
+    //                     cache.insert(10, format!("{}-100", id)).await;
+    //                     cache.get(&10);
+    //                     cache.insert(20, format!("{}-200", id)).await;
+    //                     cache.invalidate(&10).await;
+    //                 })
+    //             }
+    //         })
+    //         .collect::<Vec<_>>();
 
-        let _ = futures_util::future::join_all(tasks).await;
+    //     let _ = futures_util::future::join_all(tasks).await;
 
-        assert!(cache.get(&10).is_none());
-        assert!(cache.get(&20).is_some());
-        assert!(!cache.contains_key(&10));
-        assert!(cache.contains_key(&20));
-    }
+    //     assert!(cache.get(&10).is_none());
+    //     assert!(cache.get(&20).is_some());
+    //     assert!(!cache.contains_key(&10));
+    //     assert!(cache.contains_key(&20));
+    // }
 
     #[tokio::test]
     async fn invalidate_all() {
@@ -2397,14 +2449,20 @@ mod tests {
 
         // Create an eviction listener.
         let a1 = Arc::clone(&actual);
-        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+        let listener = move |k, v, cause| -> ListenerFuture {
+            let a2 = Arc::clone(&a1);
+            async move {
+                a2.lock().await.push((k, v, cause));
+            }
+            .boxed()
+        };
 
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
-            .eviction_listener_with_queued_delivery_mode(listener)
+            .eviction_listener(listener)
             .build();
-        cache.reconfigure_for_testing();
+        cache.reconfigure_for_testing().await;
 
         // Make the cache exterior immutable.
         let cache = cache;
@@ -2412,14 +2470,14 @@ mod tests {
         cache.insert("a", "alice").await;
         cache.insert("b", "bob").await;
         cache.insert("c", "cindy").await;
-        assert_eq!(cache.get(&"a"), Some("alice"));
-        assert_eq!(cache.get(&"b"), Some("bob"));
-        assert_eq!(cache.get(&"c"), Some("cindy"));
+        assert_eq!(cache.get(&"a").await, Some("alice"));
+        assert_eq!(cache.get(&"b").await, Some("bob"));
+        assert_eq!(cache.get(&"c").await, Some("cindy"));
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
         assert!(cache.contains_key(&"c"));
 
-        // `cache.sync()` is no longer needed here before invalidating. The last
+        // `cache.flush().await` is no longer needed here before invalidating. The last
         // modified timestamp of the entries were updated when they were inserted.
         // https://github.com/moka-rs/moka/issues/155
 
@@ -2427,21 +2485,21 @@ mod tests {
         expected.push((Arc::new("a"), "alice", RemovalCause::Explicit));
         expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
         expected.push((Arc::new("c"), "cindy", RemovalCause::Explicit));
-        cache.sync();
+        cache.flush().await;
 
         cache.insert("d", "david").await;
-        cache.sync();
+        cache.flush().await;
 
-        assert!(cache.get(&"a").is_none());
-        assert!(cache.get(&"b").is_none());
-        assert!(cache.get(&"c").is_none());
-        assert_eq!(cache.get(&"d"), Some("david"));
+        assert!(cache.get(&"a").await.is_none());
+        assert!(cache.get(&"b").await.is_none());
+        assert!(cache.get(&"c").await.is_none());
+        assert_eq!(cache.get(&"d").await, Some("david"));
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
         assert!(!cache.contains_key(&"c"));
         assert!(cache.contains_key(&"d"));
 
-        verify_notification_vec(&cache, actual, &expected);
+        verify_notification_vec(&cache, actual, &expected).await;
     }
 
     // This test is for https://github.com/moka-rs/moka/issues/155
@@ -2449,12 +2507,12 @@ mod tests {
     async fn invalidate_all_without_sync() {
         let cache = Cache::new(1024);
 
-        assert_eq!(cache.get(&0), None);
+        assert_eq!(cache.get(&0).await, None);
         cache.insert(0, 1).await;
-        assert_eq!(cache.get(&0), Some(1));
+        assert_eq!(cache.get(&0).await, Some(1));
 
         cache.invalidate_all();
-        assert_eq!(cache.get(&0), None);
+        assert_eq!(cache.get(&0).await, None);
     }
 
     #[tokio::test]
@@ -2467,18 +2525,24 @@ mod tests {
 
         // Create an eviction listener.
         let a1 = Arc::clone(&actual);
-        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+        let listener = move |k, v, cause| -> ListenerFuture {
+            let a2 = Arc::clone(&a1);
+            async move {
+                a2.lock().await.push((k, v, cause));
+            }
+            .boxed()
+        };
 
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
             .support_invalidation_closures()
-            .eviction_listener_with_queued_delivery_mode(listener)
+            .eviction_listener(listener)
             .build();
-        cache.reconfigure_for_testing();
+        cache.reconfigure_for_testing().await;
 
         let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
+        cache.set_expiration_clock(Some(clock)).await;
 
         // Make the cache exterior immutable.
         let cache = cache;
@@ -2486,14 +2550,14 @@ mod tests {
         cache.insert(0, "alice").await;
         cache.insert(1, "bob").await;
         cache.insert(2, "alex").await;
-        cache.sync();
+        cache.flush().await;
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
-        cache.sync();
+        cache.flush().await;
 
-        assert_eq!(cache.get(&0), Some("alice"));
-        assert_eq!(cache.get(&1), Some("bob"));
-        assert_eq!(cache.get(&2), Some("alex"));
+        assert_eq!(cache.get(&0).await, Some("alice"));
+        assert_eq!(cache.get(&1).await, Some("bob"));
+        assert_eq!(cache.get(&2).await, Some("alex"));
         assert!(cache.contains_key(&0));
         assert!(cache.contains_key(&1));
         assert!(cache.contains_key(&2));
@@ -2509,16 +2573,16 @@ mod tests {
         cache.insert(3, "alice").await;
 
         // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
-        cache.sync(); // To submit the invalidation task.
+        cache.flush().await; // To submit the invalidation task.
         std::thread::sleep(Duration::from_millis(200));
-        cache.sync(); // To process the task result.
+        cache.flush().await; // To process the task result.
         std::thread::sleep(Duration::from_millis(200));
 
-        assert!(cache.get(&0).is_none());
-        assert!(cache.get(&2).is_none());
-        assert_eq!(cache.get(&1), Some("bob"));
+        assert!(cache.get(&0).await.is_none());
+        assert!(cache.get(&2).await.is_none());
+        assert_eq!(cache.get(&1).await, Some("bob"));
         // This should survive as it was inserted after calling invalidate_entries_if.
-        assert_eq!(cache.get(&3), Some("alice"));
+        assert_eq!(cache.get(&3).await, Some("alice"));
 
         assert!(!cache.contains_key(&0));
         assert!(cache.contains_key(&1));
@@ -2538,13 +2602,13 @@ mod tests {
         expected.push((Arc::new(3), "alice", RemovalCause::Explicit));
 
         // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
-        cache.sync(); // To submit the invalidation task.
+        cache.flush().await; // To submit the invalidation task.
         std::thread::sleep(Duration::from_millis(200));
-        cache.sync(); // To process the task result.
+        cache.flush().await; // To process the task result.
         std::thread::sleep(Duration::from_millis(200));
 
-        assert!(cache.get(&1).is_none());
-        assert!(cache.get(&3).is_none());
+        assert!(cache.get(&1).await.is_none());
+        assert!(cache.get(&3).await.is_none());
 
         assert!(!cache.contains_key(&1));
         assert!(!cache.contains_key(&3));
@@ -2552,7 +2616,7 @@ mod tests {
         assert_eq!(cache.entry_count(), 0);
         assert_eq!(cache.invalidation_predicate_count(), 0);
 
-        verify_notification_vec(&cache, actual, &expected);
+        verify_notification_vec(&cache, actual, &expected).await;
 
         Ok(())
     }
@@ -2565,78 +2629,84 @@ mod tests {
 
         // Create an eviction listener.
         let a1 = Arc::clone(&actual);
-        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+        let listener = move |k, v, cause| -> ListenerFuture {
+            let a2 = Arc::clone(&a1);
+            async move {
+                a2.lock().await.push((k, v, cause));
+            }
+            .boxed()
+        };
 
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
             .time_to_live(Duration::from_secs(10))
-            .eviction_listener_with_queued_delivery_mode(listener)
+            .eviction_listener(listener)
             .build();
-        cache.reconfigure_for_testing();
+        cache.reconfigure_for_testing().await;
 
         let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
+        cache.set_expiration_clock(Some(clock)).await;
 
         // Make the cache exterior immutable.
         let cache = cache;
 
         cache.insert("a", "alice").await;
-        cache.sync();
+        cache.flush().await;
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
-        cache.sync();
+        cache.flush().await;
 
-        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"a").await, Some("alice"));
         assert!(cache.contains_key(&"a"));
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
         expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
-        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"a").await, None);
         assert!(!cache.contains_key(&"a"));
 
         assert_eq!(cache.iter().count(), 0);
 
-        cache.sync();
+        cache.flush().await;
         assert!(cache.is_table_empty());
 
         cache.insert("b", "bob").await;
-        cache.sync();
+        cache.flush().await;
 
         assert_eq!(cache.entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 15 secs.
-        cache.sync();
+        cache.flush().await;
 
-        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"b").await, Some("bob"));
         assert!(cache.contains_key(&"b"));
         assert_eq!(cache.entry_count(), 1);
 
         cache.insert("b", "bill").await;
         expected.push((Arc::new("b"), "bob", RemovalCause::Replaced));
-        cache.sync();
+        cache.flush().await;
 
         mock.increment(Duration::from_secs(5)); // 20 secs
-        cache.sync();
+        cache.flush().await;
 
-        assert_eq!(cache.get(&"b"), Some("bill"));
+        assert_eq!(cache.get(&"b").await, Some("bill"));
         assert!(cache.contains_key(&"b"));
         assert_eq!(cache.entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 25 secs
         expected.push((Arc::new("b"), "bill", RemovalCause::Expired));
 
-        assert_eq!(cache.get(&"a"), None);
-        assert_eq!(cache.get(&"b"), None);
+        assert_eq!(cache.get(&"a").await, None);
+        assert_eq!(cache.get(&"b").await, None);
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
 
         assert_eq!(cache.iter().count(), 0);
 
-        cache.sync();
+        cache.flush().await;
         assert!(cache.is_table_empty());
 
-        verify_notification_vec(&cache, actual, &expected);
+        verify_notification_vec(&cache, actual, &expected).await;
     }
 
     #[tokio::test]
@@ -2647,75 +2717,81 @@ mod tests {
 
         // Create an eviction listener.
         let a1 = Arc::clone(&actual);
-        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+        let listener = move |k, v, cause| -> ListenerFuture {
+            let a2 = Arc::clone(&a1);
+            async move {
+                a2.lock().await.push((k, v, cause));
+            }
+            .boxed()
+        };
 
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
             .time_to_idle(Duration::from_secs(10))
-            .eviction_listener_with_queued_delivery_mode(listener)
+            .eviction_listener(listener)
             .build();
-        cache.reconfigure_for_testing();
+        cache.reconfigure_for_testing().await;
 
         let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
+        cache.set_expiration_clock(Some(clock)).await;
 
         // Make the cache exterior immutable.
         let cache = cache;
 
         cache.insert("a", "alice").await;
-        cache.sync();
+        cache.flush().await;
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
-        cache.sync();
+        cache.flush().await;
 
-        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"a").await, Some("alice"));
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
-        cache.sync();
+        cache.flush().await;
 
         cache.insert("b", "bob").await;
-        cache.sync();
+        cache.flush().await;
 
         assert_eq!(cache.entry_count(), 2);
 
         mock.increment(Duration::from_secs(2)); // 12 secs.
-        cache.sync();
+        cache.flush().await;
 
         // contains_key does not reset the idle timer for the key.
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
-        cache.sync();
+        cache.flush().await;
 
         assert_eq!(cache.entry_count(), 2);
 
         mock.increment(Duration::from_secs(3)); // 15 secs.
         expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
 
-        assert_eq!(cache.get(&"a"), None);
-        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"a").await, None);
+        assert_eq!(cache.get(&"b").await, Some("bob"));
         assert!(!cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
 
         assert_eq!(cache.iter().count(), 1);
 
-        cache.sync();
+        cache.flush().await;
         assert_eq!(cache.entry_count(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
         expected.push((Arc::new("b"), "bob", RemovalCause::Expired));
 
-        assert_eq!(cache.get(&"a"), None);
-        assert_eq!(cache.get(&"b"), None);
+        assert_eq!(cache.get(&"a").await, None);
+        assert_eq!(cache.get(&"b").await, None);
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
 
         assert_eq!(cache.iter().count(), 0);
 
-        cache.sync();
+        cache.flush().await;
         assert!(cache.is_table_empty());
 
-        verify_notification_vec(&cache, actual, &expected);
+        verify_notification_vec(&cache, actual, &expected).await;
     }
 
     #[tokio::test]
@@ -2760,7 +2836,13 @@ mod tests {
 
         // Create an eviction listener.
         let a1 = Arc::clone(&actual);
-        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+        let listener = move |k, v, cause| -> ListenerFuture {
+            let a2 = Arc::clone(&a1);
+            async move {
+                a2.lock().await.push((k, v, cause));
+            }
+            .boxed()
+        };
 
         // Create expiry counters and the expiry.
         let expiry_counters = Arc::new(ExpiryCallCounters::default());
@@ -2770,76 +2852,76 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .expire_after(expiry)
-            .eviction_listener_with_queued_delivery_mode(listener)
+            .eviction_listener(listener)
             .build();
-        cache.reconfigure_for_testing();
+        cache.reconfigure_for_testing().await;
 
         let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
+        cache.set_expiration_clock(Some(clock)).await;
 
         // Make the cache exterior immutable.
         let cache = cache;
 
         cache.insert("a", "alice").await;
         expiry_counters.incl_expected_creations();
-        cache.sync();
+        cache.flush().await;
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
-        cache.sync();
+        cache.flush().await;
 
-        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"a").await, Some("alice"));
         assert!(cache.contains_key(&"a"));
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
         expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
-        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"a").await, None);
         assert!(!cache.contains_key(&"a"));
 
         assert_eq!(cache.iter().count(), 0);
 
-        cache.sync();
+        cache.flush().await;
         assert!(cache.is_table_empty());
 
         cache.insert("b", "bob").await;
         expiry_counters.incl_expected_creations();
-        cache.sync();
+        cache.flush().await;
 
         assert_eq!(cache.entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 15 secs.
-        cache.sync();
+        cache.flush().await;
 
-        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"b").await, Some("bob"));
         assert!(cache.contains_key(&"b"));
         assert_eq!(cache.entry_count(), 1);
 
         cache.insert("b", "bill").await;
         expected.push((Arc::new("b"), "bob", RemovalCause::Replaced));
         expiry_counters.incl_expected_updates();
-        cache.sync();
+        cache.flush().await;
 
         mock.increment(Duration::from_secs(5)); // 20 secs
-        cache.sync();
+        cache.flush().await;
 
-        assert_eq!(cache.get(&"b"), Some("bill"));
+        assert_eq!(cache.get(&"b").await, Some("bill"));
         assert!(cache.contains_key(&"b"));
         assert_eq!(cache.entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 25 secs
         expected.push((Arc::new("b"), "bill", RemovalCause::Expired));
 
-        assert_eq!(cache.get(&"a"), None);
-        assert_eq!(cache.get(&"b"), None);
+        assert_eq!(cache.get(&"a").await, None);
+        assert_eq!(cache.get(&"b").await, None);
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
 
         assert_eq!(cache.iter().count(), 0);
 
-        cache.sync();
+        cache.flush().await;
         assert!(cache.is_table_empty());
 
         expiry_counters.verify();
-        verify_notification_vec(&cache, actual, &expected);
+        verify_notification_vec(&cache, actual, &expected).await;
     }
 
     #[tokio::test]
@@ -2875,7 +2957,13 @@ mod tests {
 
         // Create an eviction listener.
         let a1 = Arc::clone(&actual);
-        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+        let listener = move |k, v, cause| -> ListenerFuture {
+            let a2 = Arc::clone(&a1);
+            async move {
+                a2.lock().await.push((k, v, cause));
+            }
+            .boxed()
+        };
 
         // Create expiry counters and the expiry.
         let expiry_counters = Arc::new(ExpiryCallCounters::default());
@@ -2885,72 +2973,72 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .expire_after(expiry)
-            .eviction_listener_with_queued_delivery_mode(listener)
+            .eviction_listener(listener)
             .build();
-        cache.reconfigure_for_testing();
+        cache.reconfigure_for_testing().await;
 
         let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
+        cache.set_expiration_clock(Some(clock)).await;
 
         // Make the cache exterior immutable.
         let cache = cache;
 
         cache.insert("a", "alice").await;
-        cache.sync();
+        cache.flush().await;
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
-        cache.sync();
+        cache.flush().await;
 
-        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"a").await, Some("alice"));
         expiry_counters.incl_expected_reads();
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
-        cache.sync();
+        cache.flush().await;
 
         cache.insert("b", "bob").await;
-        cache.sync();
+        cache.flush().await;
 
         assert_eq!(cache.entry_count(), 2);
 
         mock.increment(Duration::from_secs(2)); // 12 secs.
-        cache.sync();
+        cache.flush().await;
 
         // contains_key does not reset the idle timer for the key.
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
-        cache.sync();
+        cache.flush().await;
 
         assert_eq!(cache.entry_count(), 2);
 
         mock.increment(Duration::from_secs(3)); // 15 secs.
         expected.push((Arc::new("a"), "alice", RemovalCause::Expired));
 
-        assert_eq!(cache.get(&"a"), None);
-        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"a").await, None);
+        assert_eq!(cache.get(&"b").await, Some("bob"));
         expiry_counters.incl_expected_reads();
         assert!(!cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
 
         assert_eq!(cache.iter().count(), 1);
 
-        cache.sync();
+        cache.flush().await;
         assert_eq!(cache.entry_count(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
         expected.push((Arc::new("b"), "bob", RemovalCause::Expired));
 
-        assert_eq!(cache.get(&"a"), None);
-        assert_eq!(cache.get(&"b"), None);
+        assert_eq!(cache.get(&"a").await, None);
+        assert_eq!(cache.get(&"b").await, None);
         assert!(!cache.contains_key(&"a"));
         assert!(!cache.contains_key(&"b"));
 
         assert_eq!(cache.iter().count(), 0);
 
-        cache.sync();
+        cache.flush().await;
         assert!(cache.is_table_empty());
 
         expiry_counters.verify();
-        verify_notification_vec(&cache, actual, &expected);
+        verify_notification_vec(&cache, actual, &expected).await;
     }
 
     /// Verify that the `Expiry::expire_after_read()` method is called in `get_with`
@@ -3011,7 +3099,7 @@ mod tests {
             .max_capacity(100)
             .expire_after(expiry)
             .build();
-        cache.reconfigure_for_testing();
+        cache.reconfigure_for_testing().await;
 
         // Make the cache exterior immutable.
         let cache = cache;
@@ -3019,18 +3107,18 @@ mod tests {
         // The key is not present.
         cache.get_with("a", async { "alice" }).await;
         expiry_counters.incl_expected_creations();
-        cache.sync();
+        cache.flush().await;
 
         // The key is present.
         cache.get_with("a", async { "alex" }).await;
         expiry_counters.incl_expected_reads();
-        cache.sync();
+        cache.flush().await;
 
         // The key is not present.
         cache.invalidate("a").await;
         cache.get_with("a", async { "amanda" }).await;
         expiry_counters.incl_expected_creations();
-        cache.sync();
+        cache.flush().await;
 
         expiry_counters.verify();
     }
@@ -3197,7 +3285,7 @@ mod tests {
             async move {
                 // Wait for 200 ms before calling `get`.
                 Timer::after(Duration::from_millis(200)).await;
-                let maybe_v = cache4.get(&KEY);
+                let maybe_v = cache4.get(&KEY).await;
                 assert!(maybe_v.is_none());
             }
         };
@@ -3209,7 +3297,7 @@ mod tests {
             async move {
                 // Wait for 400 ms before calling `get`.
                 Timer::after(Duration::from_millis(400)).await;
-                let maybe_v = cache5.get(&KEY);
+                let maybe_v = cache5.get(&KEY).await;
                 assert_eq!(maybe_v, Some("task1"));
             }
         };
@@ -3277,7 +3365,7 @@ mod tests {
             async move {
                 // Wait for 200 ms before calling `get`.
                 Timer::after(Duration::from_millis(200)).await;
-                let maybe_v = cache4.get(KEY);
+                let maybe_v = cache4.get(KEY).await;
                 assert!(maybe_v.is_none());
             }
         };
@@ -3289,7 +3377,7 @@ mod tests {
             async move {
                 // Wait for 400 ms before calling `get`.
                 Timer::after(Duration::from_millis(400)).await;
-                let maybe_v = cache5.get(KEY);
+                let maybe_v = cache5.get(KEY).await;
                 assert_eq!(maybe_v, Some("task1"));
             }
         };
@@ -3399,7 +3487,7 @@ mod tests {
             async move {
                 // Wait for 200 ms before calling `get`.
                 Timer::after(Duration::from_millis(200)).await;
-                let maybe_v = cache5.get(&KEY);
+                let maybe_v = cache5.get(&KEY).await;
                 assert!(maybe_v.is_none());
             }
         };
@@ -3411,7 +3499,7 @@ mod tests {
             async move {
                 // Wait for 350 ms before calling `get`.
                 Timer::after(Duration::from_millis(350)).await;
-                let maybe_v = cache6.get(&KEY);
+                let maybe_v = cache6.get(&KEY).await;
                 assert_eq!(maybe_v, Some("task1"));
             }
         };
@@ -3423,7 +3511,7 @@ mod tests {
             async move {
                 // Wait for 450 ms before calling `get`.
                 Timer::after(Duration::from_millis(450)).await;
-                let maybe_v = cache7.get(&KEY);
+                let maybe_v = cache7.get(&KEY).await;
                 assert_eq!(maybe_v, Some("task4"));
             }
         };
@@ -3533,7 +3621,7 @@ mod tests {
             async move {
                 // Wait for 200 ms before calling `get`.
                 Timer::after(Duration::from_millis(200)).await;
-                let maybe_v = cache5.get(KEY);
+                let maybe_v = cache5.get(KEY).await;
                 assert!(maybe_v.is_none());
             }
         };
@@ -3545,7 +3633,7 @@ mod tests {
             async move {
                 // Wait for 350 ms before calling `get`.
                 Timer::after(Duration::from_millis(350)).await;
-                let maybe_v = cache6.get(KEY);
+                let maybe_v = cache6.get(KEY).await;
                 assert_eq!(maybe_v, Some("task1"));
             }
         };
@@ -3557,7 +3645,7 @@ mod tests {
             async move {
                 // Wait for 450 ms before calling `get`.
                 Timer::after(Duration::from_millis(450)).await;
-                let maybe_v = cache7.get(KEY);
+                let maybe_v = cache7.get(KEY).await;
                 assert_eq!(maybe_v, Some("task4"));
             }
         };
@@ -3668,7 +3756,7 @@ mod tests {
             async move {
                 // Wait for 200 ms before calling `get`.
                 Timer::after(Duration::from_millis(200)).await;
-                let maybe_v = cache6.get(&KEY);
+                let maybe_v = cache6.get(&KEY).await;
                 assert!(maybe_v.is_none());
             }
         };
@@ -3680,7 +3768,7 @@ mod tests {
             async move {
                 // Wait for 400 ms before calling `get`.
                 Timer::after(Duration::from_millis(400)).await;
-                let maybe_v = cache7.get(&KEY);
+                let maybe_v = cache7.get(&KEY).await;
                 assert!(maybe_v.is_none());
             }
         };
@@ -3692,7 +3780,7 @@ mod tests {
             async move {
                 // Wait for 800 ms before calling `get`.
                 Timer::after(Duration::from_millis(800)).await;
-                let maybe_v = cache8.get(&KEY);
+                let maybe_v = cache8.get(&KEY).await;
                 assert_eq!(maybe_v, Some("task3"));
             }
         };
@@ -3809,7 +3897,7 @@ mod tests {
             async move {
                 // Wait for 200 ms before calling `get`.
                 Timer::after(Duration::from_millis(200)).await;
-                let maybe_v = cache6.get(KEY);
+                let maybe_v = cache6.get(KEY).await;
                 assert!(maybe_v.is_none());
             }
         };
@@ -3821,7 +3909,7 @@ mod tests {
             async move {
                 // Wait for 400 ms before calling `get`.
                 Timer::after(Duration::from_millis(400)).await;
-                let maybe_v = cache7.get(KEY);
+                let maybe_v = cache7.get(KEY).await;
                 assert!(maybe_v.is_none());
             }
         };
@@ -3833,7 +3921,7 @@ mod tests {
             async move {
                 // Wait for 800 ms before calling `get`.
                 Timer::after(Duration::from_millis(800)).await;
-                let maybe_v = cache8.get(KEY);
+                let maybe_v = cache8.get(KEY).await;
                 assert_eq!(maybe_v, Some("task3"));
             }
         };
@@ -3942,7 +4030,7 @@ mod tests {
             async move {
                 // Wait for 200 ms before calling `get`.
                 Timer::after(Duration::from_millis(200)).await;
-                let maybe_v = cache6.get(&KEY);
+                let maybe_v = cache6.get(&KEY).await;
                 assert!(maybe_v.is_none());
             }
         };
@@ -3954,7 +4042,7 @@ mod tests {
             async move {
                 // Wait for 400 ms before calling `get`.
                 Timer::after(Duration::from_millis(400)).await;
-                let maybe_v = cache7.get(&KEY);
+                let maybe_v = cache7.get(&KEY).await;
                 assert!(maybe_v.is_none());
             }
         };
@@ -3966,7 +4054,7 @@ mod tests {
             async move {
                 // Wait for 800 ms before calling `get`.
                 Timer::after(Duration::from_millis(800)).await;
-                let maybe_v = cache8.get(&KEY);
+                let maybe_v = cache8.get(&KEY).await;
                 assert_eq!(maybe_v, Some("task3"));
             }
         };
@@ -4075,7 +4163,7 @@ mod tests {
             async move {
                 // Wait for 200 ms before calling `get`.
                 Timer::after(Duration::from_millis(200)).await;
-                let maybe_v = cache6.get(KEY);
+                let maybe_v = cache6.get(KEY).await;
                 assert!(maybe_v.is_none());
             }
         };
@@ -4087,7 +4175,7 @@ mod tests {
             async move {
                 // Wait for 400 ms before calling `get`.
                 Timer::after(Duration::from_millis(400)).await;
-                let maybe_v = cache7.get(KEY);
+                let maybe_v = cache7.get(KEY).await;
                 assert!(maybe_v.is_none());
             }
         };
@@ -4099,7 +4187,7 @@ mod tests {
             async move {
                 // Wait for 800 ms before calling `get`.
                 Timer::after(Duration::from_millis(800)).await;
-                let maybe_v = cache8.get(KEY);
+                let maybe_v = cache8.get(KEY).await;
                 assert_eq!(maybe_v, Some("task3"));
             }
         };
@@ -4229,14 +4317,20 @@ mod tests {
 
         // Create an eviction listener.
         let a1 = Arc::clone(&actual);
-        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+        let listener = move |k, v, cause| -> ListenerFuture {
+            let a2 = Arc::clone(&a1);
+            async move {
+                a2.lock().await.push((k, v, cause));
+            }
+            .boxed()
+        };
 
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(3)
-            .eviction_listener_with_queued_delivery_mode(listener)
+            .eviction_listener(listener)
             .build();
-        cache.reconfigure_for_testing();
+        cache.reconfigure_for_testing().await;
 
         // Make the cache exterior immutable.
         let cache = cache;
@@ -4245,39 +4339,39 @@ mod tests {
         cache.invalidate(&'a').await;
         expected.push((Arc::new('a'), "alice", RemovalCause::Explicit));
 
-        cache.sync();
+        cache.flush().await;
         assert_eq!(cache.entry_count(), 0);
 
         cache.insert('b', "bob").await;
         cache.insert('c', "cathy").await;
         cache.insert('d', "david").await;
-        cache.sync();
+        cache.flush().await;
         assert_eq!(cache.entry_count(), 3);
 
         // This will be rejected due to the size constraint.
         cache.insert('e', "emily").await;
         expected.push((Arc::new('e'), "emily", RemovalCause::Size));
-        cache.sync();
+        cache.flush().await;
         assert_eq!(cache.entry_count(), 3);
 
         // Raise the popularity of 'e' so it will be accepted next time.
-        cache.get(&'e');
-        cache.sync();
+        cache.get(&'e').await;
+        cache.flush().await;
 
         // Retry.
         cache.insert('e', "eliza").await;
         // and the LRU entry will be evicted.
         expected.push((Arc::new('b'), "bob", RemovalCause::Size));
-        cache.sync();
+        cache.flush().await;
         assert_eq!(cache.entry_count(), 3);
 
         // Replace an existing entry.
         cache.insert('d', "dennis").await;
         expected.push((Arc::new('d'), "david", RemovalCause::Replaced));
-        cache.sync();
+        cache.flush().await;
         assert_eq!(cache.entry_count(), 3);
 
-        verify_notification_vec(&cache, actual, &expected);
+        verify_notification_vec(&cache, actual, &expected).await;
     }
 
     #[tokio::test]
@@ -4288,29 +4382,35 @@ mod tests {
 
         // Create an eviction listener.
         let a1 = Arc::clone(&actual);
-        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+        let listener = move |k, v, cause| -> ListenerFuture {
+            let a2 = Arc::clone(&a1);
+            async move {
+                a2.lock().await.push((k, v, cause));
+            }
+            .boxed()
+        };
 
         // Create a cache with the eviction listener and also TTL and TTI.
         let mut cache = Cache::builder()
-            .eviction_listener_with_queued_delivery_mode(listener)
+            .eviction_listener(listener)
             .time_to_live(Duration::from_secs(7))
             .time_to_idle(Duration::from_secs(5))
             .build();
-        cache.reconfigure_for_testing();
+        cache.reconfigure_for_testing().await;
 
         let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
+        cache.set_expiration_clock(Some(clock)).await;
 
         // Make the cache exterior immutable.
         let cache = cache;
 
         cache.insert("alice", "a0").await;
-        cache.sync();
+        cache.flush().await;
 
         // Now alice (a0) has been expired by the idle timeout (TTI).
         mock.increment(Duration::from_secs(6));
         expected.push((Arc::new("alice"), "a0", RemovalCause::Expired));
-        assert_eq!(cache.get(&"alice"), None);
+        assert_eq!(cache.get(&"alice").await, None);
 
         // We have not ran sync after the expiration of alice (a0), so it is
         // still in the cache.
@@ -4321,16 +4421,16 @@ mod tests {
         // insert operation. We want to verify that the RemovalCause of a0 is
         // Expired, not Replaced.
         cache.insert("alice", "a1").await;
-        cache.sync();
+        cache.flush().await;
 
         mock.increment(Duration::from_secs(4));
-        assert_eq!(cache.get(&"alice"), Some("a1"));
-        cache.sync();
+        assert_eq!(cache.get(&"alice").await, Some("a1"));
+        cache.flush().await;
 
         // Now alice has been expired by time-to-live (TTL).
         mock.increment(Duration::from_secs(4));
         expected.push((Arc::new("alice"), "a1", RemovalCause::Expired));
-        assert_eq!(cache.get(&"alice"), None);
+        assert_eq!(cache.get(&"alice").await, None);
 
         // But, again, it is still in the cache.
         assert_eq!(cache.entry_count(), 1);
@@ -4338,38 +4438,38 @@ mod tests {
         // Re-insert alice with a different value and verify that the
         // RemovalCause of a1 is Expired (not Replaced).
         cache.insert("alice", "a2").await;
-        cache.sync();
+        cache.flush().await;
 
         assert_eq!(cache.entry_count(), 1);
 
         // Now alice (a2) has been expired by the idle timeout.
         mock.increment(Duration::from_secs(6));
         expected.push((Arc::new("alice"), "a2", RemovalCause::Expired));
-        assert_eq!(cache.get(&"alice"), None);
+        assert_eq!(cache.get(&"alice").await, None);
         assert_eq!(cache.entry_count(), 1);
 
         // This invalidate will internally remove alice (a2).
         cache.invalidate(&"alice").await;
-        cache.sync();
+        cache.flush().await;
         assert_eq!(cache.entry_count(), 0);
 
         // Re-insert, and this time, make it expired by the TTL.
         cache.insert("alice", "a3").await;
-        cache.sync();
+        cache.flush().await;
         mock.increment(Duration::from_secs(4));
-        assert_eq!(cache.get(&"alice"), Some("a3"));
-        cache.sync();
+        assert_eq!(cache.get(&"alice").await, Some("a3"));
+        cache.flush().await;
         mock.increment(Duration::from_secs(4));
         expected.push((Arc::new("alice"), "a3", RemovalCause::Expired));
-        assert_eq!(cache.get(&"alice"), None);
+        assert_eq!(cache.get(&"alice").await, None);
         assert_eq!(cache.entry_count(), 1);
 
         // This invalidate will internally remove alice (a2).
         cache.invalidate(&"alice").await;
-        cache.sync();
+        cache.flush().await;
         assert_eq!(cache.entry_count(), 0);
 
-        verify_notification_vec(&cache, actual, &expected);
+        verify_notification_vec(&cache, actual, &expected).await;
     }
 
     // NOTE: To enable the panic logging, run the following command:
@@ -4389,43 +4489,47 @@ mod tests {
         // Create an eviction listener that panics when it see
         // a value "panic now!".
         let a1 = Arc::clone(&actual);
-        let listener = move |k, v, cause| {
-            if v == "panic now!" {
-                panic!("Panic now!");
+        let listener = move |k, v, cause| -> ListenerFuture {
+            let a2 = Arc::clone(&a1);
+            async move {
+                if v == "panic now!" {
+                    panic!("Panic now!");
+                }
+                a2.lock().await.push((k, v, cause));
             }
-            a1.lock().push((k, v, cause))
+            .boxed()
         };
 
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .name("My Future Cache")
-            .eviction_listener_with_queued_delivery_mode(listener)
+            .eviction_listener(listener)
             .build();
-        cache.reconfigure_for_testing();
+        cache.reconfigure_for_testing().await;
 
         // Make the cache exterior immutable.
         let cache = cache;
 
         // Insert an okay value.
         cache.insert("alice", "a0").await;
-        cache.sync();
+        cache.flush().await;
 
         // Insert a value that will cause the eviction listener to panic.
         cache.insert("alice", "panic now!").await;
         expected.push((Arc::new("alice"), "a0", RemovalCause::Replaced));
-        cache.sync();
+        cache.flush().await;
 
         // Insert an okay value. This will replace the previous
         // value "panic now!" so the eviction listener will panic.
         cache.insert("alice", "a2").await;
-        cache.sync();
+        cache.flush().await;
         // No more removal notification should be sent.
 
         // Invalidate the okay value.
         cache.invalidate(&"alice").await;
-        cache.sync();
+        cache.flush().await;
 
-        verify_notification_vec(&cache, actual, &expected);
+        verify_notification_vec(&cache, actual, &expected).await;
     }
 
     // This test ensures that the `contains_key`, `get` and `invalidate` can use
@@ -4441,7 +4545,7 @@ mod tests {
         // key as &Vec<u8>
         let key_v: &Vec<u8> = &key;
         assert!(cache.contains_key(key_v));
-        assert_eq!(cache.get(key_v), Some(()));
+        assert_eq!(cache.get(key_v).await, Some(()));
         cache.invalidate(key_v).await;
 
         cache.insert(key, ()).await;
@@ -4449,7 +4553,7 @@ mod tests {
         // key as &[u8]
         let key_s: &[u8] = &[1_u8];
         assert!(cache.contains_key(key_s));
-        assert_eq!(cache.get(key_s), Some(()));
+        assert_eq!(cache.get(key_s).await, Some(()));
         cache.invalidate(key_s).await;
     }
 
@@ -4463,17 +4567,23 @@ mod tests {
         let counters = Arc::new(Counters::default());
         let counters1 = Arc::clone(&counters);
 
-        let listener = move |_k, _v, cause| match cause {
-            RemovalCause::Size => counters1.incl_evicted(),
-            RemovalCause::Explicit => counters1.incl_invalidated(),
-            _ => (),
+        let listener = move |_k, _v, cause| -> ListenerFuture {
+            let counters2 = Arc::clone(&counters1);
+            async move {
+                match cause {
+                    RemovalCause::Size => counters2.incl_evicted(),
+                    RemovalCause::Explicit => counters2.incl_invalidated(),
+                    _ => (),
+                }
+            }
+            .boxed()
         };
 
         let mut cache = Cache::builder()
             .max_capacity(MAX_CAPACITY as u64)
-            .eviction_listener_with_queued_delivery_mode(listener)
+            .eviction_listener(listener)
             .build();
-        cache.reconfigure_for_testing();
+        cache.reconfigure_for_testing().await;
 
         // Make the cache exterior immutable.
         let cache = cache;
@@ -4482,7 +4592,7 @@ mod tests {
             let value = Arc::new(Value::new(vec![0u8; 1024], &counters));
             cache.insert(key, value).await;
             counters.incl_inserted();
-            cache.sync();
+            cache.flush().await;
         }
 
         let eviction_count = KEYS - MAX_CAPACITY;
@@ -4497,7 +4607,7 @@ mod tests {
             if counters.evicted() != eviction_count || counters.value_dropped() != eviction_count {
                 if retries <= MAX_RETRIES {
                     retries += 1;
-                    cache.sync();
+                    cache.flush().await;
                     continue;
                 } else {
                     assert_eq!(counters.evicted(), eviction_count, "Retries exhausted");
@@ -4520,7 +4630,7 @@ mod tests {
 
         for key in 0..KEYS {
             cache.invalidate(&key).await;
-            cache.sync();
+            cache.flush().await;
         }
 
         let mut retries = 0;
@@ -4531,7 +4641,7 @@ mod tests {
             if counters.invalidated() != MAX_CAPACITY || counters.value_dropped() != KEYS {
                 if retries <= MAX_RETRIES {
                     retries += 1;
-                    cache.sync();
+                    cache.flush().await;
                     continue;
                 } else {
                     assert_eq!(counters.invalidated(), MAX_CAPACITY, "Retries exhausted");
@@ -4569,7 +4679,7 @@ mod tests {
 
     type NotificationTuple<K, V> = (Arc<K>, V, RemovalCause);
 
-    fn verify_notification_vec<K, V, S>(
+    async fn verify_notification_vec<K, V, S>(
         cache: &Cache<K, V, S>,
         actual: Arc<Mutex<Vec<NotificationTuple<K, V>>>>,
         expected: &[NotificationTuple<K, V>],
@@ -4585,11 +4695,11 @@ mod tests {
             // Ensure all scheduled notifications have been processed.
             std::thread::sleep(Duration::from_millis(500));
 
-            let actual = &*actual.lock();
+            let actual = &*actual.lock().await;
             if actual.len() != expected.len() {
                 if retries <= MAX_RETRIES {
                     retries += 1;
-                    cache.sync();
+                    cache.flush().await;
                     continue;
                 } else {
                     assert_eq!(actual.len(), expected.len(), "Retries exhausted");
