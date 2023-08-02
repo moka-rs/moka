@@ -30,11 +30,11 @@ where
     S: BuildHasher,
 {
     fn drop(&mut self) {
-        if TrioArc::count(&self.lock) <= 1 {
+        if TrioArc::count(&self.lock) <= 2 {
             self.map.remove_if(
                 self.hash,
                 |k| k == &self.key,
-                |_k, v| TrioArc::count(v) <= 1,
+                |_k, v| TrioArc::count(v) <= 2,
             );
         }
     }
@@ -84,5 +84,12 @@ where
             None => KeyLock::new(&self.locks, key, hash, kl),
             Some(existing_kl) => KeyLock::new(&self.locks, key, hash, existing_kl),
         }
+    }
+}
+
+#[cfg(test)]
+impl<K, S> KeyLockMap<K, S> {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.locks.len() == 0
     }
 }
