@@ -2421,7 +2421,10 @@ where
     }
 
     fn key_locks_map_is_empty(&self) -> bool {
-        self.key_locks.as_ref().map(|m| m.is_empty()).unwrap_or_default()
+        self.key_locks
+            .as_ref()
+            .map(|m| m.is_empty())
+            .unwrap_or_default()
     }
 }
 
