@@ -1,5 +1,13 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.11.3
+
+### Fixed
+
+- Fixed a bug in `sync::Cache` and `sync::SegmentedCache` where memory usage kept
+  increasing when the eviction listener was set with the `Immediate` delivery mode.
+  ([#295][gh-pull-0295])
+
 ## Version 0.11.2
 
 Bumped the minimum supported Rust version (MSRV) to 1.65 (Nov 3, 2022).
@@ -676,6 +684,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0295]: https://github.com/moka-rs/moka/pull/295/
 [gh-pull-0277]: https://github.com/moka-rs/moka/pull/277/
 [gh-pull-0275]: https://github.com/moka-rs/moka/pull/275/
 [gh-pull-0272]: https://github.com/moka-rs/moka/pull/272/
