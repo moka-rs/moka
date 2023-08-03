@@ -1789,6 +1789,10 @@ where
     pub(crate) fn set_expiration_clock(&self, clock: Option<crate::common::time::Clock>) {
         self.base.set_expiration_clock(clock);
     }
+
+    pub(crate) fn key_locks_map_is_empty(&self) -> bool {
+        self.base.key_locks_map_is_empty()
+    }
 }
 
 // To see the debug prints, run test as `cargo test -- --nocapture`
@@ -1890,6 +1894,7 @@ mod tests {
             assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
 
             verify_notification_vec(&cache, actual, &expected, delivery_mode);
+            assert_with_mode!(cache.key_locks_map_is_empty(), delivery_mode);
         }
     }
 
@@ -2020,6 +2025,7 @@ mod tests {
             assert_eq_with_mode!(cache.weighted_size(), 25, delivery_mode);
 
             verify_notification_vec(&cache, actual, &expected, delivery_mode);
+            assert_with_mode!(cache.key_locks_map_is_empty(), delivery_mode);
         }
     }
 
@@ -3691,6 +3697,8 @@ mod tests {
             assert_eq!(a[0], (Arc::new("alice"), "a3", RemovalCause::Expired));
             a.clear();
         }
+
+        assert!(cache.key_locks_map_is_empty());
     }
 
     // This test ensures the key-level lock for the immediate notification
@@ -3821,6 +3829,8 @@ mod tests {
         for (i, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
             assert_eq!(actual, expected, "expected[{}]", i);
         }
+
+        assert!(cache.key_locks_map_is_empty());
     }
 
     // NOTE: To enable the panic logging, run the following command:
