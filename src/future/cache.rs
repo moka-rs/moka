@@ -2009,6 +2009,10 @@ where
     fn set_expiration_clock(&self, clock: Option<crate::common::time::Clock>) {
         self.base.set_expiration_clock(clock);
     }
+
+    fn key_locks_map_is_empty(&self) -> bool {
+        self.base.key_locks_map_is_empty()
+    }
 }
 
 pub struct BlockingOp<'a, K, V, S>(&'a Cache<K, V, S>);
@@ -2164,6 +2168,7 @@ mod tests {
         assert!(!cache.contains_key(&"d"));
 
         verify_notification_vec(&cache, actual, &expected);
+        assert!(cache.key_locks_map_is_empty());
     }
 
     #[test]
@@ -2353,6 +2358,7 @@ mod tests {
         assert_eq!(cache.weighted_size(), 25);
 
         verify_notification_vec(&cache, actual, &expected);
+        assert!(cache.key_locks_map_is_empty());
     }
 
     #[tokio::test]

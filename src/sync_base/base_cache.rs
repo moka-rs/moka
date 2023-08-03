@@ -2424,7 +2424,8 @@ where
         self.key_locks
             .as_ref()
             .map(|m| m.is_empty())
-            .unwrap_or_default()
+            // If key_locks is None, consider it is empty.
+            .unwrap_or(true)
     }
 }
 
