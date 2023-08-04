@@ -21,7 +21,7 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 [release-badge]: https://img.shields.io/crates/v/moka.svg
 [docs-badge]: https://docs.rs/moka/badge.svg
 [deps-rs-badge]: https://deps.rs/repo/github/moka-rs/moka/status.svg
-[coveralls-badge]: https://coveralls.io/repos/github/moka-rs/moka/badge.svg?branch=master
+[coveralls-badge]: https://coveralls.io/repos/github/moka-rs/moka/badge.svg?branch=main
 [license-badge]: https://img.shields.io/crates/l/moka.svg
 [fossa-badge]: https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=shield
 
@@ -29,7 +29,7 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 [crate]: https://crates.io/crates/moka
 [docs]: https://docs.rs/moka
 [deps-rs]: https://deps.rs/repo/github/moka-rs/moka
-[coveralls]: https://coveralls.io/github/moka-rs/moka?branch=master
+[coveralls]: https://coveralls.io/github/moka-rs/moka?branch=main
 [fossa]: https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_shield
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
@@ -112,7 +112,7 @@ routers. Here are some highlights:
 
 ## Change Log
 
-- [CHANGELOG.md](https://github.com/moka-rs/moka/blob/master/CHANGELOG.md)
+- [CHANGELOG.md](https://github.com/moka-rs/moka/blob/main/CHANGELOG.md)
 
 The `unsync::Cache` and `dash::Cache` have been moved to a separate crate called
 [Mini Moka][mini-moka-crate]:
