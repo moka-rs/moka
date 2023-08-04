@@ -610,6 +610,10 @@ where
     pub(crate) fn set_expiration_clock(&self, clock: Option<Clock>) {
         self.inner.set_expiration_clock(clock);
     }
+
+    pub(crate) fn key_locks_map_is_empty(&self) -> bool {
+        self.inner.key_locks_map_is_empty()
+    }
 }
 
 struct EvictionState<'a, K, V> {
@@ -1995,6 +1999,14 @@ where
             self.has_expiration_clock.store(false, Ordering::SeqCst);
             *exp_clock = None;
         }
+    }
+
+    fn key_locks_map_is_empty(&self) -> bool {
+        self.key_locks
+            .as_ref()
+            .map(|m| m.is_empty())
+            // If key_locks is None, consider it is empty.
+            .unwrap_or(true)
     }
 }
 

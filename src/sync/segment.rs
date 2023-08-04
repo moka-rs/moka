@@ -657,6 +657,13 @@ where
 
         exp_clock
     }
+
+    fn key_locks_map_is_empty(&self) -> bool {
+        self.inner
+            .segments
+            .iter()
+            .all(|seg| seg.key_locks_map_is_empty())
+    }
 }
 
 // For unit tests.
@@ -862,6 +869,7 @@ mod tests {
             assert_with_mode!(!cache.contains_key(&"b"), delivery_mode);
 
             verify_notification_vec(&cache, actual, &expected, delivery_mode);
+            assert_with_mode!(cache.key_locks_map_is_empty(), delivery_mode);
         }
     }
 
@@ -1011,6 +1019,7 @@ mod tests {
             assert_eq_with_mode!(cache.weighted_size(), 25, delivery_mode);
 
             verify_notification_vec(&cache, actual, &expected, delivery_mode);
+            assert_with_mode!(cache.key_locks_map_is_empty(), delivery_mode);
         }
     }
 
