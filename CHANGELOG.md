@@ -8,6 +8,7 @@
   increasing when the eviction listener was set with the `Immediate` delivery mode.
   ([#295][gh-pull-0295])
 
+
 ## Version 0.11.2
 
 Bumped the minimum supported Rust version (MSRV) to 1.65 (Nov 3, 2022).
