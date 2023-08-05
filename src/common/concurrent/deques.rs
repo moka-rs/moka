@@ -34,6 +34,7 @@ impl<K> Default for Deques<K> {
 }
 
 impl<K> Deques<K> {
+    #[cfg(feature = "future")]
     pub(crate) fn select_mut(
         &mut self,
         selector: CacheRegion,

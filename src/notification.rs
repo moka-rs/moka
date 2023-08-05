@@ -1,14 +1,17 @@
 //! Common data types for notifications.
 
+#[cfg(feature = "sync")]
 pub(crate) mod notifier;
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
 pub type ListenerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
+#[cfg(feature = "sync")]
 pub(crate) type EvictionListener<K, V> =
     Arc<dyn Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static>;
 
+#[cfg(feature = "sync")]
 pub(crate) type EvictionListenerRef<'a, K, V> =
     &'a Arc<dyn Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static>;
 
@@ -26,11 +29,13 @@ pub(crate) type AsyncEvictionListener<K, V> =
 /// Currently only setting the [`DeliveryMode`][delivery-mode] is supported.
 ///
 /// [delivery-mode]: ./enum.DeliveryMode.html
+#[cfg(feature = "sync")]
 #[derive(Clone, Debug, Default)]
 pub struct Configuration {
     mode: DeliveryMode,
 }
 
+#[cfg(feature = "sync")]
 impl Configuration {
     pub fn builder() -> ConfigurationBuilder {
         ConfigurationBuilder::default()
@@ -47,11 +52,13 @@ impl Configuration {
 ///
 /// [conf]: ./struct.Configuration.html
 /// [delivery-mode]: ./enum.DeliveryMode.html
+#[cfg(feature = "sync")]
 #[derive(Default)]
 pub struct ConfigurationBuilder {
     mode: DeliveryMode,
 }
 
+#[cfg(feature = "sync")]
 impl ConfigurationBuilder {
     pub fn build(self) -> Configuration {
         Configuration { mode: self.mode }
@@ -68,6 +75,7 @@ impl ConfigurationBuilder {
 /// For more details, see [the document][delivery-mode-doc] of `sync::Cache`.
 ///
 /// [delivery-mode-doc]: ../sync/struct.Cache.html#delivery-modes-for-eviction-listener
+#[cfg(feature = "sync")]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DeliveryMode {
     /// With this mode, a notification should be delivered to the listener
@@ -93,6 +101,7 @@ pub enum DeliveryMode {
     Queued,
 }
 
+#[cfg(feature = "sync")]
 impl Default for DeliveryMode {
     fn default() -> Self {
         Self::Immediate
