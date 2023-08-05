@@ -2,8 +2,7 @@ use super::{
     base_cache::{BaseCache, HouseKeeperArc},
     housekeeper::InnerSync,
     value_initializer::{GetOrInsert, InitResult, ValueInitializer},
-    CacheBuilder, ConcurrentCacheExt, Iter, OwnedKeyEntrySelector, PredicateId,
-    RefKeyEntrySelector,
+    CacheBuilder, Iter, OwnedKeyEntrySelector, PredicateId, RefKeyEntrySelector,
 };
 use crate::{
     common::{
@@ -80,7 +79,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.11", features = ["future"] }
+/// // moka = { version = "0.12", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures-util = "0.3"
 ///
@@ -210,7 +209,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.11", features = ["future"] }
+/// // moka = { version = "0.12", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures-util = "0.3"
 ///
@@ -278,7 +277,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.11", features = ["future"] }
+/// // moka = { version = "0.12", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures-util = "0.3"
 ///
@@ -327,7 +326,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.11", features = ["future"] }
+/// // moka = { version = "0.12", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 ///
 /// use moka::{future::{Cache, FutureExt}, Expiry, notification::ListenerFuture};
@@ -743,7 +742,7 @@ impl<K, V, S> Cache<K, V, S> {
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
     ///
@@ -761,10 +760,7 @@ impl<K, V, S> Cache<K, V, S> {
     ///     println!("{}", cache.entry_count());   // -> 0
     ///     println!("{}", cache.weighted_size()); // -> 0
     ///
-    ///     // To mitigate the inaccuracy, bring `ConcurrentCacheExt` trait to
-    ///     // the scope so we can use `sync` method.
-    ///     use moka::future::ConcurrentCacheExt;
-    ///     // Call `sync` to run pending internal tasks.
+    ///     // To mitigate the inaccuracy, call `flush` to run pending internal tasks.
     ///     cache.flush().await;
     ///
     ///     // Followings will print the actual numbers.
@@ -911,7 +907,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -951,7 +947,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -996,7 +992,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // futures-util = "0.3"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
@@ -1123,7 +1119,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // futures-util = "0.3"
     /// // reqwest = "0.11"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
@@ -1247,7 +1243,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // futures-util = "0.3"
     /// // reqwest = "0.11"
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
@@ -1512,7 +1508,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     /// use moka::future::Cache;
     ///
@@ -1537,13 +1533,9 @@ where
         Iter::new(inner)
     }
 
-    // /// Returns a `BlockingOp` for this cache. It provides blocking
-    // /// [`insert`](./struct.BlockingOp.html#method.insert) and
-    // /// [`invalidate`](struct.BlockingOp.html#method.invalidate) methods, which
-    // /// can be called outside of asynchronous contexts.
-    // pub fn blocking(&self) -> BlockingOp<'_, K, V, S> {
-    //     BlockingOp(self)
-    // }
+    pub async fn flush(&self) {
+        self.base.inner.flush(MAX_SYNC_REPEATS).await;
+    }
 }
 
 impl<'a, K, V, S> IntoIterator for &'a Cache<K, V, S>
@@ -1558,18 +1550,6 @@ where
 
     fn into_iter(self) -> Self::IntoIter {
         self.iter()
-    }
-}
-
-#[async_trait]
-impl<K, V, S> ConcurrentCacheExt<K, V> for Cache<K, V, S>
-where
-    K: Hash + Eq + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + Sync + 'static,
-{
-    async fn flush(&self) {
-        self.base.inner.flush(MAX_SYNC_REPEATS).await;
     }
 }
 
@@ -1986,7 +1966,7 @@ fn never_ignore<'a, V>() -> Option<&'a mut fn(&V) -> bool> {
 // To see the debug prints, run test as `cargo test -- --nocapture`
 #[cfg(test)]
 mod tests {
-    use super::{Cache, ConcurrentCacheExt};
+    use super::Cache;
     use crate::{
         common::time::Clock,
         future::FutureExt,

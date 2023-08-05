@@ -67,7 +67,7 @@ and can be overkill for your use case. Sometimes simpler caches like
 
 The following table shows the trade-offs between the different cache implementations:
 
-| Feature | Moka v0.11 | Mini Moka v0.10 | Quick Cache v0.3 |
+| Feature | Moka v0.12 | Mini Moka v0.10 | Quick Cache v0.3 |
 |:------- |:---- |:--------- |:----------- |
 | Thread-safe, sync cache | ✅ | ✅ | ✅ |
 | Thread-safe, async cache | ✅ | ❌ | ✅ |
@@ -82,10 +82,10 @@ The following table shows the trade-offs between the different cache implementat
 | Lock-free, concurrent iterator | ✅ | ❌ | ❌ |
 | Lock-per-shard, concurrent iterator | ❌ | ✅ | ❌ |
 
-| Performance, etc. | Moka v0.11 | Mini Moka v0.10 | Quick Cache v0.3 |
+| Performance, etc. | Moka v0.12 | Mini Moka v0.10 | Quick Cache v0.3 |
 |:------- |:---- |:--------- |:----------- |
 | Small overhead compared to a concurrent hash table | ❌ | ❌ | ✅ |
-| Does not use background threads | ❌ Will be removed from v0.12 or v0.13 | ✅ | ✅ |
+| Does not use background threads | ❌ → ✅ Removed from v0.12 | ✅ | ✅ |
 | Small dependency tree | ❌ | ✅ | ✅ |
 
 [tiny-lfu]: https://github.com/moka-rs/moka/wiki#admission-and-eviction-policies
@@ -154,14 +154,14 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-moka = "0.11"
+moka = "0.12"
 ```
 
 To use the asynchronous cache, enable a crate feature called "future".
 
 ```toml
 [dependencies]
-moka = { version = "0.11", features = ["future"] }
+moka = { version = "0.12", features = ["future"] }
 ```
 
 
@@ -270,7 +270,7 @@ Here is a similar program to the previous example, but using asynchronous cache 
 // Cargo.toml
 //
 // [dependencies]
-// moka = { version = "0.11", features = ["future"] }
+// moka = { version = "0.12", features = ["future"] }
 // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 // futures-util = "0.3"
 
@@ -304,7 +304,7 @@ async fn main() {
                     // insert() is an async method, so await it.
                     my_cache.insert(key, value(key)).await;
                     // get() returns Option<String>, a clone of the stored value.
-                    assert_eq!(my_cache.get(&key), Some(value(key)));
+                    assert_eq!(my_cache.get(&key).await, Some(value(key)));
                 }
 
                 // Invalidate every 4 element of the inserted entries.
@@ -322,9 +322,9 @@ async fn main() {
     // Verify the result.
     for key in 0..(NUM_TASKS * NUM_KEYS_PER_TASK) {
         if key % 4 == 0 {
-            assert_eq!(cache.get(&key), None);
+            assert_eq!(cache.get(&key).await, None);
         } else {
-            assert_eq!(cache.get(&key), Some(value(key)));
+            assert_eq!(cache.get(&key).await, Some(value(key)));
         }
     }
 }
@@ -482,9 +482,9 @@ to the dependency declaration.
 
 ```toml:Cargo.toml
 [dependencies]
-moka = { version = "0.11", default-features = false, features = ["sync"] }
+moka = { version = "0.12", default-features = false, features = ["sync"] }
 # Or
-moka = { version = "0.11", default-features = false, features = ["future"] }
+moka = { version = "0.12", default-features = false, features = ["future"] }
 ```
 
 This will make Moka to switch to a fall-back implementation, so it will compile.

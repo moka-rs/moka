@@ -3,7 +3,6 @@
 //!
 //! To use this module, enable a crate feature called "future".
 
-use async_trait::async_trait;
 use futures_util::future::BoxFuture;
 use std::{future::Future, hash::Hash, sync::Arc};
 
@@ -66,11 +65,4 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
     }
-}
-
-/// Provides extra methods that will be useful for testing.
-#[async_trait]
-pub trait ConcurrentCacheExt<K, V> {
-    /// Performs any pending maintenance operations needed by the cache.
-    async fn flush(&self);
 }
