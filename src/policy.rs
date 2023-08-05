@@ -212,7 +212,7 @@ impl<K, V> Clone for ExpirationPolicy<K, V> {
 }
 
 impl<K, V> ExpirationPolicy<K, V> {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "sync"))]
     pub(crate) fn new(
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
