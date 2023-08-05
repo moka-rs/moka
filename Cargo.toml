@@ -23,7 +23,7 @@ default = ["sync", "atomic64", "quanta"]
 sync = ["_core"]
 
 # Enable this feature to use `moka::future::Cache`.
-future = ["_core", "async-io", "async-lock", "async-trait", "futures-util"]
+future = ["_core", "async-lock", "async-trait", "futures-util"]
 
 # Enable this feature to activate optional logging from caches.
 # Currently cache will emit log only when it encounters a panic in user provided

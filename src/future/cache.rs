@@ -7,10 +7,7 @@ use super::{
 };
 use crate::{
     common::{
-        concurrent::{
-            constants::{MAX_SYNC_REPEATS, WRITE_RETRY_INTERVAL_MICROS},
-            Weigher, WriteOp,
-        },
+        concurrent::{constants::MAX_SYNC_REPEATS, Weigher, WriteOp},
         time::Instant,
     },
     notification::AsyncEvictionListener,
@@ -32,7 +29,6 @@ use std::{
     hash::{BuildHasher, Hash},
     pin::Pin,
     sync::Arc,
-    time::Duration,
 };
 
 /// A thread-safe, futures-aware concurrent in-memory cache.
@@ -1365,25 +1361,6 @@ where
         self.insert_with_hash(key, hash, value).await
     }
 
-    // fn do_blocking_insert(&self, key: K, value: V) {
-    //     if self.base.is_map_disabled() {
-    //         return;
-    //     }
-
-    //     let hash = self.base.hash(&key);
-    //     let key = Arc::new(key);
-    //     let (op, now) = self.base.do_insert_with_hash(key, hash, value);
-    //     let hk = self.base.housekeeper.as_ref();
-    //     Self::blocking_schedule_write_op(
-    //         self.base.inner.as_ref(),
-    //         &self.base.write_op_ch,
-    //         op,
-    //         now,
-    //         hk,
-    //     )
-    //     .expect("Failed to insert");
-    // }
-
     /// Discards any cached value for the key.
     ///
     /// If you need to get the value that has been discarded, use the
@@ -1451,30 +1428,6 @@ where
             }
         }
     }
-
-    // fn do_blocking_invalidate<Q>(&self, key: &Q)
-    // where
-    //     K: Borrow<Q>,
-    //     Q: Hash + Eq + ?Sized,
-    // {
-    //     let hash = self.base.hash(key);
-    //     if let Some(kv) = self.base.remove_entry(key, hash) {
-    //         if self.base.is_removal_notifier_enabled() {
-    //             self.base.notify_invalidate(&kv.key, &kv.entry)
-    //         }
-    //         let op = WriteOp::Remove(kv);
-    //         let now = self.base.current_time_from_expiration_clock();
-    //         let hk = self.base.housekeeper.as_ref();
-    //         Self::blocking_schedule_write_op(
-    //             self.base.inner.as_ref(),
-    //             &self.base.write_op_ch,
-    //             op,
-    //             now,
-    //             hk,
-    //         )
-    //         .expect("Failed to remove");
-    //     }
-    // }
 
     /// Discards all cached values.
     ///
@@ -1947,47 +1900,23 @@ where
         housekeeper: Option<&HouseKeeperArc>,
     ) -> Result<(), TrySendError<WriteOp<K, V>>> {
         let mut op = op;
-
-        // TODO: Try to replace the timer with an async event listener to see if it
-        // can provide better performance.
         loop {
             BaseCache::<K, V, S>::apply_reads_writes_if_needed(inner, ch, now, housekeeper).await;
             match ch.try_send(op) {
                 Ok(()) => break,
                 Err(TrySendError::Full(op1)) => {
                     op = op1;
-                    async_io::Timer::after(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS))
-                        .await;
+                    // Wastes some CPU time with a hint to indicate to the CPU that
+                    // we are spinning
+                    for _ in 0..10 {
+                        std::hint::spin_loop();
+                    }
                 }
                 Err(e @ TrySendError::Disconnected(_)) => return Err(e),
             }
         }
         Ok(())
     }
-
-    // #[inline]
-    // fn blocking_schedule_write_op(
-    //     inner: &impl InnerSync,
-    //     ch: &Sender<WriteOp<K, V>>,
-    //     op: WriteOp<K, V>,
-    //     now: Instant,
-    //     housekeeper: Option<&HouseKeeperArc>,
-    // ) -> Result<(), TrySendError<WriteOp<K, V>>> {
-    //     let mut op = op;
-
-    //     loop {
-    //         BaseCache::apply_reads_writes_if_needed(inner, ch, now, housekeeper);
-    //         match ch.try_send(op) {
-    //             Ok(()) => break,
-    //             Err(TrySendError::Full(op1)) => {
-    //                 op = op1;
-    //                 std::thread::sleep(Duration::from_micros(WRITE_RETRY_INTERVAL_MICROS));
-    //             }
-    //             Err(e @ TrySendError::Disconnected(_)) => return Err(e),
-    //         }
-    //     }
-    //     Ok(())
-    // }
 }
 
 #[async_trait]
@@ -2046,39 +1975,6 @@ where
     }
 }
 
-// pub struct BlockingOp<'a, K, V, S>(&'a Cache<K, V, S>);
-
-// impl<'a, K, V, S> BlockingOp<'a, K, V, S>
-// where
-//     K: Hash + Eq + Send + Sync + 'static,
-//     V: Clone + Send + Sync + 'static,
-//     S: BuildHasher + Clone + Send + Sync + 'static,
-// {
-//     /// Inserts a key-value pair into the cache. If the cache has this key present,
-//     /// the value is updated.
-//     ///
-//     /// This method is intended for use cases where you are inserting from
-//     /// synchronous code.
-//     pub fn insert(&self, key: K, value: V) {
-//         self.0.do_blocking_insert(key, value)
-//     }
-
-//     /// Discards any cached value for the key.
-//     ///
-//     /// This method is intended for use cases where you are invalidating from
-//     /// synchronous code.
-//     ///
-//     /// The key may be any borrowed form of the cache's key type, but `Hash` and `Eq`
-//     /// on the borrowed form _must_ match those for the key type.
-//     pub fn invalidate<Q>(&self, key: &Q)
-//     where
-//         K: Borrow<Q>,
-//         Q: Hash + Eq + ?Sized,
-//     {
-//         self.0.do_blocking_invalidate(key)
-//     }
-// }
-
 // AS of Rust 1.71, we cannot make this function into a `const fn` because mutable
 // references are not allowed.
 // See [#57349](https://github.com/rust-lang/rust/issues/57349).
@@ -2099,13 +1995,13 @@ mod tests {
         Expiry,
     };
 
-    use async_io::Timer;
     use async_lock::Mutex;
     use std::{
         convert::Infallible,
         sync::Arc,
         time::{Duration, Instant as StdInstant},
     };
+    use tokio::time::sleep;
 
     #[tokio::test]
     async fn max_capacity_zero() {
@@ -2216,73 +2112,6 @@ mod tests {
         verify_notification_vec(&cache, actual, &expected).await;
         assert!(cache.key_locks_map_is_empty());
     }
-
-    // #[test]
-    // fn basic_single_blocking_api() {
-    //     // The following `Vec`s will hold actual and expected notifications.
-    //     let actual = Arc::new(Mutex::new(Vec::new()));
-    //     let mut expected = Vec::new();
-
-    //     // Create an eviction listener.
-    //     let a1 = Arc::clone(&actual);
-    //     // We use non-async mutex in the eviction listener (because the listener
-    //     // is a regular closure).
-    //     let listener = move |k, v, cause| a1.lock().push((k, v, cause));
-
-    //     // Create a cache with the eviction listener.
-    //     let mut cache = Cache::builder()
-    //         .max_capacity(3)
-    //         .eviction_listener(listener)
-    //         .build();
-    //     cache.reconfigure_for_testing();
-
-    //     // Make the cache exterior immutable.
-    //     let cache = cache;
-
-    //     cache.blocking().insert("a", "alice");
-    //     cache.blocking().insert("b", "bob");
-    //     assert_eq!(cache.get(&"a"), Some("alice"));
-    //     assert_eq!(cache.get(&"b"), Some("bob"));
-    //     cache.flush().await;
-    //     // counts: a -> 1, b -> 1
-
-    //     cache.blocking().insert("c", "cindy");
-    //     assert_eq!(cache.get(&"c"), Some("cindy"));
-    //     // counts: a -> 1, b -> 1, c -> 1
-    //     cache.flush().await;
-
-    //     assert_eq!(cache.get(&"a"), Some("alice"));
-    //     assert_eq!(cache.get(&"b"), Some("bob"));
-    //     cache.flush().await;
-    //     // counts: a -> 2, b -> 2, c -> 1
-
-    //     // "d" should not be admitted because its frequency is too low.
-    //     cache.blocking().insert("d", "david"); //   count: d -> 0
-    //     expected.push((Arc::new("d"), "david", RemovalCause::Size));
-    //     cache.flush().await;
-    //     assert_eq!(cache.get(&"d"), None); //   d -> 1
-
-    //     cache.blocking().insert("d", "david");
-    //     expected.push((Arc::new("d"), "david", RemovalCause::Size));
-    //     cache.flush().await;
-    //     assert_eq!(cache.get(&"d"), None); //   d -> 2
-
-    //     // "d" should be admitted and "c" should be evicted
-    //     // because d's frequency is higher than c's.
-    //     cache.blocking().insert("d", "dennis");
-    //     expected.push((Arc::new("c"), "cindy", RemovalCause::Size));
-    //     cache.flush().await;
-    //     assert_eq!(cache.get(&"a"), Some("alice"));
-    //     assert_eq!(cache.get(&"b"), Some("bob"));
-    //     assert_eq!(cache.get(&"c"), None);
-    //     assert_eq!(cache.get(&"d"), Some("dennis"));
-
-    //     cache.blocking().invalidate(&"b");
-    //     expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
-    //     assert_eq!(cache.get(&"b"), None);
-
-    //     verify_notification_vec(&cache, actual, &expected);
-    // }
 
     #[tokio::test]
     async fn size_aware_eviction() {
@@ -3248,7 +3077,7 @@ mod tests {
                 let v = cache1
                     .get_with(KEY, async {
                         // Wait for 300 ms and return a &str value.
-                        Timer::after(Duration::from_millis(300)).await;
+                        sleep(Duration::from_millis(300)).await;
                         "task1"
                     })
                     .await;
@@ -3263,7 +3092,7 @@ mod tests {
             let cache2 = cache.clone();
             async move {
                 // Wait for 100 ms before calling `get_with`.
-                Timer::after(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(100)).await;
                 let v = cache2.get_with(KEY, async { unreachable!() }).await;
                 assert_eq!(v, "task1");
             }
@@ -3278,7 +3107,7 @@ mod tests {
             let cache3 = cache.clone();
             async move {
                 // Wait for 400 ms before calling `get_with`.
-                Timer::after(Duration::from_millis(400)).await;
+                sleep(Duration::from_millis(400)).await;
                 let v = cache3.get_with(KEY, async { unreachable!() }).await;
                 assert_eq!(v, "task1");
             }
@@ -3290,7 +3119,7 @@ mod tests {
             let cache4 = cache.clone();
             async move {
                 // Wait for 200 ms before calling `get`.
-                Timer::after(Duration::from_millis(200)).await;
+                sleep(Duration::from_millis(200)).await;
                 let maybe_v = cache4.get(&KEY).await;
                 assert!(maybe_v.is_none());
             }
@@ -3302,7 +3131,7 @@ mod tests {
             let cache5 = cache.clone();
             async move {
                 // Wait for 400 ms before calling `get`.
-                Timer::after(Duration::from_millis(400)).await;
+                sleep(Duration::from_millis(400)).await;
                 let maybe_v = cache5.get(&KEY).await;
                 assert_eq!(maybe_v, Some("task1"));
             }
@@ -3328,7 +3157,7 @@ mod tests {
                 let v = cache1
                     .get_with_by_ref(KEY, async {
                         // Wait for 300 ms and return a &str value.
-                        Timer::after(Duration::from_millis(300)).await;
+                        sleep(Duration::from_millis(300)).await;
                         "task1"
                     })
                     .await;
@@ -3343,7 +3172,7 @@ mod tests {
             let cache2 = cache.clone();
             async move {
                 // Wait for 100 ms before calling `get_with_by_ref`.
-                Timer::after(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(100)).await;
                 let v = cache2.get_with_by_ref(KEY, async { unreachable!() }).await;
                 assert_eq!(v, "task1");
             }
@@ -3358,7 +3187,7 @@ mod tests {
             let cache3 = cache.clone();
             async move {
                 // Wait for 400 ms before calling `get_with_by_ref`.
-                Timer::after(Duration::from_millis(400)).await;
+                sleep(Duration::from_millis(400)).await;
                 let v = cache3.get_with_by_ref(KEY, async { unreachable!() }).await;
                 assert_eq!(v, "task1");
             }
@@ -3370,7 +3199,7 @@ mod tests {
             let cache4 = cache.clone();
             async move {
                 // Wait for 200 ms before calling `get`.
-                Timer::after(Duration::from_millis(200)).await;
+                sleep(Duration::from_millis(200)).await;
                 let maybe_v = cache4.get(KEY).await;
                 assert!(maybe_v.is_none());
             }
@@ -3382,7 +3211,7 @@ mod tests {
             let cache5 = cache.clone();
             async move {
                 // Wait for 400 ms before calling `get`.
-                Timer::after(Duration::from_millis(400)).await;
+                sleep(Duration::from_millis(400)).await;
                 let maybe_v = cache5.get(KEY).await;
                 assert_eq!(maybe_v, Some("task1"));
             }
@@ -3410,7 +3239,7 @@ mod tests {
                     .or_insert_with_if(
                         async {
                             // Wait for 300 ms and return a &str value.
-                            Timer::after(Duration::from_millis(300)).await;
+                            sleep(Duration::from_millis(300)).await;
                             "task1"
                         },
                         |_v| unreachable!(),
@@ -3430,7 +3259,7 @@ mod tests {
             let cache2 = cache.clone();
             async move {
                 // Wait for 100 ms before calling `or_insert_with_if`.
-                Timer::after(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(100)).await;
                 let entry = cache2
                     .entry(KEY)
                     .or_insert_with_if(async { unreachable!() }, |_v| unreachable!())
@@ -3452,7 +3281,7 @@ mod tests {
             let cache3 = cache.clone();
             async move {
                 // Wait for 350 ms before calling `or_insert_with_if`.
-                Timer::after(Duration::from_millis(350)).await;
+                sleep(Duration::from_millis(350)).await;
                 let entry = cache3
                     .entry(KEY)
                     .or_insert_with_if(async { unreachable!() }, |v| {
@@ -3473,7 +3302,7 @@ mod tests {
             let cache4 = cache.clone();
             async move {
                 // Wait for 400 ms before calling `or_insert_with_if`.
-                Timer::after(Duration::from_millis(400)).await;
+                sleep(Duration::from_millis(400)).await;
                 let entry = cache4
                     .entry(KEY)
                     .or_insert_with_if(async { "task4" }, |v| {
@@ -3492,7 +3321,7 @@ mod tests {
             let cache5 = cache.clone();
             async move {
                 // Wait for 200 ms before calling `get`.
-                Timer::after(Duration::from_millis(200)).await;
+                sleep(Duration::from_millis(200)).await;
                 let maybe_v = cache5.get(&KEY).await;
                 assert!(maybe_v.is_none());
             }
@@ -3504,7 +3333,7 @@ mod tests {
             let cache6 = cache.clone();
             async move {
                 // Wait for 350 ms before calling `get`.
-                Timer::after(Duration::from_millis(350)).await;
+                sleep(Duration::from_millis(350)).await;
                 let maybe_v = cache6.get(&KEY).await;
                 assert_eq!(maybe_v, Some("task1"));
             }
@@ -3516,7 +3345,7 @@ mod tests {
             let cache7 = cache.clone();
             async move {
                 // Wait for 450 ms before calling `get`.
-                Timer::after(Duration::from_millis(450)).await;
+                sleep(Duration::from_millis(450)).await;
                 let maybe_v = cache7.get(&KEY).await;
                 assert_eq!(maybe_v, Some("task4"));
             }
@@ -3544,7 +3373,7 @@ mod tests {
                     .or_insert_with_if(
                         async {
                             // Wait for 300 ms and return a &str value.
-                            Timer::after(Duration::from_millis(300)).await;
+                            sleep(Duration::from_millis(300)).await;
                             "task1"
                         },
                         |_v| unreachable!(),
@@ -3564,7 +3393,7 @@ mod tests {
             let cache2 = cache.clone();
             async move {
                 // Wait for 100 ms before calling `or_insert_with_if`.
-                Timer::after(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(100)).await;
                 let entry = cache2
                     .entry_by_ref(KEY)
                     .or_insert_with_if(async { unreachable!() }, |_v| unreachable!())
@@ -3586,7 +3415,7 @@ mod tests {
             let cache3 = cache.clone();
             async move {
                 // Wait for 350 ms before calling `or_insert_with_if`.
-                Timer::after(Duration::from_millis(350)).await;
+                sleep(Duration::from_millis(350)).await;
                 let entry = cache3
                     .entry_by_ref(KEY)
                     .or_insert_with_if(async { unreachable!() }, |v| {
@@ -3607,7 +3436,7 @@ mod tests {
             let cache4 = cache.clone();
             async move {
                 // Wait for 400 ms before calling `or_insert_with_if`.
-                Timer::after(Duration::from_millis(400)).await;
+                sleep(Duration::from_millis(400)).await;
                 let entry = cache4
                     .entry_by_ref(KEY)
                     .or_insert_with_if(async { "task4" }, |v| {
@@ -3626,7 +3455,7 @@ mod tests {
             let cache5 = cache.clone();
             async move {
                 // Wait for 200 ms before calling `get`.
-                Timer::after(Duration::from_millis(200)).await;
+                sleep(Duration::from_millis(200)).await;
                 let maybe_v = cache5.get(KEY).await;
                 assert!(maybe_v.is_none());
             }
@@ -3638,7 +3467,7 @@ mod tests {
             let cache6 = cache.clone();
             async move {
                 // Wait for 350 ms before calling `get`.
-                Timer::after(Duration::from_millis(350)).await;
+                sleep(Duration::from_millis(350)).await;
                 let maybe_v = cache6.get(KEY).await;
                 assert_eq!(maybe_v, Some("task1"));
             }
@@ -3650,7 +3479,7 @@ mod tests {
             let cache7 = cache.clone();
             async move {
                 // Wait for 450 ms before calling `get`.
-                Timer::after(Duration::from_millis(450)).await;
+                sleep(Duration::from_millis(450)).await;
                 let maybe_v = cache7.get(KEY).await;
                 assert_eq!(maybe_v, Some("task4"));
             }
@@ -3685,7 +3514,7 @@ mod tests {
                 let v = cache1
                     .try_get_with(KEY, async {
                         // Wait for 300 ms and return an error.
-                        Timer::after(Duration::from_millis(300)).await;
+                        sleep(Duration::from_millis(300)).await;
                         Err(MyError("task1 error".into()))
                     })
                     .await;
@@ -3700,7 +3529,7 @@ mod tests {
             let cache2 = cache.clone();
             async move {
                 // Wait for 100 ms before calling `try_get_with`.
-                Timer::after(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(100)).await;
                 let v: MyResult<_> = cache2.try_get_with(KEY, async { unreachable!() }).await;
                 assert!(v.is_err());
             }
@@ -3715,11 +3544,11 @@ mod tests {
             let cache3 = cache.clone();
             async move {
                 // Wait for 400 ms before calling `try_get_with`.
-                Timer::after(Duration::from_millis(400)).await;
+                sleep(Duration::from_millis(400)).await;
                 let v: MyResult<_> = cache3
                     .try_get_with(KEY, async {
                         // Wait for 300 ms and return an Ok(&str) value.
-                        Timer::after(Duration::from_millis(300)).await;
+                        sleep(Duration::from_millis(300)).await;
                         Ok("task3")
                     })
                     .await;
@@ -3734,7 +3563,7 @@ mod tests {
             let cache4 = cache.clone();
             async move {
                 // Wait for 500 ms before calling `try_get_with`.
-                Timer::after(Duration::from_millis(500)).await;
+                sleep(Duration::from_millis(500)).await;
                 let v: MyResult<_> = cache4.try_get_with(KEY, async { unreachable!() }).await;
                 assert_eq!(v.unwrap(), "task3");
             }
@@ -3749,7 +3578,7 @@ mod tests {
             let cache5 = cache.clone();
             async move {
                 // Wait for 800 ms before calling `try_get_with`.
-                Timer::after(Duration::from_millis(800)).await;
+                sleep(Duration::from_millis(800)).await;
                 let v: MyResult<_> = cache5.try_get_with(KEY, async { unreachable!() }).await;
                 assert_eq!(v.unwrap(), "task3");
             }
@@ -3761,7 +3590,7 @@ mod tests {
             let cache6 = cache.clone();
             async move {
                 // Wait for 200 ms before calling `get`.
-                Timer::after(Duration::from_millis(200)).await;
+                sleep(Duration::from_millis(200)).await;
                 let maybe_v = cache6.get(&KEY).await;
                 assert!(maybe_v.is_none());
             }
@@ -3773,7 +3602,7 @@ mod tests {
             let cache7 = cache.clone();
             async move {
                 // Wait for 400 ms before calling `get`.
-                Timer::after(Duration::from_millis(400)).await;
+                sleep(Duration::from_millis(400)).await;
                 let maybe_v = cache7.get(&KEY).await;
                 assert!(maybe_v.is_none());
             }
@@ -3785,7 +3614,7 @@ mod tests {
             let cache8 = cache.clone();
             async move {
                 // Wait for 800 ms before calling `get`.
-                Timer::after(Duration::from_millis(800)).await;
+                sleep(Duration::from_millis(800)).await;
                 let maybe_v = cache8.get(&KEY).await;
                 assert_eq!(maybe_v, Some("task3"));
             }
@@ -3820,7 +3649,7 @@ mod tests {
                 let v = cache1
                     .try_get_with_by_ref(KEY, async {
                         // Wait for 300 ms and return an error.
-                        Timer::after(Duration::from_millis(300)).await;
+                        sleep(Duration::from_millis(300)).await;
                         Err(MyError("task1 error".into()))
                     })
                     .await;
@@ -3835,7 +3664,7 @@ mod tests {
             let cache2 = cache.clone();
             async move {
                 // Wait for 100 ms before calling `try_get_with_by_ref`.
-                Timer::after(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(100)).await;
                 let v: MyResult<_> = cache2
                     .try_get_with_by_ref(KEY, async { unreachable!() })
                     .await;
@@ -3852,11 +3681,11 @@ mod tests {
             let cache3 = cache.clone();
             async move {
                 // Wait for 400 ms before calling `try_get_with_by_ref`.
-                Timer::after(Duration::from_millis(400)).await;
+                sleep(Duration::from_millis(400)).await;
                 let v: MyResult<_> = cache3
                     .try_get_with_by_ref(KEY, async {
                         // Wait for 300 ms and return an Ok(&str) value.
-                        Timer::after(Duration::from_millis(300)).await;
+                        sleep(Duration::from_millis(300)).await;
                         Ok("task3")
                     })
                     .await;
@@ -3871,7 +3700,7 @@ mod tests {
             let cache4 = cache.clone();
             async move {
                 // Wait for 500 ms before calling `try_get_with_by_ref`.
-                Timer::after(Duration::from_millis(500)).await;
+                sleep(Duration::from_millis(500)).await;
                 let v: MyResult<_> = cache4
                     .try_get_with_by_ref(KEY, async { unreachable!() })
                     .await;
@@ -3888,7 +3717,7 @@ mod tests {
             let cache5 = cache.clone();
             async move {
                 // Wait for 800 ms before calling `try_get_with_by_ref`.
-                Timer::after(Duration::from_millis(800)).await;
+                sleep(Duration::from_millis(800)).await;
                 let v: MyResult<_> = cache5
                     .try_get_with_by_ref(KEY, async { unreachable!() })
                     .await;
@@ -3902,7 +3731,7 @@ mod tests {
             let cache6 = cache.clone();
             async move {
                 // Wait for 200 ms before calling `get`.
-                Timer::after(Duration::from_millis(200)).await;
+                sleep(Duration::from_millis(200)).await;
                 let maybe_v = cache6.get(KEY).await;
                 assert!(maybe_v.is_none());
             }
@@ -3914,7 +3743,7 @@ mod tests {
             let cache7 = cache.clone();
             async move {
                 // Wait for 400 ms before calling `get`.
-                Timer::after(Duration::from_millis(400)).await;
+                sleep(Duration::from_millis(400)).await;
                 let maybe_v = cache7.get(KEY).await;
                 assert!(maybe_v.is_none());
             }
@@ -3926,7 +3755,7 @@ mod tests {
             let cache8 = cache.clone();
             async move {
                 // Wait for 800 ms before calling `get`.
-                Timer::after(Duration::from_millis(800)).await;
+                sleep(Duration::from_millis(800)).await;
                 let maybe_v = cache8.get(KEY).await;
                 assert_eq!(maybe_v, Some("task3"));
             }
@@ -3952,7 +3781,7 @@ mod tests {
                 let v = cache1
                     .optionally_get_with(KEY, async {
                         // Wait for 300 ms and return an None.
-                        Timer::after(Duration::from_millis(300)).await;
+                        sleep(Duration::from_millis(300)).await;
                         None
                     })
                     .await;
@@ -3968,7 +3797,7 @@ mod tests {
             let cache2 = cache.clone();
             async move {
                 // Wait for 100 ms before calling `optionally_get_with`.
-                Timer::after(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(100)).await;
                 let v = cache2
                     .optionally_get_with(KEY, async { unreachable!() })
                     .await;
@@ -3985,11 +3814,11 @@ mod tests {
             let cache3 = cache.clone();
             async move {
                 // Wait for 400 ms before calling `optionally_get_with`.
-                Timer::after(Duration::from_millis(400)).await;
+                sleep(Duration::from_millis(400)).await;
                 let v = cache3
                     .optionally_get_with(KEY, async {
                         // Wait for 300 ms and return an Some(&str) value.
-                        Timer::after(Duration::from_millis(300)).await;
+                        sleep(Duration::from_millis(300)).await;
                         Some("task3")
                     })
                     .await;
@@ -4004,7 +3833,7 @@ mod tests {
             let cache4 = cache.clone();
             async move {
                 // Wait for 500 ms before calling `try_get_with`.
-                Timer::after(Duration::from_millis(500)).await;
+                sleep(Duration::from_millis(500)).await;
                 let v = cache4
                     .optionally_get_with(KEY, async { unreachable!() })
                     .await;
@@ -4021,7 +3850,7 @@ mod tests {
             let cache5 = cache.clone();
             async move {
                 // Wait for 800 ms before calling `optionally_get_with`.
-                Timer::after(Duration::from_millis(800)).await;
+                sleep(Duration::from_millis(800)).await;
                 let v = cache5
                     .optionally_get_with(KEY, async { unreachable!() })
                     .await;
@@ -4035,7 +3864,7 @@ mod tests {
             let cache6 = cache.clone();
             async move {
                 // Wait for 200 ms before calling `get`.
-                Timer::after(Duration::from_millis(200)).await;
+                sleep(Duration::from_millis(200)).await;
                 let maybe_v = cache6.get(&KEY).await;
                 assert!(maybe_v.is_none());
             }
@@ -4047,7 +3876,7 @@ mod tests {
             let cache7 = cache.clone();
             async move {
                 // Wait for 400 ms before calling `get`.
-                Timer::after(Duration::from_millis(400)).await;
+                sleep(Duration::from_millis(400)).await;
                 let maybe_v = cache7.get(&KEY).await;
                 assert!(maybe_v.is_none());
             }
@@ -4059,7 +3888,7 @@ mod tests {
             let cache8 = cache.clone();
             async move {
                 // Wait for 800 ms before calling `get`.
-                Timer::after(Duration::from_millis(800)).await;
+                sleep(Duration::from_millis(800)).await;
                 let maybe_v = cache8.get(&KEY).await;
                 assert_eq!(maybe_v, Some("task3"));
             }
@@ -4085,7 +3914,7 @@ mod tests {
                 let v = cache1
                     .optionally_get_with_by_ref(KEY, async {
                         // Wait for 300 ms and return an None.
-                        Timer::after(Duration::from_millis(300)).await;
+                        sleep(Duration::from_millis(300)).await;
                         None
                     })
                     .await;
@@ -4101,7 +3930,7 @@ mod tests {
             let cache2 = cache.clone();
             async move {
                 // Wait for 100 ms before calling `optionally_get_with_by_ref`.
-                Timer::after(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(100)).await;
                 let v = cache2
                     .optionally_get_with_by_ref(KEY, async { unreachable!() })
                     .await;
@@ -4118,11 +3947,11 @@ mod tests {
             let cache3 = cache.clone();
             async move {
                 // Wait for 400 ms before calling `optionally_get_with_by_ref`.
-                Timer::after(Duration::from_millis(400)).await;
+                sleep(Duration::from_millis(400)).await;
                 let v = cache3
                     .optionally_get_with_by_ref(KEY, async {
                         // Wait for 300 ms and return an Some(&str) value.
-                        Timer::after(Duration::from_millis(300)).await;
+                        sleep(Duration::from_millis(300)).await;
                         Some("task3")
                     })
                     .await;
@@ -4137,7 +3966,7 @@ mod tests {
             let cache4 = cache.clone();
             async move {
                 // Wait for 500 ms before calling `try_get_with`.
-                Timer::after(Duration::from_millis(500)).await;
+                sleep(Duration::from_millis(500)).await;
                 let v = cache4
                     .optionally_get_with_by_ref(KEY, async { unreachable!() })
                     .await;
@@ -4154,7 +3983,7 @@ mod tests {
             let cache5 = cache.clone();
             async move {
                 // Wait for 800 ms before calling `optionally_get_with_by_ref`.
-                Timer::after(Duration::from_millis(800)).await;
+                sleep(Duration::from_millis(800)).await;
                 let v = cache5
                     .optionally_get_with_by_ref(KEY, async { unreachable!() })
                     .await;
@@ -4168,7 +3997,7 @@ mod tests {
             let cache6 = cache.clone();
             async move {
                 // Wait for 200 ms before calling `get`.
-                Timer::after(Duration::from_millis(200)).await;
+                sleep(Duration::from_millis(200)).await;
                 let maybe_v = cache6.get(KEY).await;
                 assert!(maybe_v.is_none());
             }
@@ -4180,7 +4009,7 @@ mod tests {
             let cache7 = cache.clone();
             async move {
                 // Wait for 400 ms before calling `get`.
-                Timer::after(Duration::from_millis(400)).await;
+                sleep(Duration::from_millis(400)).await;
                 let maybe_v = cache7.get(KEY).await;
                 assert!(maybe_v.is_none());
             }
@@ -4192,7 +4021,7 @@ mod tests {
             let cache8 = cache.clone();
             async move {
                 // Wait for 800 ms before calling `get`.
-                Timer::after(Duration::from_millis(800)).await;
+                sleep(Duration::from_millis(800)).await;
                 let maybe_v = cache8.get(KEY).await;
                 assert_eq!(maybe_v, Some("task3"));
             }
