@@ -581,7 +581,7 @@ use std::{
 /// ### `Immediate` mode
 ///
 /// Tne `Immediate` mode is the default delivery mode for the `sync` caches. Use this
-/// mode when it is import to keep the order of write operations and eviction
+/// mode when it is important to keep the order of write operations and eviction
 /// notifications.
 ///
 /// This mode has the following characteristics:
