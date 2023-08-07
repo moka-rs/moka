@@ -42,7 +42,6 @@ use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
     hash::{BuildHasher, Hash, Hasher},
-    ptr::NonNull,
     rc::Rc,
     sync::{
         atomic::{AtomicBool, AtomicU8, Ordering},
@@ -896,17 +895,11 @@ impl EntrySizeAndFrequency {
     }
 }
 
-// Access-Order Queue Node
-type AoqNode<K> = NonNull<DeqNode<KeyHashDate<K>>>;
-
 enum AdmissionResult<K> {
     Admitted {
-        victim_nodes: SmallVec<[AoqNode<K>; 8]>,
-        skipped_nodes: SmallVec<[AoqNode<K>; 4]>,
+        victim_keys: SmallVec<[KeyHash<K>; 8]>,
     },
-    Rejected {
-        skipped_nodes: SmallVec<[AoqNode<K>; 4]>,
-    },
+    Rejected,
 }
 
 type CacheStore<K, V, S> = crate::cht::SegmentedHashMap<Arc<K>, TrioArc<ValueEntry<K, V>>, S>;
@@ -1593,27 +1586,23 @@ where
             }
         }
 
-        let skipped_nodes;
         let mut candidate = EntrySizeAndFrequency::new(new_weight);
         candidate.add_frequency(freq, kh.hash);
 
         // Try to admit the candidate.
         match Self::admit(&candidate, &self.cache, deqs, freq) {
-            AdmissionResult::Admitted {
-                victim_nodes,
-                skipped_nodes: mut skipped,
-            } => {
-                // Try to remove the victims from the cache (hash map).
-                for victim in victim_nodes {
-                    let element = unsafe { &victim.as_ref().element };
+            AdmissionResult::Admitted { victim_keys } => {
+                // Try to remove the victims from the hash map.
+                for victim in victim_keys {
+                    let vic_key = victim.key;
+                    let vic_hash = victim.hash;
 
                     // Lock the key for removal if blocking removal notification is enabled.
-                    let kl = self.maybe_key_lock(element.key());
+                    let kl = self.maybe_key_lock(&vic_key);
                     let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-                    if let Some((vic_key, vic_entry)) = self
-                        .cache
-                        .remove_entry(element.hash(), |k| k == element.key())
+                    if let Some((vic_key, vic_entry)) =
+                        self.cache.remove_entry(vic_hash, |k| k == &vic_key)
                     {
                         if eviction_state.is_notifier_enabled() {
                             eviction_state.add_removed_entry(
@@ -1630,13 +1619,15 @@ where
                             &mut eviction_state.counters,
                         );
                     } else {
-                        // Could not remove the victim from the cache. Skip this
-                        // victim node as its ValueEntry might have been
-                        // invalidated. Add it to the skipped nodes.
-                        skipped.push(victim);
+                        // Could not remove the victim from the cache. Skip it as its
+                        // ValueEntry might have been invalidated.
+                        if let Some(node) = deqs.probation.peek_front() {
+                            if node.element.key() == &vic_key && node.element.hash() == vic_hash {
+                                deqs.probation.move_front_to_back();
+                            }
+                        }
                     }
                 }
-                skipped_nodes = skipped;
 
                 // Add the candidate to the deques.
                 self.handle_admit(
@@ -1647,9 +1638,7 @@ where
                     &mut eviction_state.counters,
                 );
             }
-            AdmissionResult::Rejected { skipped_nodes: s } => {
-                skipped_nodes = s;
-
+            AdmissionResult::Rejected => {
                 // Lock the key for removal if blocking removal notification is enabled.
                 let kl = self.maybe_key_lock(&kh.key);
                 let _klg = &kl.as_ref().map(|kl| kl.lock());
@@ -1662,12 +1651,6 @@ where
                 }
             }
         };
-
-        // Move the skipped nodes to the back of the deque. We do not unlink (drop)
-        // them because ValueEntries in the write op queue should be pointing them.
-        for node in skipped_nodes {
-            unsafe { deqs.probation.move_to_back(node) };
-        }
     }
 
     /// Performs size-aware admission explained in the paper:
@@ -1691,18 +1674,19 @@ where
     fn admit(
         candidate: &EntrySizeAndFrequency,
         cache: &CacheStore<K, V, S>,
-        deqs: &Deques<K>,
+        deqs: &mut Deques<K>,
         freq: &FrequencySketch,
     ) -> AdmissionResult<K> {
         const MAX_CONSECUTIVE_RETRIES: usize = 5;
         let mut retries = 0;
 
         let mut victims = EntrySizeAndFrequency::default();
-        let mut victim_nodes = SmallVec::default();
-        let mut skipped_nodes = SmallVec::default();
+        let mut victim_keys = SmallVec::default();
+
+        let deq = &mut deqs.probation;
 
         // Get first potential victim at the LRU position.
-        let mut next_victim = deqs.probation.peek_front_ptr();
+        let mut next_victim = deq.peek_front_ptr();
 
         // Aggregate potential victims.
         while victims.policy_weight < candidate.policy_weight {
@@ -1711,25 +1695,28 @@ where
             }
             if let Some(victim) = next_victim.take() {
                 next_victim = DeqNode::next_node_ptr(victim);
-                let vic_elem = &unsafe { victim.as_ref() }.element;
 
-                if let Some(vic_entry) = cache.get(vic_elem.hash(), |k| k == vic_elem.key()) {
+                let vic_elem = &unsafe { victim.as_ref() }.element;
+                let key = vic_elem.key();
+                let hash = vic_elem.hash();
+
+                if let Some(vic_entry) = cache.get(hash, |k| k == key) {
                     victims.add_policy_weight(vic_entry.policy_weight());
-                    victims.add_frequency(freq, vic_elem.hash());
-                    victim_nodes.push(victim);
+                    victims.add_frequency(freq, hash);
+                    victim_keys.push(KeyHash::new(Arc::clone(key), hash));
                     retries = 0;
                 } else {
                     // Could not get the victim from the cache (hash map). Skip this node
                     // as its ValueEntry might have been invalidated.
-                    skipped_nodes.push(victim);
-
+                    unsafe { deq.move_to_back(victim) };
                     retries += 1;
-                    if retries > MAX_CONSECUTIVE_RETRIES {
-                        break;
-                    }
                 }
             } else {
                 // No more potential victims.
+                break;
+            }
+
+            if retries > MAX_CONSECUTIVE_RETRIES {
                 break;
             }
         }
@@ -1740,12 +1727,9 @@ where
         // See Caffeine's implementation.
 
         if victims.policy_weight >= candidate.policy_weight && candidate.freq > victims.freq {
-            AdmissionResult::Admitted {
-                victim_nodes,
-                skipped_nodes,
-            }
+            AdmissionResult::Admitted { victim_keys }
         } else {
-            AdmissionResult::Rejected { skipped_nodes }
+            AdmissionResult::Rejected
         }
     }
 
