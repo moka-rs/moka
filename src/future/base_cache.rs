@@ -108,12 +108,6 @@ impl<K, V, S> BaseCache<K, V, S> {
         self.inner.is_removal_notifier_enabled()
     }
 
-    // #[inline]
-    // #[cfg(feature = "sync")]
-    // pub(crate) fn is_blocking_removal_notification(&self) -> bool {
-    //     self.inner.is_blocking_removal_notification()
-    // }
-
     #[inline]
     pub(crate) fn current_time_from_expiration_clock(&self) -> Instant {
         self.inner.current_time_from_expiration_clock()
@@ -926,14 +920,6 @@ impl<K, V, S> Inner<K, V, S> {
         self.removal_notifier.is_some()
     }
 
-    // #[inline]
-    // fn is_blocking_removal_notification(&self) -> bool {
-    //     self.removal_notifier
-    //         .as_ref()
-    //         .map(|rn| rn.is_blocking())
-    //         .unwrap_or_default()
-    // }
-
     #[cfg(feature = "unstable-debug-counters")]
     pub async fn debug_stats(&self) -> CacheDebugStats {
         let ec = self.entry_count.load();
@@ -1558,13 +1544,13 @@ where
 
         // Try to admit the candidate.
         //
-        // NOTE: We need to call `admin` here, instead of a part of the `match`
+        // NOTE: We need to call `admit` here, instead of a part of the `match`
         // expression. Otherwise the future returned from this `handle_upsert` method
         // will not be `Send`.
         let admission_result = Self::admit(&candidate, &self.cache, deqs, freq);
         match admission_result {
             AdmissionResult::Admitted { victim_keys } => {
-                // Try to remove the victims from the cache (hash map).
+                // Try to remove the victims from the hash map.
                 for victim in victim_keys {
                     let vic_key = victim.key;
                     let vic_hash = victim.hash;
@@ -1679,7 +1665,7 @@ where
                 let key = vic_elem.key();
                 let hash = vic_elem.hash();
 
-                if let Some(vic_entry) = cache.get(vic_elem.hash(), |k| k == vic_elem.key()) {
+                if let Some(vic_entry) = cache.get(hash, |k| k == key) {
                     victims.add_policy_weight(vic_entry.policy_weight());
                     victims.add_frequency(freq, hash);
                     victim_keys.push(KeyHash::new(Arc::clone(key), hash));

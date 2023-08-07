@@ -18,7 +18,6 @@ mod value_initializer;
 
 pub use {
     builder::CacheBuilder,
-    // cache::{BlockingOp, Cache},
     cache::Cache,
     entry_selector::{OwnedKeyEntrySelector, RefKeyEntrySelector},
 };

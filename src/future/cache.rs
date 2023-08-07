@@ -1975,7 +1975,7 @@ mod tests {
         Expiry,
     };
 
-    use async_lock::Mutex;
+    use async_lock::{Barrier, Mutex};
     use std::{
         convert::Infallible,
         sync::Arc,
@@ -2222,39 +2222,55 @@ mod tests {
         assert!(cache.key_locks_map_is_empty());
     }
 
-    // #[tokio::test]
-    // async fn basic_multi_async_tasks() {
-    //     let num_tasks = 4;
-    //     let cache = Cache::new(100);
+    #[tokio::test]
+    async fn basic_multi_async_tasks() {
+        let num_tasks = 2;
+        let num_threads = 2;
 
-    //     let tasks = (0..num_tasks)
-    //         .map(|id| {
-    //             let cache = cache.clone();
-    //             if id == 0 {
-    //                 tokio::spawn(async move {
-    //                     cache.blocking().insert(10, format!("{}-100", id));
-    //                     cache.get(&10);
-    //                     cache.blocking().insert(20, format!("{}-200", id));
-    //                     cache.blocking().invalidate(&10);
-    //                 })
-    //             } else {
-    //                 tokio::spawn(async move {
-    //                     cache.insert(10, format!("{}-100", id)).await;
-    //                     cache.get(&10);
-    //                     cache.insert(20, format!("{}-200", id)).await;
-    //                     cache.invalidate(&10).await;
-    //                 })
-    //             }
-    //         })
-    //         .collect::<Vec<_>>();
+        let cache = Cache::new(100);
+        let barrier = Arc::new(Barrier::new(num_tasks + num_threads as usize));
 
-    //     let _ = futures_util::future::join_all(tasks).await;
+        let tasks = (0..num_tasks)
+            .map(|id| {
+                let cache = cache.clone();
+                let barrier = Arc::clone(&barrier);
 
-    //     assert!(cache.get(&10).is_none());
-    //     assert!(cache.get(&20).is_some());
-    //     assert!(!cache.contains_key(&10));
-    //     assert!(cache.contains_key(&20));
-    // }
+                tokio::spawn(async move {
+                    barrier.wait().await;
+
+                    cache.insert(10, format!("{}-100", id)).await;
+                    cache.get(&10).await;
+                    cache.insert(20, format!("{}-200", id)).await;
+                    cache.invalidate(&10).await;
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let threads = (0..num_threads)
+            .map(|id| {
+                let cache = cache.clone();
+                let barrier = Arc::clone(&barrier);
+                let rt = tokio::runtime::Handle::current();
+
+                std::thread::spawn(move || {
+                    rt.block_on(barrier.wait());
+
+                    rt.block_on(cache.insert(10, format!("{}-100", id)));
+                    rt.block_on(cache.get(&10));
+                    rt.block_on(cache.insert(20, format!("{}-200", id)));
+                    rt.block_on(cache.invalidate(&10));
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let _ = futures_util::future::join_all(tasks).await;
+        threads.into_iter().for_each(|t| t.join().unwrap());
+
+        assert!(cache.get(&10).await.is_none());
+        assert!(cache.get(&20).await.is_some());
+        assert!(!cache.contains_key(&10));
+        assert!(cache.contains_key(&20));
+    }
 
     #[tokio::test]
     async fn invalidate_all() {

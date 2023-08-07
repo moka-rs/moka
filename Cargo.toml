@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.12.0"
+version = "0.12.0-beta.1"
 edition = "2018"
 # Rust 1.65 was released on Nov 3, 2022.
 rust-version = "1.65"
