@@ -1880,22 +1880,34 @@ where
         housekeeper: Option<&HouseKeeperArc>,
     ) -> Result<(), TrySendError<WriteOp<K, V>>> {
         let mut op = op;
+        let mut spin_count = 0u8;
         loop {
             BaseCache::<K, V, S>::apply_reads_writes_if_needed(inner, ch, now, housekeeper).await;
             match ch.try_send(op) {
-                Ok(()) => break,
+                Ok(()) => return Ok(()),
                 Err(TrySendError::Full(op1)) => {
                     op = op1;
-                    // Wastes some CPU time with a hint to indicate to the CPU that
-                    // we are spinning
-                    for _ in 0..10 {
-                        std::hint::spin_loop();
-                    }
                 }
                 Err(e @ TrySendError::Disconnected(_)) => return Err(e),
             }
+
+            // We have got a `TrySendError::Full` above. Wait for a bit and try
+            // again.
+            if spin_count < 10 {
+                spin_count += 1;
+                // Wastes some CPU time with a hint to indicate to the CPU that we
+                // are spinning
+                for _ in 0..8 {
+                    std::hint::spin_loop();
+                }
+            } else {
+                spin_count = 0;
+                // Try to yield to other tasks. We have to yield sometimes, otherwise
+                // other task, which is draining the `ch`, will not make any
+                // progress. If this happens, we will stuck in this loop forever.
+                super::may_yield().await;
+            }
         }
-        Ok(())
     }
 }
 

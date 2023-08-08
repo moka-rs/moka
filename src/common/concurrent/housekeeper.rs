@@ -134,8 +134,8 @@ impl BlockingHousekeeper {
         match self.is_sync_running.compare_exchange(
             false,
             true,
+            Ordering::AcqRel,
             Ordering::Acquire,
-            Ordering::Relaxed,
         ) {
             Ok(_) => {
                 let now = cache.now();
@@ -298,8 +298,8 @@ where
         match self.on_demand_sync_scheduled.compare_exchange(
             false,
             true,
+            Ordering::AcqRel,
             Ordering::Acquire,
-            Ordering::Relaxed,
         ) {
             Ok(_) => {
                 let unsafe_weak_ptr = Arc::clone(&self.inner);

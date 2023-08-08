@@ -3,7 +3,9 @@
 //!
 //! To use this module, enable a crate feature called "future".
 
+use async_lock::Mutex;
 use futures_util::future::BoxFuture;
+use once_cell::sync::Lazy;
 use std::{future::Future, hash::Hash, sync::Arc};
 
 mod base_cache;
@@ -64,4 +66,15 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
     }
+}
+
+/// May yield to other async tasks.
+pub(crate) async fn may_yield() {
+    static LOCK: Lazy<Mutex<()>> = Lazy::new(Default::default);
+
+    // Acquire the lock then immediately release it. This `await` may yield to other
+    // tasks.
+    //
+    // TODO: This behavior is tested only with Tokio. Check other async runtimes.
+    let _ = LOCK.lock().await;
 }

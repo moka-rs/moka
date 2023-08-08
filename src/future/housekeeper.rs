@@ -55,8 +55,8 @@ impl Housekeeper {
         match self.is_sync_running.compare_exchange(
             false,
             true,
+            Ordering::AcqRel,
             Ordering::Acquire,
-            Ordering::Relaxed,
         ) {
             Ok(_) => {
                 let now = cache.now();
