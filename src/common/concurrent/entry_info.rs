@@ -1,9 +1,19 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use super::AccessTime;
+use super::{AccessTime, KeyDeqNodeAo, KeyDeqNodeWo};
 use crate::common::{concurrent::atomic_time::AtomicInstant, time::Instant};
 
-pub(crate) struct EntryInfo {
+use parking_lot::Mutex;
+
+pub(crate) struct DeqNodes<K> {
+    access_order_q_node: Option<KeyDeqNodeAo<K>>,
+    write_order_q_node: Option<KeyDeqNodeWo<K>>,
+}
+
+// We need this `unsafe impl` as DeqNodes have NonNull pointers.
+unsafe impl<K> Send for DeqNodes<K> {}
+
+pub(crate) struct EntryInfo<K> {
     /// `is_admitted` indicates that the entry has been admitted to the
     /// cache. When `false`, it means the entry is _temporary_ admitted to
     /// the cache or evicted from the cache (so it should not have LRU nodes).
@@ -15,9 +25,10 @@ pub(crate) struct EntryInfo {
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
     policy_weight: AtomicU32,
+    nodes: Mutex<DeqNodes<K>>,
 }
 
-impl EntryInfo {
+impl<K> EntryInfo<K> {
     #[inline]
     pub(crate) fn new(timestamp: Instant, policy_weight: u32) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
@@ -29,6 +40,10 @@ impl EntryInfo {
             last_accessed: AtomicInstant::new(timestamp),
             last_modified: AtomicInstant::new(timestamp),
             policy_weight: AtomicU32::new(policy_weight),
+            nodes: Mutex::new(DeqNodes {
+                access_order_q_node: None,
+                write_order_q_node: None,
+            }),
         }
     }
 
@@ -60,16 +75,45 @@ impl EntryInfo {
     pub(crate) fn set_policy_weight(&self, size: u32) {
         self.policy_weight.store(size, Ordering::Release);
     }
+    pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
+        self.nodes.lock().access_order_q_node
+    }
+
+    pub(crate) fn set_access_order_q_node(&self, node: Option<KeyDeqNodeAo<K>>) {
+        self.nodes.lock().access_order_q_node = node;
+    }
+
+    pub(crate) fn take_access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
+        self.nodes.lock().access_order_q_node.take()
+    }
+
+    pub(crate) fn write_order_q_node(&self) -> Option<KeyDeqNodeWo<K>> {
+        self.nodes.lock().write_order_q_node
+    }
+
+    pub(crate) fn set_write_order_q_node(&self, node: Option<KeyDeqNodeWo<K>>) {
+        self.nodes.lock().write_order_q_node = node;
+    }
+
+    pub(crate) fn take_write_order_q_node(&self) -> Option<KeyDeqNodeWo<K>> {
+        self.nodes.lock().write_order_q_node.take()
+    }
+
+    pub(crate) fn unset_q_nodes(&self) {
+        let mut nodes = self.nodes.lock();
+        nodes.access_order_q_node = None;
+        nodes.write_order_q_node = None;
+    }
 }
 
 #[cfg(feature = "unstable-debug-counters")]
-impl Drop for EntryInfo {
+impl<K> Drop for EntryInfo<K> {
     fn drop(&mut self) {
         super::debug_counters::InternalGlobalDebugCounters::entry_info_dropped();
     }
 }
 
-impl AccessTime for EntryInfo {
+impl<K> AccessTime for EntryInfo<K> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
         self.last_accessed.instant()
@@ -152,7 +196,7 @@ mod test {
         }
 
         if let Some(size) = expected {
-            assert_eq!(size_of::<EntryInfo>(), size);
+            assert_eq!(size_of::<EntryInfo<()>>(), size);
         } else {
             panic!("No expected size for {:?} with Rust version {}", arch, ver);
         }
