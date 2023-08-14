@@ -275,9 +275,10 @@ where
             // Update
             .and_modify(|entry| {
                 // NOTES on `new_value_entry_from` method:
-                // 1. The internal EntryInfo will be shared between the old and new ValueEntries.
-                // 2. This method will set the last_accessed and last_modified to the max value to
-                //    prevent this new ValueEntry from being evicted by an expiration policy.
+                // 1. The internal EntryInfo will be shared between the old and new
+                //    ValueEntries.
+                // 2. This method will set the dirty flag to prevent this new
+                //    ValueEntry from being evicted by an expiration policy.
                 // 3. This method will update the policy_weight with the new weight.
                 let old_weight = entry.policy_weight();
                 *entry = self.new_value_entry_from(value.clone(), ts, weight, entry);
@@ -333,7 +334,7 @@ where
         info.set_last_accessed(timestamp);
         info.set_last_modified(timestamp);
         info.set_policy_weight(policy_weight);
-        TrioArc::new(ValueEntry::new_from(value, info, other))
+        TrioArc::new(ValueEntry::new(value, info))
     }
 
     #[inline]
@@ -1158,7 +1159,7 @@ where
             if let Some((_k, entry)) = maybe_entry {
                 Self::handle_remove(deqs, entry, counters);
             } else if let Some(entry) = self.cache.get(key) {
-                if entry.last_modified().is_none() {
+                if entry.is_dirty() {
                     deqs.move_to_back_ao(&entry);
                     deqs.move_to_back_wo(&entry);
                 } else {

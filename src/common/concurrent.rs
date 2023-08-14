@@ -1,6 +1,5 @@
 use crate::common::{deque::DeqNode, time::Instant};
 
-use parking_lot::Mutex;
 use std::{ptr::NonNull, sync::Arc};
 use tagptr::TagNonNull;
 use triomphe::Arc as TrioArc;
@@ -62,11 +61,11 @@ impl<K> Clone for KeyHash<K> {
 
 pub(crate) struct KeyDate<K> {
     key: Arc<K>,
-    entry_info: TrioArc<EntryInfo>,
+    entry_info: TrioArc<EntryInfo<K>>,
 }
 
 impl<K> KeyDate<K> {
-    pub(crate) fn new(key: Arc<K>, entry_info: &TrioArc<EntryInfo>) -> Self {
+    pub(crate) fn new(key: Arc<K>, entry_info: &TrioArc<EntryInfo<K>>) -> Self {
         Self {
             key,
             entry_info: TrioArc::clone(entry_info),
@@ -91,11 +90,11 @@ impl<K> KeyDate<K> {
 pub(crate) struct KeyHashDate<K> {
     key: Arc<K>,
     hash: u64,
-    entry_info: TrioArc<EntryInfo>,
+    entry_info: TrioArc<EntryInfo<K>>,
 }
 
 impl<K> KeyHashDate<K> {
-    pub(crate) fn new(kh: KeyHash<K>, entry_info: &TrioArc<EntryInfo>) -> Self {
+    pub(crate) fn new(kh: KeyHash<K>, entry_info: &TrioArc<EntryInfo<K>>) -> Self {
         Self {
             key: kh.key,
             hash: kh.hash,
@@ -111,7 +110,7 @@ impl<K> KeyHashDate<K> {
         self.hash
     }
 
-    pub(crate) fn entry_info(&self) -> &EntryInfo {
+    pub(crate) fn entry_info(&self) -> &EntryInfo<K> {
         &self.entry_info
     }
 }
@@ -172,59 +171,28 @@ impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
 }
 
 // DeqNode for an access order queue.
-type KeyDeqNodeAo<K> = TagNonNull<DeqNode<KeyHashDate<K>>, 2>;
+pub(crate) type KeyDeqNodeAo<K> = TagNonNull<DeqNode<KeyHashDate<K>>, 2>;
 
 // DeqNode for the write order queue.
-type KeyDeqNodeWo<K> = NonNull<DeqNode<KeyDate<K>>>;
-
-pub(crate) struct DeqNodes<K> {
-    access_order_q_node: Option<KeyDeqNodeAo<K>>,
-    write_order_q_node: Option<KeyDeqNodeWo<K>>,
-}
-
-// We need this `unsafe impl` as DeqNodes have NonNull pointers.
-unsafe impl<K> Send for DeqNodes<K> {}
+pub(crate) type KeyDeqNodeWo<K> = NonNull<DeqNode<KeyDate<K>>>;
 
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: V,
-    info: TrioArc<EntryInfo>,
-    nodes: Mutex<DeqNodes<K>>,
+    info: TrioArc<EntryInfo<K>>,
 }
 
 impl<K, V> ValueEntry<K, V> {
-    pub(crate) fn new(value: V, entry_info: TrioArc<EntryInfo>) -> Self {
+    pub(crate) fn new(value: V, entry_info: TrioArc<EntryInfo<K>>) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
         self::debug_counters::InternalGlobalDebugCounters::value_entry_created();
 
         Self {
             value,
             info: entry_info,
-            nodes: Mutex::new(DeqNodes {
-                access_order_q_node: None,
-                write_order_q_node: None,
-            }),
         }
     }
 
-    pub(crate) fn new_from(value: V, entry_info: TrioArc<EntryInfo>, other: &Self) -> Self {
-        #[cfg(feature = "unstable-debug-counters")]
-        self::debug_counters::InternalGlobalDebugCounters::value_entry_created();
-
-        let nodes = {
-            let other_nodes = other.nodes.lock();
-            DeqNodes {
-                access_order_q_node: other_nodes.access_order_q_node,
-                write_order_q_node: other_nodes.write_order_q_node,
-            }
-        };
-        Self {
-            value,
-            info: entry_info,
-            nodes: Mutex::new(nodes),
-        }
-    }
-
-    pub(crate) fn entry_info(&self) -> &TrioArc<EntryInfo> {
+    pub(crate) fn entry_info(&self) -> &TrioArc<EntryInfo<K>> {
         &self.info
     }
 
@@ -250,33 +218,31 @@ impl<K, V> ValueEntry<K, V> {
     }
 
     pub(crate) fn access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
-        self.nodes.lock().access_order_q_node
+        self.info.access_order_q_node()
     }
 
     pub(crate) fn set_access_order_q_node(&self, node: Option<KeyDeqNodeAo<K>>) {
-        self.nodes.lock().access_order_q_node = node;
+        self.info.set_access_order_q_node(node);
     }
 
     pub(crate) fn take_access_order_q_node(&self) -> Option<KeyDeqNodeAo<K>> {
-        self.nodes.lock().access_order_q_node.take()
+        self.info.take_access_order_q_node()
     }
 
     pub(crate) fn write_order_q_node(&self) -> Option<KeyDeqNodeWo<K>> {
-        self.nodes.lock().write_order_q_node
+        self.info.write_order_q_node()
     }
 
     pub(crate) fn set_write_order_q_node(&self, node: Option<KeyDeqNodeWo<K>>) {
-        self.nodes.lock().write_order_q_node = node;
+        self.info.set_write_order_q_node(node);
     }
 
     pub(crate) fn take_write_order_q_node(&self) -> Option<KeyDeqNodeWo<K>> {
-        self.nodes.lock().write_order_q_node.take()
+        self.info.take_write_order_q_node()
     }
 
     pub(crate) fn unset_q_nodes(&self) {
-        let mut nodes = self.nodes.lock();
-        nodes.access_order_q_node = None;
-        nodes.write_order_q_node = None;
+        self.info.unset_q_nodes();
     }
 }
 
