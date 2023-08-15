@@ -180,12 +180,12 @@ mod test {
         };
 
         let expected_sizes = match (arch, is_quanta_enabled) {
-            (Linux64, true) => vec![("1.51", 24)],
-            (Linux32, true) => vec![("1.51", 24)],
-            (MacOS64, true) => vec![("1.62", 24)],
-            (Linux64, false) => vec![("1.66", 56), ("1.51", 72)],
-            (Linux32, false) => vec![("1.66", 56), ("1.62", 72), ("1.51", 40)],
-            (MacOS64, false) => vec![("1.62", 56)],
+            (Linux64, true) => vec![("1.60", 48)],
+            (Linux32, true) => vec![("1.60", 48)],
+            (MacOS64, true) => vec![("1.62", 48)],
+            (Linux64, false) => vec![("1.66", 80), ("1.60", 96)],
+            (Linux32, false) => vec![("1.66", 72)],
+            (MacOS64, false) => vec![("1.62", 80)],
         };
 
         let mut expected = None;
