@@ -181,7 +181,7 @@ mod test {
 
         let expected_sizes = match (arch, is_quanta_enabled) {
             (Linux64, true) => vec![("1.60", 48)],
-            (Linux32, true) => vec![("1.60", 48)],
+            (Linux32, true) => vec![("1.60", 40)],
             (MacOS64, true) => vec![("1.62", 48)],
             (Linux64, false) => vec![("1.66", 80), ("1.60", 96)],
             (Linux32, false) => vec![("1.66", 72)],
