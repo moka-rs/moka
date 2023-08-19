@@ -33,10 +33,8 @@ use std::{
 /// A thread-safe, futures-aware concurrent in-memory cache.
 ///
 /// `Cache` supports full concurrency of retrievals and a high expected concurrency
-/// for updates. It can be accessed inside and outside of asynchronous contexts.
-///
-/// `Cache` utilizes a lock-free concurrent hash table as the central key-value
-/// storage. `Cache` performs a best-effort bounding of the map using an entry
+/// for updates.It utilizes a lock-free concurrent hash table as the central
+/// key-value storage. It performs a best-effort bounding of the map using an entry
 /// replacement algorithm to determine which entries to evict when the capacity is
 /// exceeded.
 ///
@@ -386,9 +384,8 @@ use std::{
 ///     // eviction listener.
 ///     let expiry = MyExpiry;
 ///
-///     let eviction_listener = |key, _value, cause| -> ListenerFuture {
+///     let eviction_listener = |key, _value, cause| {
 ///         println!("Evicted key {key}. Cause: {cause:?}");
-///         async move {}.boxed()
 ///     };
 ///
 ///     let cache = Cache::builder()
@@ -575,7 +572,7 @@ use std::{
 ///     let cache = Cache::builder()
 ///         .max_capacity(100)
 ///         .time_to_live(Duration::from_secs(2))
-///         .eviction_listener(listener)
+///         .async_eviction_listener(listener)
 ///         .build();
 ///
 ///     // Insert an entry to the cache.
@@ -2032,7 +2029,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(3)
-            .eviction_listener(listener)
+            .async_eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing().await;
 
@@ -2134,7 +2131,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(31)
             .weigher(weigher)
-            .eviction_listener(listener)
+            .async_eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing().await;
 
@@ -2303,7 +2300,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
-            .eviction_listener(listener)
+            .async_eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing().await;
 
@@ -2380,7 +2377,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .support_invalidation_closures()
-            .eviction_listener(listener)
+            .async_eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing().await;
 
@@ -2484,7 +2481,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .time_to_live(Duration::from_secs(10))
-            .eviction_listener(listener)
+            .async_eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing().await;
 
@@ -2572,7 +2569,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .time_to_idle(Duration::from_secs(10))
-            .eviction_listener(listener)
+            .async_eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing().await;
 
@@ -2695,7 +2692,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .expire_after(expiry)
-            .eviction_listener(listener)
+            .async_eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing().await;
 
@@ -2816,7 +2813,7 @@ mod tests {
         let mut cache = Cache::builder()
             .max_capacity(100)
             .expire_after(expiry)
-            .eviction_listener(listener)
+            .async_eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing().await;
 
@@ -4171,7 +4168,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(3)
-            .eviction_listener(listener)
+            .async_eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing().await;
 
@@ -4235,7 +4232,7 @@ mod tests {
 
         // Create a cache with the eviction listener and also TTL and TTI.
         let mut cache = Cache::builder()
-            .eviction_listener(listener)
+            .async_eviction_listener(listener)
             .time_to_live(Duration::from_secs(7))
             .time_to_idle(Duration::from_secs(5))
             .build();
@@ -4346,7 +4343,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .name("My Future Cache")
-            .eviction_listener(listener)
+            .async_eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing().await;
 
@@ -4424,7 +4421,7 @@ mod tests {
 
         let mut cache = Cache::builder()
             .max_capacity(MAX_CAPACITY as u64)
-            .eviction_listener(listener)
+            .async_eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing().await;
 

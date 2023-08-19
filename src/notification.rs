@@ -5,6 +5,12 @@ pub(crate) mod notifier;
 
 use std::{future::Future, pin::Pin, sync::Arc};
 
+/// A future returned by an eviction listener.
+///
+/// You can use the [`boxed` method][boxed-method] of `FutureExt` trait to convert a
+/// regular `Future` object into `ListenerFuture`.
+///
+/// [boxed-method]: ../future/trait.FutureExt.html#method.boxed
 pub type ListenerFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 
 #[cfg(feature = "sync")]
@@ -17,7 +23,7 @@ pub(crate) type EvictionListenerRef<'a, K, V> =
 
 #[cfg(feature = "future")]
 pub(crate) type AsyncEvictionListener<K, V> =
-    Arc<dyn Fn(Arc<K>, V, RemovalCause) -> ListenerFuture + Send + Sync + 'static>;
+    Box<dyn Fn(Arc<K>, V, RemovalCause) -> ListenerFuture + Send + Sync + 'static>;
 
 // NOTE: Currently, dropping the cache will drop all entries without sending
 // notifications. Calling `invalidate_all` method of the cache will trigger

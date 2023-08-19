@@ -1,4 +1,4 @@
-use super::Cache;
+use super::{Cache, FutureExt};
 use crate::{
     common::{builder_utils, concurrent::Weigher},
     notification::{AsyncEvictionListener, ListenerFuture, RemovalCause},
@@ -256,11 +256,14 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
-    /// Sets the eviction listener closure to the cache.
+    /// Sets the eviction listener closure to the cache. The closure should take
+    /// `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as the arguments. The
+    /// [immediate delivery mode][immediate-mode] is used for the listener.
     ///
-    /// The closure should take `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as
-    /// the arguments. The [queued delivery mode][queued-mode] is used for the
-    /// listener.
+    /// See [this example][example] for a usage of eviction listener.
+    ///
+    /// If you want to use an asynchronous listener, use
+    /// [`async_eviction_listener`](#method.async_eviction_listener) instead.
     ///
     /// # Panics
     ///
@@ -270,13 +273,43 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     /// call the panicked lister again.
     ///
     /// [removal-cause]: ../notification/enum.RemovalCause.html
-    /// [queued-mode]: ../notification/enum.DeliveryMode.html#variant.Queued
+    /// [immediate-mode]: ../notification/enum.DeliveryMode.html#variant.Immediate
+    /// [example]: ./struct.Cache.html#per-entry-expiration-policy
     pub fn eviction_listener<F>(self, listener: F) -> Self
+    where
+        F: Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
+    {
+        let async_listener = move |k, v, c| std::future::ready(listener(k, v, c)).boxed();
+        self.async_eviction_listener(async_listener)
+    }
+
+    /// Sets the eviction listener closure to the cache. The closure should take
+    /// `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as the arguments, and
+    /// return a [`ListenerFuture`][listener-future]. The
+    /// [immediate delivery mode][immediate-mode] is used for the listener.
+    ///
+    /// See [this example][example] for a usage of asynchronous eviction listener.
+    ///
+    /// If you want to use a synchronous listener, use
+    /// [`eviction_listener`](#method.eviction_listener) instead.
+    ///
+    /// # Panics
+    ///
+    /// It is very important to make the listener closure not to panic. Otherwise,
+    /// the cache will stop calling the listener after a panic. This is an intended
+    /// behavior because the cache cannot know whether is is memory safe or not to
+    /// call the panicked lister again.
+    ///
+    /// [removal-cause]: ../notification/enum.RemovalCause.html
+    /// [listener-future]: ../notification/type.ListenerFuture.html
+    /// [immediate-mode]: ../notification/enum.DeliveryMode.html#variant.Immediate
+    /// [example]: ./struct.Cache.html#example-eviction-listener
+    pub fn async_eviction_listener<F>(self, listener: F) -> Self
     where
         F: Fn(Arc<K>, V, RemovalCause) -> ListenerFuture + Send + Sync + 'static,
     {
         Self {
-            eviction_listener: Some(Arc::new(listener)),
+            eviction_listener: Some(Box::new(listener)),
             ..self
         }
     }
