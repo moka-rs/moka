@@ -279,7 +279,14 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     where
         F: Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
     {
-        let async_listener = move |k, v, c| std::future::ready(listener(k, v, c)).boxed();
+        let async_listener = move |k, v, c| {
+            {
+                listener(k, v, c);
+                std::future::ready(())
+            }
+            .boxed()
+        };
+
         self.async_eviction_listener(async_listener)
     }
 
