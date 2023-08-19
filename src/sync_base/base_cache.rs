@@ -2100,8 +2100,7 @@ where
                 }
                 Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters);
             } else if let Some(entry) = self.cache.get(hash, |k| k == key) {
-                // TODO: CHECKME: Should we check `entry.is_dirty()` instead?
-                if entry.last_modified().is_none() {
+                if entry.is_dirty() {
                     deqs.move_to_back_ao(&entry);
                     deqs.move_to_back_wo(&entry);
                 } else {
