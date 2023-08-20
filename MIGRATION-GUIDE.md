@@ -3,7 +3,7 @@
 ## Migrating to v0.12 from a prior version
 
 v0.12.0 has major breaking changes on the API and internal behavior. This section
-walks you through ...
+describes the code changes required to migrate to v0.12.0.
 
 ### `future::Cache`
 
@@ -20,14 +20,14 @@ To support these changes, the following API changes were made:
    - See [Replacing the blocking API](#replacing-the-blocking-api) for more details.
 3. Now `or_insert_with_if` method of the entry API requires `Send` bound for the
    `replace_if` closure.
-4. `future::CacheBuilder::eviction_listener_with_queued_delivery_mode` method was
+4. `eviction_listener_with_queued_delivery_mode` method of `future::CacheBuilder` was
    removed.
    - Please use one of the new methods `eviction_listener` or
      `async_eviction_listener` instead.
    - See [Updating the eviction listener](#updating-the-eviction-listener) for more
      details.
 5. `future::ConcurrentCacheExt::sync` method is renamed to
-   `future::Cache::run_pending_tasks`. It also changed to `async fn`.
+   `future::Cache::run_pending_tasks`. It is also changed to `async fn`.
 
 The following internal behavior changes were made:
 
@@ -37,14 +37,11 @@ The following internal behavior changes were made:
 2. Now `future::Cache` only supports `Immediate` delivery mode for eviction listener.
    - In older versions, only `Queued` delivery mode was supported.
        - If you need `Queued` delivery mode back, please file an issue.
-   - See [Updating the eviction listener](#updating-the-eviction-listener) for more
-     details.
-
 
 #### Replacing the blocking API
 
-`future::Cache::blocking` method was removed. You need to use async runtime's
-blocking API instead.
+`future::Cache::blocking` method was removed. Please use async runtime's blocking API
+instead.
 
 **Tokio**
 
@@ -117,7 +114,7 @@ async fn main() {
 
 #### Updating the eviction listener
 
-`future::CacheBuilder::eviction_listener_with_queued_delivery_mode` method was
+`eviction_listener_with_queued_delivery_mode` method of `future::CacheBuilder` was
 removed. Please use one of the new methods `eviction_listener` or
 `async_eviction_listener` instead.
 
@@ -126,7 +123,8 @@ removed. Please use one of the new methods `eviction_listener` or
 `eviction_listener` takes the same closure as the old method. If you do not need to
 `.await` anything in the eviction listener, use this method.
 
-This code snippet is borrowed from [an example][listener-ex1] in the document of `future::Cache`.
+This code snippet is borrowed from [an example][listener-ex1] in the document of
+`future::Cache`:
 
 ```rust
 let eviction_listener = |key, _value, cause| {
@@ -150,20 +148,22 @@ of the closure is `future::ListenerFuture`, which is a type alias of
 `Pin<Box<dyn Future<Output = ()> + Send>>`. You can use the `boxed` method of
 `future::FutureExt` trait to convert a regular `Future` into this type.
 
-This code snippet is borrowed from [an example][listener-ex2] in the document of `future::Cache`.
+This code snippet is borrowed from [an example][listener-ex2] in the document of
+`future::Cache`:
 
 ```rust
-use moka::{future::{Cache, FutureExt}, notification::ListenerFuture};
+use moka::notification::ListenerFuture;
+// FutureExt trait provides the boxed method.
+use moka::future::FutureExt;
 
 let listener = move |k, v: PathBuf, cause| -> ListenerFuture {
-    // Try to remove the data file at the path `v`.
     println!(
         "\n== An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
         k, v, cause
     );
     let file_mgr2 = Arc::clone(&file_mgr1);
 
-    // Create a Future that removes the data file.
+    // Create a Future that removes the data file at the path `v`.
     async move {
         // Acquire the write lock of the DataFileManager.
         let mut mgr = file_mgr2.write().await;
@@ -187,13 +187,13 @@ let cache = Cache::builder()
     .build();
 ```
 
-[listener-ex1]: https://docs.rs/moka/latest/moka/future/struct.Cache.html#example-eviction-listener
+[listener-ex2]: https://docs.rs/moka/latest/moka/future/struct.Cache.html#example-eviction-listener
 
 #### Maintenance tasks
 
 In older versions, the maintenance tasks needed by the cache were periodically
 executed in background by a global thread pool managed by `moka`. Now `future::Cache`
-does not use the thread pool anymore. Instead, those maintenance tasks are executed
+does not use the thread pool anymore, so those maintenance tasks are executed
 _sometimes_ in foreground when certain cache methods (`get`, `get_with`, `insert`,
 etc.) are called by user code.
 
@@ -206,10 +206,13 @@ These maintenance tasks include:
 1. Determine whether to admit a "temporary admitted" entry or not.
 2. Apply the recording of cache reads and writes to the internal data structures,
    such as LFU filter, LRU queues, and timer wheels.
-3. Remove expired entries.
-4. Remove entries that have been invalidated by `invalidate_all` or
+3. When cache's max capacity is exceeded, select existing entries to evict and remove
+   them from cache.
+4. Remove expired entries.
+5. Remove entries that have been invalidated by `invalidate_all` or
    `invalidate_entries_if` methods.
-5. Deliver removal notifications to the eviction listener.
+6. Deliver removal notifications to the eviction listener. (Call the eviction
+   listener closure with the information about evicted entry)
 
 They will be executed in the following cache methods when necessary:
 
@@ -218,12 +221,16 @@ They will be executed in the following cache methods when necessary:
 - `run_pending_tasks` method, which executes the pending maintenance tasks
   explicitly.
 
+Although expired entries will not be removed until the pending maintenance tasks are
+executed, they will not be returned by cache read methods such as `get`, `get_with`
+and `contains_key`. So unless you need to remove expired entries immediately (e.g. to
+free some memory), you do not need to call `run_pending_tasks` method.
 
 ### `sync::Cache` and `sync::SegmentedCache`
 
-1. `sync` module is no longer enabled by default. Use a crate feature `sync` to
-   enable it.
-2. The thread pool is disabled by default.
+1. (Not in v0.12.0-beta.1) `sync` caches will be no longer enabled by default. Use a
+   crate feature `sync` to enable it.
+2. (Not in v0.12.0-beta.1) The thread pool will be disabled by default.
    - In older versions, the thread pool was used to execute maintenance tasks in
      background.
    - When disabled:
@@ -239,5 +246,5 @@ They will be executed in the following cache methods when necessary:
 To enable the thread pool, do the followings:
 
 - Specify a crate feature `thread-pool`.
-- Call ... at the cache build time.
-
+- At the cache creation time, call the `thread_pool_enabled` method of
+  `CacheBuilder`.

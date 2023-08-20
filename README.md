@@ -42,8 +42,7 @@ high level of concurrency for concurrent access.
 
 - Thread-safe, highly concurrent in-memory cache implementations:
     - Synchronous caches that can be shared across OS threads.
-    - An asynchronous (futures aware) cache that can be accessed inside and outside
-      of asynchronous contexts.
+    - An asynchronous (futures aware) cache.
 - A cache can be bounded by one of the followings:
     - The maximum number of entries.
     - The total weighted size of entries. (Size aware eviction)
@@ -529,12 +528,15 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
 - [x] Variable (per-entry) expiration, using a hierarchical timer wheel.
   (`v0.11.0` via [#248][gh-pull-248])
 - [ ] Cache statistics. (Hit rate, etc.)
+- [x] Remove background threads. (`v0.12.0` via [#294][gh-pull-294] and [#???][gh-pull-qqq])
 - [ ] Upgrade TinyLFU to Window-TinyLFU. ([details][tiny-lfu])
 
 [gh-pull-024]: https://github.com/moka-rs/moka/pull/24
 [gh-pull-105]: https://github.com/moka-rs/moka/pull/105
 [gh-pull-145]: https://github.com/moka-rs/moka/pull/145
 [gh-pull-248]: https://github.com/moka-rs/moka/pull/248
+[gh-pull-294]: https://github.com/moka-rs/moka/pull/294
+[gh-pull-qqq]: https://github.com/moka-rs/moka/pull/qqq
 
 
 ## About the Name
