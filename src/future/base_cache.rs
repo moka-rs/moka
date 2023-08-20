@@ -355,7 +355,7 @@ where
 
         if let Some(hk) = housekeeper {
             if Self::should_apply_writes(hk, w_len, now) {
-                hk.try_sync(inner).await;
+                hk.try_run_pending_tasks(inner).await;
             }
         }
     }
@@ -595,7 +595,7 @@ where
 
         if let Some(hk) = &self.housekeeper {
             if Self::should_apply_reads(hk, len, now) {
-                hk.try_sync(inner).await;
+                hk.try_run_pending_tasks(inner).await;
             }
         }
     }
@@ -717,10 +717,18 @@ where
     pub(crate) async fn reconfigure_for_testing(&mut self) {
         // Enable the frequency sketch.
         self.inner.enable_frequency_sketch_for_testing().await;
+        // Disable auto clean up of pending tasks.
+        if let Some(hk) = &self.housekeeper {
+            hk.disable_auto_run();
+        }
     }
 
     pub(crate) async fn set_expiration_clock(&self, clock: Option<Clock>) {
         self.inner.set_expiration_clock(clock).await;
+        if let Some(hk) = &self.housekeeper {
+            let now = self.current_time_from_expiration_clock();
+            hk.reset_run_after(now);
+        }
     }
 
     pub(crate) fn key_locks_map_is_empty(&self) -> bool {

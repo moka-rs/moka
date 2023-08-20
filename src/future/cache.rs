@@ -6,7 +6,7 @@ use super::{
 };
 use crate::{
     common::{
-        concurrent::{constants::MAX_SYNC_REPEATS, Weigher, WriteOp},
+        concurrent::{Weigher, WriteOp},
         time::Instant,
     },
     notification::AsyncEvictionListener,
@@ -1512,7 +1512,9 @@ where
     }
 
     pub async fn run_pending_tasks(&self) {
-        self.base.inner.run_pending_tasks(MAX_SYNC_REPEATS).await;
+        if let Some(hk) = &self.base.housekeeper {
+            hk.run_pending_tasks(Arc::clone(&self.base.inner)).await;
+        }
     }
 }
 
@@ -1943,6 +1945,24 @@ where
     fn key_locks_map_is_empty(&self) -> bool {
         self.base.key_locks_map_is_empty()
     }
+
+    fn run_pending_tasks_initiation_count(&self) -> usize {
+        use std::sync::atomic::Ordering;
+        self.base
+            .housekeeper
+            .as_ref()
+            .map(|hk| hk.start_count.load(Ordering::Acquire))
+            .expect("housekeeper is not set")
+    }
+
+    fn run_pending_tasks_completion_count(&self) -> usize {
+        use std::sync::atomic::Ordering;
+        self.base
+            .housekeeper
+            .as_ref()
+            .map(|hk| hk.complete_count.load(Ordering::Acquire))
+            .expect("housekeeper is not set")
+    }
 }
 
 // AS of Rust 1.71, we cannot make this function into a `const fn` because mutable
@@ -1968,7 +1988,10 @@ mod tests {
     use async_lock::{Barrier, Mutex};
     use std::{
         convert::Infallible,
-        sync::Arc,
+        sync::{
+            atomic::{AtomicU32, Ordering},
+            Arc,
+        },
         time::{Duration, Instant as StdInstant},
     };
     use tokio::time::sleep;
@@ -4351,6 +4374,86 @@ mod tests {
         cache.run_pending_tasks().await;
 
         verify_notification_vec(&cache, actual, &expected).await;
+    }
+
+    #[tokio::test]
+    async fn cancel_future_while_running_pending_tasks() {
+        use crate::future::FutureExt;
+        use futures_util::future::poll_immediate;
+        use tokio::task::yield_now;
+
+        let listener_initiation_count: Arc<AtomicU32> = Default::default();
+        let listener_completion_count: Arc<AtomicU32> = Default::default();
+
+        let listener = {
+            // Variables to capture.
+            let init_count = Arc::clone(&listener_initiation_count);
+            let comp_count = Arc::clone(&listener_completion_count);
+
+            // Our eviction listener closure.
+            move |_k, _v, _r| {
+                init_count.fetch_add(1, Ordering::AcqRel);
+                let comp_count1 = Arc::clone(&comp_count);
+
+                async move {
+                    yield_now().await;
+                    comp_count1.fetch_add(1, Ordering::AcqRel);
+                }
+                .boxed()
+            }
+        };
+
+        let mut cache: Cache<u32, u32> = Cache::builder()
+            .time_to_live(Duration::from_millis(10))
+            .async_eviction_listener(listener)
+            .build();
+
+        cache.reconfigure_for_testing().await;
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock)).await;
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert(1, 1).await;
+        assert_eq!(cache.run_pending_tasks_initiation_count(), 0);
+        assert_eq!(cache.run_pending_tasks_completion_count(), 0);
+
+        // Key 1 is not yet expired.
+        mock.increment(Duration::from_millis(7));
+
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.run_pending_tasks_initiation_count(), 1);
+        assert_eq!(cache.run_pending_tasks_completion_count(), 1);
+        assert_eq!(listener_initiation_count.load(Ordering::Acquire), 0);
+        assert_eq!(listener_completion_count.load(Ordering::Acquire), 0);
+
+        // Now key 1 is expired, so the eviction listener should be called when we
+        // call run_pending_tasks() and poll the returned future.
+        mock.increment(Duration::from_millis(7));
+
+        let fut = cache.run_pending_tasks();
+        // Poll the fut only once, and drop it. The fut should not be completed (so
+        // it is cancelled) because the eviction listener performed a yield_now().
+        assert!(poll_immediate(fut).await.is_none());
+
+        // The task is initiated but not completed.
+        assert_eq!(cache.run_pending_tasks_initiation_count(), 2);
+        assert_eq!(cache.run_pending_tasks_completion_count(), 1);
+        // The listener is initiated but not completed.
+        assert_eq!(listener_initiation_count.load(Ordering::Acquire), 1);
+        assert_eq!(listener_completion_count.load(Ordering::Acquire), 0);
+
+        // This will resume the task and the listener, and continue polling
+        // until complete.
+        cache.run_pending_tasks().await;
+        // Now the task is completed.
+        assert_eq!(cache.run_pending_tasks_initiation_count(), 2);
+        assert_eq!(cache.run_pending_tasks_completion_count(), 2);
+        // Now the listener is completed.
+        assert_eq!(listener_initiation_count.load(Ordering::Acquire), 1);
+        assert_eq!(listener_completion_count.load(Ordering::Acquire), 1);
     }
 
     // This test ensures that the `contains_key`, `get` and `invalidate` can use

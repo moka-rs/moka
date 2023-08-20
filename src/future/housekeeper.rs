@@ -9,7 +9,16 @@ use crate::common::{
     time::{CheckedTimeOps, Instant},
 };
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 
 use async_lock::Mutex;
 use async_trait::async_trait;
@@ -25,6 +34,11 @@ pub(crate) struct Housekeeper {
     /// A shared `Future` of the maintenance task that is currently being resolved.
     current_task: Mutex<Option<Shared<BoxFuture<'static, ()>>>>,
     run_after: AtomicInstant,
+    auto_run_enabled: AtomicBool,
+    #[cfg(test)]
+    pub(crate) start_count: AtomicUsize,
+    #[cfg(test)]
+    pub(crate) complete_count: AtomicUsize,
 }
 
 impl Default for Housekeeper {
@@ -32,6 +46,11 @@ impl Default for Housekeeper {
         Self {
             current_task: Default::default(),
             run_after: AtomicInstant::new(Self::sync_after(Instant::now())),
+            auto_run_enabled: AtomicBool::new(true),
+            #[cfg(test)]
+            start_count: Default::default(),
+            #[cfg(test)]
+            complete_count: Default::default(),
         }
     }
 }
@@ -47,45 +66,66 @@ impl Housekeeper {
 
     #[inline]
     fn should_apply(&self, ch_len: usize, ch_flush_point: usize, now: Instant) -> bool {
-        ch_len >= ch_flush_point || self.run_after.instant().unwrap() >= now
+        self.auto_run_enabled.load(Ordering::Relaxed)
+            && (ch_len >= ch_flush_point || now >= self.run_after.instant().unwrap())
     }
 
-    // TODO: Change the name to something that shows some kind of relationship with
-    // `run_pending_tasks`.
-    pub(crate) async fn try_sync<T>(&self, cache: Arc<T>) -> bool
+    pub(crate) async fn run_pending_tasks<T>(&self, cache: Arc<T>)
     where
         T: InnerSync + Send + Sync + 'static,
     {
-        use futures_util::FutureExt;
+        let mut current_task = self.current_task.lock().await;
+        self.do_run_pending_tasks(cache, &mut current_task).await;
+    }
 
-        // TODO: This will skip to run pending tasks if lock cannot be acquired.
-        // Change this so that when `try_sync` is explicitly called, it will be
-        // blocked here until the lock is acquired.
-        if let Some(mut lock) = self.current_task.try_lock() {
-            let now = cache.now();
-
-            if let Some(task) = &*lock {
-                // This task was being resolved, but did not complete. This means
-                // that the enclosing Future was canceled. Try to resolve it.
-                task.clone().await;
-            } else {
-                // Create a new maintenance task and try to resolve it.
-                let task = async move { cache.run_pending_tasks(MAX_SYNC_REPEATS).await }
-                    .boxed()
-                    .shared();
-                *lock = Some(task.clone());
-                task.await;
-            }
-
-            // If we are here, it means that the maintenance task has been completed,
-            // so we can remove it from the lock.
-            *lock = None;
-            self.run_after.set_instant(Self::sync_after(now));
-
+    pub(crate) async fn try_run_pending_tasks<T>(&self, cache: Arc<T>) -> bool
+    where
+        T: InnerSync + Send + Sync + 'static,
+    {
+        if let Some(mut current_task) = self.current_task.try_lock() {
+            self.do_run_pending_tasks(cache, &mut current_task).await;
             true
         } else {
             false
         }
+    }
+
+    async fn do_run_pending_tasks<T>(
+        &self,
+        cache: Arc<T>,
+        current_task: &mut Option<Shared<BoxFuture<'static, ()>>>,
+    ) where
+        T: InnerSync + Send + Sync + 'static,
+    {
+        use futures_util::FutureExt;
+
+        let now = cache.now();
+
+        if let Some(task) = &*current_task {
+            // This task was being resolved, but did not complete. This means the
+            // previous run was canceled due to the enclosing Future was dropped.
+            // Resume the task now by awaiting.
+            task.clone().await;
+        } else {
+            // Create a new maintenance task and resolve it.
+            let task = async move { cache.run_pending_tasks(MAX_SYNC_REPEATS).await }
+                .boxed()
+                .shared();
+            *current_task = Some(task.clone());
+
+            #[cfg(test)]
+            self.start_count.fetch_add(1, Ordering::AcqRel);
+
+            task.await;
+        }
+
+        // If we are here, it means that the maintenance task has been resolved.
+        // We can remove it from the lock.
+        *current_task = None;
+        self.run_after.set_instant(Self::sync_after(now));
+
+        #[cfg(test)]
+        self.complete_count.fetch_add(1, Ordering::AcqRel);
     }
 
     fn sync_after(now: Instant) -> Instant {
@@ -94,5 +134,16 @@ impl Housekeeper {
         // Assuming that `now` is current wall clock time, this should never fail at
         // least next millions of years.
         ts.expect("Timestamp overflow")
+    }
+}
+
+#[cfg(test)]
+impl Housekeeper {
+    pub(crate) fn disable_auto_run(&self) {
+        self.auto_run_enabled.store(false, Ordering::Relaxed);
+    }
+
+    pub(crate) fn reset_run_after(&self, now: Instant) {
+        self.run_after.set_instant(Self::sync_after(now));
     }
 }
