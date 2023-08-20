@@ -1394,15 +1394,9 @@ where
                 let op = WriteOp::Remove(kv);
                 let now = self.base.current_time_from_expiration_clock();
                 let hk = self.base.housekeeper.as_ref();
-                Self::schedule_write_op(
-                    self.base.inner.as_ref(),
-                    &self.base.write_op_ch,
-                    op,
-                    now,
-                    hk,
-                )
-                .await
-                .expect("Failed to remove");
+                Self::schedule_write_op(&self.base.inner, &self.base.write_op_ch, op, now, hk)
+                    .await
+                    .expect("Failed to remove");
                 crossbeam_epoch::pin().flush();
                 maybe_v
             }
@@ -1844,20 +1838,14 @@ where
 
         let (op, now) = self.base.do_insert_with_hash(key, hash, value).await;
         let hk = self.base.housekeeper.as_ref();
-        Self::schedule_write_op(
-            self.base.inner.as_ref(),
-            &self.base.write_op_ch,
-            op,
-            now,
-            hk,
-        )
-        .await
-        .expect("Failed to insert");
+        Self::schedule_write_op(&self.base.inner, &self.base.write_op_ch, op, now, hk)
+            .await
+            .expect("Failed to insert");
     }
 
     #[inline]
     async fn schedule_write_op(
-        inner: &impl InnerSync,
+        inner: &Arc<impl InnerSync + Send + Sync + 'static>,
         ch: &Sender<WriteOp<K, V>>,
         op: WriteOp<K, V>,
         now: Instant,
@@ -1866,7 +1854,13 @@ where
         let mut op = op;
         let mut spin_count = 0u8;
         loop {
-            BaseCache::<K, V, S>::apply_reads_writes_if_needed(inner, ch, now, housekeeper).await;
+            BaseCache::<K, V, S>::apply_reads_writes_if_needed(
+                Arc::clone(inner),
+                ch,
+                now,
+                housekeeper,
+            )
+            .await;
             match ch.try_send(op) {
                 Ok(()) => return Ok(()),
                 Err(TrySendError::Full(op1)) => {

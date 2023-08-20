@@ -9,12 +9,11 @@ use crate::common::{
     time::{CheckedTimeOps, Instant},
 };
 
-use std::{
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
+use async_lock::Mutex;
 use async_trait::async_trait;
+use futures_util::future::{BoxFuture, Shared};
 
 #[async_trait]
 pub(crate) trait InnerSync {
@@ -23,15 +22,16 @@ pub(crate) trait InnerSync {
 }
 
 pub(crate) struct Housekeeper {
-    is_sync_running: AtomicBool,
-    sync_after: AtomicInstant,
+    /// A shared `Future` of the maintenance task that is currently being resolved.
+    current_task: Mutex<Option<Shared<BoxFuture<'static, ()>>>>,
+    run_after: AtomicInstant,
 }
 
 impl Default for Housekeeper {
     fn default() -> Self {
         Self {
-            is_sync_running: Default::default(),
-            sync_after: AtomicInstant::new(Self::sync_after(Instant::now())),
+            current_task: Default::default(),
+            run_after: AtomicInstant::new(Self::sync_after(Instant::now())),
         }
     }
 }
@@ -47,27 +47,44 @@ impl Housekeeper {
 
     #[inline]
     fn should_apply(&self, ch_len: usize, ch_flush_point: usize, now: Instant) -> bool {
-        ch_len >= ch_flush_point || self.sync_after.instant().unwrap() >= now
+        ch_len >= ch_flush_point || self.run_after.instant().unwrap() >= now
     }
 
-    pub(crate) async fn try_sync<T: InnerSync>(&self, cache: &T) -> bool {
-        // Try to flip the value of sync_scheduled from false to true.
-        match self.is_sync_running.compare_exchange(
-            false,
-            true,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => {
-                let now = cache.now();
-                self.sync_after.set_instant(Self::sync_after(now));
+    // TODO: Change the name to something that shows some kind of relationship with
+    // `run_pending_tasks`.
+    pub(crate) async fn try_sync<T>(&self, cache: Arc<T>) -> bool
+    where
+        T: InnerSync + Send + Sync + 'static,
+    {
+        use futures_util::FutureExt;
 
-                cache.run_pending_tasks(MAX_SYNC_REPEATS).await;
+        // TODO: This will skip to run pending tasks if lock cannot be acquired.
+        // Change this so that when `try_sync` is explicitly called, it will be
+        // blocked here until the lock is acquired.
+        if let Some(mut lock) = self.current_task.try_lock() {
+            let now = cache.now();
 
-                self.is_sync_running.store(false, Ordering::Release);
-                true
+            if let Some(task) = &*lock {
+                // This task was being resolved, but did not complete. This means
+                // that the enclosing Future was canceled. Try to resolve it.
+                task.clone().await;
+            } else {
+                // Create a new maintenance task and try to resolve it.
+                let task = async move { cache.run_pending_tasks(MAX_SYNC_REPEATS).await }
+                    .boxed()
+                    .shared();
+                *lock = Some(task.clone());
+                task.await;
             }
-            Err(_) => false,
+
+            // If we are here, it means that the maintenance task has been completed,
+            // so we can remove it from the lock.
+            *lock = None;
+            self.run_after.set_instant(Self::sync_after(now));
+
+            true
+        } else {
+            false
         }
     }
 

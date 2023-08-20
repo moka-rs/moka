@@ -346,7 +346,7 @@ where
 
     #[inline]
     pub(crate) async fn apply_reads_writes_if_needed(
-        inner: &impl InnerSync,
+        inner: Arc<impl InnerSync + Send + Sync + 'static>,
         ch: &Sender<WriteOp<K, V>>,
         now: Instant,
         housekeeper: Option<&HouseKeeperArc>,
@@ -428,7 +428,8 @@ where
         op: ReadOp<K, V>,
         now: Instant,
     ) -> Result<(), TrySendError<ReadOp<K, V>>> {
-        self.apply_reads_if_needed(&self.inner, now).await;
+        self.apply_reads_if_needed(Arc::clone(&self.inner), now)
+            .await;
         let ch = &self.read_op_ch;
         match ch.try_send(op) {
             // Discard the ReadOp when the channel is full.
@@ -589,7 +590,7 @@ where
     }
 
     #[inline]
-    async fn apply_reads_if_needed(&self, inner: &Inner<K, V, S>, now: Instant) {
+    async fn apply_reads_if_needed(&self, inner: Arc<Inner<K, V, S>>, now: Instant) {
         let len = self.read_op_ch.len();
 
         if let Some(hk) = &self.housekeeper {
@@ -1236,7 +1237,7 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     async fn run_pending_tasks(&self, max_repeats: usize) {
-        self.run_pending_tasks(max_repeats).await;
+        self.do_run_pending_tasks(max_repeats).await;
     }
 
     fn now(&self) -> Instant {
@@ -1250,7 +1251,7 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    async fn run_pending_tasks(&self, max_repeats: usize) {
+    async fn do_run_pending_tasks(&self, max_repeats: usize) {
         if self.max_capacity == Some(0) {
             return;
         }
@@ -2605,19 +2606,19 @@ mod tests {
             ($cache:ident, $key:ident, $hash:ident, $mock:ident, $duration_secs:expr) => {
                 // Increment the time.
                 $mock.increment(Duration::from_millis($duration_secs * 1000 - 1));
-                $cache.inner.run_pending_tasks(1).await;
+                $cache.inner.do_run_pending_tasks(1).await;
                 assert!($cache.contains_key_with_hash(&$key, $hash));
                 assert_eq!($cache.entry_count(), 1);
 
                 // Increment the time by 1ms (3). The entry should be expired.
                 $mock.increment(Duration::from_millis(1));
-                $cache.inner.run_pending_tasks(1).await;
+                $cache.inner.do_run_pending_tasks(1).await;
                 assert!(!$cache.contains_key_with_hash(&$key, $hash));
 
                 // Increment the time again to ensure the entry has been evicted from the
                 // cache.
                 $mock.increment(Duration::from_secs(1));
-                $cache.inner.run_pending_tasks(1).await;
+                $cache.inner.do_run_pending_tasks(1).await;
                 assert_eq!($cache.entry_count(), 0);
             };
         }
@@ -2899,7 +2900,7 @@ mod tests {
         insert(&cache, key, hash, value).await;
         // Run a sync to register the entry to the internal data structures including
         // the timer wheel.
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert_eq!(cache.entry_count(), 1);
 
         assert_expiry!(cache, key, hash, mock, 1);
@@ -2921,12 +2922,12 @@ mod tests {
             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), None);
         let inserted_at = current_time(&cache);
         insert(&cache, key, hash, value).await;
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert_eq!(cache.entry_count(), 1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(1));
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert!(cache.contains_key_with_hash(&key, hash));
 
         // Read the entry (2).
@@ -2946,7 +2947,7 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
 
         assert_expiry!(cache, key, hash, mock, 3);
 
@@ -2968,12 +2969,12 @@ mod tests {
             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), None);
         let inserted_at = current_time(&cache);
         insert(&cache, key, hash, value).await;
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert_eq!(cache.entry_count(), 1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(1));
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert!(cache.contains_key_with_hash(&key, hash));
 
         // Read the entry (2).
@@ -2993,11 +2994,11 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
 
         // Increment the time.
         mock.increment(Duration::from_secs(2));
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3012,7 +3013,7 @@ mod tests {
             Some(3),
         );
         insert(&cache, key, hash, value).await;
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert_eq!(cache.entry_count(), 1);
 
         assert_expiry!(cache, key, hash, mock, 3);
@@ -3035,12 +3036,12 @@ mod tests {
             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), None);
         let inserted_at = current_time(&cache);
         insert(&cache, key, hash, value).await;
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert_eq!(cache.entry_count(), 1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(1));
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3061,11 +3062,11 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
 
         // Increment the time.
         mock.increment(Duration::from_secs(2));
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3080,7 +3081,7 @@ mod tests {
             None,
         );
         insert(&cache, key, hash, value).await;
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert_eq!(cache.entry_count(), 1);
 
         assert_expiry!(cache, key, hash, mock, 7);
@@ -3102,12 +3103,12 @@ mod tests {
             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(8));
         let inserted_at = current_time(&cache);
         insert(&cache, key, hash, value).await;
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert_eq!(cache.entry_count(), 1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(5));
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3128,7 +3129,7 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
 
         assert_expiry!(cache, key, hash, mock, 7);
 
@@ -3150,12 +3151,12 @@ mod tests {
             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(8));
         let inserted_at = current_time(&cache);
         insert(&cache, key, hash, value).await;
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert_eq!(cache.entry_count(), 1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(5));
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3176,11 +3177,11 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
 
         // Increment the time.
         mock.increment(Duration::from_secs(6));
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3201,7 +3202,7 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
 
         assert_expiry!(cache, key, hash, mock, 5);
 
@@ -3222,12 +3223,12 @@ mod tests {
         *expectation.lock().unwrap() =
             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(9));
         insert(&cache, key, hash, value).await;
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert_eq!(cache.entry_count(), 1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(6));
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3243,12 +3244,12 @@ mod tests {
         );
         let updated_at = current_time(&cache);
         insert(&cache, key, hash, value).await;
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert_eq!(cache.entry_count(), 1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(6));
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3269,11 +3270,11 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
 
         // Increment the time.
         mock.increment(Duration::from_secs(6));
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3294,7 +3295,7 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.run_pending_tasks(1).await;
+        cache.inner.do_run_pending_tasks(1).await;
 
         assert_expiry!(cache, key, hash, mock, 4);
     }
