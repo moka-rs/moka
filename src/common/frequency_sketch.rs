@@ -191,7 +191,7 @@ impl FrequencySketch {
 }
 
 // Methods only available for testing.
-#[cfg(all(test, feature = "sync"))]
+#[cfg(test)]
 impl FrequencySketch {
     pub(crate) fn table_len(&self) -> usize {
         self.table.len()

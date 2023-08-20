@@ -1235,8 +1235,8 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    async fn flush(&self, max_repeats: usize) {
-        self.flush(max_repeats).await;
+    async fn run_pending_tasks(&self, max_repeats: usize) {
+        self.run_pending_tasks(max_repeats).await;
     }
 
     fn now(&self) -> Instant {
@@ -1250,7 +1250,7 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    async fn flush(&self, max_repeats: usize) {
+    async fn run_pending_tasks(&self, max_repeats: usize) {
         if self.max_capacity == Some(0) {
             return;
         }
@@ -2494,797 +2494,808 @@ fn is_expired_by_ttl(
     false
 }
 
-// #[cfg(test)]
-// mod tests {
-//     use crate::{future::housekeeper, policy::ExpirationPolicy};
-
-//     use super::BaseCache;
-
-//     #[cfg_attr(target_pointer_width = "16", ignore)]
-//     #[tokio::test]
-//     async fn test_skt_capacity_will_not_overflow() {
-//         use std::collections::hash_map::RandomState;
-
-//         // power of two
-//         let pot = |exp| 2u64.pow(exp);
-
-//         let ensure_sketch_len = |max_capacity, len, name| {
-//             let cache = BaseCache::<u8, u8>::new(
-//                 None,
-//                 Some(max_capacity),
-//                 None,
-//                 RandomState::default(),
-//                 None,
-//                 None,
-//                 Default::default(),
-//                 false,
-//             );
-//             cache.inner.enable_frequency_sketch_for_testing();
-//             assert_eq!(
-//                 cache.inner.frequency_sketch.read().await.table_len(),
-//                 len as usize,
-//                 "{}",
-//                 name
-//             );
-//         };
-
-//         if cfg!(target_pointer_width = "32") {
-//             let pot24 = pot(24);
-//             let pot16 = pot(16);
-//             ensure_sketch_len(0, 128, "0");
-//             ensure_sketch_len(128, 128, "128");
-//             ensure_sketch_len(pot16, pot16, "pot16");
-//             // due to ceiling to next_power_of_two
-//             ensure_sketch_len(pot16 + 1, pot(17), "pot16 + 1");
-//             // due to ceiling to next_power_of_two
-//             ensure_sketch_len(pot24 - 1, pot24, "pot24 - 1");
-//             ensure_sketch_len(pot24, pot24, "pot24");
-//             ensure_sketch_len(pot(27), pot24, "pot(27)");
-//             ensure_sketch_len(u32::MAX as u64, pot24, "u32::MAX");
-//         } else {
-//             // target_pointer_width: 64 or larger.
-//             let pot30 = pot(30);
-//             let pot16 = pot(16);
-//             ensure_sketch_len(0, 128, "0");
-//             ensure_sketch_len(128, 128, "128");
-//             ensure_sketch_len(pot16, pot16, "pot16");
-//             // due to ceiling to next_power_of_two
-//             ensure_sketch_len(pot16 + 1, pot(17), "pot16 + 1");
-
-//             // The following tests will allocate large memory (~8GiB).
-//             // Skip when running on Circle CI.
-//             if !cfg!(circleci) {
-//                 // due to ceiling to next_power_of_two
-//                 ensure_sketch_len(pot30 - 1, pot30, "pot30- 1");
-//                 ensure_sketch_len(pot30, pot30, "pot30");
-//                 ensure_sketch_len(u64::MAX, pot30, "u64::MAX");
-//             }
-//         };
-//     }
-
-//     #[test]
-//     fn test_per_entry_expiration() {
-//         use super::InnerSync;
-//         use crate::{common::time::Clock, Entry, Expiry};
-
-//         use std::{
-//             collections::hash_map::RandomState,
-//             sync::{Arc, Mutex},
-//             time::{Duration, Instant as StdInstant},
-//         };
-
-//         type Key = u32;
-//         type Value = char;
-
-//         fn current_time(cache: &BaseCache<Key, Value>) -> StdInstant {
-//             cache
-//                 .inner
-//                 .clocks()
-//                 .to_std_instant(cache.current_time_from_expiration_clock())
-//         }
-
-//         fn insert(cache: &BaseCache<Key, Value>, key: Key, hash: u64, value: Value) {
-//             let (op, _now) = cache.do_insert_with_hash(Arc::new(key), hash, value);
-//             cache.write_op_ch.send(op).expect("Failed to send");
-//         }
-
-//         macro_rules! assert_params_eq {
-//             ($left:expr, $right:expr, $param_name:expr, $line:expr) => {
-//                 assert_eq!(
-//                     $left, $right,
-//                     "Mismatched `{}`s. line: {}",
-//                     $param_name, $line
-//                 );
-//             };
-//         }
-
-//         macro_rules! assert_expiry {
-//             ($cache:ident, $key:ident, $hash:ident, $mock:ident, $duration_secs:expr) => {
-//                 // Increment the time.
-//                 $mock.increment(Duration::from_millis($duration_secs * 1000 - 1));
-//                 $cache.inner.flush(1).await;
-//                 assert!($cache.contains_key_with_hash(&$key, $hash));
-//                 assert_eq!($cache.entry_count(), 1);
-
-//                 // Increment the time by 1ms (3). The entry should be expired.
-//                 $mock.increment(Duration::from_millis(1));
-//                 $cache.inner.flush(1).await;
-//                 assert!(!$cache.contains_key_with_hash(&$key, $hash));
-
-//                 // Increment the time again to ensure the entry has been evicted from the
-//                 // cache.
-//                 $mock.increment(Duration::from_secs(1));
-//                 $cache.inner.flush(1).await;
-//                 assert_eq!($cache.entry_count(), 0);
-//             };
-//         }
-
-//         /// Contains expected call parameters and also a return value.
-//         #[derive(Debug)]
-//         enum ExpiryExpectation {
-//             NoCall,
-//             AfterCreate {
-//                 caller_line: u32,
-//                 key: Key,
-//                 value: Value,
-//                 current_time: StdInstant,
-//                 new_duration_secs: Option<u64>,
-//             },
-//             AfterRead {
-//                 caller_line: u32,
-//                 key: Key,
-//                 value: Value,
-//                 current_time: StdInstant,
-//                 current_duration_secs: Option<u64>,
-//                 last_modified_at: StdInstant,
-//                 new_duration_secs: Option<u64>,
-//             },
-//             AfterUpdate {
-//                 caller_line: u32,
-//                 key: Key,
-//                 value: Value,
-//                 current_time: StdInstant,
-//                 current_duration_secs: Option<u64>,
-//                 new_duration_secs: Option<u64>,
-//             },
-//         }
-
-//         impl ExpiryExpectation {
-//             fn after_create(
-//                 caller_line: u32,
-//                 key: Key,
-//                 value: Value,
-//                 current_time: StdInstant,
-//                 new_duration_secs: Option<u64>,
-//             ) -> Self {
-//                 Self::AfterCreate {
-//                     caller_line,
-//                     key,
-//                     value,
-//                     current_time,
-//                     new_duration_secs,
-//                 }
-//             }
-
-//             fn after_read(
-//                 caller_line: u32,
-//                 key: Key,
-//                 value: Value,
-//                 current_time: StdInstant,
-//                 current_duration_secs: Option<u64>,
-//                 last_modified_at: StdInstant,
-//                 new_duration_secs: Option<u64>,
-//             ) -> Self {
-//                 Self::AfterRead {
-//                     caller_line,
-//                     key,
-//                     value,
-//                     current_time,
-//                     current_duration_secs,
-//                     last_modified_at,
-//                     new_duration_secs,
-//                 }
-//             }
-
-//             fn after_update(
-//                 caller_line: u32,
-//                 key: Key,
-//                 value: Value,
-//                 current_time: StdInstant,
-//                 current_duration_secs: Option<u64>,
-//                 new_duration_secs: Option<u64>,
-//             ) -> Self {
-//                 Self::AfterUpdate {
-//                     caller_line,
-//                     key,
-//                     value,
-//                     current_time,
-//                     current_duration_secs,
-//                     new_duration_secs,
-//                 }
-//             }
-//         }
-
-//         let expectation = Arc::new(Mutex::new(ExpiryExpectation::NoCall));
-
-//         struct MyExpiry {
-//             expectation: Arc<Mutex<ExpiryExpectation>>,
-//         }
-
-//         impl Expiry<u32, char> for MyExpiry {
-//             fn expire_after_create(
-//                 &self,
-//                 actual_key: &u32,
-//                 actual_value: &char,
-//                 actual_current_time: StdInstant,
-//             ) -> Option<Duration> {
-//                 use ExpiryExpectation::*;
-
-//                 let lock = &mut *self.expectation.lock().unwrap();
-//                 let expected = std::mem::replace(lock, NoCall);
-//                 match expected {
-//                     AfterCreate {
-//                         caller_line,
-//                         key,
-//                         value,
-//                         current_time,
-//                         new_duration_secs: new_duration,
-//                     } => {
-//                         assert_params_eq!(*actual_key, key, "key", caller_line);
-//                         assert_params_eq!(*actual_value, value, "value", caller_line);
-//                         assert_params_eq!(
-//                             actual_current_time,
-//                             current_time,
-//                             "current_time",
-//                             caller_line
-//                         );
-//                         new_duration.map(Duration::from_secs)
-//                     }
-//                     expected => {
-//                         panic!("Unexpected call to expire_after_create: caller_line {}, expected: {:?}",
-//                             line!(), expected
-//                         );
-//                     }
-//                 }
-//             }
-
-//             fn expire_after_read(
-//                 &self,
-//                 actual_key: &u32,
-//                 actual_value: &char,
-//                 actual_current_time: StdInstant,
-//                 actual_current_duration: Option<Duration>,
-//                 actual_last_modified_at: StdInstant,
-//             ) -> Option<Duration> {
-//                 use ExpiryExpectation::*;
-
-//                 let lock = &mut *self.expectation.lock().unwrap();
-//                 let expected = std::mem::replace(lock, NoCall);
-//                 match expected {
-//                     AfterRead {
-//                         caller_line,
-//                         key,
-//                         value,
-//                         current_time,
-//                         current_duration_secs,
-//                         last_modified_at,
-//                         new_duration_secs,
-//                     } => {
-//                         assert_params_eq!(*actual_key, key, "key", caller_line);
-//                         assert_params_eq!(*actual_value, value, "value", caller_line);
-//                         assert_params_eq!(
-//                             actual_current_time,
-//                             current_time,
-//                             "current_time",
-//                             caller_line
-//                         );
-//                         assert_params_eq!(
-//                             actual_current_duration,
-//                             current_duration_secs.map(Duration::from_secs),
-//                             "current_duration",
-//                             caller_line
-//                         );
-//                         assert_params_eq!(
-//                             actual_last_modified_at,
-//                             last_modified_at,
-//                             "last_modified_at",
-//                             caller_line
-//                         );
-//                         new_duration_secs.map(Duration::from_secs)
-//                     }
-//                     expected => {
-//                         panic!(
-//                             "Unexpected call to expire_after_read: caller_line {}, expected: {:?}",
-//                             line!(),
-//                             expected
-//                         );
-//                     }
-//                 }
-//             }
-
-//             fn expire_after_update(
-//                 &self,
-//                 actual_key: &u32,
-//                 actual_value: &char,
-//                 actual_current_time: StdInstant,
-//                 actual_current_duration: Option<Duration>,
-//             ) -> Option<Duration> {
-//                 use ExpiryExpectation::*;
-
-//                 let lock = &mut *self.expectation.lock().unwrap();
-//                 let expected = std::mem::replace(lock, NoCall);
-//                 match expected {
-//                     AfterUpdate {
-//                         caller_line,
-//                         key,
-//                         value,
-//                         current_time,
-//                         current_duration_secs,
-//                         new_duration_secs,
-//                     } => {
-//                         assert_params_eq!(*actual_key, key, "key", caller_line);
-//                         assert_params_eq!(*actual_value, value, "value", caller_line);
-//                         assert_params_eq!(
-//                             actual_current_time,
-//                             current_time,
-//                             "current_time",
-//                             caller_line
-//                         );
-//                         assert_params_eq!(
-//                             actual_current_duration,
-//                             current_duration_secs.map(Duration::from_secs),
-//                             "current_duration",
-//                             caller_line
-//                         );
-//                         new_duration_secs.map(Duration::from_secs)
-//                     }
-//                     expected => {
-//                         panic!("Unexpected call to expire_after_update: caller_line {}, expected: {:?}",
-//                             line!(), expected
-//                         );
-//                     }
-//                 }
-//             }
-//         }
-
-//         const TTL: u64 = 16;
-//         const TTI: u64 = 7;
-//         let expiry: Option<Arc<dyn Expiry<_, _> + Send + Sync + 'static>> =
-//             Some(Arc::new(MyExpiry {
-//                 expectation: Arc::clone(&expectation),
-//             }));
-
-//         let mut cache = BaseCache::<Key, Value>::new(
-//             None,
-//             None,
-//             None,
-//             RandomState::default(),
-//             None,
-//             None,
-//             ExpirationPolicy::new(
-//                 Some(Duration::from_secs(TTL)),
-//                 Some(Duration::from_secs(TTI)),
-//                 expiry,
-//             ),
-//             false,
-//         );
-//         cache.reconfigure_for_testing();
-
-//         let (clock, mock) = Clock::mock();
-//         cache.set_expiration_clock(Some(clock));
-
-//         // Make the cache exterior immutable.
-//         let cache = cache;
-
-//         mock.increment(Duration::from_millis(10));
-
-//         // ----------------------------------------------------
-//         // Case 1
-//         //
-//         // 1.  0s: Insert with per-entry TTL 1s.
-//         // 2. +1s: Expires.
-//         // ----------------------------------------------------
-
-//         // Insert an entry (1). It will have a per-entry TTL of 1 second.
-//         let key = 1;
-//         let hash = cache.hash(&key);
-//         let value = 'a';
-
-//         *expectation.lock().unwrap() =
-//             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(1));
-
-//         insert(&cache, key, hash, value);
-//         // Run a sync to register the entry to the internal data structures including
-//         // the timer wheel.
-//         cache.inner.flush(1).await;
-//         assert_eq!(cache.entry_count(), 1);
-
-//         assert_expiry!(cache, key, hash, mock, 1);
-
-//         // ----------------------------------------------------
-//         // Case 2
-//         //
-//         // 1.  0s: Insert with no per-entry TTL.
-//         // 2. +1s: Get with per-entry TTL 3s.
-//         // 3. +3s: Expires.
-//         // ----------------------------------------------------
-
-//         // Insert an entry (1).
-//         let key = 2;
-//         let hash = cache.hash(&key);
-//         let value = 'b';
-
-//         *expectation.lock().unwrap() =
-//             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), None);
-//         let inserted_at = current_time(&cache);
-//         insert(&cache, key, hash, value);
-//         cache.inner.flush(1).await;
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Increment the time.
-//         mock.increment(Duration::from_secs(1));
-//         cache.inner.flush(1).await;
-//         assert!(cache.contains_key_with_hash(&key, hash));
-
-//         // Read the entry (2).
-//         *expectation.lock().unwrap() = ExpiryExpectation::after_read(
-//             line!(),
-//             key,
-//             value,
-//             current_time(&cache),
-//             Some(TTI - 1),
-//             inserted_at,
-//             Some(3),
-//         );
-//         assert_eq!(
-//             cache
-//                 .get_with_hash(&key, hash, false)
-//                 .map(Entry::into_value),
-//             Some(value)
-//         );
-//         cache.inner.flush(1).await;
-
-//         assert_expiry!(cache, key, hash, mock, 3);
-
-//         // ----------------------------------------------------
-//         // Case 3
-//         //
-//         // 1.  0s: Insert with no per-entry TTL.
-//         // 2. +1s: Get with no per-entry TTL.
-//         // 3. +2s: Update with per-entry TTL 3s.
-//         // 4. +3s: Expires.
-//         // ----------------------------------------------------
-
-//         // Insert an entry (1).
-//         let key = 3;
-//         let hash = cache.hash(&key);
-//         let value = 'c';
-
-//         *expectation.lock().unwrap() =
-//             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), None);
-//         let inserted_at = current_time(&cache);
-//         insert(&cache, key, hash, value);
-//         cache.inner.flush(1).await;
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Increment the time.
-//         mock.increment(Duration::from_secs(1));
-//         cache.inner.flush(1).await;
-//         assert!(cache.contains_key_with_hash(&key, hash));
-
-//         // Read the entry (2).
-//         *expectation.lock().unwrap() = ExpiryExpectation::after_read(
-//             line!(),
-//             key,
-//             value,
-//             current_time(&cache),
-//             Some(TTI - 1),
-//             inserted_at,
-//             None,
-//         );
-//         assert_eq!(
-//             cache
-//                 .get_with_hash(&key, hash, false)
-//                 .map(Entry::into_value),
-//             Some(value)
-//         );
-//         cache.inner.flush(1).await;
-
-//         // Increment the time.
-//         mock.increment(Duration::from_secs(2));
-//         cache.inner.flush(1).await;
-//         assert!(cache.contains_key_with_hash(&key, hash));
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Update the entry (3).
-//         *expectation.lock().unwrap() = ExpiryExpectation::after_update(
-//             line!(),
-//             key,
-//             value,
-//             current_time(&cache),
-//             // TTI should be reset by this update.
-//             Some(TTI),
-//             Some(3),
-//         );
-//         insert(&cache, key, hash, value);
-//         cache.inner.flush(1).await;
-//         assert_eq!(cache.entry_count(), 1);
-
-//         assert_expiry!(cache, key, hash, mock, 3);
-
-//         // ----------------------------------------------------
-//         // Case 4
-//         //
-//         // 1.  0s: Insert with no per-entry TTL.
-//         // 2. +1s: Get with no per-entry TTL.
-//         // 3. +2s: Update with no per-entry TTL.
-//         // 4. +7s: Expires by TTI (7s from step 3).
-//         // ----------------------------------------------------
-
-//         // Insert an entry (1).
-//         let key = 4;
-//         let hash = cache.hash(&key);
-//         let value = 'd';
-
-//         *expectation.lock().unwrap() =
-//             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), None);
-//         let inserted_at = current_time(&cache);
-//         insert(&cache, key, hash, value);
-//         cache.inner.flush(1).await;
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Increment the time.
-//         mock.increment(Duration::from_secs(1));
-//         cache.inner.flush(1).await;
-//         assert!(cache.contains_key_with_hash(&key, hash));
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Read the entry (2).
-//         *expectation.lock().unwrap() = ExpiryExpectation::after_read(
-//             line!(),
-//             key,
-//             value,
-//             current_time(&cache),
-//             Some(TTI - 1),
-//             inserted_at,
-//             None,
-//         );
-//         assert_eq!(
-//             cache
-//                 .get_with_hash(&key, hash, false)
-//                 .map(Entry::into_value),
-//             Some(value)
-//         );
-//         cache.inner.flush(1).await;
-
-//         // Increment the time.
-//         mock.increment(Duration::from_secs(2));
-//         cache.inner.flush(1).await;
-//         assert!(cache.contains_key_with_hash(&key, hash));
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Update the entry (3).
-//         *expectation.lock().unwrap() = ExpiryExpectation::after_update(
-//             line!(),
-//             key,
-//             value,
-//             current_time(&cache),
-//             // TTI should be reset by this update.
-//             Some(TTI),
-//             None,
-//         );
-//         insert(&cache, key, hash, value);
-//         cache.inner.flush(1).await;
-//         assert_eq!(cache.entry_count(), 1);
-
-//         assert_expiry!(cache, key, hash, mock, 7);
-
-//         // ----------------------------------------------------
-//         // Case 5
-//         //
-//         // 1.  0s: Insert with per-entry TTL 8s.
-//         // 2. +5s: Get with per-entry TTL 8s.
-//         // 3. +7s: Expires by TTI (7s).
-//         // ----------------------------------------------------
-
-//         // Insert an entry.
-//         let key = 5;
-//         let hash = cache.hash(&key);
-//         let value = 'e';
-
-//         *expectation.lock().unwrap() =
-//             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(8));
-//         let inserted_at = current_time(&cache);
-//         insert(&cache, key, hash, value);
-//         cache.inner.flush(1).await;
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Increment the time.
-//         mock.increment(Duration::from_secs(5));
-//         cache.inner.flush(1).await;
-//         assert!(cache.contains_key_with_hash(&key, hash));
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Read the entry.
-//         *expectation.lock().unwrap() = ExpiryExpectation::after_read(
-//             line!(),
-//             key,
-//             value,
-//             current_time(&cache),
-//             Some(TTI - 5),
-//             inserted_at,
-//             Some(8),
-//         );
-//         assert_eq!(
-//             cache
-//                 .get_with_hash(&key, hash, false)
-//                 .map(Entry::into_value),
-//             Some(value)
-//         );
-//         cache.inner.flush(1).await;
-
-//         assert_expiry!(cache, key, hash, mock, 7);
-
-//         // ----------------------------------------------------
-//         // Case 6
-//         //
-//         // 1.  0s: Insert with per-entry TTL 8s.
-//         // 2. +5s: Get with per-entry TTL 9s.
-//         // 3. +6s: Get with per-entry TTL 10s.
-//         // 4. +5s: Expires by TTL (16s).
-//         // ----------------------------------------------------
-
-//         // Insert an entry.
-//         let key = 6;
-//         let hash = cache.hash(&key);
-//         let value = 'f';
-
-//         *expectation.lock().unwrap() =
-//             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(8));
-//         let inserted_at = current_time(&cache);
-//         insert(&cache, key, hash, value);
-//         cache.inner.flush(1).await;
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Increment the time.
-//         mock.increment(Duration::from_secs(5));
-//         cache.inner.flush(1).await;
-//         assert!(cache.contains_key_with_hash(&key, hash));
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Read the entry.
-//         *expectation.lock().unwrap() = ExpiryExpectation::after_read(
-//             line!(),
-//             key,
-//             value,
-//             current_time(&cache),
-//             Some(TTI - 5),
-//             inserted_at,
-//             Some(9),
-//         );
-//         assert_eq!(
-//             cache
-//                 .get_with_hash(&key, hash, false)
-//                 .map(Entry::into_value),
-//             Some(value)
-//         );
-//         cache.inner.flush(1).await;
-
-//         // Increment the time.
-//         mock.increment(Duration::from_secs(6));
-//         cache.inner.flush(1).await;
-//         assert!(cache.contains_key_with_hash(&key, hash));
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Read the entry.
-//         *expectation.lock().unwrap() = ExpiryExpectation::after_read(
-//             line!(),
-//             key,
-//             value,
-//             current_time(&cache),
-//             Some(TTI - 6),
-//             inserted_at,
-//             Some(10),
-//         );
-//         assert_eq!(
-//             cache
-//                 .get_with_hash(&key, hash, false)
-//                 .map(Entry::into_value),
-//             Some(value)
-//         );
-//         cache.inner.flush(1).await;
-
-//         assert_expiry!(cache, key, hash, mock, 5);
-
-//         // ----------------------------------------------------
-//         // Case 7
-//         //
-//         // 1.   0s: Insert with per-entry TTL 9s.
-//         // 2.  +6s: Update with per-entry TTL 8s.
-//         // 3.  +6s: Get with per-entry TTL 9s
-//         // 4.  +6s: Get with per-entry TTL 5s.
-//         // 5.  +4s: Expires by TTL (16s from step 2).
-//         // ----------------------------------------------------
-//         // Insert an entry.
-//         let key = 7;
-//         let hash = cache.hash(&key);
-//         let value = 'g';
-
-//         *expectation.lock().unwrap() =
-//             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(9));
-//         insert(&cache, key, hash, value);
-//         cache.inner.flush(1).await;
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Increment the time.
-//         mock.increment(Duration::from_secs(6));
-//         cache.inner.flush(1).await;
-//         assert!(cache.contains_key_with_hash(&key, hash));
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Update the entry (3).
-//         *expectation.lock().unwrap() = ExpiryExpectation::after_update(
-//             line!(),
-//             key,
-//             value,
-//             current_time(&cache),
-//             // From the per-entry TTL.
-//             Some(9 - 6),
-//             Some(8),
-//         );
-//         let updated_at = current_time(&cache);
-//         insert(&cache, key, hash, value);
-//         cache.inner.flush(1).await;
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Increment the time.
-//         mock.increment(Duration::from_secs(6));
-//         cache.inner.flush(1).await;
-//         assert!(cache.contains_key_with_hash(&key, hash));
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Read the entry.
-//         *expectation.lock().unwrap() = ExpiryExpectation::after_read(
-//             line!(),
-//             key,
-//             value,
-//             current_time(&cache),
-//             Some(TTI - 6),
-//             updated_at,
-//             Some(9),
-//         );
-//         assert_eq!(
-//             cache
-//                 .get_with_hash(&key, hash, false)
-//                 .map(Entry::into_value),
-//             Some(value)
-//         );
-//         cache.inner.flush(1).await;
-
-//         // Increment the time.
-//         mock.increment(Duration::from_secs(6));
-//         cache.inner.flush(1).await;
-//         assert!(cache.contains_key_with_hash(&key, hash));
-//         assert_eq!(cache.entry_count(), 1);
-
-//         // Read the entry.
-//         *expectation.lock().unwrap() = ExpiryExpectation::after_read(
-//             line!(),
-//             key,
-//             value,
-//             current_time(&cache),
-//             Some(TTI - 6),
-//             updated_at,
-//             Some(5),
-//         );
-//         assert_eq!(
-//             cache
-//                 .get_with_hash(&key, hash, false)
-//                 .map(Entry::into_value),
-//             Some(value)
-//         );
-//         cache.inner.flush(1).await;
-
-//         assert_expiry!(cache, key, hash, mock, 4);
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use crate::policy::ExpirationPolicy;
+
+    use super::BaseCache;
+
+    #[cfg_attr(target_pointer_width = "16", ignore)]
+    #[tokio::test]
+    async fn test_skt_capacity_will_not_overflow() {
+        use std::collections::hash_map::RandomState;
+
+        // power of two
+        let pot = |exp| 2u64.pow(exp);
+
+        async fn ensure_sketch_len(max_capacity: u64, len: u64, name: &str) {
+            let cache = BaseCache::<u8, u8>::new(
+                None,
+                Some(max_capacity),
+                None,
+                RandomState::default(),
+                None,
+                None,
+                Default::default(),
+                false,
+            );
+            cache.inner.enable_frequency_sketch_for_testing().await;
+            assert_eq!(
+                cache.inner.frequency_sketch.read().await.table_len(),
+                len as usize,
+                "{}",
+                name
+            );
+        }
+
+        if cfg!(target_pointer_width = "32") {
+            let pot24 = pot(24);
+            let pot16 = pot(16);
+            ensure_sketch_len(0, 128, "0").await;
+            ensure_sketch_len(128, 128, "128").await;
+            ensure_sketch_len(pot16, pot16, "pot16").await;
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot16 + 1, pot(17), "pot16 + 1").await;
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot24 - 1, pot24, "pot24 - 1").await;
+            ensure_sketch_len(pot24, pot24, "pot24").await;
+            ensure_sketch_len(pot(27), pot24, "pot(27)").await;
+            ensure_sketch_len(u32::MAX as u64, pot24, "u32::MAX").await;
+        } else {
+            // target_pointer_width: 64 or larger.
+            let pot30 = pot(30);
+            let pot16 = pot(16);
+            ensure_sketch_len(0, 128, "0").await;
+            ensure_sketch_len(128, 128, "128").await;
+            ensure_sketch_len(pot16, pot16, "pot16").await;
+            // due to ceiling to next_power_of_two
+            ensure_sketch_len(pot16 + 1, pot(17), "pot16 + 1").await;
+
+            // The following tests will allocate large memory (~8GiB).
+            // Skip when running on Circle CI.
+            if !cfg!(circleci) {
+                // due to ceiling to next_power_of_two
+                ensure_sketch_len(pot30 - 1, pot30, "pot30- 1").await;
+                ensure_sketch_len(pot30, pot30, "pot30").await;
+                ensure_sketch_len(u64::MAX, pot30, "u64::MAX").await;
+            }
+        };
+    }
+
+    #[tokio::test]
+    async fn test_per_entry_expiration() {
+        use crate::{common::time::Clock, Entry, Expiry};
+
+        use std::{
+            collections::hash_map::RandomState,
+            sync::{Arc, Mutex},
+            time::{Duration, Instant as StdInstant},
+        };
+
+        type Key = u32;
+        type Value = char;
+
+        fn current_time(cache: &BaseCache<Key, Value>) -> StdInstant {
+            cache
+                .inner
+                .clocks()
+                .to_std_instant(cache.current_time_from_expiration_clock())
+        }
+
+        async fn insert(cache: &BaseCache<Key, Value>, key: Key, hash: u64, value: Value) {
+            let (op, _now) = cache.do_insert_with_hash(Arc::new(key), hash, value).await;
+            cache.write_op_ch.send(op).expect("Failed to send");
+        }
+
+        fn never_ignore<'a, V>() -> Option<&'a mut fn(&V) -> bool> {
+            None
+        }
+
+        macro_rules! assert_params_eq {
+            ($left:expr, $right:expr, $param_name:expr, $line:expr) => {
+                assert_eq!(
+                    $left, $right,
+                    "Mismatched `{}`s. line: {}",
+                    $param_name, $line
+                );
+            };
+        }
+
+        macro_rules! assert_expiry {
+            ($cache:ident, $key:ident, $hash:ident, $mock:ident, $duration_secs:expr) => {
+                // Increment the time.
+                $mock.increment(Duration::from_millis($duration_secs * 1000 - 1));
+                $cache.inner.run_pending_tasks(1).await;
+                assert!($cache.contains_key_with_hash(&$key, $hash));
+                assert_eq!($cache.entry_count(), 1);
+
+                // Increment the time by 1ms (3). The entry should be expired.
+                $mock.increment(Duration::from_millis(1));
+                $cache.inner.run_pending_tasks(1).await;
+                assert!(!$cache.contains_key_with_hash(&$key, $hash));
+
+                // Increment the time again to ensure the entry has been evicted from the
+                // cache.
+                $mock.increment(Duration::from_secs(1));
+                $cache.inner.run_pending_tasks(1).await;
+                assert_eq!($cache.entry_count(), 0);
+            };
+        }
+
+        /// Contains expected call parameters and also a return value.
+        #[derive(Debug)]
+        enum ExpiryExpectation {
+            NoCall,
+            AfterCreate {
+                caller_line: u32,
+                key: Key,
+                value: Value,
+                current_time: StdInstant,
+                new_duration_secs: Option<u64>,
+            },
+            AfterRead {
+                caller_line: u32,
+                key: Key,
+                value: Value,
+                current_time: StdInstant,
+                current_duration_secs: Option<u64>,
+                last_modified_at: StdInstant,
+                new_duration_secs: Option<u64>,
+            },
+            AfterUpdate {
+                caller_line: u32,
+                key: Key,
+                value: Value,
+                current_time: StdInstant,
+                current_duration_secs: Option<u64>,
+                new_duration_secs: Option<u64>,
+            },
+        }
+
+        impl ExpiryExpectation {
+            fn after_create(
+                caller_line: u32,
+                key: Key,
+                value: Value,
+                current_time: StdInstant,
+                new_duration_secs: Option<u64>,
+            ) -> Self {
+                Self::AfterCreate {
+                    caller_line,
+                    key,
+                    value,
+                    current_time,
+                    new_duration_secs,
+                }
+            }
+
+            fn after_read(
+                caller_line: u32,
+                key: Key,
+                value: Value,
+                current_time: StdInstant,
+                current_duration_secs: Option<u64>,
+                last_modified_at: StdInstant,
+                new_duration_secs: Option<u64>,
+            ) -> Self {
+                Self::AfterRead {
+                    caller_line,
+                    key,
+                    value,
+                    current_time,
+                    current_duration_secs,
+                    last_modified_at,
+                    new_duration_secs,
+                }
+            }
+
+            fn after_update(
+                caller_line: u32,
+                key: Key,
+                value: Value,
+                current_time: StdInstant,
+                current_duration_secs: Option<u64>,
+                new_duration_secs: Option<u64>,
+            ) -> Self {
+                Self::AfterUpdate {
+                    caller_line,
+                    key,
+                    value,
+                    current_time,
+                    current_duration_secs,
+                    new_duration_secs,
+                }
+            }
+        }
+
+        let expectation = Arc::new(Mutex::new(ExpiryExpectation::NoCall));
+
+        struct MyExpiry {
+            expectation: Arc<Mutex<ExpiryExpectation>>,
+        }
+
+        impl Expiry<u32, char> for MyExpiry {
+            fn expire_after_create(
+                &self,
+                actual_key: &u32,
+                actual_value: &char,
+                actual_current_time: StdInstant,
+            ) -> Option<Duration> {
+                use ExpiryExpectation::*;
+
+                let lock = &mut *self.expectation.lock().unwrap();
+                let expected = std::mem::replace(lock, NoCall);
+                match expected {
+                    AfterCreate {
+                        caller_line,
+                        key,
+                        value,
+                        current_time,
+                        new_duration_secs: new_duration,
+                    } => {
+                        assert_params_eq!(*actual_key, key, "key", caller_line);
+                        assert_params_eq!(*actual_value, value, "value", caller_line);
+                        assert_params_eq!(
+                            actual_current_time,
+                            current_time,
+                            "current_time",
+                            caller_line
+                        );
+                        new_duration.map(Duration::from_secs)
+                    }
+                    expected => {
+                        panic!("Unexpected call to expire_after_create: caller_line {}, expected: {:?}",
+                            line!(), expected
+                        );
+                    }
+                }
+            }
+
+            fn expire_after_read(
+                &self,
+                actual_key: &u32,
+                actual_value: &char,
+                actual_current_time: StdInstant,
+                actual_current_duration: Option<Duration>,
+                actual_last_modified_at: StdInstant,
+            ) -> Option<Duration> {
+                use ExpiryExpectation::*;
+
+                let lock = &mut *self.expectation.lock().unwrap();
+                let expected = std::mem::replace(lock, NoCall);
+                match expected {
+                    AfterRead {
+                        caller_line,
+                        key,
+                        value,
+                        current_time,
+                        current_duration_secs,
+                        last_modified_at,
+                        new_duration_secs,
+                    } => {
+                        assert_params_eq!(*actual_key, key, "key", caller_line);
+                        assert_params_eq!(*actual_value, value, "value", caller_line);
+                        assert_params_eq!(
+                            actual_current_time,
+                            current_time,
+                            "current_time",
+                            caller_line
+                        );
+                        assert_params_eq!(
+                            actual_current_duration,
+                            current_duration_secs.map(Duration::from_secs),
+                            "current_duration",
+                            caller_line
+                        );
+                        assert_params_eq!(
+                            actual_last_modified_at,
+                            last_modified_at,
+                            "last_modified_at",
+                            caller_line
+                        );
+                        new_duration_secs.map(Duration::from_secs)
+                    }
+                    expected => {
+                        panic!(
+                            "Unexpected call to expire_after_read: caller_line {}, expected: {:?}",
+                            line!(),
+                            expected
+                        );
+                    }
+                }
+            }
+
+            fn expire_after_update(
+                &self,
+                actual_key: &u32,
+                actual_value: &char,
+                actual_current_time: StdInstant,
+                actual_current_duration: Option<Duration>,
+            ) -> Option<Duration> {
+                use ExpiryExpectation::*;
+
+                let lock = &mut *self.expectation.lock().unwrap();
+                let expected = std::mem::replace(lock, NoCall);
+                match expected {
+                    AfterUpdate {
+                        caller_line,
+                        key,
+                        value,
+                        current_time,
+                        current_duration_secs,
+                        new_duration_secs,
+                    } => {
+                        assert_params_eq!(*actual_key, key, "key", caller_line);
+                        assert_params_eq!(*actual_value, value, "value", caller_line);
+                        assert_params_eq!(
+                            actual_current_time,
+                            current_time,
+                            "current_time",
+                            caller_line
+                        );
+                        assert_params_eq!(
+                            actual_current_duration,
+                            current_duration_secs.map(Duration::from_secs),
+                            "current_duration",
+                            caller_line
+                        );
+                        new_duration_secs.map(Duration::from_secs)
+                    }
+                    expected => {
+                        panic!("Unexpected call to expire_after_update: caller_line {}, expected: {:?}",
+                            line!(), expected
+                        );
+                    }
+                }
+            }
+        }
+
+        const TTL: u64 = 16;
+        const TTI: u64 = 7;
+        let expiry: Option<Arc<dyn Expiry<_, _> + Send + Sync + 'static>> =
+            Some(Arc::new(MyExpiry {
+                expectation: Arc::clone(&expectation),
+            }));
+
+        let mut cache = BaseCache::<Key, Value>::new(
+            None,
+            None,
+            None,
+            RandomState::default(),
+            None,
+            None,
+            ExpirationPolicy::new(
+                Some(Duration::from_secs(TTL)),
+                Some(Duration::from_secs(TTI)),
+                expiry,
+            ),
+            false,
+        );
+        cache.reconfigure_for_testing().await;
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock)).await;
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        mock.increment(Duration::from_millis(10));
+
+        // ----------------------------------------------------
+        // Case 1
+        //
+        // 1.  0s: Insert with per-entry TTL 1s.
+        // 2. +1s: Expires.
+        // ----------------------------------------------------
+
+        // Insert an entry (1). It will have a per-entry TTL of 1 second.
+        let key = 1;
+        let hash = cache.hash(&key);
+        let value = 'a';
+
+        *expectation.lock().unwrap() =
+            ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(1));
+
+        insert(&cache, key, hash, value).await;
+        // Run a sync to register the entry to the internal data structures including
+        // the timer wheel.
+        cache.inner.run_pending_tasks(1).await;
+        assert_eq!(cache.entry_count(), 1);
+
+        assert_expiry!(cache, key, hash, mock, 1);
+
+        // ----------------------------------------------------
+        // Case 2
+        //
+        // 1.  0s: Insert with no per-entry TTL.
+        // 2. +1s: Get with per-entry TTL 3s.
+        // 3. +3s: Expires.
+        // ----------------------------------------------------
+
+        // Insert an entry (1).
+        let key = 2;
+        let hash = cache.hash(&key);
+        let value = 'b';
+
+        *expectation.lock().unwrap() =
+            ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), None);
+        let inserted_at = current_time(&cache);
+        insert(&cache, key, hash, value).await;
+        cache.inner.run_pending_tasks(1).await;
+        assert_eq!(cache.entry_count(), 1);
+
+        // Increment the time.
+        mock.increment(Duration::from_secs(1));
+        cache.inner.run_pending_tasks(1).await;
+        assert!(cache.contains_key_with_hash(&key, hash));
+
+        // Read the entry (2).
+        *expectation.lock().unwrap() = ExpiryExpectation::after_read(
+            line!(),
+            key,
+            value,
+            current_time(&cache),
+            Some(TTI - 1),
+            inserted_at,
+            Some(3),
+        );
+        assert_eq!(
+            cache
+                .get_with_hash(&key, hash, never_ignore(), false, true)
+                .await
+                .map(Entry::into_value),
+            Some(value)
+        );
+        cache.inner.run_pending_tasks(1).await;
+
+        assert_expiry!(cache, key, hash, mock, 3);
+
+        // ----------------------------------------------------
+        // Case 3
+        //
+        // 1.  0s: Insert with no per-entry TTL.
+        // 2. +1s: Get with no per-entry TTL.
+        // 3. +2s: Update with per-entry TTL 3s.
+        // 4. +3s: Expires.
+        // ----------------------------------------------------
+
+        // Insert an entry (1).
+        let key = 3;
+        let hash = cache.hash(&key);
+        let value = 'c';
+
+        *expectation.lock().unwrap() =
+            ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), None);
+        let inserted_at = current_time(&cache);
+        insert(&cache, key, hash, value).await;
+        cache.inner.run_pending_tasks(1).await;
+        assert_eq!(cache.entry_count(), 1);
+
+        // Increment the time.
+        mock.increment(Duration::from_secs(1));
+        cache.inner.run_pending_tasks(1).await;
+        assert!(cache.contains_key_with_hash(&key, hash));
+
+        // Read the entry (2).
+        *expectation.lock().unwrap() = ExpiryExpectation::after_read(
+            line!(),
+            key,
+            value,
+            current_time(&cache),
+            Some(TTI - 1),
+            inserted_at,
+            None,
+        );
+        assert_eq!(
+            cache
+                .get_with_hash(&key, hash, never_ignore(), false, true)
+                .await
+                .map(Entry::into_value),
+            Some(value)
+        );
+        cache.inner.run_pending_tasks(1).await;
+
+        // Increment the time.
+        mock.increment(Duration::from_secs(2));
+        cache.inner.run_pending_tasks(1).await;
+        assert!(cache.contains_key_with_hash(&key, hash));
+        assert_eq!(cache.entry_count(), 1);
+
+        // Update the entry (3).
+        *expectation.lock().unwrap() = ExpiryExpectation::after_update(
+            line!(),
+            key,
+            value,
+            current_time(&cache),
+            // TTI should be reset by this update.
+            Some(TTI),
+            Some(3),
+        );
+        insert(&cache, key, hash, value).await;
+        cache.inner.run_pending_tasks(1).await;
+        assert_eq!(cache.entry_count(), 1);
+
+        assert_expiry!(cache, key, hash, mock, 3);
+
+        // ----------------------------------------------------
+        // Case 4
+        //
+        // 1.  0s: Insert with no per-entry TTL.
+        // 2. +1s: Get with no per-entry TTL.
+        // 3. +2s: Update with no per-entry TTL.
+        // 4. +7s: Expires by TTI (7s from step 3).
+        // ----------------------------------------------------
+
+        // Insert an entry (1).
+        let key = 4;
+        let hash = cache.hash(&key);
+        let value = 'd';
+
+        *expectation.lock().unwrap() =
+            ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), None);
+        let inserted_at = current_time(&cache);
+        insert(&cache, key, hash, value).await;
+        cache.inner.run_pending_tasks(1).await;
+        assert_eq!(cache.entry_count(), 1);
+
+        // Increment the time.
+        mock.increment(Duration::from_secs(1));
+        cache.inner.run_pending_tasks(1).await;
+        assert!(cache.contains_key_with_hash(&key, hash));
+        assert_eq!(cache.entry_count(), 1);
+
+        // Read the entry (2).
+        *expectation.lock().unwrap() = ExpiryExpectation::after_read(
+            line!(),
+            key,
+            value,
+            current_time(&cache),
+            Some(TTI - 1),
+            inserted_at,
+            None,
+        );
+        assert_eq!(
+            cache
+                .get_with_hash(&key, hash, never_ignore(), false, true)
+                .await
+                .map(Entry::into_value),
+            Some(value)
+        );
+        cache.inner.run_pending_tasks(1).await;
+
+        // Increment the time.
+        mock.increment(Duration::from_secs(2));
+        cache.inner.run_pending_tasks(1).await;
+        assert!(cache.contains_key_with_hash(&key, hash));
+        assert_eq!(cache.entry_count(), 1);
+
+        // Update the entry (3).
+        *expectation.lock().unwrap() = ExpiryExpectation::after_update(
+            line!(),
+            key,
+            value,
+            current_time(&cache),
+            // TTI should be reset by this update.
+            Some(TTI),
+            None,
+        );
+        insert(&cache, key, hash, value).await;
+        cache.inner.run_pending_tasks(1).await;
+        assert_eq!(cache.entry_count(), 1);
+
+        assert_expiry!(cache, key, hash, mock, 7);
+
+        // ----------------------------------------------------
+        // Case 5
+        //
+        // 1.  0s: Insert with per-entry TTL 8s.
+        // 2. +5s: Get with per-entry TTL 8s.
+        // 3. +7s: Expires by TTI (7s).
+        // ----------------------------------------------------
+
+        // Insert an entry.
+        let key = 5;
+        let hash = cache.hash(&key);
+        let value = 'e';
+
+        *expectation.lock().unwrap() =
+            ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(8));
+        let inserted_at = current_time(&cache);
+        insert(&cache, key, hash, value).await;
+        cache.inner.run_pending_tasks(1).await;
+        assert_eq!(cache.entry_count(), 1);
+
+        // Increment the time.
+        mock.increment(Duration::from_secs(5));
+        cache.inner.run_pending_tasks(1).await;
+        assert!(cache.contains_key_with_hash(&key, hash));
+        assert_eq!(cache.entry_count(), 1);
+
+        // Read the entry.
+        *expectation.lock().unwrap() = ExpiryExpectation::after_read(
+            line!(),
+            key,
+            value,
+            current_time(&cache),
+            Some(TTI - 5),
+            inserted_at,
+            Some(8),
+        );
+        assert_eq!(
+            cache
+                .get_with_hash(&key, hash, never_ignore(), false, true)
+                .await
+                .map(Entry::into_value),
+            Some(value)
+        );
+        cache.inner.run_pending_tasks(1).await;
+
+        assert_expiry!(cache, key, hash, mock, 7);
+
+        // ----------------------------------------------------
+        // Case 6
+        //
+        // 1.  0s: Insert with per-entry TTL 8s.
+        // 2. +5s: Get with per-entry TTL 9s.
+        // 3. +6s: Get with per-entry TTL 10s.
+        // 4. +5s: Expires by TTL (16s).
+        // ----------------------------------------------------
+
+        // Insert an entry.
+        let key = 6;
+        let hash = cache.hash(&key);
+        let value = 'f';
+
+        *expectation.lock().unwrap() =
+            ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(8));
+        let inserted_at = current_time(&cache);
+        insert(&cache, key, hash, value).await;
+        cache.inner.run_pending_tasks(1).await;
+        assert_eq!(cache.entry_count(), 1);
+
+        // Increment the time.
+        mock.increment(Duration::from_secs(5));
+        cache.inner.run_pending_tasks(1).await;
+        assert!(cache.contains_key_with_hash(&key, hash));
+        assert_eq!(cache.entry_count(), 1);
+
+        // Read the entry.
+        *expectation.lock().unwrap() = ExpiryExpectation::after_read(
+            line!(),
+            key,
+            value,
+            current_time(&cache),
+            Some(TTI - 5),
+            inserted_at,
+            Some(9),
+        );
+        assert_eq!(
+            cache
+                .get_with_hash(&key, hash, never_ignore(), false, true)
+                .await
+                .map(Entry::into_value),
+            Some(value)
+        );
+        cache.inner.run_pending_tasks(1).await;
+
+        // Increment the time.
+        mock.increment(Duration::from_secs(6));
+        cache.inner.run_pending_tasks(1).await;
+        assert!(cache.contains_key_with_hash(&key, hash));
+        assert_eq!(cache.entry_count(), 1);
+
+        // Read the entry.
+        *expectation.lock().unwrap() = ExpiryExpectation::after_read(
+            line!(),
+            key,
+            value,
+            current_time(&cache),
+            Some(TTI - 6),
+            inserted_at,
+            Some(10),
+        );
+        assert_eq!(
+            cache
+                .get_with_hash(&key, hash, never_ignore(), false, true)
+                .await
+                .map(Entry::into_value),
+            Some(value)
+        );
+        cache.inner.run_pending_tasks(1).await;
+
+        assert_expiry!(cache, key, hash, mock, 5);
+
+        // ----------------------------------------------------
+        // Case 7
+        //
+        // 1.   0s: Insert with per-entry TTL 9s.
+        // 2.  +6s: Update with per-entry TTL 8s.
+        // 3.  +6s: Get with per-entry TTL 9s
+        // 4.  +6s: Get with per-entry TTL 5s.
+        // 5.  +4s: Expires by TTL (16s from step 2).
+        // ----------------------------------------------------
+        // Insert an entry.
+        let key = 7;
+        let hash = cache.hash(&key);
+        let value = 'g';
+
+        *expectation.lock().unwrap() =
+            ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(9));
+        insert(&cache, key, hash, value).await;
+        cache.inner.run_pending_tasks(1).await;
+        assert_eq!(cache.entry_count(), 1);
+
+        // Increment the time.
+        mock.increment(Duration::from_secs(6));
+        cache.inner.run_pending_tasks(1).await;
+        assert!(cache.contains_key_with_hash(&key, hash));
+        assert_eq!(cache.entry_count(), 1);
+
+        // Update the entry (3).
+        *expectation.lock().unwrap() = ExpiryExpectation::after_update(
+            line!(),
+            key,
+            value,
+            current_time(&cache),
+            // From the per-entry TTL.
+            Some(9 - 6),
+            Some(8),
+        );
+        let updated_at = current_time(&cache);
+        insert(&cache, key, hash, value).await;
+        cache.inner.run_pending_tasks(1).await;
+        assert_eq!(cache.entry_count(), 1);
+
+        // Increment the time.
+        mock.increment(Duration::from_secs(6));
+        cache.inner.run_pending_tasks(1).await;
+        assert!(cache.contains_key_with_hash(&key, hash));
+        assert_eq!(cache.entry_count(), 1);
+
+        // Read the entry.
+        *expectation.lock().unwrap() = ExpiryExpectation::after_read(
+            line!(),
+            key,
+            value,
+            current_time(&cache),
+            Some(TTI - 6),
+            updated_at,
+            Some(9),
+        );
+        assert_eq!(
+            cache
+                .get_with_hash(&key, hash, never_ignore(), false, true)
+                .await
+                .map(Entry::into_value),
+            Some(value)
+        );
+        cache.inner.run_pending_tasks(1).await;
+
+        // Increment the time.
+        mock.increment(Duration::from_secs(6));
+        cache.inner.run_pending_tasks(1).await;
+        assert!(cache.contains_key_with_hash(&key, hash));
+        assert_eq!(cache.entry_count(), 1);
+
+        // Read the entry.
+        *expectation.lock().unwrap() = ExpiryExpectation::after_read(
+            line!(),
+            key,
+            value,
+            current_time(&cache),
+            Some(TTI - 6),
+            updated_at,
+            Some(5),
+        );
+        assert_eq!(
+            cache
+                .get_with_hash(&key, hash, never_ignore(), false, true)
+                .await
+                .map(Entry::into_value),
+            Some(value)
+        );
+        cache.inner.run_pending_tasks(1).await;
+
+        assert_expiry!(cache, key, hash, mock, 4);
+    }
+}

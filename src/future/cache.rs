@@ -757,8 +757,9 @@ impl<K, V, S> Cache<K, V, S> {
     ///     println!("{}", cache.entry_count());   // -> 0
     ///     println!("{}", cache.weighted_size()); // -> 0
     ///
-    ///     // To mitigate the inaccuracy, call `flush` to run pending internal tasks.
-    ///     cache.flush().await;
+    ///     // To mitigate the inaccuracy, call `run_pending_tasks` to run pending
+    ///     // internal tasks.
+    ///     cache.run_pending_tasks().await;
     ///
     ///     // Followings will print the actual numbers.
     ///     println!("{}", cache.entry_count());   // -> 3
@@ -1007,9 +1008,9 @@ where
     ///             tokio::spawn(async move {
     ///                 println!("Task {} started.", task_id);
     ///
-    ///                 // Insert and get the value for key1. Although all four async tasks
-    ///                 // will call `get_with` at the same time, the `init` async
-    ///                 // block must be resolved only once.
+    ///                 // Insert and get the value for key1. Although all four async
+    ///                 // tasks will call `get_with` at the same time, the `init`
+    ///                 // async block must be resolved only once.
     ///                 let value = my_cache
     ///                     .get_with("key1", async move {
     ///                         println!("Task {} inserting a value.", task_id);
@@ -1530,8 +1531,8 @@ where
         Iter::new(inner)
     }
 
-    pub async fn flush(&self) {
-        self.base.inner.flush(MAX_SYNC_REPEATS).await;
+    pub async fn run_pending_tasks(&self) {
+        self.base.inner.run_pending_tasks(MAX_SYNC_REPEATS).await;
     }
 }
 
@@ -2004,7 +2005,7 @@ mod tests {
 
         assert!(!cache.contains_key(&0));
         assert!(cache.get(&0).await.is_none());
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert!(!cache.contains_key(&0));
         assert!(cache.get(&0).await.is_none());
         assert_eq!(cache.entry_count(), 0)
@@ -2042,32 +2043,32 @@ mod tests {
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
         assert_eq!(cache.get(&"b").await, Some("bob"));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         // counts: a -> 1, b -> 1
 
         cache.insert("c", "cindy").await;
         assert_eq!(cache.get(&"c").await, Some("cindy"));
         assert!(cache.contains_key(&"c"));
         // counts: a -> 1, b -> 1, c -> 1
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert!(cache.contains_key(&"a"));
         assert_eq!(cache.get(&"a").await, Some("alice"));
         assert_eq!(cache.get(&"b").await, Some("bob"));
         assert!(cache.contains_key(&"b"));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         // counts: a -> 2, b -> 2, c -> 1
 
         // "d" should not be admitted because its frequency is too low.
         cache.insert("d", "david").await; //   count: d -> 0
         expected.push((Arc::new("d"), "david", RemovalCause::Size));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.get(&"d").await, None); //   d -> 1
         assert!(!cache.contains_key(&"d"));
 
         cache.insert("d", "david").await;
         expected.push((Arc::new("d"), "david", RemovalCause::Size));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert!(!cache.contains_key(&"d"));
         assert_eq!(cache.get(&"d").await, None); //   d -> 2
 
@@ -2075,7 +2076,7 @@ mod tests {
         // because d's frequency is higher than c's.
         cache.insert("d", "dennis").await;
         expected.push((Arc::new("c"), "cindy", RemovalCause::Size));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.get(&"a").await, Some("alice"));
         assert_eq!(cache.get(&"b").await, Some("bob"));
         assert_eq!(cache.get(&"c").await, None);
@@ -2087,14 +2088,14 @@ mod tests {
 
         cache.invalidate(&"b").await;
         expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.get(&"b").await, None);
         assert!(!cache.contains_key(&"b"));
 
         assert!(cache.remove(&"b").await.is_none());
         assert_eq!(cache.remove(&"d").await, Some("dennis"));
         expected.push((Arc::new("d"), "dennis", RemovalCause::Explicit));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.get(&"d").await, None);
         assert!(!cache.contains_key(&"d"));
 
@@ -2144,20 +2145,20 @@ mod tests {
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
         assert_eq!(cache.get(&"b").await, Some(bob));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         // order (LRU -> MRU) and counts: a -> 1, b -> 1
 
         cache.insert("c", cindy).await;
         assert_eq!(cache.get(&"c").await, Some(cindy));
         assert!(cache.contains_key(&"c"));
         // order and counts: a -> 1, b -> 1, c -> 1
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert!(cache.contains_key(&"a"));
         assert_eq!(cache.get(&"a").await, Some(alice));
         assert_eq!(cache.get(&"b").await, Some(bob));
         assert!(cache.contains_key(&"b"));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         // order and counts: c -> 1, a -> 2, b -> 2
 
         // To enter "d" (weight: 15), it needs to evict "c" (w: 5) and "a" (w: 10).
@@ -2165,25 +2166,25 @@ mod tests {
         // of "a" and "c".
         cache.insert("d", david).await; //   count: d -> 0
         expected.push((Arc::new("d"), david, RemovalCause::Size));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.get(&"d").await, None); //   d -> 1
         assert!(!cache.contains_key(&"d"));
 
         cache.insert("d", david).await;
         expected.push((Arc::new("d"), david, RemovalCause::Size));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert!(!cache.contains_key(&"d"));
         assert_eq!(cache.get(&"d").await, None); //   d -> 2
 
         cache.insert("d", david).await;
         expected.push((Arc::new("d"), david, RemovalCause::Size));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.get(&"d").await, None); //   d -> 3
         assert!(!cache.contains_key(&"d"));
 
         cache.insert("d", david).await;
         expected.push((Arc::new("d"), david, RemovalCause::Size));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert!(!cache.contains_key(&"d"));
         assert_eq!(cache.get(&"d").await, None); //   d -> 4
 
@@ -2191,7 +2192,7 @@ mod tests {
         cache.insert("d", dennis).await;
         expected.push((Arc::new("c"), cindy, RemovalCause::Size));
         expected.push((Arc::new("a"), alice, RemovalCause::Size));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.get(&"a").await, None);
         assert_eq!(cache.get(&"b").await, Some(bob));
         assert_eq!(cache.get(&"c").await, None);
@@ -2205,7 +2206,7 @@ mod tests {
         cache.insert("b", bill).await;
         expected.push((Arc::new("b"), bob, RemovalCause::Replaced));
         expected.push((Arc::new("d"), dennis, RemovalCause::Size));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.get(&"b").await, Some(bill));
         assert_eq!(cache.get(&"d").await, None);
         assert!(cache.contains_key(&"b"));
@@ -2215,7 +2216,7 @@ mod tests {
         cache.insert("a", alice).await;
         cache.insert("b", bob).await;
         expected.push((Arc::new("b"), bill, RemovalCause::Replaced));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.get(&"a").await, Some(alice));
         assert_eq!(cache.get(&"b").await, Some(bob));
         assert_eq!(cache.get(&"d").await, None);
@@ -2317,7 +2318,7 @@ mod tests {
         assert!(cache.contains_key(&"b"));
         assert!(cache.contains_key(&"c"));
 
-        // `cache.flush().await` is no longer needed here before invalidating. The last
+        // `cache.run_pending_tasks().await` is no longer needed here before invalidating. The last
         // modified timestamp of the entries were updated when they were inserted.
         // https://github.com/moka-rs/moka/issues/155
 
@@ -2325,10 +2326,10 @@ mod tests {
         expected.push((Arc::new("a"), "alice", RemovalCause::Explicit));
         expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
         expected.push((Arc::new("c"), "cindy", RemovalCause::Explicit));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         cache.insert("d", "david").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert!(cache.get(&"a").await.is_none());
         assert!(cache.get(&"b").await.is_none());
@@ -2390,10 +2391,10 @@ mod tests {
         cache.insert(0, "alice").await;
         cache.insert(1, "bob").await;
         cache.insert(2, "alex").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.get(&0).await, Some("alice"));
         assert_eq!(cache.get(&1).await, Some("bob"));
@@ -2413,9 +2414,9 @@ mod tests {
         cache.insert(3, "alice").await;
 
         // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
-        cache.flush().await; // To submit the invalidation task.
+        cache.run_pending_tasks().await; // To submit the invalidation task.
         std::thread::sleep(Duration::from_millis(200));
-        cache.flush().await; // To process the task result.
+        cache.run_pending_tasks().await; // To process the task result.
         std::thread::sleep(Duration::from_millis(200));
 
         assert!(cache.get(&0).await.is_none());
@@ -2442,9 +2443,9 @@ mod tests {
         expected.push((Arc::new(3), "alice", RemovalCause::Explicit));
 
         // Run the invalidation task and wait for it to finish. (TODO: Need a better way than sleeping)
-        cache.flush().await; // To submit the invalidation task.
+        cache.run_pending_tasks().await; // To submit the invalidation task.
         std::thread::sleep(Duration::from_millis(200));
-        cache.flush().await; // To process the task result.
+        cache.run_pending_tasks().await; // To process the task result.
         std::thread::sleep(Duration::from_millis(200));
 
         assert!(cache.get(&1).await.is_none());
@@ -2492,10 +2493,10 @@ mod tests {
         let cache = cache;
 
         cache.insert("a", "alice").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.get(&"a").await, Some("alice"));
         assert!(cache.contains_key(&"a"));
@@ -2507,16 +2508,16 @@ mod tests {
 
         assert_eq!(cache.iter().count(), 0);
 
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert!(cache.is_table_empty());
 
         cache.insert("b", "bob").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 15 secs.
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.get(&"b").await, Some("bob"));
         assert!(cache.contains_key(&"b"));
@@ -2524,10 +2525,10 @@ mod tests {
 
         cache.insert("b", "bill").await;
         expected.push((Arc::new("b"), "bob", RemovalCause::Replaced));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         mock.increment(Duration::from_secs(5)); // 20 secs
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.get(&"b").await, Some("bill"));
         assert!(cache.contains_key(&"b"));
@@ -2543,7 +2544,7 @@ mod tests {
 
         assert_eq!(cache.iter().count(), 0);
 
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert!(cache.is_table_empty());
 
         verify_notification_vec(&cache, actual, &expected).await;
@@ -2580,28 +2581,28 @@ mod tests {
         let cache = cache;
 
         cache.insert("a", "alice").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.get(&"a").await, Some("alice"));
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         cache.insert("b", "bob").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.entry_count(), 2);
 
         mock.increment(Duration::from_secs(2)); // 12 secs.
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         // contains_key does not reset the idle timer for the key.
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.entry_count(), 2);
 
@@ -2615,7 +2616,7 @@ mod tests {
 
         assert_eq!(cache.iter().count(), 1);
 
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.entry_count(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
@@ -2628,7 +2629,7 @@ mod tests {
 
         assert_eq!(cache.iter().count(), 0);
 
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert!(cache.is_table_empty());
 
         verify_notification_vec(&cache, actual, &expected).await;
@@ -2704,10 +2705,10 @@ mod tests {
 
         cache.insert("a", "alice").await;
         expiry_counters.incl_expected_creations();
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.get(&"a").await, Some("alice"));
         assert!(cache.contains_key(&"a"));
@@ -2719,17 +2720,17 @@ mod tests {
 
         assert_eq!(cache.iter().count(), 0);
 
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert!(cache.is_table_empty());
 
         cache.insert("b", "bob").await;
         expiry_counters.incl_expected_creations();
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.entry_count(), 1);
 
         mock.increment(Duration::from_secs(5)); // 15 secs.
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.get(&"b").await, Some("bob"));
         assert!(cache.contains_key(&"b"));
@@ -2738,10 +2739,10 @@ mod tests {
         cache.insert("b", "bill").await;
         expected.push((Arc::new("b"), "bob", RemovalCause::Replaced));
         expiry_counters.incl_expected_updates();
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         mock.increment(Duration::from_secs(5)); // 20 secs
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.get(&"b").await, Some("bill"));
         assert!(cache.contains_key(&"b"));
@@ -2757,7 +2758,7 @@ mod tests {
 
         assert_eq!(cache.iter().count(), 0);
 
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert!(cache.is_table_empty());
 
         expiry_counters.verify();
@@ -2824,29 +2825,29 @@ mod tests {
         let cache = cache;
 
         cache.insert("a", "alice").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         mock.increment(Duration::from_secs(5)); // 5 secs from the start.
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.get(&"a").await, Some("alice"));
         expiry_counters.incl_expected_reads();
 
         mock.increment(Duration::from_secs(5)); // 10 secs.
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         cache.insert("b", "bob").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.entry_count(), 2);
 
         mock.increment(Duration::from_secs(2)); // 12 secs.
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         // contains_key does not reset the idle timer for the key.
         assert!(cache.contains_key(&"a"));
         assert!(cache.contains_key(&"b"));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.entry_count(), 2);
 
@@ -2861,7 +2862,7 @@ mod tests {
 
         assert_eq!(cache.iter().count(), 1);
 
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.entry_count(), 1);
 
         mock.increment(Duration::from_secs(10)); // 25 secs
@@ -2874,7 +2875,7 @@ mod tests {
 
         assert_eq!(cache.iter().count(), 0);
 
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert!(cache.is_table_empty());
 
         expiry_counters.verify();
@@ -2947,18 +2948,18 @@ mod tests {
         // The key is not present.
         cache.get_with("a", async { "alice" }).await;
         expiry_counters.incl_expected_creations();
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         // The key is present.
         cache.get_with("a", async { "alex" }).await;
         expiry_counters.incl_expected_reads();
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         // The key is not present.
         cache.invalidate("a").await;
         cache.get_with("a", async { "amanda" }).await;
         expiry_counters.incl_expected_creations();
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         expiry_counters.verify();
     }
@@ -4179,36 +4180,36 @@ mod tests {
         cache.invalidate(&'a').await;
         expected.push((Arc::new('a'), "alice", RemovalCause::Explicit));
 
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.entry_count(), 0);
 
         cache.insert('b', "bob").await;
         cache.insert('c', "cathy").await;
         cache.insert('d', "david").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.entry_count(), 3);
 
         // This will be rejected due to the size constraint.
         cache.insert('e', "emily").await;
         expected.push((Arc::new('e'), "emily", RemovalCause::Size));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.entry_count(), 3);
 
         // Raise the popularity of 'e' so it will be accepted next time.
         cache.get(&'e').await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         // Retry.
         cache.insert('e', "eliza").await;
         // and the LRU entry will be evicted.
         expected.push((Arc::new('b'), "bob", RemovalCause::Size));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.entry_count(), 3);
 
         // Replace an existing entry.
         cache.insert('d', "dennis").await;
         expected.push((Arc::new('d'), "david", RemovalCause::Replaced));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.entry_count(), 3);
 
         verify_notification_vec(&cache, actual, &expected).await;
@@ -4245,7 +4246,7 @@ mod tests {
         let cache = cache;
 
         cache.insert("alice", "a0").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         // Now alice (a0) has been expired by the idle timeout (TTI).
         mock.increment(Duration::from_secs(6));
@@ -4261,11 +4262,11 @@ mod tests {
         // insert operation. We want to verify that the RemovalCause of a0 is
         // Expired, not Replaced.
         cache.insert("alice", "a1").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         mock.increment(Duration::from_secs(4));
         assert_eq!(cache.get(&"alice").await, Some("a1"));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         // Now alice has been expired by time-to-live (TTL).
         mock.increment(Duration::from_secs(4));
@@ -4278,7 +4279,7 @@ mod tests {
         // Re-insert alice with a different value and verify that the
         // RemovalCause of a1 is Expired (not Replaced).
         cache.insert("alice", "a2").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         assert_eq!(cache.entry_count(), 1);
 
@@ -4290,15 +4291,15 @@ mod tests {
 
         // This invalidate will internally remove alice (a2).
         cache.invalidate(&"alice").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.entry_count(), 0);
 
         // Re-insert, and this time, make it expired by the TTL.
         cache.insert("alice", "a3").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         mock.increment(Duration::from_secs(4));
         assert_eq!(cache.get(&"alice").await, Some("a3"));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         mock.increment(Duration::from_secs(4));
         expected.push((Arc::new("alice"), "a3", RemovalCause::Expired));
         assert_eq!(cache.get(&"alice").await, None);
@@ -4306,7 +4307,7 @@ mod tests {
 
         // This invalidate will internally remove alice (a2).
         cache.invalidate(&"alice").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         assert_eq!(cache.entry_count(), 0);
 
         verify_notification_vec(&cache, actual, &expected).await;
@@ -4352,22 +4353,22 @@ mod tests {
 
         // Insert an okay value.
         cache.insert("alice", "a0").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         // Insert a value that will cause the eviction listener to panic.
         cache.insert("alice", "panic now!").await;
         expected.push((Arc::new("alice"), "a0", RemovalCause::Replaced));
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         // Insert an okay value. This will replace the previous
         // value "panic now!" so the eviction listener will panic.
         cache.insert("alice", "a2").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
         // No more removal notification should be sent.
 
         // Invalidate the okay value.
         cache.invalidate(&"alice").await;
-        cache.flush().await;
+        cache.run_pending_tasks().await;
 
         verify_notification_vec(&cache, actual, &expected).await;
     }
@@ -4432,7 +4433,7 @@ mod tests {
             let value = Arc::new(Value::new(vec![0u8; 1024], &counters));
             cache.insert(key, value).await;
             counters.incl_inserted();
-            cache.flush().await;
+            cache.run_pending_tasks().await;
         }
 
         let eviction_count = KEYS - MAX_CAPACITY;
@@ -4447,7 +4448,7 @@ mod tests {
             if counters.evicted() != eviction_count || counters.value_dropped() != eviction_count {
                 if retries <= MAX_RETRIES {
                     retries += 1;
-                    cache.flush().await;
+                    cache.run_pending_tasks().await;
                     continue;
                 } else {
                     assert_eq!(counters.evicted(), eviction_count, "Retries exhausted");
@@ -4470,7 +4471,7 @@ mod tests {
 
         for key in 0..KEYS {
             cache.invalidate(&key).await;
-            cache.flush().await;
+            cache.run_pending_tasks().await;
         }
 
         let mut retries = 0;
@@ -4481,7 +4482,7 @@ mod tests {
             if counters.invalidated() != MAX_CAPACITY || counters.value_dropped() != KEYS {
                 if retries <= MAX_RETRIES {
                     retries += 1;
-                    cache.flush().await;
+                    cache.run_pending_tasks().await;
                     continue;
                 } else {
                     assert_eq!(counters.invalidated(), MAX_CAPACITY, "Retries exhausted");
@@ -4539,7 +4540,7 @@ mod tests {
             if actual.len() != expected.len() {
                 if retries <= MAX_RETRIES {
                     retries += 1;
-                    cache.flush().await;
+                    cache.run_pending_tasks().await;
                     continue;
                 } else {
                     assert_eq!(actual.len(), expected.len(), "Retries exhausted");

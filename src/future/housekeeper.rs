@@ -18,7 +18,7 @@ use async_trait::async_trait;
 
 #[async_trait]
 pub(crate) trait InnerSync {
-    async fn flush(&self, max_sync_repeats: usize);
+    async fn run_pending_tasks(&self, max_sync_repeats: usize);
     fn now(&self) -> Instant;
 }
 
@@ -62,7 +62,7 @@ impl Housekeeper {
                 let now = cache.now();
                 self.sync_after.set_instant(Self::sync_after(now));
 
-                cache.flush(MAX_SYNC_REPEATS).await;
+                cache.run_pending_tasks(MAX_SYNC_REPEATS).await;
 
                 self.is_sync_running.store(false, Ordering::Release);
                 true
