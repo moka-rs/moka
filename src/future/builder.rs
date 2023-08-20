@@ -262,8 +262,16 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     ///
     /// See [this example][example] for a usage of eviction listener.
     ///
-    /// If you want to use an asynchronous listener, use
-    /// [`async_eviction_listener`](#method.async_eviction_listener) instead.
+    /// # Sync or Async Eviction Listener
+    ///
+    /// The closure can be either synchronous or asynchronous, and `CacheBuilder`
+    /// provides two methods for setting the eviction listener closure:
+    ///
+    /// - If you do not need to `.await` anything in the eviction listener, use this
+    ///   `eviction_listener` method.
+    /// - If you need to `.await` something in the eviction listener, use
+    ///   [`async_eviction_listener`](#method.async_eviction_listener) method
+    ///   instead.
     ///
     /// # Panics
     ///
@@ -297,8 +305,15 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     ///
     /// See [this example][example] for a usage of asynchronous eviction listener.
     ///
-    /// If you want to use a synchronous listener, use
-    /// [`eviction_listener`](#method.eviction_listener) instead.
+    /// # Sync or Async Eviction Listener
+    ///
+    /// The closure can be either synchronous or asynchronous, and `CacheBuilder`
+    /// provides two methods for setting the eviction listener closure:
+    ///
+    /// - If you do not need to `.await` anything in the eviction listener, use
+    ///   [`eviction_listener`](#method.eviction_listener) method instead.
+    /// - If you need to `.await` something in the eviction listener, use
+    ///   this method.
     ///
     /// # Panics
     ///

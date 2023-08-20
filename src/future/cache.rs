@@ -57,16 +57,9 @@ use std::{
 ///
 /// # Example: `insert`, `get` and `invalidate`
 ///
-/// Cache entries are manually added using an insert method, and are stored in the
-/// cache until either evicted or manually invalidated:
-///
-/// - Inside an async context (`async fn` or `async` block), use
-///   [`insert`](#method.insert), [`get_with`](#method.get_with) or
-///   [`invalidate`](#method.invalidate) methods for updating the cache and `await`
-///   them.
-/// - Outside any async context, use [`blocking`](#method.blocking) method to access
-///   blocking version of [`insert`](./struct.BlockingOp.html#method.insert) or
-///   [`invalidate`](struct.BlockingOp.html#method.invalidate) methods.
+/// Cache entries are manually added using [`insert`](#method.insert) of
+/// [`get_with`](#method.get_with) method, and are stored in the cache until either
+/// evicted or manually invalidated:
 ///
 /// Here's an example of reading and updating a cache by using multiple asynchronous
 /// tasks with [Tokio][tokio-crate] runtime:
@@ -107,7 +100,6 @@ use std::{
 ///             tokio::spawn(async move {
 ///                 // Insert 64 entries. (NUM_KEYS_PER_TASK = 64)
 ///                 for key in start..end {
-///                     // insert() is an async method, so await it.
 ///                     my_cache.insert(key, value(key)).await;
 ///                     // get() returns Option<String>, a clone of the stored value.
 ///                     assert_eq!(my_cache.get(&key).await, Some(value(key)));
@@ -115,7 +107,6 @@ use std::{
 ///
 ///                 // Invalidate every 4 element of the inserted entries.
 ///                 for key in (start..end).step_by(4) {
-///                     // invalidate() is an async method, so await it.
 ///                     my_cache.invalidate(&key).await;
 ///                 }
 ///             })
@@ -638,18 +629,12 @@ use std::{
 /// ## Delivery Modes for eviction listener
 ///
 /// The [`DeliveryMode`][delivery-mode] specifies how and when an eviction
-/// notification should be delivered to an eviction listener. Currently, the
-/// `future::Cache` supports only one delivery mode: `Queued` mode.
+/// notification should be delivered to an eviction listener.
 ///
-/// A future version of `future::Cache` will support `Immediate` mode, which will be
-/// easier to use in many use cases than queued mode. Unlike the `future::Cache`,
-/// the `sync::Cache` already supports it.
+/// The `future::Cache` supports the following delivery mode:
 ///
-/// Once `future::Cache` supports the immediate mode, the `eviction_listener` and
-/// `eviction_listener_with_conf` methods will be added to the
-/// `future::CacheBuilder`. The former will use the immediate mode, and the latter
-/// will take a custom configurations to specify the queued mode. The current method
-/// `eviction_listener` will be deprecated.
+/// - From v0.12.0, it only supports `Immediate` mode.
+/// - Up to v0.11.x, it only supported `Queued` modes.
 ///
 /// For more details about the delivery modes, see [this section][sync-delivery-modes]
 /// of `sync::Cache` documentation.
@@ -730,8 +715,8 @@ impl<K, V, S> Cache<K, V, S> {
     ///
     /// The value returned is _an estimate_; the actual count may differ if there are
     /// concurrent insertions or removals, or if some entries are pending removal due
-    /// to expiration. This inaccuracy can be mitigated by performing a `sync()`
-    /// first.
+    /// to expiration. This inaccuracy can be mitigated by calling
+    /// `run_pending_tasks` first.
     ///
     /// # Example
     ///
@@ -775,8 +760,9 @@ impl<K, V, S> Cache<K, V, S> {
     ///
     /// The value returned is _an estimate_; the actual size may differ if there are
     /// concurrent insertions or removals, or if some entries are pending removal due
-    /// to expiration. This inaccuracy can be mitigated by performing a `sync()`
-    /// first. See [`entry_count`](#method.entry_count) for a sample code.
+    /// to expiration. This inaccuracy can be mitigated by calling
+    /// `run_pending_tasks` first. See [`entry_count`](#method.entry_count) for a
+    /// sample code.
     pub fn weighted_size(&self) -> u64 {
         self.base.weighted_size()
     }
@@ -2345,7 +2331,7 @@ mod tests {
 
     // This test is for https://github.com/moka-rs/moka/issues/155
     #[tokio::test]
-    async fn invalidate_all_without_sync() {
+    async fn invalidate_all_without_running_pending_tasks() {
         let cache = Cache::new(1024);
 
         assert_eq!(cache.get(&0).await, None);

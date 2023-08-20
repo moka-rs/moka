@@ -101,7 +101,8 @@
 //! - The numbers of read/write recordings reach to the configured amounts.
 //! - Or, the certain time past from the last draining.
 //!
-//! **TODO** We do not use the worker threads anymore.
+//! **TODO (v0.12.0 release)**: Update the following section as we do not use the
+//! worker threads anymore.
 //!
 //! In a `Cache`, this draining and batch application is handled by a single worker
 //! thread. So under heavy concurrent operations from clients, draining may not be
