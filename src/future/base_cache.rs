@@ -489,9 +489,10 @@ where
             // on_modify
             |_k, old_entry| {
                 // NOTES on `new_value_entry_from` method:
-                // 1. The internal EntryInfo will be shared between the old and new ValueEntries.
-                // 2. This method will set the last_accessed and last_modified to the max value to
-                //    prevent this new ValueEntry from being evicted by an expiration policy.
+                // 1. The internal EntryInfo will be shared between the old and new
+                //    ValueEntries.
+                // 2. This method will set the is_dirty to prevent this new
+                //    ValueEntry from being evicted by an expiration policy.
                 // 3. This method will update the policy_weight with the new weight.
                 let old_weight = old_entry.policy_weight();
                 let old_timestamps = (old_entry.last_accessed(), old_entry.last_modified());
@@ -1231,12 +1232,6 @@ mod batch_size {
     pub(crate) const INVALIDATION_BATCH_SIZE: usize = 500;
 }
 
-// TODO: Divide this method into smaller methods so that unit tests can do more
-// precise testing.
-// - sync_reads
-// - sync_writes
-// - evict
-// - invalidate_entries
 #[async_trait]
 impl<K, V, S> InnerSync for Inner<K, V, S>
 where

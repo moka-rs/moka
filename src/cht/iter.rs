@@ -87,17 +87,3 @@ where
         self.keys.as_mut()
     }
 }
-
-unsafe impl<'a, 'i, K, V> Send for Iter<'i, K, V>
-where
-    K: 'a + Eq + Hash + Send,
-    V: 'a + Send,
-{
-}
-
-unsafe impl<'a, 'i, K, V> Sync for Iter<'i, K, V>
-where
-    K: 'a + Eq + Hash + Sync,
-    V: 'a + Sync,
-{
-}

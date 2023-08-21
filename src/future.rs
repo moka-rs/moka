@@ -78,6 +78,6 @@ pub(crate) async fn may_yield() {
     // Acquire the lock then immediately release it. This `await` may yield to other
     // tasks.
     //
-    // TODO: This behavior is tested only with Tokio. Check other async runtimes.
+    // NOTE: This behavior was tested with Tokio and async-std.
     let _ = LOCK.lock().await;
 }
