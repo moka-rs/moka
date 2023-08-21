@@ -7,8 +7,8 @@ describes the code changes required to migrate to v0.12.0.
 
 ### `future::Cache`
 
-- The thread pool was removed from `future::Cache`. It no longer spawns background
-  threads.
+- The thread pool was removed from `future::Cache`. The background threads are It no
+  longer spawned.
 - The `notification::DeliveryMode` for eviction listener was changed from `Queued` to
   `Immediate`.
 
@@ -26,8 +26,8 @@ To support these changes, the following API changes were made:
      `async_eviction_listener` instead.
    - See [Updating the eviction listener](#updating-the-eviction-listener) for more
      details.
-5. `future::ConcurrentCacheExt::sync` method is renamed to
-   `future::Cache::run_pending_tasks`. It is also changed to `async fn`.
+5. `future::ConcurrentCacheExt::sync` method was renamed to
+   `future::Cache::run_pending_tasks`. It was also changed to `async fn`.
 
 The following internal behavior changes were made:
 
@@ -156,7 +156,7 @@ use moka::notification::ListenerFuture;
 // FutureExt trait provides the boxed method.
 use moka::future::FutureExt;
 
-let listener = move |k, v: PathBuf, cause| -> ListenerFuture {
+let eviction_listener = move |k, v: PathBuf, cause| -> ListenerFuture {
     println!(
         "\n== An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
         k, v, cause
@@ -183,7 +183,7 @@ let listener = move |k, v: PathBuf, cause| -> ListenerFuture {
 let cache = Cache::builder()
     .max_capacity(100)
     .time_to_live(Duration::from_secs(2))
-    .async_eviction_listener(listener)
+    .async_eviction_listener(eviction_listener)
     .build();
 ```
 

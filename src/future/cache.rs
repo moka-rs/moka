@@ -459,7 +459,9 @@ use std::{
 /// // uuid = { version = "1.1", features = ["v4"] }
 /// // tokio = { version = "1.18", features = ["fs", "macros", "rt-multi-thread", "sync", "time"] }
 ///
-/// use moka::{future::{Cache, FutureExt}, notification::ListenerFuture};
+/// use moka::{future::Cache, notification::ListenerFuture};
+/// // FutureExt trait provides the boxed method.
+/// use moka::future::FutureExt;
 ///
 /// use anyhow::{anyhow, Context};
 /// use std::{
@@ -539,13 +541,14 @@ use std::{
 ///     let rt = tokio::runtime::Handle::current();
 ///
 ///     // Create an eviction lister closure.
-///     let listener = move |k, v: PathBuf, cause| -> ListenerFuture {
-///         // Try to remove the data file at the path `v`.
+///     let eviction_listener = move |k, v: PathBuf, cause| -> ListenerFuture {
 ///         println!(
 ///             "\n== An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
 ///             k, v, cause
 ///         );
 ///         let file_mgr2 = Arc::clone(&file_mgr1);
+///
+///         // Create a Future that removes the data file at the path `v`.
 ///         async move {
 ///             // Acquire the write lock of the DataFileManager.
 ///             let mut mgr = file_mgr2.write().await;
@@ -555,6 +558,8 @@ use std::{
 ///                 eprintln!("Failed to remove a data file at {:?}", v);
 ///             }
 ///         }
+///         // Convert the regular Future into ListenerFuture. This method is
+///         // provided by moka::future::FutureExt trait.
 ///         .boxed()
 ///     };
 ///
@@ -563,7 +568,7 @@ use std::{
 ///     let cache = Cache::builder()
 ///         .max_capacity(100)
 ///         .time_to_live(Duration::from_secs(2))
-///         .async_eviction_listener(listener)
+///         .async_eviction_listener(eviction_listener)
 ///         .build();
 ///
 ///     // Insert an entry to the cache.
