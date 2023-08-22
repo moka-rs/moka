@@ -7,7 +7,7 @@ describes the code changes required to migrate to v0.12.0.
 
 ### `future::Cache`
 
-- The thread pool was removed from `future::Cache`. The background threads are It no
+- The thread pool was removed from `future::Cache`. The background threads are no
   longer spawned.
 - The `notification::DeliveryMode` for eviction listener was changed from `Queued` to
   `Immediate`.
@@ -36,7 +36,7 @@ The following internal behavior changes were made:
    - See [Maintenance tasks](#maintenance-tasks) for more details.
 2. Now `future::Cache` only supports `Immediate` delivery mode for eviction listener.
    - In older versions, only `Queued` delivery mode was supported.
-       - If you need `Queued` delivery mode back, please file an issue.
+   - If you need `Queued` delivery mode back, please file an issue.
 
 #### Replacing the blocking API
 
@@ -114,9 +114,11 @@ async fn main() {
 
 #### Updating the eviction listener
 
-`eviction_listener_with_queued_delivery_mode` method of `future::CacheBuilder` was
-removed. Please use one of the new methods `eviction_listener` or
-`async_eviction_listener` instead.
+- The `notification::DeliveryMode` for eviction listener was changed from `Queued` to
+  `Immediate`.
+- `eviction_listener_with_queued_delivery_mode` method of `future::CacheBuilder` was
+  removed. Please use one of the new methods `eviction_listener` or
+  `async_eviction_listener` instead.
 
 ##### `eviction_listener` method
 
