@@ -52,7 +52,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -94,7 +94,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -135,7 +135,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -195,7 +195,7 @@ where
     pub async fn or_insert_with_if(
         self,
         init: impl Future<Output = V>,
-        replace_if: impl FnMut(&V) -> bool,
+        replace_if: impl FnMut(&V) -> bool + Send,
     ) -> Entry<K, V> {
         futures_util::pin_mut!(init);
         let key = Arc::new(self.owned_key);
@@ -218,7 +218,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -293,7 +293,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -403,7 +403,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -444,7 +444,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -484,7 +484,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -543,7 +543,7 @@ where
     pub async fn or_insert_with_if(
         self,
         init: impl Future<Output = V>,
-        replace_if: impl FnMut(&V) -> bool,
+        replace_if: impl FnMut(&V) -> bool + Send,
     ) -> Entry<K, V> {
         futures_util::pin_mut!(init);
         self.cache
@@ -571,7 +571,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -645,7 +645,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.11", features = ["future"] }
+    /// // moka = { version = "0.12", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;

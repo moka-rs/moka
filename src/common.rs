@@ -35,6 +35,18 @@ impl From<usize> for CacheRegion {
     }
 }
 
+#[cfg(feature = "future")]
+impl CacheRegion {
+    pub(crate) fn name(&self) -> &'static str {
+        match self {
+            Self::Window => "window",
+            Self::MainProbation => "main probation",
+            Self::MainProtected => "main protected",
+            Self::Other => "other",
+        }
+    }
+}
+
 impl PartialEq<Self> for CacheRegion {
     fn eq(&self, other: &Self) -> bool {
         core::mem::discriminant(self) == core::mem::discriminant(other)
@@ -52,6 +64,7 @@ pub(crate) fn sketch_capacity(max_capacity: u64) -> u32 {
     max_capacity.try_into().unwrap_or(u32::MAX).max(128)
 }
 
+#[cfg(any(test, feature = "sync"))]
 pub(crate) fn available_parallelism() -> usize {
     use std::{num::NonZeroUsize, thread::available_parallelism};
     available_parallelism().map(NonZeroUsize::get).unwrap_or(1)

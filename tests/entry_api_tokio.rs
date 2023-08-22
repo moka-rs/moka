@@ -71,7 +71,7 @@ async fn test_get_with() {
                 };
 
                 assert_eq!(value.len(), TEN_MIB);
-                assert!(my_cache.get(key.as_str()).is_some());
+                assert!(my_cache.get(key.as_str()).await.is_some());
 
                 println!("Task {} got the value. (len: {})", task_id, value.len());
             })
@@ -137,7 +137,7 @@ async fn test_optionally_get_with() {
                 };
 
                 assert!(value.is_some());
-                assert!(my_cache.get(key.as_str()).is_some());
+                assert!(my_cache.get(key.as_str()).await.is_some());
 
                 println!(
                     "Task {} got the value. (len: {})",
@@ -208,7 +208,7 @@ async fn test_try_get_with() {
                 };
 
                 assert!(value.is_ok());
-                assert!(my_cache.get(key.as_str()).is_some());
+                assert!(my_cache.get(key.as_str()).await.is_some());
 
                 println!(
                     "Task {} got the value. (len: {})",

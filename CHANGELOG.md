@@ -1,5 +1,31 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.0 (Currently Beta)
+
+**IMPORTANT**: This release has major breaking changes.
+
+- `future::Cache`
+    - The thread pool was removed from `future::Cache`. It no longer spawns
+      background threads.
+    - The `notification::DeliveryMode` for eviction listener was changed from
+      `Queued` to `Immediate`.
+    - To support these changes, some of the APIs were changed. Please see the
+      [MIGRATION-GUIDE.md](./MIGRATION-GUIDE.md#migrating-to-v0120-from-a-prior-version)
+      for more details.
+- `sync::Cache` and `sync::SegmentedCache`
+    - As of 0.12.0-beta.1, no breaking changes have been made to these caches.
+    - However, the future beta releases will have the following changes:
+        - (Not in 0.12.0-beta.1) `sync` caches will be no longer enabled by default.
+          Use a crate feature `sync` to enable it.
+        - (Not in 0.12.0-beta.1) The thread pool will be disabled by default.
+
+### Changed
+
+- Remove the thread pool from `future::Cache`. ([#294][gh-pull-0294])
+- Add support for `Immediate` notification delivery mode to future cache.
+ ([#228][gh-issue-0228])
+
+
 ## Version 0.11.3
 
 ### Fixed
@@ -671,6 +697,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0243]: https://github.com/moka-rs/moka/issues/243/
 [gh-issue-0242]: https://github.com/moka-rs/moka/issues/242/
 [gh-issue-0230]: https://github.com/moka-rs/moka/issues/230/
+[gh-issue-0228]: https://github.com/moka-rs/moka/issues/228/
 [gh-issue-0212]: https://github.com/moka-rs/moka/issues/212/
 [gh-issue-0207]: https://github.com/moka-rs/moka/issues/207/
 [gh-issue-0162]: https://github.com/moka-rs/moka/issues/162/
@@ -686,6 +713,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
 [gh-pull-0295]: https://github.com/moka-rs/moka/pull/295/
+[gh-pull-0294]: https://github.com/moka-rs/moka/pull/294/
 [gh-pull-0277]: https://github.com/moka-rs/moka/pull/277/
 [gh-pull-0275]: https://github.com/moka-rs/moka/pull/275/
 [gh-pull-0272]: https://github.com/moka-rs/moka/pull/272/

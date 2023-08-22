@@ -8,8 +8,14 @@ use triomphe::Arc as TrioArc;
 pub(crate) mod constants;
 pub(crate) mod deques;
 pub(crate) mod entry_info;
+
+#[cfg(feature = "sync")]
 pub(crate) mod housekeeper;
+
+#[cfg(feature = "sync")]
 pub(crate) mod thread_pool;
+
+#[cfg(feature = "sync")]
 pub(crate) mod unsafe_weak_pointer;
 
 // target_has_atomic is more convenient but yet unstable (Rust 1.55)

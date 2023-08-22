@@ -1,5 +1,6 @@
-use async_lock::{RwLock, RwLockWriteGuard};
-use futures_util::{future::BoxFuture, FutureExt};
+use async_lock::{Mutex, RwLock, RwLockWriteGuard};
+use async_trait::async_trait;
+use futures_util::FutureExt;
 use std::{
     any::{Any, TypeId},
     future::Future,
@@ -12,6 +13,21 @@ use triomphe::Arc as TrioArc;
 use super::OptionallyNone;
 
 const WAITER_MAP_NUM_SEGMENTS: usize = 64;
+
+#[async_trait]
+pub(crate) trait GetOrInsert<K, V> {
+    async fn get_without_recording<I>(
+        &self,
+        key: &Arc<K>,
+        hash: u64,
+        replace_if: Option<&mut I>,
+    ) -> Option<V>
+    where
+        V: 'static,
+        I: for<'i> FnMut(&'i V) -> bool + Send;
+
+    async fn insert(&self, key: Arc<K>, hash: u64, value: V);
+}
 
 type ErrorObject = Arc<dyn Any + Send + Sync + 'static>;
 
@@ -128,21 +144,23 @@ where
 
     /// # Panics
     /// Panics if the `init` future has been panicked.
-    pub(crate) async fn try_init_or_read<'a, O, E>(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn try_init_or_read<'a, C, I, O, E>(
         &'a self,
         key: &Arc<K>,
+        hash: u64,
         type_id: TypeId,
-        // Closure to get an existing value from cache.
-        mut get: impl FnMut() -> Option<V>,
+        cache: &C,
+        ignore_if: Arc<Mutex<Option<I>>>,
         // Future to initialize a new value.
         init: Pin<&mut impl Future<Output = O>>,
-        // Closure that returns a future to insert a new value into cache.
-        mut insert: impl FnMut(V) -> BoxFuture<'a, ()> + Send + 'a,
         // Function to convert a value O, returned from the init future, into
         // Result<V, E>.
         post_init: fn(O) -> Result<V, E>,
     ) -> InitResult<V, E>
     where
+        C: GetOrInsert<K, V> + Send + 'a,
+        I: FnMut(&V) -> bool + Send,
         E: Send + Sync + 'static,
     {
         use std::panic::{resume_unwind, AssertUnwindSafe};
@@ -151,7 +169,7 @@ where
         const MAX_RETRIES: usize = 200;
         let mut retries = 0;
 
-        let (cht_key, hash) = cht_key_hash(&self.waiters, key, type_id);
+        let cht_key = (Arc::clone(key), type_id);
 
         loop {
             let waiter = TrioArc::new(RwLock::new(WaiterValue::Computing));
@@ -172,7 +190,10 @@ where
                     );
 
                     // Check if the value has already been inserted by other thread.
-                    if let Some(value) = get() {
+                    if let Some(value) = cache
+                        .get_without_recording(key, hash, ignore_if.lock().await.as_mut())
+                        .await
+                    {
                         // Yes. Set the waiter value, remove our waiter, and return
                         // the existing value.
                         waiter_guard.set_waiter_value(WaiterValue::Ready(Ok(value.clone())));
@@ -188,7 +209,7 @@ where
                         Ok(value) => {
                             let (waiter_val, init_res) = match post_init(value) {
                                 Ok(value) => {
-                                    insert(value.clone()).await;
+                                    cache.insert(Arc::clone(key), hash, value.clone()).await;
                                     (
                                         WaiterValue::Ready(Ok(value.clone())),
                                         InitResult::Initialized(value),
@@ -311,21 +332,6 @@ where
 {
     let waiter = TrioArc::clone(waiter);
     waiter_map.insert_if_not_present(cht_key, hash, waiter)
-}
-
-#[inline]
-fn cht_key_hash<K, V, S>(
-    waiter_map: &WaiterMap<K, V, S>,
-    key: &Arc<K>,
-    type_id: TypeId,
-) -> ((Arc<K>, TypeId), u64)
-where
-    (Arc<K>, TypeId): Eq + Hash,
-    S: BuildHasher,
-{
-    let cht_key = (Arc::clone(key), type_id);
-    let hash = waiter_map.hash(&cht_key);
-    (cht_key, hash)
 }
 
 fn panic_if_retry_exhausted_for_panicking(retries: usize, max: usize) {

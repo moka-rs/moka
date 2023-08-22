@@ -16,6 +16,9 @@ pub(crate) trait ScanningGet<K, V> {
     fn keys(&self, cht_segment: usize) -> Option<Vec<Arc<K>>>;
 }
 
+/// Iterator visiting all key-value pairs in a cache in arbitrary order.
+///
+/// Call [`Cache::iter`](./struct.Cache.html#method.iter) method to obtain an `Iter`.
 pub struct Iter<'i, K, V> {
     keys: Option<Vec<Arc<K>>>,
     cache_segments: Box<[&'i dyn ScanningGet<K, V>]>,

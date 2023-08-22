@@ -34,6 +34,19 @@ impl<K> Default for Deques<K> {
 }
 
 impl<K> Deques<K> {
+    #[cfg(feature = "future")]
+    pub(crate) fn select_mut(
+        &mut self,
+        selector: CacheRegion,
+    ) -> (&mut Deque<KeyHashDate<K>>, &mut Deque<KeyHashDate<K>>) {
+        match selector {
+            CacheRegion::Window => (&mut self.window, &mut self.write_order),
+            CacheRegion::MainProbation => (&mut self.probation, &mut self.write_order),
+            CacheRegion::MainProtected => (&mut self.protected, &mut self.write_order),
+            _ => unreachable!(),
+        }
+    }
+
     pub(crate) fn push_back_ao<V>(
         &mut self,
         region: CacheRegion,

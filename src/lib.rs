@@ -22,23 +22,25 @@
 //!
 //! - Thread-safe, highly concurrent in-memory cache implementations:
 //!     - Synchronous caches that can be shared across OS threads.
-//!     - An asynchronous (futures aware) cache that can be accessed inside and
-//!       outside of asynchronous contexts.
+//!     - An asynchronous (futures aware) cache.
 //! - A cache can be bounded by one of the followings:
 //!     - The maximum number of entries.
 //!     - The total weighted size of entries. (Size aware eviction)
-//! - Maintains good hit rate by using entry replacement algorithms inspired by
-//!   [Caffeine][caffeine-git]:
+//! - Maintains near optimal hit ratio by using an entry replacement algorithms
+//!   inspired by Caffeine:
 //!     - Admission to a cache is controlled by the Least Frequently Used (LFU)
 //!       policy.
 //!     - Eviction from a cache is controlled by the Least Recently Used (LRU)
 //!       policy.
+//!     - [More details and some benchmark results are available here][tiny-lfu].
 //! - Supports expiration policies:
 //!     - Time to live.
 //!     - Time to idle.
 //!     - Per-entry variable expiration.
 //! - Supports eviction listener, a callback function that will be called when an
 //!   entry is removed from the cache.
+//!
+//! [tiny-lfu]: https://github.com/moka-rs/moka/wiki#admission-and-eviction-policies
 //!
 //! # Examples
 //!
@@ -59,7 +61,7 @@
 //!
 //! - Non concurrent cache for single threaded applications:
 //!     - `moka::unsync::Cache` → [`mini_moka::unsync::Cache`][unsync-cache-struct]
-//! - Experimental, thread-safe, synchronous cache:
+//! - A simple, thread-safe, synchronous cache:
 //!     - `moka::dash::Cache` → [`mini_moka::sync::Cache`][dash-cache-struct]
 //!
 //! [mini-moka-crate]: https://crates.io/crates/mini-moka
@@ -98,6 +100,9 @@
 //!
 //! - The numbers of read/write recordings reach to the configured amounts.
 //! - Or, the certain time past from the last draining.
+//!
+//! **TODO (v0.12.0 release)**: Update the following section as we do not use the
+//! worker threads anymore.
 //!
 //! In a `Cache`, this draining and batch application is handled by a single worker
 //! thread. So under heavy concurrent operations from clients, draining may not be
@@ -155,8 +160,7 @@
 //!
 //! - The time-to-live policy uses a write-order queue.
 //! - The time-to-idle policy uses an access-order queue.
-//! - The variable expiration will use a [hierarchical timer wheel][timer-wheel]
-//!   (*1).
+//! - The variable expiration uses a [hierarchical timer wheel][timer-wheel] (*1).
 //!
 //! *1: If you get 404 page not found when you click on the link to the hierarchical
 //! timer wheel paper, try to change the URL from `https:` to `http:`.

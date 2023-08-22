@@ -140,8 +140,10 @@ mod test {
 
         use TargetArch::*;
 
+        #[allow(clippy::option_env_unwrap)]
         // e.g. "1.64"
-        let ver = option_env!("RUSTC_SEMVER").expect("RUSTC_SEMVER env var not set");
+        let ver =
+            option_env!("RUSTC_SEMVER").expect("RUSTC_SEMVER env var was not set at compile time");
         let is_quanta_enabled = cfg!(feature = "quanta");
         let arch = if cfg!(target_os = "linux") {
             if cfg!(target_pointer_width = "64") {

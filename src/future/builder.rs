@@ -1,7 +1,7 @@
-use super::Cache;
+use super::{Cache, FutureExt};
 use crate::{
     common::{builder_utils, concurrent::Weigher},
-    notification::{self, DeliveryMode, EvictionListener, RemovalCause},
+    notification::{AsyncEvictionListener, ListenerFuture, RemovalCause},
     policy::ExpirationPolicy,
     Expiry,
 };
@@ -24,7 +24,7 @@ use std::{
 /// // Cargo.toml
 /// //
 /// // [dependencies]
-/// // moka = { version = "0.11", features = ["future"] }
+/// // moka = { version = "0.12", features = ["future"] }
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures = "0.3"
 ///
@@ -60,8 +60,7 @@ pub struct CacheBuilder<K, V, C> {
     max_capacity: Option<u64>,
     initial_capacity: Option<usize>,
     weigher: Option<Weigher<K, V>>,
-    eviction_listener: Option<EvictionListener<K, V>>,
-    eviction_listener_conf: Option<notification::Configuration>,
+    eviction_listener: Option<AsyncEvictionListener<K, V>>,
     expiration_policy: ExpirationPolicy<K, V>,
     invalidator_enabled: bool,
     cache_type: PhantomData<C>,
@@ -79,7 +78,6 @@ where
             initial_capacity: None,
             weigher: None,
             eviction_listener: None,
-            eviction_listener_conf: None,
             expiration_policy: Default::default(),
             invalidator_enabled: false,
             cache_type: Default::default(),
@@ -119,10 +117,8 @@ where
             build_hasher,
             self.weigher,
             self.eviction_listener,
-            self.eviction_listener_conf,
             self.expiration_policy,
             self.invalidator_enabled,
-            builder_utils::housekeeper_conf(true),
         )
     }
 
@@ -217,10 +213,8 @@ where
             hasher,
             self.weigher,
             self.eviction_listener,
-            self.eviction_listener_conf,
             self.expiration_policy,
             self.invalidator_enabled,
-            builder_utils::housekeeper_conf(true),
         )
     }
 }
@@ -262,11 +256,22 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
-    /// Sets the eviction listener closure to the cache.
+    /// Sets the eviction listener closure to the cache. The closure should take
+    /// `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as the arguments. The
+    /// [immediate delivery mode][immediate-mode] is used for the listener.
     ///
-    /// The closure should take `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as
-    /// the arguments. The [queued delivery mode][queued-mode] is used for the
-    /// listener.
+    /// See [this example][example] for a usage of eviction listener.
+    ///
+    /// # Sync or Async Eviction Listener
+    ///
+    /// The closure can be either synchronous or asynchronous, and `CacheBuilder`
+    /// provides two methods for setting the eviction listener closure:
+    ///
+    /// - If you do not need to `.await` anything in the eviction listener, use this
+    ///   `eviction_listener` method.
+    /// - If you need to `.await` something in the eviction listener, use
+    ///   [`async_eviction_listener`](#method.async_eviction_listener) method
+    ///   instead.
     ///
     /// # Panics
     ///
@@ -276,17 +281,57 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     /// call the panicked lister again.
     ///
     /// [removal-cause]: ../notification/enum.RemovalCause.html
-    /// [queued-mode]: ../notification/enum.DeliveryMode.html#variant.Queued
-    pub fn eviction_listener_with_queued_delivery_mode(
-        self,
-        listener: impl Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
-    ) -> Self {
-        let conf = notification::Configuration::builder()
-            .delivery_mode(DeliveryMode::Queued)
-            .build();
+    /// [immediate-mode]: ../notification/enum.DeliveryMode.html#variant.Immediate
+    /// [example]: ./struct.Cache.html#per-entry-expiration-policy
+    pub fn eviction_listener<F>(self, listener: F) -> Self
+    where
+        F: Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
+    {
+        let async_listener = move |k, v, c| {
+            {
+                listener(k, v, c);
+                std::future::ready(())
+            }
+            .boxed()
+        };
+
+        self.async_eviction_listener(async_listener)
+    }
+
+    /// Sets the eviction listener closure to the cache. The closure should take
+    /// `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as the arguments, and
+    /// return a [`ListenerFuture`][listener-future]. The
+    /// [immediate delivery mode][immediate-mode] is used for the listener.
+    ///
+    /// See [this example][example] for a usage of asynchronous eviction listener.
+    ///
+    /// # Sync or Async Eviction Listener
+    ///
+    /// The closure can be either synchronous or asynchronous, and `CacheBuilder`
+    /// provides two methods for setting the eviction listener closure:
+    ///
+    /// - If you do not need to `.await` anything in the eviction listener, use
+    ///   [`eviction_listener`](#method.eviction_listener) method instead.
+    /// - If you need to `.await` something in the eviction listener, use
+    ///   this method.
+    ///
+    /// # Panics
+    ///
+    /// It is very important to make the listener closure not to panic. Otherwise,
+    /// the cache will stop calling the listener after a panic. This is an intended
+    /// behavior because the cache cannot know whether is is memory safe or not to
+    /// call the panicked lister again.
+    ///
+    /// [removal-cause]: ../notification/enum.RemovalCause.html
+    /// [listener-future]: ../notification/type.ListenerFuture.html
+    /// [immediate-mode]: ../notification/enum.DeliveryMode.html#variant.Immediate
+    /// [example]: ./struct.Cache.html#example-eviction-listener
+    pub fn async_eviction_listener<F>(self, listener: F) -> Self
+    where
+        F: Fn(Arc<K>, V, RemovalCause) -> ListenerFuture + Send + Sync + 'static,
+    {
         Self {
-            eviction_listener: Some(Arc::new(listener)),
-            eviction_listener_conf: Some(conf),
+            eviction_listener: Some(Box::new(listener)),
             ..self
         }
     }
@@ -369,7 +414,7 @@ mod tests {
         assert_eq!(policy.num_segments(), 1);
 
         cache.insert('a', "Alice").await;
-        assert_eq!(cache.get(&'a'), Some("Alice"));
+        assert_eq!(cache.get(&'a').await, Some("Alice"));
 
         let cache = CacheBuilder::new(100)
             .time_to_live(Duration::from_secs(45 * 60))
@@ -383,7 +428,7 @@ mod tests {
         assert_eq!(policy.num_segments(), 1);
 
         cache.insert('a', "Alice").await;
-        assert_eq!(cache.get(&'a'), Some("Alice"));
+        assert_eq!(cache.get(&'a').await, Some("Alice"));
     }
 
     #[tokio::test]
