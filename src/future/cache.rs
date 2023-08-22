@@ -33,7 +33,7 @@ use std::{
 /// A thread-safe, futures-aware concurrent in-memory cache.
 ///
 /// `Cache` supports full concurrency of retrievals and a high expected concurrency
-/// for updates.It utilizes a lock-free concurrent hash table as the central
+/// for updates. It utilizes a lock-free concurrent hash table as the central
 /// key-value storage. It performs a best-effort bounding of the map using an entry
 /// replacement algorithm to determine which entries to evict when the capacity is
 /// exceeded.
@@ -4496,21 +4496,15 @@ mod tests {
         let counters = Arc::new(Counters::default());
         let counters1 = Arc::clone(&counters);
 
-        let listener = move |_k, _v, cause| -> ListenerFuture {
-            let counters2 = Arc::clone(&counters1);
-            async move {
-                match cause {
-                    RemovalCause::Size => counters2.incl_evicted(),
-                    RemovalCause::Explicit => counters2.incl_invalidated(),
-                    _ => (),
-                }
-            }
-            .boxed()
+        let listener = move |_k, _v, cause| match cause {
+            RemovalCause::Size => counters1.incl_evicted(),
+            RemovalCause::Explicit => counters1.incl_invalidated(),
+            _ => (),
         };
 
         let mut cache = Cache::builder()
             .max_capacity(MAX_CAPACITY as u64)
-            .async_eviction_listener(listener)
+            .eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing().await;
 
