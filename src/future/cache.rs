@@ -1383,22 +1383,58 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
+        // Lock the key for removal if blocking removal notification is enabled.
+        let mut kl = None;
+        let mut klg = None;
+        if self.base.is_removal_notifier_enabled() {
+            // To lock the key, we have to get Arc<K> for key (&Q).
+            //
+            // TODO: Enhance this if possible. This is rather hack now because
+            // it cannot prevent race conditions like this:
+            //
+            // 1. We miss the key because it does not exist. So we do not lock
+            //    the key.
+            // 2. Somebody else (other thread) inserts the key.
+            // 3. We remove the entry for the key, but without the key lock!
+            //
+            if let Some(arc_key) = self.base.get_key_with_hash(key, hash) {
+                kl = self.base.maybe_key_lock(&arc_key);
+                klg = if let Some(lock) = &kl {
+                    Some(lock.lock().await)
+                } else {
+                    None
+                };
+            }
+        }
+
         match self.base.remove_entry(key, hash) {
             None => None,
             Some(kv) => {
+                let now = self.base.current_time_from_expiration_clock();
+
+                if self.base.is_removal_notifier_enabled() {
+                    // TODO: Make this one resumable. (Pass `kl`, `klg`, `kv` and
+                    // `now`)
+                    self.base.notify_invalidate(&kv.key, &kv.entry).await
+                }
+                // Drop the locks before scheduling write op to avoid a potential
+                // dead lock. (Scheduling write can do spin lock when the queue is
+                // full, and queue will be drained by the housekeeping thread that
+                // can lock the same key)
+                std::mem::drop(klg);
+                std::mem::drop(kl);
+
                 let maybe_v = if need_value {
                     Some(kv.entry.value.clone())
                 } else {
                     None
                 };
 
-                if self.base.is_removal_notifier_enabled() {
-                    self.base.notify_invalidate(&kv.key, &kv.entry).await
-                }
-
                 let op = WriteOp::Remove(kv);
-                let now = self.base.current_time_from_expiration_clock();
                 let hk = self.base.housekeeper.as_ref();
+                // TODO: If enclosing future is being dropped, save `op` and `now` so
+                // that we can resume later. (maybe we can send to an unbound mpsc
+                // channel)
                 Self::schedule_write_op(&self.base.inner, &self.base.write_op_ch, op, now, hk)
                     .await
                     .expect("Failed to remove");
@@ -1845,6 +1881,8 @@ where
 
         let (op, now) = self.base.do_insert_with_hash(key, hash, value).await;
         let hk = self.base.housekeeper.as_ref();
+        // TODO: If enclosing future is being dropped, save `op` and `now` so that
+        // we can resume later. (maybe we can send to an unbound mpsc channel)
         Self::schedule_write_op(&self.base.inner, &self.base.write_op_ch, op, now, hk)
             .await
             .expect("Failed to insert");

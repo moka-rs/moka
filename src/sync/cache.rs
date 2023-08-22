@@ -1805,12 +1805,15 @@ where
         match self.base.remove_entry(key, hash) {
             None => None,
             Some(kv) => {
+                let now = self.base.current_time_from_expiration_clock();
+
                 if self.base.is_removal_notifier_enabled() {
                     self.base.notify_invalidate(&kv.key, &kv.entry)
                 }
-                // Drop the locks before scheduling write op to avoid a potential dead lock.
-                // (Scheduling write can do spin lock when the queue is full, and queue will
-                // be drained by the housekeeping thread that can lock the same key)
+                // Drop the locks before scheduling write op to avoid a potential
+                // dead lock. (Scheduling write can do spin lock when the queue is
+                // full, and queue will be drained by the housekeeping thread that
+                // can lock the same key)
                 std::mem::drop(klg);
                 std::mem::drop(kl);
 
@@ -1821,7 +1824,6 @@ where
                 };
 
                 let op = WriteOp::Remove(kv);
-                let now = self.base.current_time_from_expiration_clock();
                 let hk = self.base.housekeeper.as_ref();
                 Self::schedule_write_op(
                     self.base.inner.as_ref(),

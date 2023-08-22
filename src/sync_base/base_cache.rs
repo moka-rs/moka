@@ -109,7 +109,6 @@ impl<K, V, S> BaseCache<K, V, S> {
     }
 
     #[inline]
-    #[cfg(feature = "sync")]
     pub(crate) fn is_blocking_removal_notification(&self) -> bool {
         self.inner.is_blocking_removal_notification()
     }
@@ -378,7 +377,6 @@ where
         }
     }
 
-    #[cfg(feature = "sync")]
     pub(crate) fn get_key_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<Arc<K>>
     where
         K: Borrow<Q>,
@@ -997,7 +995,6 @@ impl<K, V, S> Inner<K, V, S> {
     }
 
     #[inline]
-    #[cfg(feature = "sync")]
     fn is_blocking_removal_notification(&self) -> bool {
         self.removal_notifier
             .as_ref()
