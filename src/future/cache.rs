@@ -1432,9 +1432,9 @@ where
 
                 let op = WriteOp::Remove(kv);
                 let hk = self.base.housekeeper.as_ref();
-                // TODO: If enclosing future is being dropped, save `op` and `now` so
-                // that we can resume later. (maybe we can send to an unbound mpsc
-                // channel)
+                // TODO: Async cancellation safety: If enclosing future is being
+                // dropped, save `op` and `now` so that we can resume later. (maybe
+                // we can send to an unbound mpsc channel)
                 Self::schedule_write_op(&self.base.inner, &self.base.write_op_ch, op, now, hk)
                     .await
                     .expect("Failed to remove");
@@ -1881,8 +1881,9 @@ where
 
         let (op, now) = self.base.do_insert_with_hash(key, hash, value).await;
         let hk = self.base.housekeeper.as_ref();
-        // TODO: If enclosing future is being dropped, save `op` and `now` so that
-        // we can resume later. (maybe we can send to an unbound mpsc channel)
+        // TODO: Async cancellation safety: If enclosing future is being dropped,
+        // save `op` and `now` so that we can resume later. (maybe we can send to an
+        // unbound mpsc channel)
         Self::schedule_write_op(&self.base.inner, &self.base.write_op_ch, op, now, hk)
             .await
             .expect("Failed to insert");

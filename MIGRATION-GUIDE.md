@@ -242,7 +242,6 @@ free some memory), you do not need to call `run_pending_tasks` method.
    - To enable it, see [Enabling the thread pool](#enabling-the-thread-pool) for more
      details.
 
-
 #### Enabling the thread pool
 
 To enable the thread pool, do the followings:

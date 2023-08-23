@@ -547,8 +547,9 @@ where
                 }
 
                 if self.is_removal_notifier_enabled() {
-                    // TODO: Make this one resumable. (Pass `kl`, `_klg`, `upd_op`
-                    // and `ts`)
+                    // TODO: Async cancellation safety: Make this resumable.
+                    // (NOTE: Move `kl`, `_klg`, `upd_op` and `ts` into the
+                    // Future)
                     self.inner
                         .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified)
                         .await;
@@ -589,8 +590,9 @@ where
                     }
 
                     if self.is_removal_notifier_enabled() {
-                        // TODO: Make this one resumable. (Pass `kl`, `_klg`, `upd_op`
-                        // and `ts`)
+                        // TODO: Async cancellation safety: Make this resumable.
+                        // (NOTE: Move `kl`, `_klg`, `upd_op` and `ts` into the
+                        // Future)
                         self.inner
                             .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified)
                             .await;
