@@ -335,6 +335,15 @@ where
         }
     }
 
+    pub(crate) fn get_key_with_hash<Q>(&self, key: &Q, hash: u64) -> Option<Arc<K>>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        self.inner
+            .get_key_value_and(key, hash, |k, _entry| Arc::clone(k))
+    }
+
     #[inline]
     pub(crate) fn remove_entry<Q>(&self, key: &Q, hash: u64) -> Option<KvEntry<K, V>>
     where
@@ -538,6 +547,8 @@ where
                 }
 
                 if self.is_removal_notifier_enabled() {
+                    // TODO: Make this one resumable. (Pass `kl`, `_klg`, `upd_op`
+                    // and `ts`)
                     self.inner
                         .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified)
                         .await;
@@ -578,6 +589,8 @@ where
                     }
 
                     if self.is_removal_notifier_enabled() {
+                        // TODO: Make this one resumable. (Pass `kl`, `_klg`, `upd_op`
+                        // and `ts`)
                         self.inner
                             .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified)
                             .await;
