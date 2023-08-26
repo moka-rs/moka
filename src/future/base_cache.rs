@@ -58,7 +58,7 @@ pub(crate) type HouseKeeperArc = Arc<Housekeeper>;
 pub(crate) struct BaseCache<K, V, S = RandomState> {
     pub(crate) inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
-    pub(crate) write_op_ch: Sender<WriteOp<K, V>>,
+    pub(crate) write_op_ch: Sender<TrioArc<WriteOp<K, V>>>,
     pub(crate) pending_op_ch_snd: Sender<PendingOp<K, V>>,
     pub(crate) pending_op_ch_rcv: Receiver<PendingOp<K, V>>,
     pub(crate) housekeeper: Option<HouseKeeperArc>,
@@ -371,14 +371,14 @@ where
     #[inline]
     pub(crate) async fn apply_reads_writes_if_needed(
         inner: Arc<impl InnerSync + Send + Sync + 'static>,
-        ch: &Sender<WriteOp<K, V>>,
-        now: Instant,
+        ch: &Sender<TrioArc<WriteOp<K, V>>>,
+        ts: Instant,
         housekeeper: Option<&HouseKeeperArc>,
     ) {
         let w_len = ch.len();
 
         if let Some(hk) = housekeeper {
-            if Self::should_apply_writes(hk, w_len, now) {
+            if Self::should_apply_writes(hk, w_len, ts) {
                 hk.try_run_pending_tasks(inner).await;
             }
         }
@@ -468,7 +468,7 @@ where
         key: Arc<K>,
         hash: u64,
         value: V,
-    ) -> (WriteOp<K, V>, Instant) {
+    ) -> (TrioArc<WriteOp<K, V>>, Instant) {
         use futures_util::FutureExt;
 
         self.process_pending_ops().await;
@@ -489,7 +489,7 @@ where
             None
         };
 
-        let mut drop_guard = PendingOpGuard::new(pending_op_ch);
+        let mut drop_guard = PendingOpGuard::new(pending_op_ch, ts);
 
         // Since the cache (cht::SegmentedHashMap) employs optimistic locking
         // strategy, insert_with_or_modify() may get an insert/modify operation
@@ -551,9 +551,9 @@ where
                 {
                     Self::expire_after_create(expiry, &key, value_entry, ts, self.inner.clocks());
                 }
-                (ins_op, ts)
+                (TrioArc::new(ins_op), ts)
             }
-            (None, Some((_cnt, old_entry, (old_last_accessed, old_last_modified), mut upd_op))) => {
+            (None, Some((_cnt, old_entry, (old_last_accessed, old_last_modified), upd_op))) => {
                 if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
                     (&self.inner.expiration_policy.expiry(), &upd_op)
                 {
@@ -568,15 +568,17 @@ where
                     );
                 }
 
+                let upd_op = TrioArc::new(upd_op);
+
                 if self.is_removal_notifier_enabled() {
                     let future = self
                         .inner
                         .notify_upsert_future(key, &old_entry, old_last_accessed, old_last_modified)
                         .shared();
-                    drop_guard.set(future.clone(), upd_op);
+                    drop_guard.set_future_and_op(future.clone(), TrioArc::clone(&upd_op));
 
                     future.await;
-                    upd_op = drop_guard.clear().unwrap();
+                    drop_guard.clear();
                 }
 
                 crossbeam_epoch::pin().flush();
@@ -584,7 +586,7 @@ where
             }
             (
                 Some((cnt1, ins_op)),
-                Some((cnt2, old_entry, (old_last_accessed, old_last_modified), mut upd_op)),
+                Some((cnt2, old_entry, (old_last_accessed, old_last_modified), upd_op)),
             ) => {
                 if cnt1 > cnt2 {
                     if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
@@ -598,7 +600,7 @@ where
                             self.inner.clocks(),
                         );
                     }
-                    (ins_op, ts)
+                    (TrioArc::new(ins_op), ts)
                 } else {
                     if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
                         (&self.inner.expiration_policy.expiry(), &upd_op)
@@ -614,6 +616,8 @@ where
                         );
                     }
 
+                    let upd_op = TrioArc::new(upd_op);
+
                     if self.is_removal_notifier_enabled() {
                         let future = self
                             .inner
@@ -624,10 +628,10 @@ where
                                 old_last_modified,
                             )
                             .shared();
-                        drop_guard.set(future.clone(), upd_op);
+                        drop_guard.set_future_and_op(future.clone(), TrioArc::clone(&upd_op));
 
                         future.await;
-                        upd_op = drop_guard.clear().unwrap();
+                        drop_guard.clear();
                     }
                     crossbeam_epoch::pin().flush();
                     (upd_op, ts)
@@ -637,21 +641,79 @@ where
         }
     }
 
+    #[inline]
+    pub(crate) async fn schedule_write_op(
+        inner: &Arc<impl InnerSync + Send + Sync + 'static>,
+        ch: &Sender<TrioArc<WriteOp<K, V>>>,
+        op: TrioArc<WriteOp<K, V>>,
+        ts: Instant,
+        housekeeper: Option<&HouseKeeperArc>,
+    ) -> Result<(), TrySendError<TrioArc<WriteOp<K, V>>>> {
+        let mut op = op;
+        let mut spin_count = 0u8;
+        loop {
+            BaseCache::<K, V, S>::apply_reads_writes_if_needed(
+                Arc::clone(inner),
+                ch,
+                ts,
+                housekeeper,
+            )
+            .await;
+            match ch.try_send(op) {
+                Ok(()) => return Ok(()),
+                Err(TrySendError::Full(op1)) => {
+                    op = op1;
+                }
+                Err(e @ TrySendError::Disconnected(_)) => return Err(e),
+            }
+
+            // We have got a `TrySendError::Full` above. Wait for a bit and try
+            // again.
+            if spin_count < 10 {
+                spin_count += 1;
+                // Wastes some CPU time with a hint to indicate to the CPU that we
+                // are spinning
+                for _ in 0..8 {
+                    std::hint::spin_loop();
+                }
+            } else {
+                spin_count = 0;
+                // Try to yield to other tasks. We have to yield sometimes, otherwise
+                // other task, which is draining the `ch`, will not make any
+                // progress. If this happens, we will stuck in this loop forever.
+                super::may_yield().await;
+            }
+        }
+    }
+
     pub(crate) async fn process_pending_ops(&self) {
         while let Ok(op) = self.pending_op_ch_rcv.try_recv() {
+            let mut drop_guard;
+            // Resume an interrupted future if there is one.
             match op {
-                PendingOp::CallEvictionListener { future, op } => {
-                    let mut drop_guard = PendingOpGuard::new(&self.pending_op_ch_snd);
-                    drop_guard.set(future.clone(), op);
-
+                PendingOp::CallEvictionListener { ts, future, op } => {
+                    drop_guard = PendingOpGuard::new(&self.pending_op_ch_snd, ts);
+                    drop_guard.set_future_and_op(future.clone(), op);
+                    // Resume the interrupted future.
                     future.await;
-                    let _op = drop_guard.clear().unwrap();
-                    // todo!();
+                    // If we are here, it means the above future has been completed.
+                    drop_guard.unset_future();
                 }
-                PendingOp::SendWriteOp(_op) => {
-                    // todo!()
+                PendingOp::SendWriteOp { ts, op } => {
+                    drop_guard = PendingOpGuard::new(&self.pending_op_ch_snd, ts);
+                    drop_guard.set_op(op);
                 }
             }
+
+            let ts = drop_guard.ts;
+            let op = drop_guard.op.as_ref().map(TrioArc::clone).unwrap();
+            let hk = self.housekeeper.as_ref();
+            Self::schedule_write_op(&self.inner, &self.write_op_ch, op, ts, hk)
+                .await
+                .expect("Failed to reschedule a write op");
+
+            // If we are here, it means the above write op has been scheduled.
+            drop_guard.clear();
         }
     }
 
@@ -956,7 +1018,7 @@ pub(crate) struct Inner<K, V, S> {
     frequency_sketch: RwLock<FrequencySketch>,
     frequency_sketch_enabled: AtomicBool,
     read_op_ch: Receiver<ReadOp<K, V>>,
-    write_op_ch: Receiver<WriteOp<K, V>>,
+    write_op_ch: Receiver<TrioArc<WriteOp<K, V>>>,
     expiration_policy: ExpirationPolicy<K, V>,
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
@@ -1100,7 +1162,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<AsyncEvictionListener<K, V>>,
         read_op_ch: Receiver<ReadOp<K, V>>,
-        write_op_ch: Receiver<WriteOp<K, V>>,
+        write_op_ch: Receiver<TrioArc<WriteOp<K, V>>>,
         expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
     ) -> Self {
@@ -1520,34 +1582,49 @@ where
 
         for _ in 0..count {
             match ch.try_recv() {
-                Ok(Upsert {
-                    key_hash: kh,
-                    value_entry: entry,
-                    old_weight,
-                    new_weight,
-                }) => {
-                    self.handle_upsert(
-                        kh,
-                        entry,
-                        old_weight,
-                        new_weight,
-                        deqs,
-                        timer_wheel,
-                        &freq,
-                        eviction_state,
-                    )
-                    .await
-                }
-                Ok(Remove(kv_entry)) => {
-                    let KvEntry { key: _key, entry } = &*kv_entry;
-                    Self::handle_remove(
-                        deqs,
-                        timer_wheel,
-                        TrioArc::clone(entry),
-                        &mut eviction_state.counters,
-                    )
-                }
-                Err(_) => break,
+                Err(_) => break, // for loop
+                Ok(mut arc_op) => loop {
+                    match TrioArc::try_unwrap(arc_op) {
+                        Ok(op) => {
+                            match op {
+                                Upsert {
+                                    key_hash: kh,
+                                    value_entry: entry,
+                                    old_weight,
+                                    new_weight,
+                                } => {
+                                    self.handle_upsert(
+                                        kh,
+                                        entry,
+                                        old_weight,
+                                        new_weight,
+                                        deqs,
+                                        timer_wheel,
+                                        &freq,
+                                        eviction_state,
+                                    )
+                                    .await
+                                }
+                                Remove(kv_entry) => {
+                                    let KvEntry { key: _key, entry } = &*kv_entry;
+                                    Self::handle_remove(
+                                        deqs,
+                                        timer_wheel,
+                                        TrioArc::clone(entry),
+                                        &mut eviction_state.counters,
+                                    )
+                                }
+                            }
+                            break; // inner loop
+                        }
+                        Err(op) => {
+                            arc_op = op;
+                            for _ in 0..8 {
+                                std::hint::spin_loop();
+                            }
+                        }
+                    }
+                },
             };
         }
     }

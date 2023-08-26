@@ -146,7 +146,7 @@ let cache = Cache::builder()
 
 `async_eviction_listener` takes a closure that returns a `Future`. If you need to
 `.await` something in the eviction listener, use this method. The actual return type
-of the closure is `future::ListenerFuture`, which is a type alias of
+of the closure is `notification::ListenerFuture`, which is a type alias of
 `Pin<Box<dyn Future<Output = ()> + Send>>`. You can use the `boxed` method of
 `future::FutureExt` trait to convert a regular `Future` into this type.
 
