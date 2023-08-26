@@ -318,3 +318,19 @@ pub(crate) enum WriteOp<K, V> {
     },
     Remove(KvEntry<K, V>),
 }
+
+pub(crate) struct OldEntryInfo<K, V> {
+    pub(crate) entry: TrioArc<ValueEntry<K, V>>,
+    pub(crate) last_accessed: Option<Instant>,
+    pub(crate) last_modified: Option<Instant>,
+}
+
+impl<K, V> OldEntryInfo<K, V> {
+    pub(crate) fn new(entry: &TrioArc<ValueEntry<K, V>>) -> Self {
+        Self {
+            entry: TrioArc::clone(entry),
+            last_accessed: entry.last_accessed(),
+            last_modified: entry.last_modified(),
+        }
+    }
+}
