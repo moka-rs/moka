@@ -3,7 +3,7 @@ use super::{
     invalidator::{GetOrRemoveEntry, Invalidator, KeyDateLite, PredicateFun},
     key_lock::{KeyLock, KeyLockMap},
     notifier::RemovalNotifier,
-    PredicateId,
+    PendingOp, PredicateId, ReadOp, WriteOp,
 };
 
 use crate::{
@@ -16,7 +16,7 @@ use crate::{
             },
             deques::Deques,
             entry_info::EntryInfo,
-            AccessTime, KeyHash, KeyHashDate, KvEntry, ReadOp, ValueEntry, Weigher, WriteOp,
+            AccessTime, KeyHash, KeyHashDate, KvEntry, ValueEntry, Weigher,
         },
         deque::{DeqNode, Deque},
         frequency_sketch::FrequencySketch,
@@ -24,6 +24,7 @@ use crate::{
         timer_wheel::{ReschedulingResult, TimerWheel},
         CacheRegion,
     },
+    future::PendingOpGuard,
     notification::{AsyncEvictionListener, RemovalCause},
     policy::ExpirationPolicy,
     sync_base::iter::ScanningGet,
@@ -37,6 +38,7 @@ use async_lock::{Mutex, MutexGuard, RwLock};
 use async_trait::async_trait;
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use crossbeam_utils::atomic::AtomicCell;
+use futures_util::future::BoxFuture;
 use parking_lot::RwLock as SyncRwLock;
 use smallvec::SmallVec;
 use std::{
@@ -57,6 +59,8 @@ pub(crate) struct BaseCache<K, V, S = RandomState> {
     pub(crate) inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
     pub(crate) write_op_ch: Sender<WriteOp<K, V>>,
+    pub(crate) pending_op_ch_snd: Sender<PendingOp<K, V>>,
+    pub(crate) pending_op_ch_rcv: Receiver<PendingOp<K, V>>,
     pub(crate) housekeeper: Option<HouseKeeperArc>,
 }
 
@@ -70,6 +74,8 @@ impl<K, V, S> Clone for BaseCache<K, V, S> {
             inner: Arc::clone(&self.inner),
             read_op_ch: self.read_op_ch.clone(),
             write_op_ch: self.write_op_ch.clone(),
+            pending_op_ch_snd: self.pending_op_ch_snd.clone(),
+            pending_op_ch_rcv: self.pending_op_ch_rcv.clone(),
             housekeeper: self.housekeeper.as_ref().map(Arc::clone),
         }
     }
@@ -113,12 +119,16 @@ impl<K, V, S> BaseCache<K, V, S> {
         self.inner.current_time_from_expiration_clock()
     }
 
-    pub(crate) async fn notify_invalidate(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>)
+    pub(crate) fn notify_invalidate_future(
+        &self,
+        key: &Arc<K>,
+        entry: &TrioArc<ValueEntry<K, V>>,
+    ) -> BoxFuture<'static, ()>
     where
         K: Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
     {
-        self.inner.notify_invalidate(key, entry).await;
+        self.inner.notify_invalidate_future(key, entry)
     }
 
     #[cfg(feature = "unstable-debug-counters")]
@@ -163,6 +173,7 @@ where
 
         let (r_snd, r_rcv) = crossbeam_channel::bounded(r_size);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(w_size);
+        let (p_snd, p_rcv) = crossbeam_channel::unbounded();
 
         let inner = Arc::new(Inner::new(
             name,
@@ -181,6 +192,8 @@ where
             inner,
             read_op_ch: r_snd,
             write_op_ch: w_snd,
+            pending_op_ch_snd: p_snd,
+            pending_op_ch_rcv: p_rcv,
             housekeeper: Some(Arc::new(Housekeeper::default())),
         }
     }
@@ -229,6 +242,8 @@ where
         if self.is_map_disabled() {
             return None;
         }
+
+        self.process_pending_ops().await;
 
         let mut now = self.current_time_from_expiration_clock();
 
@@ -454,12 +469,17 @@ where
         hash: u64,
         value: V,
     ) -> (WriteOp<K, V>, Instant) {
+        use futures_util::FutureExt;
+
+        self.process_pending_ops().await;
+
         let ts = self.current_time_from_expiration_clock();
         let weight = self.inner.weigh(&key, &value);
         let op_cnt1 = Arc::new(AtomicU8::new(0));
         let op_cnt2 = Arc::clone(&op_cnt1);
         let mut op1 = None;
         let mut op2 = None;
+        let pending_op_ch = &self.pending_op_ch_snd;
 
         // Lock the key for update if blocking removal notification is enabled.
         let kl = self.maybe_key_lock(&key);
@@ -468,6 +488,8 @@ where
         } else {
             None
         };
+
+        let mut drop_guard = PendingOpGuard::new(pending_op_ch);
 
         // Since the cache (cht::SegmentedHashMap) employs optimistic locking
         // strategy, insert_with_or_modify() may get an insert/modify operation
@@ -531,7 +553,7 @@ where
                 }
                 (ins_op, ts)
             }
-            (None, Some((_cnt, old_entry, (old_last_accessed, old_last_modified), upd_op))) => {
+            (None, Some((_cnt, old_entry, (old_last_accessed, old_last_modified), mut upd_op))) => {
                 if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
                     (&self.inner.expiration_policy.expiry(), &upd_op)
                 {
@@ -547,19 +569,22 @@ where
                 }
 
                 if self.is_removal_notifier_enabled() {
-                    // TODO: Async cancellation safety: Make this resumable.
-                    // (NOTE: Move `kl`, `_klg`, `upd_op` and `ts` into the
-                    // Future)
-                    self.inner
-                        .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified)
-                        .await;
+                    let future = self
+                        .inner
+                        .notify_upsert_future(key, &old_entry, old_last_accessed, old_last_modified)
+                        .shared();
+                    drop_guard.set(future.clone(), upd_op);
+
+                    future.await;
+                    upd_op = drop_guard.clear().unwrap();
                 }
+
                 crossbeam_epoch::pin().flush();
                 (upd_op, ts)
             }
             (
                 Some((cnt1, ins_op)),
-                Some((cnt2, old_entry, (old_last_accessed, old_last_modified), upd_op)),
+                Some((cnt2, old_entry, (old_last_accessed, old_last_modified), mut upd_op)),
             ) => {
                 if cnt1 > cnt2 {
                     if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
@@ -590,18 +615,43 @@ where
                     }
 
                     if self.is_removal_notifier_enabled() {
-                        // TODO: Async cancellation safety: Make this resumable.
-                        // (NOTE: Move `kl`, `_klg`, `upd_op` and `ts` into the
-                        // Future)
-                        self.inner
-                            .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified)
-                            .await;
+                        let future = self
+                            .inner
+                            .notify_upsert_future(
+                                key,
+                                &old_entry,
+                                old_last_accessed,
+                                old_last_modified,
+                            )
+                            .shared();
+                        drop_guard.set(future.clone(), upd_op);
+
+                        future.await;
+                        upd_op = drop_guard.clear().unwrap();
                     }
                     crossbeam_epoch::pin().flush();
                     (upd_op, ts)
                 }
             }
             (None, None) => unreachable!(),
+        }
+    }
+
+    pub(crate) async fn process_pending_ops(&self) {
+        while let Ok(op) = self.pending_op_ch_rcv.try_recv() {
+            match op {
+                PendingOp::CallEvictionListener { future, op } => {
+                    let mut drop_guard = PendingOpGuard::new(&self.pending_op_ch_snd);
+                    drop_guard.set(future.clone(), op);
+
+                    future.await;
+                    let _op = drop_guard.clear().unwrap();
+                    // todo!();
+                }
+                PendingOp::SendWriteOp(_op) => {
+                    // todo!()
+                }
+            }
         }
     }
 
@@ -754,14 +804,14 @@ where
 
 struct EvictionState<'a, K, V> {
     counters: EvictionCounters,
-    notifier: Option<&'a RemovalNotifier<K, V>>,
+    notifier: Option<&'a Arc<RemovalNotifier<K, V>>>,
 }
 
 impl<'a, K, V> EvictionState<'a, K, V> {
     fn new(
         entry_count: u64,
         weighted_size: u64,
-        notifier: Option<&'a RemovalNotifier<K, V>>,
+        notifier: Option<&'a Arc<RemovalNotifier<K, V>>>,
     ) -> Self {
         Self {
             counters: EvictionCounters::new(entry_count, weighted_size),
@@ -910,7 +960,7 @@ pub(crate) struct Inner<K, V, S> {
     expiration_policy: ExpirationPolicy<K, V>,
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
-    removal_notifier: Option<RemovalNotifier<K, V>>,
+    removal_notifier: Option<Arc<RemovalNotifier<K, V>>>,
     key_locks: Option<KeyLockMap<K, S>>,
     invalidator: Option<Invalidator<K, V, S>>,
     clocks: Clocks,
@@ -1076,7 +1126,7 @@ where
         let timer_wheel = Mutex::new(TimerWheel::new(now));
 
         let (removal_notifier, key_locks) = if let Some(listener) = eviction_listener {
-            let rn = RemovalNotifier::new(listener, name.clone());
+            let rn = Arc::new(RemovalNotifier::new(listener, name.clone()));
             let kl = KeyLockMap::with_hasher(build_hasher.clone());
             (Some(rn), Some(kl))
         } else {
@@ -1488,8 +1538,14 @@ where
                     )
                     .await
                 }
-                Ok(Remove(KvEntry { key: _key, entry })) => {
-                    Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters)
+                Ok(Remove(kv_entry)) => {
+                    let KvEntry { key: _key, entry } = &*kv_entry;
+                    Self::handle_remove(
+                        deqs,
+                        timer_wheel,
+                        TrioArc::clone(entry),
+                        &mut eviction_state.counters,
+                    )
                 }
                 Err(_) => break,
             };
@@ -2289,13 +2345,15 @@ where
     }
 
     #[inline]
-    async fn notify_upsert(
+    fn notify_upsert_future(
         &self,
         key: Arc<K>,
         entry: &TrioArc<ValueEntry<K, V>>,
         last_accessed: Option<Instant>,
         last_modified: Option<Instant>,
-    ) {
+    ) -> BoxFuture<'static, ()> {
+        use futures_util::future::FutureExt;
+
         let now = self.current_time_from_expiration_clock();
         let exp = &self.expiration_policy;
 
@@ -2315,11 +2373,26 @@ where
             }
         }
 
-        self.notify_single_removal(key, entry, cause).await;
+        if let Some(notifier) = &self.removal_notifier {
+            let notifier = Arc::clone(notifier);
+            let value = entry.value.clone();
+            async move {
+                notifier.notify(key, value, cause).await;
+            }
+            .boxed()
+        } else {
+            std::future::ready(()).boxed()
+        }
     }
 
     #[inline]
-    async fn notify_invalidate(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>) {
+    fn notify_invalidate_future(
+        &self,
+        key: &Arc<K>,
+        entry: &TrioArc<ValueEntry<K, V>>,
+    ) -> BoxFuture<'static, ()> {
+        use futures_util::future::FutureExt;
+
         let now = self.current_time_from_expiration_clock();
         let exp = &self.expiration_policy;
 
@@ -2337,8 +2410,14 @@ where
             }
         }
 
-        self.notify_single_removal(Arc::clone(key), entry, cause)
-            .await;
+        if let Some(notifier) = &self.removal_notifier {
+            let notifier = Arc::clone(notifier);
+            let key = Arc::clone(key);
+            let value = entry.value.clone();
+            async move { notifier.notify(key, value, cause).await }.boxed()
+        } else {
+            std::future::ready(()).boxed()
+        }
     }
 }
 

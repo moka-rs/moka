@@ -2,13 +2,11 @@ use super::{
     base_cache::{BaseCache, HouseKeeperArc},
     housekeeper::InnerSync,
     value_initializer::{GetOrInsert, InitResult, ValueInitializer},
-    CacheBuilder, Iter, OwnedKeyEntrySelector, PredicateId, RefKeyEntrySelector,
+    CacheBuilder, Iter, OwnedKeyEntrySelector, PendingOpGuard, PredicateId, RefKeyEntrySelector,
+    WriteOp,
 };
 use crate::{
-    common::{
-        concurrent::{Weigher, WriteOp},
-        time::Instant,
-    },
+    common::{concurrent::Weigher, time::Instant},
     notification::AsyncEvictionListener,
     policy::ExpirationPolicy,
     Entry, Policy, PredicateError,
@@ -29,6 +27,7 @@ use std::{
     pin::Pin,
     sync::Arc,
 };
+use triomphe::Arc as TrioArc;
 
 /// A thread-safe, futures-aware concurrent in-memory cache.
 ///
@@ -1383,6 +1382,10 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
+        use futures_util::FutureExt;
+
+        self.base.process_pending_ops().await;
+
         // Lock the key for removal if blocking removal notification is enabled.
         let mut kl = None;
         let mut klg = None;
@@ -1412,10 +1415,26 @@ where
             Some(kv) => {
                 let now = self.base.current_time_from_expiration_clock();
 
+                let maybe_v = if need_value {
+                    Some(kv.entry.value.clone())
+                } else {
+                    None
+                };
+
+                let kv = TrioArc::new(kv);
+                let mut op = WriteOp::Remove(TrioArc::clone(&kv));
+                let mut drop_guard = PendingOpGuard::new(&self.base.pending_op_ch_snd);
+
                 if self.base.is_removal_notifier_enabled() {
-                    // TODO: Make this one resumable. (Pass `kl`, `klg`, `kv` and
-                    // `now`)
-                    self.base.notify_invalidate(&kv.key, &kv.entry).await
+                    let future = self
+                        .base
+                        .notify_invalidate_future(&kv.key, &kv.entry)
+                        .boxed()
+                        .shared();
+                    drop_guard.set(future.clone(), op);
+
+                    future.await;
+                    op = drop_guard.clear().unwrap();
                 }
                 // Drop the locks before scheduling write op to avoid a potential
                 // dead lock. (Scheduling write can do spin lock when the queue is
@@ -1424,13 +1443,6 @@ where
                 std::mem::drop(klg);
                 std::mem::drop(kl);
 
-                let maybe_v = if need_value {
-                    Some(kv.entry.value.clone())
-                } else {
-                    None
-                };
-
-                let op = WriteOp::Remove(kv);
                 let hk = self.base.housekeeper.as_ref();
                 // TODO: Async cancellation safety: If enclosing future is being
                 // dropped, save `op` and `now` so that we can resume later. (maybe
@@ -1554,6 +1566,7 @@ where
 
     pub async fn run_pending_tasks(&self) {
         if let Some(hk) = &self.base.housekeeper {
+            self.base.process_pending_ops().await;
             hk.run_pending_tasks(Arc::clone(&self.base.inner)).await;
         }
     }

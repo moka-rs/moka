@@ -297,6 +297,7 @@ impl<K, V> AccessTime for TrioArc<ValueEntry<K, V>> {
     }
 }
 
+#[cfg(feature = "sync")]
 pub(crate) enum ReadOp<K, V> {
     Hit {
         value_entry: TrioArc<ValueEntry<K, V>>,
@@ -307,6 +308,7 @@ pub(crate) enum ReadOp<K, V> {
     Miss(u64),
 }
 
+#[cfg(feature = "sync")]
 pub(crate) enum WriteOp<K, V> {
     Upsert {
         key_hash: KeyHash<K>,
