@@ -158,13 +158,9 @@ impl<K, V> ThreadPoolRemovalNotifier<K, V> {
             is_running: Default::default(),
             is_shutting_down: Default::default(),
         };
-
-        #[cfg_attr(beta_clippy, allow(clippy::arc_with_non_send_sync))]
-        let state = Arc::new(state);
-
         Self {
             snd,
-            state,
+            state: Arc::new(state),
             thread_pool,
         }
     }
