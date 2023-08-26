@@ -1,7 +1,7 @@
 use crate::common::{deque::DeqNode, time::Instant};
 
 use parking_lot::Mutex;
-use std::{ptr::NonNull, sync::Arc};
+use std::{fmt, ptr::NonNull, sync::Arc};
 use tagptr::TagNonNull;
 use triomphe::Arc as TrioArc;
 
@@ -109,6 +109,15 @@ pub(crate) struct KvEntry<K, V> {
 impl<K, V> KvEntry<K, V> {
     pub(crate) fn new(key: Arc<K>, entry: TrioArc<ValueEntry<K, V>>) -> Self {
         Self { key, entry }
+    }
+}
+
+impl<K, V> Clone for KvEntry<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            key: Arc::clone(&self.key),
+            entry: TrioArc::clone(&self.entry),
+        }
     }
 }
 
@@ -308,7 +317,6 @@ pub(crate) enum ReadOp<K, V> {
     Miss(u64),
 }
 
-#[cfg(feature = "sync")]
 pub(crate) enum WriteOp<K, V> {
     Upsert {
         key_hash: KeyHash<K>,
@@ -317,6 +325,36 @@ pub(crate) enum WriteOp<K, V> {
         new_weight: u32,
     },
     Remove(KvEntry<K, V>),
+}
+
+/// Cloning a WriteOp is safe and cheap because it uses Arc and TrioArc pointers to
+/// the actual data.
+impl<K, V> Clone for WriteOp<K, V> {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Upsert {
+                key_hash,
+                value_entry,
+                old_weight,
+                new_weight,
+            } => Self::Upsert {
+                key_hash: key_hash.clone(),
+                value_entry: TrioArc::clone(value_entry),
+                old_weight: *old_weight,
+                new_weight: *new_weight,
+            },
+            Self::Remove(kv_hash) => Self::Remove(kv_hash.clone()),
+        }
+    }
+}
+
+impl<K, V> fmt::Debug for WriteOp<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Upsert { .. } => f.debug_struct("Upsert").finish(),
+            Self::Remove(..) => f.debug_tuple("Remove").finish(),
+        }
+    }
 }
 
 pub(crate) struct OldEntryInfo<K, V> {

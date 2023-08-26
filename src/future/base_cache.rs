@@ -58,7 +58,7 @@ pub(crate) type HouseKeeperArc = Arc<Housekeeper>;
 pub(crate) struct BaseCache<K, V, S = RandomState> {
     pub(crate) inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
-    pub(crate) write_op_ch: Sender<TrioArc<WriteOp<K, V>>>,
+    pub(crate) write_op_ch: Sender<WriteOp<K, V>>,
     pub(crate) pending_op_ch_snd: Sender<PendingOp<K, V>>,
     pub(crate) pending_op_ch_rcv: Receiver<PendingOp<K, V>>,
     pub(crate) housekeeper: Option<HouseKeeperArc>,
@@ -119,7 +119,7 @@ impl<K, V, S> BaseCache<K, V, S> {
         self.inner.current_time_from_expiration_clock()
     }
 
-    pub(crate) fn notify_invalidate_future(
+    pub(crate) fn notify_invalidate(
         &self,
         key: &Arc<K>,
         entry: &TrioArc<ValueEntry<K, V>>,
@@ -371,7 +371,7 @@ where
     #[inline]
     pub(crate) async fn apply_reads_writes_if_needed(
         inner: Arc<impl InnerSync + Send + Sync + 'static>,
-        ch: &Sender<TrioArc<WriteOp<K, V>>>,
+        ch: &Sender<WriteOp<K, V>>,
         ts: Instant,
         housekeeper: Option<&HouseKeeperArc>,
     ) {
@@ -468,7 +468,7 @@ where
         key: Arc<K>,
         hash: u64,
         value: V,
-    ) -> (TrioArc<WriteOp<K, V>>, Instant) {
+    ) -> (WriteOp<K, V>, Instant) {
         self.process_pending_ops().await;
 
         let ts = self.current_time_from_expiration_clock();
@@ -477,7 +477,6 @@ where
         let op_cnt2 = Arc::clone(&op_cnt1);
         let mut op1 = None;
         let mut op2 = None;
-        let pending_op_ch = &self.pending_op_ch_snd;
 
         // Lock the key for update if blocking removal notification is enabled.
         let kl = self.maybe_key_lock(&key);
@@ -486,8 +485,6 @@ where
         } else {
             None
         };
-
-        let drop_guard = PendingOpGuard::new(pending_op_ch, ts);
 
         // Since the cache (cht::SegmentedHashMap) employs optimistic locking
         // strategy, insert_with_or_modify() may get an insert/modify operation
@@ -540,7 +537,7 @@ where
                 self.post_insert(ts, &key, ins_op)
             }
             (_, Some((_cnt, old_entry, upd_op))) => {
-                self.post_update(ts, key, old_entry, upd_op, drop_guard)
+                self.post_update(ts, key, old_entry, upd_op, &self.pending_op_ch_snd)
                     .await
             }
             (None, None) => unreachable!(),
@@ -552,13 +549,13 @@ where
         ts: Instant,
         key: &Arc<K>,
         ins_op: WriteOp<K, V>,
-    ) -> (TrioArc<WriteOp<K, V>>, Instant) {
+    ) -> (WriteOp<K, V>, Instant) {
         if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
             (&self.inner.expiration_policy.expiry(), &ins_op)
         {
             Self::expire_after_create(expiry, key, value_entry, ts, self.inner.clocks());
         }
-        (TrioArc::new(ins_op), ts)
+        (ins_op, ts)
     }
 
     async fn post_update<'a>(
@@ -567,8 +564,8 @@ where
         key: Arc<K>,
         old_info: OldEntryInfo<K, V>,
         upd_op: WriteOp<K, V>,
-        mut drop_guard: PendingOpGuard<'a, K, V>,
-    ) -> (TrioArc<WriteOp<K, V>>, Instant) {
+        pending_op_ch: &'a Sender<PendingOp<K, V>>,
+    ) -> (WriteOp<K, V>, Instant) {
         use futures_util::FutureExt;
 
         if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
@@ -585,20 +582,20 @@ where
             );
         }
 
-        let upd_op = TrioArc::new(upd_op);
-
         if self.is_removal_notifier_enabled() {
             let future = self
                 .inner
-                .notify_upsert_future(
+                .notify_upsert(
                     key,
                     &old_info.entry,
                     old_info.last_accessed,
                     old_info.last_modified,
                 )
                 .shared();
-            drop_guard.set_future_and_op(future.clone(), TrioArc::clone(&upd_op));
+            let mut drop_guard = PendingOpGuard::new(pending_op_ch, ts);
+            drop_guard.set_future_and_op(future.clone(), upd_op.clone());
 
+            // Notify the eviction listener.
             future.await;
             drop_guard.clear();
         }
@@ -610,11 +607,11 @@ where
     #[inline]
     pub(crate) async fn schedule_write_op(
         inner: &Arc<impl InnerSync + Send + Sync + 'static>,
-        ch: &Sender<TrioArc<WriteOp<K, V>>>,
-        op: TrioArc<WriteOp<K, V>>,
+        ch: &Sender<WriteOp<K, V>>,
+        op: WriteOp<K, V>,
         ts: Instant,
         housekeeper: Option<&HouseKeeperArc>,
-    ) -> Result<(), TrySendError<TrioArc<WriteOp<K, V>>>> {
+    ) -> Result<(), TrySendError<WriteOp<K, V>>> {
         let mut op = op;
         let mut spin_count = 0u8;
         loop {
@@ -672,7 +669,7 @@ where
             }
 
             let ts = drop_guard.ts;
-            let op = drop_guard.op.as_ref().map(TrioArc::clone).unwrap();
+            let op = drop_guard.op.as_ref().cloned().unwrap();
             let hk = self.housekeeper.as_ref();
             Self::schedule_write_op(&self.inner, &self.write_op_ch, op, ts, hk)
                 .await
@@ -984,7 +981,7 @@ pub(crate) struct Inner<K, V, S> {
     frequency_sketch: RwLock<FrequencySketch>,
     frequency_sketch_enabled: AtomicBool,
     read_op_ch: Receiver<ReadOp<K, V>>,
-    write_op_ch: Receiver<TrioArc<WriteOp<K, V>>>,
+    write_op_ch: Receiver<WriteOp<K, V>>,
     expiration_policy: ExpirationPolicy<K, V>,
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
@@ -1128,7 +1125,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<AsyncEvictionListener<K, V>>,
         read_op_ch: Receiver<ReadOp<K, V>>,
-        write_op_ch: Receiver<TrioArc<WriteOp<K, V>>>,
+        write_op_ch: Receiver<WriteOp<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
     ) -> Self {
@@ -1548,49 +1545,28 @@ where
 
         for _ in 0..count {
             match ch.try_recv() {
-                Err(_) => break, // for loop
-                Ok(mut arc_op) => loop {
-                    match TrioArc::try_unwrap(arc_op) {
-                        Ok(op) => {
-                            match op {
-                                Upsert {
-                                    key_hash: kh,
-                                    value_entry: entry,
-                                    old_weight,
-                                    new_weight,
-                                } => {
-                                    self.handle_upsert(
-                                        kh,
-                                        entry,
-                                        old_weight,
-                                        new_weight,
-                                        deqs,
-                                        timer_wheel,
-                                        &freq,
-                                        eviction_state,
-                                    )
-                                    .await
-                                }
-                                Remove(kv_entry) => {
-                                    let KvEntry { key: _key, entry } = &*kv_entry;
-                                    Self::handle_remove(
-                                        deqs,
-                                        timer_wheel,
-                                        TrioArc::clone(entry),
-                                        &mut eviction_state.counters,
-                                    )
-                                }
-                            }
-                            break; // inner loop
-                        }
-                        Err(op) => {
-                            arc_op = op;
-                            for _ in 0..8 {
-                                std::hint::spin_loop();
-                            }
-                        }
-                    }
-                },
+                Ok(Upsert {
+                    key_hash: kh,
+                    value_entry: entry,
+                    old_weight,
+                    new_weight,
+                }) => {
+                    self.handle_upsert(
+                        kh,
+                        entry,
+                        old_weight,
+                        new_weight,
+                        deqs,
+                        timer_wheel,
+                        &freq,
+                        eviction_state,
+                    )
+                    .await
+                }
+                Ok(Remove(KvEntry { key: _key, entry })) => {
+                    Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters)
+                }
+                Err(_) => break,
             };
         }
     }
@@ -2388,7 +2364,7 @@ where
     }
 
     #[inline]
-    fn notify_upsert_future(
+    fn notify_upsert(
         &self,
         key: Arc<K>,
         entry: &TrioArc<ValueEntry<K, V>>,

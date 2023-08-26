@@ -7,11 +7,11 @@ use async_lock::Mutex;
 use crossbeam_channel::Sender;
 use futures_util::future::{BoxFuture, Shared};
 use once_cell::sync::Lazy;
-use std::{fmt, future::Future, hash::Hash, sync::Arc};
+use std::{future::Future, hash::Hash, sync::Arc};
 use triomphe::Arc as TrioArc;
 
 use crate::common::{
-    concurrent::{KeyHash, KvEntry, ValueEntry},
+    concurrent::{ValueEntry, WriteOp},
     time::Instant,
 };
 
@@ -78,25 +78,30 @@ where
     }
 }
 
+/// Operation that has been interrupted by async cancellation.
 pub(crate) enum PendingOp<K, V> {
-    // 'static means that the future can capture only owned value and/or static
-    // references. No non-static references are allowed.
     CallEvictionListener {
         ts: Instant,
+        // 'static means that the future can capture only owned value and/or static
+        // references. No non-static references are allowed.
         future: Shared<BoxFuture<'static, ()>>,
-        op: TrioArc<WriteOp<K, V>>,
+        op: WriteOp<K, V>,
     },
     SendWriteOp {
         ts: Instant,
-        op: TrioArc<WriteOp<K, V>>,
+        op: WriteOp<K, V>,
     },
 }
 
+/// Drop guard for an operation being performed. If this guard is dropped while it is
+/// still having the future or the write op, it will convert them to a PendingOp and
+/// send to the pending operation channel, so that the operation can be retried
+/// later.
 struct PendingOpGuard<'a, K, V> {
     pending_op_ch: &'a Sender<PendingOp<K, V>>,
     ts: Instant,
     future: Option<Shared<BoxFuture<'static, ()>>>,
-    op: Option<TrioArc<WriteOp<K, V>>>,
+    op: Option<WriteOp<K, V>>,
 }
 
 impl<'a, K, V> PendingOpGuard<'a, K, V> {
@@ -109,16 +114,12 @@ impl<'a, K, V> PendingOpGuard<'a, K, V> {
         }
     }
 
-    fn set_future_and_op(
-        &mut self,
-        future: Shared<BoxFuture<'static, ()>>,
-        op: TrioArc<WriteOp<K, V>>,
-    ) {
+    fn set_future_and_op(&mut self, future: Shared<BoxFuture<'static, ()>>, op: WriteOp<K, V>) {
         self.future = Some(future);
         self.op = Some(op);
     }
 
-    fn set_op(&mut self, op: TrioArc<WriteOp<K, V>>) {
+    fn set_op(&mut self, op: WriteOp<K, V>) {
         self.op = Some(op);
     }
 
@@ -169,23 +170,4 @@ pub(crate) enum ReadOp<K, V> {
     },
     // u64 is the hash of the key.
     Miss(u64),
-}
-
-pub(crate) enum WriteOp<K, V> {
-    Upsert {
-        key_hash: KeyHash<K>,
-        value_entry: TrioArc<ValueEntry<K, V>>,
-        old_weight: u32,
-        new_weight: u32,
-    },
-    Remove(TrioArc<KvEntry<K, V>>),
-}
-
-impl<K, V> fmt::Debug for WriteOp<K, V> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Upsert { .. } => f.debug_struct("Upsert").finish(),
-            Self::Remove(..) => f.debug_tuple("Remove").finish(),
-        }
-    }
 }

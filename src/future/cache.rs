@@ -23,7 +23,6 @@ use std::{
     pin::Pin,
     sync::Arc,
 };
-use triomphe::Arc as TrioArc;
 
 /// A thread-safe, futures-aware concurrent in-memory cache.
 ///
@@ -1417,19 +1416,21 @@ where
                     None
                 };
 
-                let kv = TrioArc::new(kv);
-                let op = TrioArc::new(WriteOp::Remove(TrioArc::clone(&kv)));
+                let op = WriteOp::Remove(kv.clone());
                 let mut drop_guard = PendingOpGuard::new(&self.base.pending_op_ch_snd, now);
 
                 if self.base.is_removal_notifier_enabled() {
                     let future = self
                         .base
-                        .notify_invalidate_future(&kv.key, &kv.entry)
+                        .notify_invalidate(&kv.key, &kv.entry)
                         .boxed()
                         .shared();
-                    drop_guard.set_future_and_op(future.clone(), TrioArc::clone(&op));
+                    drop_guard.set_future_and_op(future.clone(), op.clone());
+                    // Send notification to the eviction listener.
                     future.await;
                     drop_guard.unset_future();
+                } else {
+                    drop_guard.set_op(op.clone());
                 }
 
                 // Drop the locks before scheduling write op to avoid a potential
@@ -1896,7 +1897,7 @@ where
         let (op, ts) = self.base.do_insert_with_hash(key, hash, value).await;
         let hk = self.base.housekeeper.as_ref();
         let mut drop_guard = PendingOpGuard::new(&self.base.pending_op_ch_snd, ts);
-        drop_guard.set_op(TrioArc::clone(&op));
+        drop_guard.set_op(op.clone());
 
         BaseCache::<K, V, S>::schedule_write_op(
             &self.base.inner,
