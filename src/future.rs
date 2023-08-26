@@ -8,12 +8,8 @@ use crossbeam_channel::Sender;
 use futures_util::future::{BoxFuture, Shared};
 use once_cell::sync::Lazy;
 use std::{future::Future, hash::Hash, sync::Arc};
-use triomphe::Arc as TrioArc;
 
-use crate::common::{
-    concurrent::{ValueEntry, WriteOp},
-    time::Instant,
-};
+use crate::common::{concurrent::WriteOp, time::Instant};
 
 mod base_cache;
 mod builder;
@@ -160,14 +156,4 @@ pub(crate) async fn may_yield() {
     //
     // NOTE: This behavior was tested with Tokio and async-std.
     let _ = LOCK.lock().await;
-}
-
-pub(crate) enum ReadOp<K, V> {
-    Hit {
-        value_entry: TrioArc<ValueEntry<K, V>>,
-        timestamp: Instant,
-        is_expiry_modified: bool,
-    },
-    // u64 is the hash of the key.
-    Miss(u64),
 }

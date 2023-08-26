@@ -3,7 +3,7 @@ use super::{
     invalidator::{GetOrRemoveEntry, Invalidator, KeyDateLite, PredicateFun},
     key_lock::{KeyLock, KeyLockMap},
     notifier::RemovalNotifier,
-    PendingOp, PredicateId, ReadOp, WriteOp,
+    PendingOp, PredicateId,
 };
 
 use crate::{
@@ -16,7 +16,8 @@ use crate::{
             },
             deques::Deques,
             entry_info::EntryInfo,
-            AccessTime, KeyHash, KeyHashDate, KvEntry, OldEntryInfo, ValueEntry, Weigher,
+            AccessTime, KeyHash, KeyHashDate, KvEntry, OldEntryInfo, ReadOp, ValueEntry, Weigher,
+            WriteOp,
         },
         deque::{DeqNode, Deque},
         frequency_sketch::FrequencySketch,

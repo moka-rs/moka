@@ -306,7 +306,6 @@ impl<K, V> AccessTime for TrioArc<ValueEntry<K, V>> {
     }
 }
 
-#[cfg(feature = "sync")]
 pub(crate) enum ReadOp<K, V> {
     Hit {
         value_entry: TrioArc<ValueEntry<K, V>>,
