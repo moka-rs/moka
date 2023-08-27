@@ -3,7 +3,7 @@ use super::{
     invalidator::{GetOrRemoveEntry, Invalidator, KeyDateLite, PredicateFun},
     key_lock::{KeyLock, KeyLockMap},
     notifier::RemovalNotifier,
-    PredicateId,
+    InterruptedOp, PredicateId,
 };
 
 use crate::{
@@ -16,7 +16,8 @@ use crate::{
             },
             deques::Deques,
             entry_info::EntryInfo,
-            AccessTime, KeyHash, KeyHashDate, KvEntry, ReadOp, ValueEntry, Weigher, WriteOp,
+            AccessTime, KeyHash, KeyHashDate, KvEntry, OldEntryInfo, ReadOp, ValueEntry, Weigher,
+            WriteOp,
         },
         deque::{DeqNode, Deque},
         frequency_sketch::FrequencySketch,
@@ -24,6 +25,7 @@ use crate::{
         timer_wheel::{ReschedulingResult, TimerWheel},
         CacheRegion,
     },
+    future::CancelGuard,
     notification::{AsyncEvictionListener, RemovalCause},
     policy::ExpirationPolicy,
     sync_base::iter::ScanningGet,
@@ -37,6 +39,7 @@ use async_lock::{Mutex, MutexGuard, RwLock};
 use async_trait::async_trait;
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use crossbeam_utils::atomic::AtomicCell;
+use futures_util::future::BoxFuture;
 use parking_lot::RwLock as SyncRwLock;
 use smallvec::SmallVec;
 use std::{
@@ -57,6 +60,8 @@ pub(crate) struct BaseCache<K, V, S = RandomState> {
     pub(crate) inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
     pub(crate) write_op_ch: Sender<WriteOp<K, V>>,
+    pub(crate) interrupted_op_ch_snd: Sender<InterruptedOp<K, V>>,
+    pub(crate) interrupted_op_ch_rcv: Receiver<InterruptedOp<K, V>>,
     pub(crate) housekeeper: Option<HouseKeeperArc>,
 }
 
@@ -70,6 +75,8 @@ impl<K, V, S> Clone for BaseCache<K, V, S> {
             inner: Arc::clone(&self.inner),
             read_op_ch: self.read_op_ch.clone(),
             write_op_ch: self.write_op_ch.clone(),
+            interrupted_op_ch_snd: self.interrupted_op_ch_snd.clone(),
+            interrupted_op_ch_rcv: self.interrupted_op_ch_rcv.clone(),
             housekeeper: self.housekeeper.as_ref().map(Arc::clone),
         }
     }
@@ -113,12 +120,16 @@ impl<K, V, S> BaseCache<K, V, S> {
         self.inner.current_time_from_expiration_clock()
     }
 
-    pub(crate) async fn notify_invalidate(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>)
+    pub(crate) fn notify_invalidate(
+        &self,
+        key: &Arc<K>,
+        entry: &TrioArc<ValueEntry<K, V>>,
+    ) -> BoxFuture<'static, ()>
     where
         K: Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
     {
-        self.inner.notify_invalidate(key, entry).await;
+        self.inner.notify_invalidate(key, entry)
     }
 
     #[cfg(feature = "unstable-debug-counters")]
@@ -163,6 +174,7 @@ where
 
         let (r_snd, r_rcv) = crossbeam_channel::bounded(r_size);
         let (w_snd, w_rcv) = crossbeam_channel::bounded(w_size);
+        let (i_snd, i_rcv) = crossbeam_channel::unbounded();
 
         let inner = Arc::new(Inner::new(
             name,
@@ -181,6 +193,8 @@ where
             inner,
             read_op_ch: r_snd,
             write_op_ch: w_snd,
+            interrupted_op_ch_snd: i_snd,
+            interrupted_op_ch_rcv: i_rcv,
             housekeeper: Some(Arc::new(Housekeeper::default())),
         }
     }
@@ -228,6 +242,10 @@ where
     {
         if self.is_map_disabled() {
             return None;
+        }
+
+        if record_read {
+            self.retry_interrupted_ops().await;
         }
 
         let mut now = self.current_time_from_expiration_clock();
@@ -454,6 +472,8 @@ where
         hash: u64,
         value: V,
     ) -> (WriteOp<K, V>, Instant) {
+        self.retry_interrupted_ops().await;
+
         let ts = self.current_time_from_expiration_clock();
         let weight = self.inner.weigh(&key, &value);
         let op_cnt1 = Arc::new(AtomicU8::new(0));
@@ -483,123 +503,210 @@ where
             // on_insert
             || {
                 let entry = self.new_value_entry(&key, hash, value.clone(), ts, weight);
+                let ins_op = WriteOp::Upsert {
+                    key_hash: KeyHash::new(Arc::clone(&key), hash),
+                    value_entry: TrioArc::clone(&entry),
+                    old_weight: 0,
+                    new_weight: weight,
+                };
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
-                op1 = Some((
-                    cnt,
-                    WriteOp::Upsert {
-                        key_hash: KeyHash::new(Arc::clone(&key), hash),
-                        value_entry: TrioArc::clone(&entry),
-                        old_weight: 0,
-                        new_weight: weight,
-                    },
-                ));
+                op1 = Some((cnt, ins_op));
                 entry
             },
             // on_modify
             |_k, old_entry| {
-                // NOTES on `new_value_entry_from` method:
-                // 1. The internal EntryInfo will be shared between the old and new
-                //    ValueEntries.
-                // 2. This method will set the is_dirty to prevent this new
-                //    ValueEntry from being evicted by an expiration policy.
-                // 3. This method will update the policy_weight with the new weight.
                 let old_weight = old_entry.policy_weight();
-                let old_timestamps = (old_entry.last_accessed(), old_entry.last_modified());
+
+                // Create this OldEntryInfo _before_ creating a new ValueEntry, so
+                // that the OldEntryInfo can preserve the old EntryInfo's
+                // last_accessed and last_modified timestamps.
+                let old_info = OldEntryInfo::new(old_entry);
                 let entry = self.new_value_entry_from(value.clone(), ts, weight, old_entry);
+                let upd_op = WriteOp::Upsert {
+                    key_hash: KeyHash::new(Arc::clone(&key), hash),
+                    value_entry: TrioArc::clone(&entry),
+                    old_weight,
+                    new_weight: weight,
+                };
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
-                op2 = Some((
-                    cnt,
-                    TrioArc::clone(old_entry),
-                    old_timestamps,
-                    WriteOp::Upsert {
-                        key_hash: KeyHash::new(Arc::clone(&key), hash),
-                        value_entry: TrioArc::clone(&entry),
-                        old_weight,
-                        new_weight: weight,
-                    },
-                ));
+                op2 = Some((cnt, old_info, upd_op));
                 entry
             },
         );
 
         match (op1, op2) {
-            (Some((_cnt, ins_op)), None) => {
-                if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
-                    (&self.inner.expiration_policy.expiry(), &ins_op)
-                {
-                    Self::expire_after_create(expiry, &key, value_entry, ts, self.inner.clocks());
-                }
-                (ins_op, ts)
+            (Some((_cnt, ins_op)), None) => self.do_post_insert_steps(ts, &key, ins_op),
+            (Some((cnt1, ins_op)), Some((cnt2, ..))) if cnt1 > cnt2 => {
+                self.do_post_insert_steps(ts, &key, ins_op)
             }
-            (None, Some((_cnt, old_entry, (old_last_accessed, old_last_modified), upd_op))) => {
-                if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
-                    (&self.inner.expiration_policy.expiry(), &upd_op)
-                {
-                    Self::expire_after_read_or_update(
-                        |k, v, t, d| expiry.expire_after_update(k, v, t, d),
-                        &key,
-                        value_entry,
-                        self.inner.expiration_policy.time_to_live(),
-                        self.inner.expiration_policy.time_to_idle(),
-                        ts,
-                        self.inner.clocks(),
-                    );
-                }
-
-                if self.is_removal_notifier_enabled() {
-                    // TODO: Make this one resumable. (Pass `kl`, `_klg`, `upd_op`
-                    // and `ts`)
-                    self.inner
-                        .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified)
-                        .await;
-                }
-                crossbeam_epoch::pin().flush();
-                (upd_op, ts)
-            }
-            (
-                Some((cnt1, ins_op)),
-                Some((cnt2, old_entry, (old_last_accessed, old_last_modified), upd_op)),
-            ) => {
-                if cnt1 > cnt2 {
-                    if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
-                        (&self.inner.expiration_policy.expiry(), &ins_op)
-                    {
-                        Self::expire_after_create(
-                            expiry,
-                            &key,
-                            value_entry,
-                            ts,
-                            self.inner.clocks(),
-                        );
-                    }
-                    (ins_op, ts)
-                } else {
-                    if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
-                        (&self.inner.expiration_policy.expiry(), &upd_op)
-                    {
-                        Self::expire_after_read_or_update(
-                            |k, v, t, d| expiry.expire_after_update(k, v, t, d),
-                            &key,
-                            value_entry,
-                            self.inner.expiration_policy.time_to_live(),
-                            self.inner.expiration_policy.time_to_idle(),
-                            ts,
-                            self.inner.clocks(),
-                        );
-                    }
-
-                    if self.is_removal_notifier_enabled() {
-                        // TODO: Make this one resumable. (Pass `kl`, `_klg`, `upd_op`
-                        // and `ts`)
-                        self.inner
-                            .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified)
-                            .await;
-                    }
-                    crossbeam_epoch::pin().flush();
-                    (upd_op, ts)
-                }
+            (_, Some((_cnt, old_entry, upd_op))) => {
+                self.do_post_update_steps(ts, key, old_entry, upd_op, &self.interrupted_op_ch_snd)
+                    .await
             }
             (None, None) => unreachable!(),
+        }
+    }
+
+    fn do_post_insert_steps(
+        &self,
+        ts: Instant,
+        key: &Arc<K>,
+        ins_op: WriteOp<K, V>,
+    ) -> (WriteOp<K, V>, Instant) {
+        if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
+            (&self.inner.expiration_policy.expiry(), &ins_op)
+        {
+            Self::expire_after_create(expiry, key, value_entry, ts, self.inner.clocks());
+        }
+        (ins_op, ts)
+    }
+
+    async fn do_post_update_steps<'a>(
+        &self,
+        ts: Instant,
+        key: Arc<K>,
+        old_info: OldEntryInfo<K, V>,
+        upd_op: WriteOp<K, V>,
+        interrupted_op_ch: &'a Sender<InterruptedOp<K, V>>,
+    ) -> (WriteOp<K, V>, Instant) {
+        use futures_util::FutureExt;
+
+        if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
+            (&self.inner.expiration_policy.expiry(), &upd_op)
+        {
+            Self::expire_after_read_or_update(
+                |k, v, t, d| expiry.expire_after_update(k, v, t, d),
+                &key,
+                value_entry,
+                self.inner.expiration_policy.time_to_live(),
+                self.inner.expiration_policy.time_to_idle(),
+                ts,
+                self.inner.clocks(),
+            );
+        }
+
+        if self.is_removal_notifier_enabled() {
+            let future = self
+                .inner
+                .notify_upsert(
+                    key,
+                    &old_info.entry,
+                    old_info.last_accessed,
+                    old_info.last_modified,
+                )
+                .shared();
+            // Async Cancellation Safety: To ensure the above future should be
+            // executed even if our caller async task is cancelled, we create a
+            // cancel guard for the future (and the upd_op). If our caller is
+            // cancelled while we are awaiting for the future, the cancel guard will
+            // save the future and the upd_op to the interrupted_op_ch channel, so
+            // that we can resume/retry later.
+            let mut cancel_guard = CancelGuard::new(interrupted_op_ch, ts);
+            cancel_guard.set_future_and_op(future.clone(), upd_op.clone());
+
+            // Notify the eviction listener.
+            future.await;
+            cancel_guard.clear();
+        }
+
+        crossbeam_epoch::pin().flush();
+        (upd_op, ts)
+    }
+
+    #[inline]
+    pub(crate) async fn schedule_write_op(
+        inner: &Arc<impl InnerSync + Send + Sync + 'static>,
+        ch: &Sender<WriteOp<K, V>>,
+        op: WriteOp<K, V>,
+        ts: Instant,
+        housekeeper: Option<&HouseKeeperArc>,
+        // Used only for testing.
+        _should_block: bool,
+    ) -> Result<(), TrySendError<WriteOp<K, V>>> {
+        // Testing stuff.
+        #[cfg(test)]
+        if _should_block {
+            // We are going to do a dead-lock here to simulate a full channel.
+            let mutex = Mutex::new(());
+            let _guard = mutex.lock().await;
+            // This should dead-lock.
+            mutex.lock().await;
+        }
+
+        let mut op = op;
+        let mut spin_count = 0u8;
+        loop {
+            BaseCache::<K, V, S>::apply_reads_writes_if_needed(
+                Arc::clone(inner),
+                ch,
+                ts,
+                housekeeper,
+            )
+            .await;
+            match ch.try_send(op) {
+                Ok(()) => return Ok(()),
+                Err(TrySendError::Full(op1)) => {
+                    op = op1;
+                }
+                Err(e @ TrySendError::Disconnected(_)) => return Err(e),
+            }
+
+            // We have got a `TrySendError::Full` above. Wait for a bit and try
+            // again.
+            if spin_count < 10 {
+                spin_count += 1;
+                // Wastes some CPU time with a hint to indicate to the CPU that we
+                // are spinning
+                for _ in 0..8 {
+                    std::hint::spin_loop();
+                }
+            } else {
+                spin_count = 0;
+                // Try to yield to other tasks. We have to yield sometimes, otherwise
+                // other task, which is draining the `ch`, will not make any
+                // progress. If this happens, we will stuck in this loop forever.
+                super::may_yield().await;
+            }
+        }
+    }
+
+    pub(crate) async fn retry_interrupted_ops(&self) {
+        while let Ok(op) = self.interrupted_op_ch_rcv.try_recv() {
+            // Async Cancellation Safety: Remember that we are in an async task here.
+            // If our caller is cancelled while we are awaiting for the future, we
+            // will be cancelled too at the await point. In that case, the cancel
+            // guard below will save the future and the op to the interrupted_op_ch
+            // channel, so that we can resume/retry later.
+            let mut cancel_guard;
+
+            // Resume an interrupted future if there is one.
+            match op {
+                InterruptedOp::CallEvictionListener { ts, future, op } => {
+                    cancel_guard = CancelGuard::new(&self.interrupted_op_ch_snd, ts);
+                    cancel_guard.set_future_and_op(future.clone(), op);
+                    // Resume the interrupted future (which will notify an eviction
+                    // to the eviction listener).
+                    future.await;
+                    // If we are here, it means the above future has been completed.
+                    cancel_guard.unset_future();
+                }
+                InterruptedOp::SendWriteOp { ts, op } => {
+                    cancel_guard = CancelGuard::new(&self.interrupted_op_ch_snd, ts);
+                    cancel_guard.set_op(op);
+                }
+            }
+
+            // Retry to schedule the write op.
+            let ts = cancel_guard.ts;
+            let op = cancel_guard.op.as_ref().cloned().unwrap();
+            let hk = self.housekeeper.as_ref();
+            Self::schedule_write_op(&self.inner, &self.write_op_ch, op, ts, hk, false)
+                .await
+                .expect("Failed to reschedule a write op");
+
+            // If we are here, it means the above write op has been scheduled.
+            // We are all good now. Clear the cancel guard.
+            cancel_guard.clear();
         }
     }
 
@@ -752,14 +859,14 @@ where
 
 struct EvictionState<'a, K, V> {
     counters: EvictionCounters,
-    notifier: Option<&'a RemovalNotifier<K, V>>,
+    notifier: Option<&'a Arc<RemovalNotifier<K, V>>>,
 }
 
 impl<'a, K, V> EvictionState<'a, K, V> {
     fn new(
         entry_count: u64,
         weighted_size: u64,
-        notifier: Option<&'a RemovalNotifier<K, V>>,
+        notifier: Option<&'a Arc<RemovalNotifier<K, V>>>,
     ) -> Self {
         Self {
             counters: EvictionCounters::new(entry_count, weighted_size),
@@ -908,7 +1015,7 @@ pub(crate) struct Inner<K, V, S> {
     expiration_policy: ExpirationPolicy<K, V>,
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
-    removal_notifier: Option<RemovalNotifier<K, V>>,
+    removal_notifier: Option<Arc<RemovalNotifier<K, V>>>,
     key_locks: Option<KeyLockMap<K, S>>,
     invalidator: Option<Invalidator<K, V, S>>,
     clocks: Clocks,
@@ -1074,7 +1181,7 @@ where
         let timer_wheel = Mutex::new(TimerWheel::new(now));
 
         let (removal_notifier, key_locks) = if let Some(listener) = eviction_listener {
-            let rn = RemovalNotifier::new(listener, name.clone());
+            let rn = Arc::new(RemovalNotifier::new(listener, name.clone()));
             let kl = KeyLockMap::with_hasher(build_hasher.clone());
             (Some(rn), Some(kl))
         } else {
@@ -2287,13 +2394,15 @@ where
     }
 
     #[inline]
-    async fn notify_upsert(
+    fn notify_upsert(
         &self,
         key: Arc<K>,
         entry: &TrioArc<ValueEntry<K, V>>,
         last_accessed: Option<Instant>,
         last_modified: Option<Instant>,
-    ) {
+    ) -> BoxFuture<'static, ()> {
+        use futures_util::future::FutureExt;
+
         let now = self.current_time_from_expiration_clock();
         let exp = &self.expiration_policy;
 
@@ -2313,11 +2422,26 @@ where
             }
         }
 
-        self.notify_single_removal(key, entry, cause).await;
+        if let Some(notifier) = &self.removal_notifier {
+            let notifier = Arc::clone(notifier);
+            let value = entry.value.clone();
+            async move {
+                notifier.notify(key, value, cause).await;
+            }
+            .boxed()
+        } else {
+            std::future::ready(()).boxed()
+        }
     }
 
     #[inline]
-    async fn notify_invalidate(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>) {
+    fn notify_invalidate(
+        &self,
+        key: &Arc<K>,
+        entry: &TrioArc<ValueEntry<K, V>>,
+    ) -> BoxFuture<'static, ()> {
+        use futures_util::future::FutureExt;
+
         let now = self.current_time_from_expiration_clock();
         let exp = &self.expiration_policy;
 
@@ -2335,8 +2459,14 @@ where
             }
         }
 
-        self.notify_single_removal(Arc::clone(key), entry, cause)
-            .await;
+        if let Some(notifier) = &self.removal_notifier {
+            let notifier = Arc::clone(notifier);
+            let key = Arc::clone(key);
+            let value = entry.value.clone();
+            async move { notifier.notify(key, value, cause).await }.boxed()
+        } else {
+            std::future::ready(()).boxed()
+        }
     }
 }
 
