@@ -4625,14 +4625,23 @@ mod tests {
         // - get               (Already tested in a previous test)
         // - insert
         // - invalidate
+        // - remove
 
+        // insert
         prepare().await;
         cache.insert(99, 99).await;
         assert_eq!(listener_initiation_count.load(Ordering::Acquire), 1);
         assert_eq!(listener_completion_count.load(Ordering::Acquire), 1);
 
+        // invalidate
         prepare().await;
         cache.invalidate(&88).await;
+        assert_eq!(listener_initiation_count.load(Ordering::Acquire), 1);
+        assert_eq!(listener_completion_count.load(Ordering::Acquire), 1);
+
+        // remove
+        prepare().await;
+        cache.remove(&77).await;
         assert_eq!(listener_initiation_count.load(Ordering::Acquire), 1);
         assert_eq!(listener_completion_count.load(Ordering::Acquire), 1);
     }
