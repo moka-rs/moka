@@ -101,13 +101,15 @@ impl Housekeeper {
 
         let now = cache.now();
 
+        // Async Cancellation Safety: Our maintenance task is cancellable as we save
+        // it in the lock. If it is canceled, we will resume it in the next run.
+
         if let Some(task) = &*current_task {
-            // This task was being resolved, but did not complete. This means the
-            // previous run was canceled due to the enclosing Future was dropped.
-            // Resume the task now by awaiting.
+            // This task was cancelled in the previous run due to the enclosing
+            // Future was dropped. Resume the task now by awaiting.
             task.clone().await;
         } else {
-            // Create a new maintenance task and resolve it.
+            // Create a new maintenance task and await it.
             let task = async move { cache.run_pending_tasks(MAX_SYNC_REPEATS).await }
                 .boxed()
                 .shared();
@@ -119,7 +121,7 @@ impl Housekeeper {
             task.await;
         }
 
-        // If we are here, it means that the maintenance task has been resolved.
+        // If we are here, it means that the maintenance task has been completed.
         // We can remove it from the lock.
         *current_task = None;
         self.run_after.set_instant(Self::sync_after(now));

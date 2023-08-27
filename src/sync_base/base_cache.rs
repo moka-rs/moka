@@ -553,16 +553,18 @@ where
         );
 
         match (op1, op2) {
-            (Some((_cnt, ins_op)), None) => self.post_insert(ts, &key, ins_op),
+            (Some((_cnt, ins_op)), None) => self.do_post_insert_steps(ts, &key, ins_op),
             (Some((cnt1, ins_op)), Some((cnt2, ..))) if cnt1 > cnt2 => {
-                self.post_insert(ts, &key, ins_op)
+                self.do_post_insert_steps(ts, &key, ins_op)
             }
-            (_, Some((_cnt, old_info, upd_op))) => self.post_update(ts, key, old_info, upd_op),
+            (_, Some((_cnt, old_info, upd_op))) => {
+                self.do_post_update_steps(ts, key, old_info, upd_op)
+            }
             (None, None) => unreachable!(),
         }
     }
 
-    fn post_insert(
+    fn do_post_insert_steps(
         &self,
         ts: Instant,
         key: &Arc<K>,
@@ -576,7 +578,7 @@ where
         (ins_op, ts)
     }
 
-    fn post_update(
+    fn do_post_update_steps(
         &self,
         ts: Instant,
         key: Arc<K>,

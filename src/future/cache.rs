@@ -1,7 +1,7 @@
 use super::{
     base_cache::BaseCache,
     value_initializer::{GetOrInsert, InitResult, ValueInitializer},
-    CacheBuilder, Iter, OwnedKeyEntrySelector, PendingOpGuard, PredicateId, RefKeyEntrySelector,
+    CacheBuilder, CancelGuard, Iter, OwnedKeyEntrySelector, PredicateId, RefKeyEntrySelector,
     WriteOp,
 };
 use crate::{
@@ -23,6 +23,9 @@ use std::{
     pin::Pin,
     sync::Arc,
 };
+
+#[cfg(test)]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// A thread-safe, futures-aware concurrent in-memory cache.
 ///
@@ -644,6 +647,9 @@ use std::{
 pub struct Cache<K, V, S = RandomState> {
     base: BaseCache<K, V, S>,
     value_initializer: Arc<ValueInitializer<K, V, S>>,
+
+    #[cfg(test)]
+    schedule_write_op_should_block: AtomicBool,
 }
 
 // TODO: https://github.com/moka-rs/moka/issues/54
@@ -674,6 +680,11 @@ impl<K, V, S> Clone for Cache<K, V, S> {
         Self {
             base: self.base.clone(),
             value_initializer: Arc::clone(&self.value_initializer),
+
+            #[cfg(test)]
+            schedule_write_op_should_block: AtomicBool::new(
+                self.schedule_write_op_should_block.load(Ordering::Acquire),
+            ),
         }
     }
 }
@@ -837,6 +848,9 @@ where
                 invalidator_enabled,
             ),
             value_initializer: Arc::new(ValueInitializer::with_hasher(build_hasher)),
+
+            #[cfg(test)]
+            schedule_write_op_should_block: Default::default(), // false
         }
     }
 
@@ -1379,7 +1393,7 @@ where
     {
         use futures_util::FutureExt;
 
-        self.base.process_pending_ops().await;
+        self.base.retry_interrupted_ops().await;
 
         // Lock the key for removal if blocking removal notification is enabled.
         let mut kl = None;
@@ -1417,7 +1431,14 @@ where
                 };
 
                 let op = WriteOp::Remove(kv.clone());
-                let mut drop_guard = PendingOpGuard::new(&self.base.pending_op_ch_snd, now);
+
+                // Async Cancellation Safety: To ensure the below future should be
+                // executed even if our caller async task is cancelled, we create a
+                // cancel guard for the future (and the op). If our caller is
+                // cancelled while we are awaiting for the future, the cancel guard
+                // will save the future and the op to the interrupted_op_ch channel,
+                // so that we can resume/retry later.
+                let mut cancel_guard = CancelGuard::new(&self.base.interrupted_op_ch_snd, now);
 
                 if self.base.is_removal_notifier_enabled() {
                     let future = self
@@ -1425,12 +1446,12 @@ where
                         .notify_invalidate(&kv.key, &kv.entry)
                         .boxed()
                         .shared();
-                    drop_guard.set_future_and_op(future.clone(), op.clone());
+                    cancel_guard.set_future_and_op(future.clone(), op.clone());
                     // Send notification to the eviction listener.
                     future.await;
-                    drop_guard.unset_future();
+                    cancel_guard.unset_future();
                 } else {
-                    drop_guard.set_op(op.clone());
+                    cancel_guard.set_op(op.clone());
                 }
 
                 // Drop the locks before scheduling write op to avoid a potential
@@ -1441,16 +1462,28 @@ where
                 std::mem::drop(kl);
 
                 let hk = self.base.housekeeper.as_ref();
+
+                let should_block;
+                #[cfg(not(test))]
+                {
+                    should_block = false;
+                }
+                #[cfg(test)]
+                {
+                    should_block = self.schedule_write_op_should_block.load(Ordering::Acquire);
+                }
+
                 BaseCache::<K, V, S>::schedule_write_op(
                     &self.base.inner,
                     &self.base.write_op_ch,
                     op,
                     now,
                     hk,
+                    should_block,
                 )
                 .await
                 .expect("Failed to schedule write op for remove");
-                drop_guard.clear();
+                cancel_guard.clear();
 
                 crossbeam_epoch::pin().flush();
                 maybe_v
@@ -1568,7 +1601,7 @@ where
 
     pub async fn run_pending_tasks(&self) {
         if let Some(hk) = &self.base.housekeeper {
-            self.base.process_pending_ops().await;
+            self.base.retry_interrupted_ops().await;
             hk.run_pending_tasks(Arc::clone(&self.base.inner)).await;
         }
     }
@@ -1896,8 +1929,18 @@ where
 
         let (op, ts) = self.base.do_insert_with_hash(key, hash, value).await;
         let hk = self.base.housekeeper.as_ref();
-        let mut drop_guard = PendingOpGuard::new(&self.base.pending_op_ch_snd, ts);
-        drop_guard.set_op(op.clone());
+        let mut cancel_guard = CancelGuard::new(&self.base.interrupted_op_ch_snd, ts);
+        cancel_guard.set_op(op.clone());
+
+        let should_block;
+        #[cfg(not(test))]
+        {
+            should_block = false;
+        }
+        #[cfg(test)]
+        {
+            should_block = self.schedule_write_op_should_block.load(Ordering::Acquire);
+        }
 
         BaseCache::<K, V, S>::schedule_write_op(
             &self.base.inner,
@@ -1905,10 +1948,11 @@ where
             op,
             ts,
             hk,
+            should_block,
         )
         .await
         .expect("Failed to schedule write op for insert");
-        drop_guard.clear();
+        cancel_guard.clear();
     }
 }
 
@@ -1968,7 +2012,6 @@ where
     }
 
     fn run_pending_tasks_initiation_count(&self) -> usize {
-        use std::sync::atomic::Ordering;
         self.base
             .housekeeper
             .as_ref()
@@ -1977,7 +2020,6 @@ where
     }
 
     fn run_pending_tasks_completion_count(&self) -> usize {
-        use std::sync::atomic::Ordering;
         self.base
             .housekeeper
             .as_ref()
@@ -4475,6 +4517,187 @@ mod tests {
         // Now the listener is completed.
         assert_eq!(listener_initiation_count.load(Ordering::Acquire), 1);
         assert_eq!(listener_completion_count.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn cancel_future_while_calling_eviction_listener() {
+        use crate::future::FutureExt;
+        use futures_util::future::poll_immediate;
+        use tokio::task::yield_now;
+
+        let listener_initiation_count: Arc<AtomicU32> = Default::default();
+        let listener_completion_count: Arc<AtomicU32> = Default::default();
+
+        let listener = {
+            // Variables to capture.
+            let init_count = Arc::clone(&listener_initiation_count);
+            let comp_count = Arc::clone(&listener_completion_count);
+
+            // Our eviction listener closure.
+            move |_k, _v, _r| {
+                init_count.fetch_add(1, Ordering::AcqRel);
+                let comp_count1 = Arc::clone(&comp_count);
+
+                async move {
+                    yield_now().await;
+                    comp_count1.fetch_add(1, Ordering::AcqRel);
+                }
+                .boxed()
+            }
+        };
+
+        let mut cache: Cache<u32, u32> = Cache::builder()
+            .time_to_live(Duration::from_millis(10))
+            .async_eviction_listener(listener)
+            .build();
+
+        cache.reconfigure_for_testing().await;
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        // ------------------------------------------------------------
+        // Interrupt the eviction listener while calling `insert`
+        // ------------------------------------------------------------
+
+        cache.insert(1, 1).await;
+
+        let fut = cache.insert(1, 2);
+        // Poll the fut only once, and drop it. The fut should not be completed (so
+        // it is cancelled) because the eviction listener performed a yield_now().
+        assert!(poll_immediate(fut).await.is_none());
+
+        // The listener is initiated but not completed.
+        assert_eq!(listener_initiation_count.load(Ordering::Acquire), 1);
+        assert_eq!(listener_completion_count.load(Ordering::Acquire), 0);
+
+        // This will call retry_interrupted_ops() and resume the interrupted
+        // listener.
+        cache.run_pending_tasks().await;
+        assert_eq!(listener_initiation_count.load(Ordering::Acquire), 1);
+        assert_eq!(listener_completion_count.load(Ordering::Acquire), 1);
+
+        // ------------------------------------------------------------
+        // Interrupt the eviction listener while calling `invalidate`
+        // ------------------------------------------------------------
+
+        let fut = cache.invalidate(&1);
+        // Cancel the fut after one poll.
+        assert!(poll_immediate(fut).await.is_none());
+        // The listener is initiated but not completed.
+        assert_eq!(listener_initiation_count.load(Ordering::Acquire), 2);
+        assert_eq!(listener_completion_count.load(Ordering::Acquire), 1);
+
+        // This will call retry_interrupted_ops() and resume the interrupted
+        // listener.
+        cache.get(&99).await;
+        assert_eq!(listener_initiation_count.load(Ordering::Acquire), 2);
+        assert_eq!(listener_completion_count.load(Ordering::Acquire), 2);
+
+        // ------------------------------------------------------------
+        // Ensure retry_interrupted_ops() is called
+        // ------------------------------------------------------------
+
+        // Repeat the same test with `insert`, but this time, call different methods
+        // to ensure retry_interrupted_ops() is called.
+        let prepare = || async {
+            cache.invalidate(&1).await;
+
+            // Reset the counters.
+            listener_initiation_count.store(0, Ordering::Release);
+            listener_completion_count.store(0, Ordering::Release);
+
+            cache.insert(1, 1).await;
+
+            let fut = cache.insert(1, 2);
+            // Poll the fut only once, and drop it. The fut should not be completed (so
+            // it is cancelled) because the eviction listener performed a yield_now().
+            assert!(poll_immediate(fut).await.is_none());
+
+            // The listener is initiated but not completed.
+            assert_eq!(listener_initiation_count.load(Ordering::Acquire), 1);
+            assert_eq!(listener_completion_count.load(Ordering::Acquire), 0);
+        };
+
+        // Methods to test:
+        //
+        // - run_pending_tasks (Already tested in a previous test)
+        // - get               (Already tested in a previous test)
+        // - insert
+        // - invalidate
+
+        prepare().await;
+        cache.insert(99, 99).await;
+        assert_eq!(listener_initiation_count.load(Ordering::Acquire), 1);
+        assert_eq!(listener_completion_count.load(Ordering::Acquire), 1);
+
+        prepare().await;
+        cache.invalidate(&88).await;
+        assert_eq!(listener_initiation_count.load(Ordering::Acquire), 1);
+        assert_eq!(listener_completion_count.load(Ordering::Acquire), 1);
+    }
+
+    #[tokio::test]
+    async fn cancel_future_while_scheduling_write_op() {
+        use futures_util::future::poll_immediate;
+
+        let mut cache: Cache<u32, u32> = Cache::builder().build();
+        cache.reconfigure_for_testing().await;
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        // --------------------------------------------------------------
+        // Interrupt `insert` while blocking in `schedule_write_op`
+        // --------------------------------------------------------------
+
+        cache
+            .schedule_write_op_should_block
+            .store(true, Ordering::Release);
+        let fut = cache.insert(1, 1);
+        // Poll the fut only once, and drop it. The fut should not be completed (so
+        // it is cancelled) because schedule_write_op should be awaiting for a lock.
+        assert!(poll_immediate(fut).await.is_none());
+
+        assert_eq!(cache.base.interrupted_op_ch_snd.len(), 1);
+        assert_eq!(cache.base.write_op_ch.len(), 0);
+
+        // This should retry the interrupted operation.
+        cache
+            .schedule_write_op_should_block
+            .store(false, Ordering::Release);
+        cache.get(&99).await;
+        assert_eq!(cache.base.interrupted_op_ch_snd.len(), 0);
+        assert_eq!(cache.base.write_op_ch.len(), 1);
+
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.base.write_op_ch.len(), 0);
+
+        // --------------------------------------------------------------
+        // Interrupt `invalidate` while blocking in `schedule_write_op`
+        // --------------------------------------------------------------
+
+        cache
+            .schedule_write_op_should_block
+            .store(true, Ordering::Release);
+        let fut = cache.invalidate(&1);
+        // Poll the fut only once, and drop it. The fut should not be completed (so
+        // it is cancelled) because schedule_write_op should be awaiting for a lock.
+        assert!(poll_immediate(fut).await.is_none());
+
+        assert_eq!(cache.base.interrupted_op_ch_snd.len(), 1);
+        assert_eq!(cache.base.write_op_ch.len(), 0);
+
+        // This should retry the interrupted operation.
+        cache
+            .schedule_write_op_should_block
+            .store(false, Ordering::Release);
+        cache.get(&99).await;
+        assert_eq!(cache.base.interrupted_op_ch_snd.len(), 0);
+        assert_eq!(cache.base.write_op_ch.len(), 1);
+
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.base.write_op_ch.len(), 0);
     }
 
     // This test ensures that the `contains_key`, `get` and `invalidate` can use

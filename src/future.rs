@@ -74,8 +74,8 @@ where
     }
 }
 
-/// Operation that has been interrupted by async cancellation.
-pub(crate) enum PendingOp<K, V> {
+/// Operation that has been interrupted (stopped polling) by async cancellation.
+pub(crate) enum InterruptedOp<K, V> {
     CallEvictionListener {
         ts: Instant,
         // 'static means that the future can capture only owned value and/or static
@@ -89,21 +89,22 @@ pub(crate) enum PendingOp<K, V> {
     },
 }
 
-/// Drop guard for an operation being performed. If this guard is dropped while it is
-/// still having the future or the write op, it will convert them to a PendingOp and
-/// send to the pending operation channel, so that the operation can be retried
-/// later.
-struct PendingOpGuard<'a, K, V> {
-    pending_op_ch: &'a Sender<PendingOp<K, V>>,
+/// Drop guard for an async task being performed. If this guard is dropped while it
+/// is still having the shared `future` or the write `op`, it will convert them to an
+/// `InterruptedOp` and send it to the interrupted operations channel. Later, the
+/// interrupted op will be retried by `retry_interrupted_ops` method of
+/// `BaseCache`.
+struct CancelGuard<'a, K, V> {
+    interrupted_op_ch: &'a Sender<InterruptedOp<K, V>>,
     ts: Instant,
     future: Option<Shared<BoxFuture<'static, ()>>>,
     op: Option<WriteOp<K, V>>,
 }
 
-impl<'a, K, V> PendingOpGuard<'a, K, V> {
-    fn new(pending_op_ch: &'a Sender<PendingOp<K, V>>, ts: Instant) -> Self {
+impl<'a, K, V> CancelGuard<'a, K, V> {
+    fn new(interrupted_op_ch: &'a Sender<InterruptedOp<K, V>>, ts: Instant) -> Self {
         Self {
-            pending_op_ch,
+            interrupted_op_ch,
             ts,
             future: Default::default(),
             op: Default::default(),
@@ -129,20 +130,20 @@ impl<'a, K, V> PendingOpGuard<'a, K, V> {
     }
 }
 
-impl<'a, K, V> Drop for PendingOpGuard<'a, K, V> {
+impl<'a, K, V> Drop for CancelGuard<'a, K, V> {
     fn drop(&mut self) {
-        let pending_op = match (self.future.take(), self.op.take()) {
-            (Some(future), Some(op)) => PendingOp::CallEvictionListener {
+        let interrupted_op = match (self.future.take(), self.op.take()) {
+            (Some(future), Some(op)) => InterruptedOp::CallEvictionListener {
                 ts: self.ts,
                 future,
                 op,
             },
-            (None, Some(op)) => PendingOp::SendWriteOp { ts: self.ts, op },
+            (None, Some(op)) => InterruptedOp::SendWriteOp { ts: self.ts, op },
             _ => return,
         };
 
-        self.pending_op_ch
-            .send(pending_op)
+        self.interrupted_op_ch
+            .send(interrupted_op)
             .expect("Failed to send a pending op");
     }
 }
