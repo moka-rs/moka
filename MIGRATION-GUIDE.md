@@ -49,6 +49,8 @@ code.
 1. Please use a crate feature `sync` to enable `sync` caches.
 2. Since the background threads are removed, the maintenance tasks such as removing
    expired entries are not executed periodically anymore.
+   - The `thread_pool_enabled` in `sync::CacheBuilder` was removed. The thread pool
+     is always disabled.
    - See the [maintenance tasks](#the-maintenance-tasks) section for more details.
 3. The `sync` method of the `sync::ConcurrentCacheExt` trait was moved to
    `sync::Cache` and `sync::SegmentedCache` types and renamed to `run_pending_tasks`.
