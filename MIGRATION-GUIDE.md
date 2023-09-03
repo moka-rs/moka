@@ -47,31 +47,32 @@ code.
 ### `sync::Cache` and `sync::SegmentedCache` v0.12
 
 1. Please use a crate feature `sync` to enable `sync` caches.
-2. Since the background threads are removed, the maintenance tasks such as removing
+2. Since the background threads were removed, the maintenance tasks such as removing
    expired entries are not executed periodically anymore.
-   - The `thread_pool_enabled` in `sync::CacheBuilder` was removed. The thread pool
-     is always disabled.
+   - The `thread_pool_enabled` method of the `sync::CacheBuilder` was removed. The
+     thread pool is always disabled.
    - See the [maintenance tasks](#the-maintenance-tasks) section for more details.
 3. The `sync` method of the `sync::ConcurrentCacheExt` trait was moved to
-   `sync::Cache` and `sync::SegmentedCache` types and renamed to `run_pending_tasks`.
+   `sync::Cache` and `sync::SegmentedCache` types. It is also renamed to
+   `run_pending_tasks`.
 4. Now `sync` caches always work as if the immediate delivery mode is specified
    for the eviction listener.
-   - In older versions, the immediate mode was the default mode. And the queued
+   - In older versions, the immediate mode was the default mode, and the queued
      mode can be optionally selected.
 
 ### `future::Cache` v0.12
 
 #### API changes
 
-1. `get` method is now `async fn`, so you must `await` for the result.
-2. `blocking` method was removed.
+1. The `get` method is now `async fn`, so you must `await` for the result.
+2. The `blocking` method was removed.
    - Please use async runtime's blocking API instead.
    - See the [replacing the blocking API](#replacing-the-blocking-api) section for
      more details.
-3. Now `or_insert_with_if` method of the entry API requires `Send` bound for the
+3. Now the `or_insert_with_if` method of the entry API requires `Send` bound for the
    `replace_if` closure.
-4. `eviction_listener_with_queued_delivery_mode` method of `future::CacheBuilder` was
-   removed.
+4. The `eviction_listener_with_queued_delivery_mode` method of `future::CacheBuilder`
+   was removed.
    - Please use one of the new methods instead:
      - `eviction_listener`
      - `async_eviction_listener`
@@ -83,7 +84,7 @@ code.
 
 #### Behavior changes
 
-1. Since the background threads are removed, the maintenance tasks such as removing
+1. Since the background threads were removed, the maintenance tasks such as removing
    expired entries are not executed periodically anymore.
    - See the [maintenance tasks](#the-maintenance-tasks) section for more details.
 2. Now `future::Cache` always works as if the immediate delivery mode is specified
@@ -97,8 +98,8 @@ blocking API instead.
 
 **Tokio**
 
-1. Call `tokio::runtime::Handle::current()` in async context to obtain a handle to
-   the current Tokio runtime.
+1. Call the `tokio::runtime::Handle::current()` method in async context to obtain a
+   handle to the current Tokio runtime.
 2. From outside async context, call cache's async function using `block_on` method of
    the runtime.
 
@@ -133,7 +134,7 @@ async fn main() {
 
 **async-std**
 
-- From outside async context, call cache's async function using
+- From outside async context, call cache's async function using the
   `async_std::task::block_on` method.
 
 ```rust
@@ -166,16 +167,14 @@ async fn main() {
 
 #### Updating the eviction listener
 
-- The `notification::DeliveryMode` for eviction listener was changed from `Queued` to
-  `Immediate`.
-- `eviction_listener_with_queued_delivery_mode` method of `future::CacheBuilder` was
-  removed. Please use one of the new methods `eviction_listener` or
-  `async_eviction_listener` instead.
+The `eviction_listener_with_queued_delivery_mode` method of `future::CacheBuilder`
+was removed. Please use one of the new methods `eviction_listener` or
+`async_eviction_listener` instead.
 
 ##### `eviction_listener` method
 
-`eviction_listener` takes the same closure as the old method. If you do not need to
-`.await` anything in the eviction listener, use this method.
+The `eviction_listener` method takes the same closure as the old method. If you do
+not need to `.await` anything in the eviction listener, use this method.
 
 This code snippet is borrowed from [an example][listener-ex1] in the document of
 `future::Cache`:
@@ -196,7 +195,7 @@ let cache = Cache::builder()
 
 ##### `async_eviction_listener` method
 
-`async_eviction_listener` takes a closure that returns a `Future`. If you need to
+The `async_eviction_listener` takes a closure that returns a `Future`. If you need to
 `await` something in the eviction listener, use this method. The actual return type
 of the closure is `notification::ListenerFuture`, which is a type alias of
 `Pin<Box<dyn Future<Output = ()> + Send>>`. You can use the `boxed` method of
@@ -263,7 +262,7 @@ These maintenance tasks include:
    wheels.
 3. When cache's max capacity is exceeded, remove least recently used (LRU) entries.
 4. Remove expired entries.
-5. Find and remove the entries that have been invalidated by `invalidate_all` or
+5. Find and remove the entries that have been invalidated by the `invalidate_all` or
    `invalidate_entries_if` methods.
 6. Deliver removal notifications to the eviction listener. (Call the eviction
    listener closure with the information about the evicted entry)
@@ -273,7 +272,8 @@ conditions is met:
 
 Cache Methods:
 
-- All cache write methods: `insert`, `get_with`, `invalidate`, etc.
+- All cache write methods: `insert`, `get_with`, `invalidate`, etc., except for
+  `invalidate_all` and `invalidate_entries_if`.
 - Some of the cache read methods: `get`
 - `run_pending_tasks` method, which executes the pending maintenance tasks
   explicitly.
@@ -281,18 +281,17 @@ Cache Methods:
 Conditions:
 
 - When one of the numbers of pending read and write recordings exceeds the threshold.
-    - It is currently hard-coded to 64 items.
+    - The threshold is currently hard-coded to 64 items.
 - When the time since the last execution of the maintenance tasks exceeds the
   threshold.
-    - It is currently hard-coded to 300 milliseconds.
-
+    - The threshold is currently hard-coded to 300 milliseconds.
 
 #### `run_pending_tasks` method
 
 You can execute the pending maintenance tasks explicitly by calling the
 `run_pending_tasks` method. This method is available for all cache types.
 
-Note that cache read methods such as `get`, `get_with` and `contains_key` never
+Note that cache read methods such as the `get`, `get_with` and `contains_key` never
 return expired entries although they are not removed immediately from the cache when
 they expire. You will not need to call `run_pending_tasks` method to remove expired
-entries unless you want to remove them immediately (e.g. to free some memory).
+entries unless you want to remove them immediately (e.g. to free some resources).

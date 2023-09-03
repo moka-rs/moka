@@ -21,7 +21,7 @@ delivery mode is specified.
 
 Please read the [MIGRATION-GUIDE.md][migration-guide-v012] for more details.
 
-[migration-guide-v012]: ./MIGRATION-GUIDE.md#migrating-to-v0120-from-a-prior-version
+[migration-guide-v012]: https://github.com/moka-rs/moka/blob/main/MIGRATION-GUIDE.md#migrating-to-v0120-from-a-prior-version
 
 ### Changed
 
