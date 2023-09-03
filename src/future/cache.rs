@@ -50,7 +50,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     - [Per-entry expiration policy](#per-entry-expiration-policy)
 /// - [Example: Eviction Listener](#example-eviction-listener)
 ///     - [You should avoid eviction listener to panic](#you-should-avoid-eviction-listener-to-panic)
-///     - [Delivery modes for eviction listener](#delivery-modes-for-eviction-listener)
 ///
 /// # Example: `insert`, `get` and `invalidate`
 ///
@@ -629,22 +628,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///    will appear in the log.
 ///
 /// [builder-name-method]: ./struct.CacheBuilder.html#method.name
-///
-/// ## Delivery Modes for eviction listener
-///
-/// The [`DeliveryMode`][delivery-mode] specifies how and when an eviction
-/// notification should be delivered to an eviction listener.
-///
-/// The `future::Cache` supports the following delivery mode:
-///
-/// - From v0.12.0, it only supports `Immediate` mode.
-/// - Up to v0.11.x, it only supported `Queued` modes.
-///
-/// For more details about the delivery modes, see [this section][sync-delivery-modes]
-/// of `sync::Cache` documentation.
-///
-/// [delivery-mode]: ../notification/enum.DeliveryMode.html
-/// [sync-delivery-modes]: ../sync/struct.Cache.html#delivery-modes-for-eviction-listener
 ///
 pub struct Cache<K, V, S = RandomState> {
     base: BaseCache<K, V, S>,

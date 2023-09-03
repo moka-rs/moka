@@ -53,8 +53,6 @@ use std::{
 /// - [Example: Eviction Listener](#example-eviction-listener)
 ///     - [You should avoid eviction listener to
 ///       panic](#you-should-avoid-eviction-listener-to-panic)
-///     - [Delivery modes for eviction listener](#delivery-modes-for-eviction-listener)
-///         - [`Immediate` mode](#immediate-mode)
 ///
 /// # Example: `insert`, `get` and `invalidate`
 ///
@@ -574,47 +572,7 @@ use std::{
 ///
 /// [builder-name-method]: ./struct.CacheBuilder.html#method.name
 ///
-/// ## Delivery modes for eviction listener
-///
-/// The [`DeliveryMode`][delivery-mode] specifies how and when an eviction
-/// notifications should be delivered to an eviction listener. The `sync` caches
-/// (`Cache` and `SegmentedCache`) support two delivery modes: `Immediate` and
-/// `Queued` modes.
-///
-/// [delivery-mode]: ../notification/enum.DeliveryMode.html
-///
-/// ### `Immediate` mode
-///
-/// Tne `Immediate` mode is the default delivery mode for the `sync` caches. Use this
-/// mode when it is important to keep the order of write operations and eviction
-/// notifications.
-///
-/// This mode has the following characteristics:
-///
-/// - The listener is called immediately after an entry was evicted.
-/// - The listener is called by the thread who evicted the entry:
-///    - The calling thread can be a background eviction thread or a user thread
-///      invoking a cache write operation such as `insert`, `get_with` or
-///      `invalidate`.
-///    - The calling thread is blocked until the listener returns.
-/// - This mode guarantees that write operations and eviction notifications for a
-///   given cache key are ordered by the time when they occurred.
-/// - This mode adds some performance overhead to cache write operations as it uses
-///   internal per-key lock to guarantee the ordering.
-///
-/// ### `Queued` mode
-///
-/// Use this mode when write performance is more important than preserving the order
-/// of write operations and eviction notifications.
-///
-/// - The listener will be called some time after an entry was evicted.
-/// - A notification will be stashed in a queue. The queue will be processed by
-///   dedicated notification thread(s) and that thread will call the listener.
-/// - This mode does not preserve the order of write operations and eviction
-///   notifications.
-/// - This mode adds almost no performance overhead to cache write operations as it
-///   does not use the per-key lock.
-///
+
 pub struct Cache<K, V, S = RandomState> {
     base: BaseCache<K, V, S>,
     value_initializer: Arc<ValueInitializer<K, V, S>>,

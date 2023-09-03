@@ -391,8 +391,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     /// Sets the eviction listener closure to the cache.
     ///
     /// The closure should take `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as
-    /// the arguments. The [immediate delivery mode][immediate-mode] is used for the
-    /// listener.
+    /// the arguments.
     ///
     /// # Panics
     ///
@@ -402,7 +401,6 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     /// call the panicked lister again.
     ///
     /// [removal-cause]: ../notification/enum.RemovalCause.html
-    /// [immediate-mode]: ../notification/enum.DeliveryMode.html#variant.Immediate
     pub fn eviction_listener(
         self,
         listener: impl Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,

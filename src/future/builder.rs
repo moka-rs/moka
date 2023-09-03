@@ -257,8 +257,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     }
 
     /// Sets the eviction listener closure to the cache. The closure should take
-    /// `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as the arguments. The
-    /// [immediate delivery mode][immediate-mode] is used for the listener.
+    /// `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as the arguments.
     ///
     /// See [this example][example] for a usage of eviction listener.
     ///
@@ -281,7 +280,6 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     /// call the panicked lister again.
     ///
     /// [removal-cause]: ../notification/enum.RemovalCause.html
-    /// [immediate-mode]: ../notification/enum.DeliveryMode.html#variant.Immediate
     /// [example]: ./struct.Cache.html#per-entry-expiration-policy
     pub fn eviction_listener<F>(self, listener: F) -> Self
     where
@@ -300,8 +298,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
 
     /// Sets the eviction listener closure to the cache. The closure should take
     /// `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as the arguments, and
-    /// return a [`ListenerFuture`][listener-future]. The
-    /// [immediate delivery mode][immediate-mode] is used for the listener.
+    /// return a [`ListenerFuture`][listener-future].
     ///
     /// See [this example][example] for a usage of asynchronous eviction listener.
     ///
@@ -324,7 +321,6 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     ///
     /// [removal-cause]: ../notification/enum.RemovalCause.html
     /// [listener-future]: ../notification/type.ListenerFuture.html
-    /// [immediate-mode]: ../notification/enum.DeliveryMode.html#variant.Immediate
     /// [example]: ./struct.Cache.html#example-eviction-listener
     pub fn async_eviction_listener<F>(self, listener: F) -> Self
     where
