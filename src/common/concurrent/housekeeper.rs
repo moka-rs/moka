@@ -6,6 +6,7 @@ use super::{
 };
 use crate::common::time::{CheckedTimeOps, Instant};
 
+use parking_lot::{Mutex, MutexGuard};
 use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
@@ -18,7 +19,7 @@ pub(crate) trait InnerSync {
 }
 
 pub(crate) struct Housekeeper {
-    is_sync_running: AtomicBool,
+    run_lock: Mutex<()>,
     run_after: AtomicInstant,
     auto_run_enabled: AtomicBool,
 }
@@ -26,7 +27,7 @@ pub(crate) struct Housekeeper {
 impl Default for Housekeeper {
     fn default() -> Self {
         Self {
-            is_sync_running: Default::default(),
+            run_lock: Default::default(),
             run_after: AtomicInstant::new(Self::sync_after(Instant::now())),
             auto_run_enabled: AtomicBool::new(true),
         }
@@ -49,32 +50,23 @@ impl Housekeeper {
     }
 
     pub(crate) fn run_pending_tasks<T: InnerSync>(&self, cache: &T) {
-        self.do_run_pending_tasks(cache);
+        let lock = self.run_lock.lock();
+        self.do_run_pending_tasks(cache, lock);
     }
 
     pub(crate) fn try_run_pending_tasks<T: InnerSync>(&self, cache: &T) -> bool {
-        // Try to flip the value of sync_scheduled from false to true.
-        match self.is_sync_running.compare_exchange(
-            false,
-            true,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => {
-                self.do_run_pending_tasks(cache);
-                true
-            }
-            Err(_) => false,
+        if let Some(lock) = self.run_lock.try_lock() {
+            self.do_run_pending_tasks(cache, lock);
+            true
+        } else {
+            false
         }
     }
 
-    fn do_run_pending_tasks<T: InnerSync>(&self, cache: &T) {
+    fn do_run_pending_tasks<T: InnerSync>(&self, cache: &T, _lock: MutexGuard<'_, ()>) {
         let now = cache.now();
         self.run_after.set_instant(Self::sync_after(now));
-
         cache.run_pending_tasks(MAX_SYNC_REPEATS);
-
-        self.is_sync_running.store(false, Ordering::Release);
     }
 
     fn sync_after(now: Instant) -> Instant {

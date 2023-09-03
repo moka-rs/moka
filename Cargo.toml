@@ -18,7 +18,7 @@ build = "build.rs"
 [features]
 default = ["atomic64", "quanta"]
 
-# Enabled this feature to use `moka::sync::{Cache, SegmentedCache}`
+# Enable this feature to use `moka::sync::{Cache, SegmentedCache}`
 sync = []
 
 # Enable this feature to use `moka::future::Cache`.
