@@ -31,3 +31,5 @@ jobs:
 
       - name: Run Kani
         uses: model-checking/kani-github-action@v0.28
+        with:
+          args: --features 'sync, future'
