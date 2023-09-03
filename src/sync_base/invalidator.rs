@@ -62,38 +62,11 @@ impl<K> KeyDateLite<K> {
     }
 }
 
-// pub(crate) struct InvalidationResult<K, V> {
-//     pub(crate) invalidated: Vec<KvEntry<K, V>>,
-//     pub(crate) is_done: bool,
-// }
-
-// impl<K, V> InvalidationResult<K, V> {
-//     fn new(invalidated: Vec<KvEntry<K, V>>, is_done: bool) -> Self {
-//         Self {
-//             invalidated,
-//             is_done,
-//         }
-//     }
-// }
-
 pub(crate) struct Invalidator<K, V, S> {
     predicates: crate::cht::SegmentedHashMap<PredicateId, Predicate<K, V>, S>,
     is_empty: AtomicBool,
     scan_context: Arc<ScanContext<K, V>>,
 }
-
-// impl<K, V, S> Drop for Invalidator<K, V, S> {
-//     fn drop(&mut self) {
-//         let ctx = &self.scan_context;
-//         // Disallow to create and run a scanning task by now.
-//         ctx.is_shutting_down.store(true, Ordering::Release);
-
-//         // Wait for the scanning task to finish. (busy loop)
-//         while ctx.is_running.load(Ordering::Acquire) {
-//             std::thread::sleep(Duration::from_millis(1));
-//         }
-//     }
-// }
 
 //
 // Crate public methods.
@@ -217,32 +190,6 @@ impl<K, V, S> Invalidator<K, V, S> {
         V: Clone + Send + Sync + 'static,
         S: BuildHasher,
     {
-        // let ctx = &self.scan_context;
-
-        // // Do not submit a task if this invalidator is about to be dropped.
-        // if ctx.is_shutting_down.load(Ordering::Acquire) {
-        //     return;
-        // }
-
-        // // Ensure there is no pending task and result.
-        // assert!(!self.is_task_running());
-        // assert!(ctx.result.lock().is_none());
-
-        // // Populate ctx.predicates if it is empty.
-        // {
-        //     let mut ps = ctx.predicates.lock();
-        //     if ps.is_empty() {
-        //         *ps = self.predicates.read().values().cloned().collect();
-        //     }
-        // }
-
-        // self.scan_context.is_running.store(true, Ordering::Release);
-
-        // let task = ScanTask::new(&self.scan_context, candidates, is_truncated);
-        // self.thread_pool.pool.execute(move || {
-        //     task.execute();
-        // });
-
         let mut predicates = self.scan_context.predicates.lock();
         if predicates.is_empty() {
             *predicates = self.predicates.iter().map(|(_k, v)| v).collect();
@@ -270,17 +217,6 @@ impl<K, V, S> Invalidator<K, V, S> {
 
         (invalidated, self.predicates.is_empty())
     }
-
-    // pub(crate) fn task_result(&self) -> Option<InvalidationResult<K, V>> {
-    //     assert!(!self.is_task_running());
-    //     let ctx = &self.scan_context;
-
-    //     ctx.result.lock().take().map(|result| {
-    //         self.remove_finished_predicates(ctx, &result);
-    //         let is_done = ctx.predicates.lock().is_empty();
-    //         InvalidationResult::new(result.invalidated, is_done)
-    //     })
-    // }
 }
 
 //

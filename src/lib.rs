@@ -168,6 +168,12 @@
 //! [timer-wheel]:
 //!     http://www.cs.columbia.edu/~nahum/w6998/papers/ton97-timing-wheels.pdf
 
+#[cfg(not(any(feature = "sync", feature = "future")))]
+compile_error!(
+    "At least one of the crate features `sync` or `future` must be enabled for \
+    `moka` crate. Please update your dependencies in Cargo.toml"
+);
+
 #[cfg(feature = "future")]
 #[cfg_attr(docsrs, doc(cfg(feature = "future")))]
 pub mod future;
