@@ -174,10 +174,6 @@ impl<K, V, S> Invalidator<K, V, S> {
         }
     }
 
-    // pub(crate) fn is_task_running(&self) -> bool {
-    //     self.scan_context.is_running.load(Ordering::Acquire)
-    // }
-
     pub(crate) fn scan_and_invalidate<C>(
         &self,
         cache: &C,
