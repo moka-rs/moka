@@ -532,7 +532,8 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
 - [x] Variable (per-entry) expiration, using a hierarchical timer wheel.
   (`v0.11.0` via [#248][gh-pull-248])
 - [ ] Cache statistics. (Hit rate, etc.)
-- [x] Remove background threads. (`v0.12.0` via [#294][gh-pull-294] and [#???][gh-pull-qqq])
+- [x] Remove background threads. (`v0.12.0` via [#294][gh-pull-294] and
+  [#316][gh-pull-316])
 - [ ] Upgrade TinyLFU to Window-TinyLFU. ([details][tiny-lfu])
 
 [gh-pull-024]: https://github.com/moka-rs/moka/pull/24
@@ -540,7 +541,7 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
 [gh-pull-145]: https://github.com/moka-rs/moka/pull/145
 [gh-pull-248]: https://github.com/moka-rs/moka/pull/248
 [gh-pull-294]: https://github.com/moka-rs/moka/pull/294
-[gh-pull-qqq]: https://github.com/moka-rs/moka/pull/qqq
+[gh-pull-316]: https://github.com/moka-rs/moka/pull/316
 
 
 ## About the Name
