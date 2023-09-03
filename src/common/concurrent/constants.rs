@@ -8,13 +8,4 @@ pub(crate) const WRITE_LOG_FLUSH_POINT: usize = 512;
 pub(crate) const WRITE_LOG_SIZE: usize = WRITE_LOG_FLUSH_POINT * (MAX_SYNC_REPEATS + 2);
 
 #[cfg(feature = "sync")]
-pub(crate) const WRITE_LOG_LOW_WATER_MARK: usize = WRITE_LOG_FLUSH_POINT / 2;
-
-#[cfg(feature = "sync")]
 pub(crate) const WRITE_RETRY_INTERVAL_MICROS: u64 = 50;
-
-#[cfg(feature = "sync")]
-pub(crate) const PERIODICAL_SYNC_NORMAL_PACE_MILLIS: u64 = 300;
-
-#[cfg(feature = "sync")]
-pub(crate) const PERIODICAL_SYNC_FAST_PACE_NANOS: u64 = 500;

@@ -12,12 +12,6 @@ pub(crate) mod entry_info;
 #[cfg(feature = "sync")]
 pub(crate) mod housekeeper;
 
-#[cfg(feature = "sync")]
-pub(crate) mod thread_pool;
-
-#[cfg(feature = "sync")]
-pub(crate) mod unsafe_weak_pointer;
-
 // target_has_atomic is more convenient but yet unstable (Rust 1.55)
 // https://github.com/rust-lang/rust/issues/32976
 // #[cfg_attr(target_has_atomic = "64", path = "common/time_atomic64.rs")]

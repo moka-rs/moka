@@ -35,7 +35,6 @@ use crate::cht::map::{
     DefaultHashBuilder,
 };
 
-#[cfg(feature = "future")]
 use super::iter::{Iter, ScanningGet};
 
 use std::{
@@ -206,7 +205,6 @@ impl<K, V, S> HashMap<K, V, S> {
     ///
     /// This method on its own is safe, but other threads can add or remove
     /// elements at any time.
-    #[cfg(any(test, feature = "future"))]
     pub(crate) fn len(&self) -> usize {
         self.len.load(Ordering::Relaxed)
     }
@@ -217,7 +215,6 @@ impl<K, V, S> HashMap<K, V, S> {
     ///
     /// This method on its own is safe, but other threads can add or remove
     /// elements at any time.
-    #[cfg(any(test, feature = "future"))]
     pub(crate) fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -252,7 +249,6 @@ impl<K, V, S> HashMap<K, V, S> {
 }
 
 impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
-    #[cfg(feature = "future")]
     #[inline]
     pub(crate) fn contains_key(&self, hash: u64, eq: impl FnMut(&K) -> bool) -> bool {
         self.get_key_value_and_then(hash, eq, |_, _| Some(()))
@@ -299,7 +295,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     ///
     /// If the map did have this key present, both the key and value are
     /// updated.
-    #[cfg(any(test, feature = "future"))]
     #[inline]
     pub fn insert_entry_and<T>(
         &self,
@@ -494,7 +489,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
         Some(bucket_array_ref.keys(with_key))
     }
 
-    #[cfg(feature = "future")]
     pub(crate) fn iter(&self) -> Iter<'_, K, V>
     where
         K: Clone,
@@ -513,7 +507,6 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     }
 }
 
-#[cfg(feature = "future")]
 impl<K, V, S> ScanningGet<K, V> for HashMap<K, V, S>
 where
     K: Hash + Eq + Clone,

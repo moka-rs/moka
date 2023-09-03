@@ -1,8 +1,5 @@
 use std::time::Duration;
 
-#[cfg(feature = "sync")]
-use super::concurrent::housekeeper;
-
 const YEAR_SECONDS: u64 = 365 * 24 * 3600;
 
 pub(crate) fn ensure_expirations_or_panic(
@@ -15,14 +12,5 @@ pub(crate) fn ensure_expirations_or_panic(
     }
     if let Some(d) = time_to_idle {
         assert!(d <= max_duration, "time_to_idle is longer than 1000 years");
-    }
-}
-
-#[cfg(feature = "sync")]
-pub(crate) fn housekeeper_conf(thread_pool_enabled: bool) -> housekeeper::Configuration {
-    if thread_pool_enabled {
-        housekeeper::Configuration::new_thread_pool(true)
-    } else {
-        housekeeper::Configuration::new_blocking()
     }
 }
