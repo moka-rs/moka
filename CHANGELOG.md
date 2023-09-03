@@ -28,7 +28,7 @@ delivery mode is specified.
 - Remove the thread pool from `future` cache`. ([#294][gh-pull-0294])
 - Add support for `Immediate` notification delivery mode to future cache.
  ([#228][gh-issue-0228])
-- Improve async cancellation safety of `future::Cache`. ([#309][gh-issue-0309])
+- Improve async cancellation safety of `future::Cache`. ([#309][gh-pull-0309])
 
 
 ## Version 0.11.3
@@ -697,7 +697,6 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-tinou98]: https://github.com/tinou98
 
-[gh-issue-0316]: https://github.com/moka-rs/moka/issues/316/
 [gh-issue-0255]: https://github.com/moka-rs/moka/issues/255/
 [gh-issue-0252]: https://github.com/moka-rs/moka/issues/252/
 [gh-issue-0243]: https://github.com/moka-rs/moka/issues/243/
@@ -718,6 +717,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0316]: https://github.com/moka-rs/moka/pull/316/
 [gh-pull-0309]: https://github.com/moka-rs/moka/pull/309/
 [gh-pull-0295]: https://github.com/moka-rs/moka/pull/295/
 [gh-pull-0294]: https://github.com/moka-rs/moka/pull/294/
