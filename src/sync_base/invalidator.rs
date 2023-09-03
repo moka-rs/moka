@@ -1,31 +1,26 @@
-use super::{base_cache::Inner, PredicateId, PredicateIdStr};
+use super::{PredicateId, PredicateIdStr};
 use crate::{
     common::{
-        concurrent::{
-            thread_pool::{PoolName, ThreadPool, ThreadPoolRegistry},
-            unsafe_weak_pointer::UnsafeWeakPointer,
-            AccessTime, KvEntry, ValueEntry,
-        },
+        concurrent::{AccessTime, KvEntry, ValueEntry},
         time::Instant,
     },
     PredicateError,
 };
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Mutex, MutexGuard};
 use std::{
-    collections::HashMap,
     hash::{BuildHasher, Hash},
-    marker::PhantomData,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Weak,
+        Arc,
     },
-    time::Duration,
 };
 use triomphe::Arc as TrioArc;
 use uuid::Uuid;
 
 pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 'static>;
+
+const PREDICATE_MAP_NUM_SEGMENTS: usize = 16;
 
 pub(crate) trait GetOrRemoveEntry<K, V> {
     fn get_value_entry(&self, key: &Arc<K>, hash: u64) -> Option<TrioArc<ValueEntry<K, V>>>;
@@ -67,53 +62,30 @@ impl<K> KeyDateLite<K> {
     }
 }
 
-pub(crate) struct InvalidationResult<K, V> {
-    pub(crate) invalidated: Vec<KvEntry<K, V>>,
-    pub(crate) is_done: bool,
-}
-
-impl<K, V> InvalidationResult<K, V> {
-    fn new(invalidated: Vec<KvEntry<K, V>>, is_done: bool) -> Self {
-        Self {
-            invalidated,
-            is_done,
-        }
-    }
-}
-
 pub(crate) struct Invalidator<K, V, S> {
-    predicates: RwLock<HashMap<PredicateId, Predicate<K, V>>>,
+    predicates: crate::cht::SegmentedHashMap<PredicateId, Predicate<K, V>, S>,
     is_empty: AtomicBool,
-    scan_context: Arc<ScanContext<K, V, S>>,
-    thread_pool: Arc<ThreadPool>,
-}
-
-impl<K, V, S> Drop for Invalidator<K, V, S> {
-    fn drop(&mut self) {
-        let ctx = &self.scan_context;
-        // Disallow to create and run a scanning task by now.
-        ctx.is_shutting_down.store(true, Ordering::Release);
-
-        // Wait for the scanning task to finish. (busy loop)
-        while ctx.is_running.load(Ordering::Acquire) {
-            std::thread::sleep(Duration::from_millis(1));
-        }
-
-        ThreadPoolRegistry::release_pool(&self.thread_pool);
-    }
+    scan_context: Arc<ScanContext<K, V>>,
 }
 
 //
 // Crate public methods.
 //
 impl<K, V, S> Invalidator<K, V, S> {
-    pub(crate) fn new(cache: Weak<Inner<K, V, S>>) -> Self {
-        let thread_pool = ThreadPoolRegistry::acquire_pool(PoolName::Invalidator);
+    pub(crate) fn new(hasher: S) -> Self
+    where
+        S: BuildHasher,
+    {
+        const CAPACITY: usize = 0;
+        let predicates = crate::cht::SegmentedHashMap::with_num_segments_capacity_and_hasher(
+            PREDICATE_MAP_NUM_SEGMENTS,
+            CAPACITY,
+            hasher,
+        );
         Self {
-            predicates: RwLock::new(HashMap::new()),
+            predicates,
             is_empty: AtomicBool::new(true),
-            scan_context: Arc::new(ScanContext::new(cache)),
-            thread_pool,
+            scan_context: Arc::new(ScanContext::default()),
         }
     }
 
@@ -121,18 +93,23 @@ impl<K, V, S> Invalidator<K, V, S> {
         self.is_empty.load(Ordering::Acquire)
     }
 
-    pub(crate) fn remove_predicates_registered_before(&self, ts: Instant) {
-        let mut pred_map = self.predicates.write();
+    pub(crate) fn remove_predicates_registered_before(&self, ts: Instant)
+    where
+        K: Hash + Eq + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        S: BuildHasher,
+    {
+        let pred_map = &self.predicates;
 
         let removing_ids = pred_map
             .iter()
             .filter(|(_, pred)| pred.registered_at <= ts)
             .map(|(id, _)| id)
-            .cloned()
             .collect::<Vec<_>>();
 
         for id in removing_ids {
-            pred_map.remove(&id);
+            let hash = pred_map.hash(&id);
+            pred_map.remove(hash, |k| k == &id);
         }
 
         if pred_map.is_empty() {
@@ -144,20 +121,26 @@ impl<K, V, S> Invalidator<K, V, S> {
         &self,
         predicate: PredicateFun<K, V>,
         registered_at: Instant,
-    ) -> Result<PredicateId, PredicateError> {
+    ) -> Result<PredicateId, PredicateError>
+    where
+        K: Hash + Eq,
+        S: BuildHasher,
+    {
         const MAX_RETRY: usize = 1_000;
         let mut tries = 0;
-        let mut preds = self.predicates.write();
+        let preds = &self.predicates;
 
         while tries < MAX_RETRY {
             let id = Uuid::new_v4().as_hyphenated().to_string();
-            if preds.contains_key(&id) {
+
+            let hash = preds.hash(&id);
+            if preds.contains_key(hash, |k| k == &id) {
                 tries += 1;
 
                 continue; // Retry
             }
             let pred = Predicate::new(&id, predicate, registered_at);
-            preds.insert(id.clone(), pred);
+            preds.insert_entry_and(id.clone(), hash, pred, |_, _| ());
             self.is_empty.store(false, Ordering::Release);
 
             return Ok(id);
@@ -171,62 +154,64 @@ impl<K, V, S> Invalidator<K, V, S> {
 
     // This method will be called by the get method of Cache.
     #[inline]
-    pub(crate) fn apply_predicates(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>) -> bool {
+    pub(crate) fn apply_predicates(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>) -> bool
+    where
+        K: Hash + Eq + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        S: BuildHasher,
+    {
         if self.is_empty() {
             false
         } else if let Some(ts) = entry.last_modified() {
-            Self::do_apply_predicates(self.predicates.read().values(), key, &entry.value, ts)
+            Self::do_apply_predicates(
+                self.predicates.iter().map(|(_, v)| v),
+                key,
+                &entry.value,
+                ts,
+            )
         } else {
             false
         }
     }
 
-    pub(crate) fn is_task_running(&self) -> bool {
-        self.scan_context.is_running.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn submit_task(&self, candidates: Vec<KeyDateLite<K>>, is_truncated: bool)
+    pub(crate) fn scan_and_invalidate<C>(
+        &self,
+        cache: &C,
+        candidates: Vec<KeyDateLite<K>>,
+        is_truncated: bool,
+    ) -> (Vec<KvEntry<K, V>>, bool)
     where
+        C: GetOrRemoveEntry<K, V>,
         K: Hash + Eq + Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
-        S: BuildHasher + Send + Sync + 'static,
+        S: BuildHasher,
     {
-        let ctx = &self.scan_context;
-
-        // Do not submit a task if this invalidator is about to be dropped.
-        if ctx.is_shutting_down.load(Ordering::Acquire) {
-            return;
+        let mut predicates = self.scan_context.predicates.lock();
+        if predicates.is_empty() {
+            *predicates = self.predicates.iter().map(|(_k, v)| v).collect();
         }
 
-        // Ensure there is no pending task and result.
-        assert!(!self.is_task_running());
-        assert!(ctx.result.lock().is_none());
+        let mut invalidated = Vec::default();
+        let mut newest_timestamp = None;
 
-        // Populate ctx.predicates if it is empty.
-        {
-            let mut ps = ctx.predicates.lock();
-            if ps.is_empty() {
-                *ps = self.predicates.read().values().cloned().collect();
+        for candidate in &candidates {
+            let key = &candidate.key;
+            let hash = candidate.hash;
+            let ts = candidate.timestamp;
+            if self.apply(&predicates, cache, key, hash, ts) {
+                if let Some(entry) = Self::invalidate(cache, key, hash, ts) {
+                    invalidated.push(KvEntry {
+                        key: Arc::clone(key),
+                        entry,
+                    })
+                }
             }
+            newest_timestamp = Some(ts);
         }
 
-        self.scan_context.is_running.store(true, Ordering::Release);
+        self.remove_finished_predicates(predicates, is_truncated, newest_timestamp);
 
-        let task = ScanTask::new(&self.scan_context, candidates, is_truncated);
-        self.thread_pool.pool.execute(move || {
-            task.execute();
-        });
-    }
-
-    pub(crate) fn task_result(&self) -> Option<InvalidationResult<K, V>> {
-        assert!(!self.is_task_running());
-        let ctx = &self.scan_context;
-
-        ctx.result.lock().take().map(|result| {
-            self.remove_finished_predicates(ctx, &result);
-            let is_done = ctx.predicates.lock().is_empty();
-            InvalidationResult::new(result.invalidated, is_done)
-        })
+        (invalidated, self.predicates.is_empty())
     }
 }
 
@@ -235,9 +220,9 @@ impl<K, V, S> Invalidator<K, V, S> {
 //
 impl<K, V, S> Invalidator<K, V, S> {
     #[inline]
-    fn do_apply_predicates<'a, I>(predicates: I, key: &'a K, value: &'a V, ts: Instant) -> bool
+    fn do_apply_predicates<I>(predicates: I, key: &K, value: &V, ts: Instant) -> bool
     where
-        I: Iterator<Item = &'a Predicate<K, V>>,
+        I: Iterator<Item = Predicate<K, V>>,
     {
         for predicate in predicates {
             if predicate.is_applicable(ts) && predicate.apply(key, value) {
@@ -247,11 +232,18 @@ impl<K, V, S> Invalidator<K, V, S> {
         false
     }
 
-    fn remove_finished_predicates(&self, ctx: &ScanContext<K, V, S>, result: &ScanResult<K, V>) {
-        let mut predicates = ctx.predicates.lock();
-
-        if result.is_truncated {
-            if let Some(ts) = result.newest_timestamp {
+    fn remove_finished_predicates(
+        &self,
+        mut predicates: MutexGuard<'_, Vec<Predicate<K, V>>>,
+        is_truncated: bool,
+        newest_timestamp: Option<Instant>,
+    ) where
+        K: Hash + Eq,
+        S: BuildHasher,
+    {
+        let predicates = &mut *predicates;
+        if is_truncated {
+            if let Some(ts) = newest_timestamp {
                 let (active, finished): (Vec<_>, Vec<_>) =
                     predicates.drain(..).partition(|p| p.is_applicable(ts));
 
@@ -259,22 +251,77 @@ impl<K, V, S> Invalidator<K, V, S> {
                 self.remove_predicates(&finished);
                 // Set the active predicates to the scan context.
                 *predicates = active;
+            } else {
+                unreachable!();
             }
         } else {
             // Remove all the predicates from the predicate registry and scan context.
-            self.remove_predicates(&predicates);
+            self.remove_predicates(predicates);
             predicates.clear();
         }
     }
 
-    fn remove_predicates(&self, predicates: &[Predicate<K, V>]) {
-        let mut pred_map = self.predicates.write();
+    fn remove_predicates(&self, predicates: &[Predicate<K, V>])
+    where
+        K: Hash + Eq,
+        S: BuildHasher,
+    {
+        let pred_map = &self.predicates;
         predicates.iter().for_each(|p| {
-            pred_map.remove(p.id());
+            let hash = pred_map.hash(p.id());
+            pred_map.remove(hash, |k| k == p.id());
         });
+
         if pred_map.is_empty() {
             self.is_empty.store(true, Ordering::Release);
         }
+    }
+
+    fn apply<C>(
+        &self,
+        predicates: &[Predicate<K, V>],
+        cache: &C,
+        key: &Arc<K>,
+        hash: u64,
+        ts: Instant,
+    ) -> bool
+    where
+        C: GetOrRemoveEntry<K, V>,
+    {
+        if let Some(entry) = cache.get_value_entry(key, hash) {
+            if let Some(lm) = entry.last_modified() {
+                if lm == ts {
+                    return Invalidator::<_, _, S>::do_apply_predicates(
+                        predicates.iter().cloned(),
+                        key,
+                        &entry.value,
+                        lm,
+                    );
+                }
+            }
+        }
+
+        false
+    }
+
+    fn invalidate<C>(
+        cache: &C,
+        key: &Arc<K>,
+        hash: u64,
+        ts: Instant,
+    ) -> Option<TrioArc<ValueEntry<K, V>>>
+    where
+        C: GetOrRemoveEntry<K, V>,
+        K: Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+    {
+        cache.remove_key_value_if(key, hash, |_, v| {
+            if let Some(lm) = v.last_modified() {
+                lm == ts
+            } else {
+                false
+            }
+        })
     }
 }
 
@@ -284,28 +331,18 @@ impl<K, V, S> Invalidator<K, V, S> {
 #[cfg(test)]
 impl<K, V, S> Invalidator<K, V, S> {
     pub(crate) fn predicate_count(&self) -> usize {
-        self.predicates.read().len()
+        self.predicates.len()
     }
 }
 
-struct ScanContext<K, V, S> {
+struct ScanContext<K, V> {
     predicates: Mutex<Vec<Predicate<K, V>>>,
-    cache: Mutex<UnsafeWeakPointer<Inner<K, V, S>>>,
-    result: Mutex<Option<ScanResult<K, V>>>,
-    is_running: AtomicBool,
-    is_shutting_down: AtomicBool,
-    _marker: PhantomData<S>,
 }
 
-impl<K, V, S> ScanContext<K, V, S> {
-    fn new(cache: Weak<Inner<K, V, S>>) -> Self {
+impl<K, V> Default for ScanContext<K, V> {
+    fn default() -> Self {
         Self {
             predicates: Mutex::new(Vec::default()),
-            cache: Mutex::new(UnsafeWeakPointer::from_weak_arc(cache)),
-            result: Mutex::new(None),
-            is_running: AtomicBool::new(false),
-            is_shutting_down: AtomicBool::new(false),
-            _marker: PhantomData,
         }
     }
 }
@@ -345,151 +382,5 @@ impl<K, V> Predicate<K, V> {
 
     fn apply(&self, key: &K, value: &V) -> bool {
         (self.f)(key, value)
-    }
-}
-
-struct ScanTask<K, V, S> {
-    scan_context: Arc<ScanContext<K, V, S>>,
-    candidates: Vec<KeyDateLite<K>>,
-    is_truncated: bool,
-}
-
-impl<K, V, S> ScanTask<K, V, S>
-where
-    K: Hash + Eq,
-    S: BuildHasher,
-{
-    fn new(
-        scan_context: &Arc<ScanContext<K, V, S>>,
-        candidates: Vec<KeyDateLite<K>>,
-        is_truncated: bool,
-    ) -> Self {
-        Self {
-            scan_context: Arc::clone(scan_context),
-            candidates,
-            is_truncated,
-        }
-    }
-
-    fn execute(&self)
-    where
-        K: Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static,
-    {
-        let cache_lock = self.scan_context.cache.lock();
-
-        // Restore the Weak pointer to Inner<K, V, S>.
-        let weak = unsafe { cache_lock.as_weak_arc() };
-        if let Some(inner_cache) = weak.upgrade() {
-            // TODO: Protect this call with catch_unwind().
-            *self.scan_context.result.lock() = Some(self.do_execute(&inner_cache));
-
-            // Change this flag here (before downgrading the Arc to a Weak) to avoid a (soft)
-            // deadlock. (forget_arc might trigger to drop the cache, which is in turn to drop
-            // this invalidator. To do it, this flag must be false, otherwise dropping self
-            // will be blocked forever)
-            self.scan_context.is_running.store(false, Ordering::Release);
-            // Avoid to drop the Arc<Inner<K, V, S>>.
-            UnsafeWeakPointer::forget_arc(inner_cache);
-        } else {
-            *self.scan_context.result.lock() = Some(ScanResult::default());
-            self.scan_context.is_running.store(false, Ordering::Release);
-            // Avoid to drop the Weak<Inner<K, V, S>>.
-            UnsafeWeakPointer::forget_weak_arc(weak);
-        }
-    }
-
-    fn do_execute<C>(&self, cache: &Arc<C>) -> ScanResult<K, V>
-    where
-        Arc<C>: GetOrRemoveEntry<K, V>,
-        K: Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static,
-    {
-        let predicates = self.scan_context.predicates.lock();
-        let mut invalidated = Vec::default();
-        let mut newest_timestamp = None;
-
-        for candidate in &self.candidates {
-            let key = &candidate.key;
-            let hash = candidate.hash;
-            let ts = candidate.timestamp;
-            if Self::apply(&predicates, cache, key, hash, ts) {
-                if let Some(entry) = Self::invalidate(cache, key, hash, ts) {
-                    invalidated.push(KvEntry {
-                        key: Arc::clone(key),
-                        entry,
-                    })
-                }
-            }
-            newest_timestamp = Some(ts);
-        }
-
-        ScanResult {
-            invalidated,
-            is_truncated: self.is_truncated,
-            newest_timestamp,
-        }
-    }
-
-    fn apply<C>(
-        predicates: &[Predicate<K, V>],
-        cache: &Arc<C>,
-        key: &Arc<K>,
-        hash: u64,
-        ts: Instant,
-    ) -> bool
-    where
-        Arc<C>: GetOrRemoveEntry<K, V>,
-    {
-        if let Some(entry) = cache.get_value_entry(key, hash) {
-            if let Some(lm) = entry.last_modified() {
-                if lm == ts {
-                    return Invalidator::<_, _, S>::do_apply_predicates(
-                        predicates.iter(),
-                        key,
-                        &entry.value,
-                        lm,
-                    );
-                }
-            }
-        }
-
-        false
-    }
-
-    fn invalidate<C>(
-        cache: &Arc<C>,
-        key: &Arc<K>,
-        hash: u64,
-        ts: Instant,
-    ) -> Option<TrioArc<ValueEntry<K, V>>>
-    where
-        Arc<C>: GetOrRemoveEntry<K, V>,
-        K: Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static,
-    {
-        cache.remove_key_value_if(key, hash, |_, v| {
-            if let Some(lm) = v.last_modified() {
-                lm == ts
-            } else {
-                false
-            }
-        })
-    }
-}
-
-struct ScanResult<K, V> {
-    invalidated: Vec<KvEntry<K, V>>,
-    is_truncated: bool,
-    newest_timestamp: Option<Instant>,
-}
-
-impl<K, V> Default for ScanResult<K, V> {
-    fn default() -> Self {
-        Self {
-            invalidated: Vec::default(),
-            is_truncated: false,
-            newest_timestamp: None,
-        }
     }
 }

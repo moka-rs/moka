@@ -71,11 +71,9 @@
 //! [Junction]: https://github.com/preshing/junction
 //! [a tech talk]: https://youtu.be/HJ-719EGIts
 
+pub(crate) mod iter;
 pub(crate) mod map;
 pub(crate) mod segment;
-
-#[cfg(feature = "future")]
-pub(crate) mod iter;
 
 #[cfg(test)]
 #[macro_use]

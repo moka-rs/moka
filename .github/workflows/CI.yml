@@ -74,7 +74,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: tree
-          args: --features future
+          args: --features 'sync, future'
 
       - name: Run tests (debug, sync feature)
         uses: actions-rs/cargo@v1
@@ -91,18 +91,6 @@ jobs:
           args: --release --features sync
         env:
           RUSTFLAGS: '--cfg rustver'
-
-      - name: Run tests (sync feature, thread-pool test for sync::Cache)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --lib --features sync sync::cache::tests::enabling_and_disabling_thread_pools -- --exact --ignored
-
-      - name: Run tests (sync feature, thread-pool test for sync::SegmentedCache)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --lib --features sync sync::segment::tests::enabling_and_disabling_thread_pools -- --exact --ignored
 
       - name: Run tests (sync feature, key lock test for notification)
         uses: actions-rs/cargo@v1

@@ -1,5 +1,5 @@
 use super::{
-    invalidator::{GetOrRemoveEntry, InvalidationResult, Invalidator, KeyDateLite, PredicateFun},
+    invalidator::{GetOrRemoveEntry, Invalidator, KeyDateLite, PredicateFun},
     iter::ScanningGet,
     key_lock::{KeyLock, KeyLockMap},
     PredicateId,
@@ -11,12 +11,11 @@ use crate::{
         concurrent::{
             atomic_time::AtomicInstant,
             constants::{
-                READ_LOG_FLUSH_POINT, READ_LOG_SIZE, WRITE_LOG_FLUSH_POINT,
-                WRITE_LOG_LOW_WATER_MARK, WRITE_LOG_SIZE,
+                READ_LOG_FLUSH_POINT, READ_LOG_SIZE, WRITE_LOG_FLUSH_POINT, WRITE_LOG_SIZE,
             },
             deques::Deques,
             entry_info::EntryInfo,
-            housekeeper::{self, Housekeeper, InnerSync, SyncPace},
+            housekeeper::{Housekeeper, InnerSync},
             AccessTime, KeyHash, KeyHashDate, KvEntry, OldEntryInfo, ReadOp, ValueEntry, Weigher,
             WriteOp,
         },
@@ -26,11 +25,7 @@ use crate::{
         timer_wheel::{ReschedulingResult, TimerWheel},
         CacheRegion,
     },
-    notification::{
-        self,
-        notifier::{RemovalNotifier, RemovedEntry},
-        EvictionListener, RemovalCause,
-    },
+    notification::{notifier::RemovalNotifier, EvictionListener, RemovalCause},
     policy::ExpirationPolicy,
     Entry, Expiry, Policy, PredicateError,
 };
@@ -52,13 +47,13 @@ use std::{
 };
 use triomphe::Arc as TrioArc;
 
-pub(crate) type HouseKeeperArc<K, V, S> = Arc<Housekeeper<Inner<K, V, S>>>;
+pub(crate) type HouseKeeperArc = Arc<Housekeeper>;
 
 pub(crate) struct BaseCache<K, V, S = RandomState> {
     pub(crate) inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
     pub(crate) write_op_ch: Sender<WriteOp<K, V>>,
-    pub(crate) housekeeper: Option<HouseKeeperArc<K, V, S>>,
+    pub(crate) housekeeper: Option<HouseKeeperArc>,
 }
 
 impl<K, V, S> Clone for BaseCache<K, V, S> {
@@ -110,11 +105,6 @@ impl<K, V, S> BaseCache<K, V, S> {
     }
 
     #[inline]
-    pub(crate) fn is_blocking_removal_notification(&self) -> bool {
-        self.inner.is_blocking_removal_notification()
-    }
-
-    #[inline]
     pub(crate) fn current_time_from_expiration_clock(&self) -> Instant {
         self.inner.current_time_from_expiration_clock()
     }
@@ -153,10 +143,8 @@ where
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
-        eviction_listener_conf: Option<notification::Configuration>,
         expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
-        housekeeper_conf: housekeeper::Configuration,
     ) -> Self {
         let (r_size, w_size) = if max_capacity == Some(0) {
             (0, 0)
@@ -174,21 +162,17 @@ where
             build_hasher,
             weigher,
             eviction_listener,
-            eviction_listener_conf,
             r_rcv,
             w_rcv,
             expiration_policy,
             invalidator_enabled,
         ));
-        if invalidator_enabled {
-            inner.set_invalidator(&inner);
-        }
-        let housekeeper = Housekeeper::new(Arc::downgrade(&inner), housekeeper_conf);
+
         Self {
             inner,
             read_op_ch: r_snd,
             write_op_ch: w_snd,
-            housekeeper: Some(Arc::new(housekeeper)),
+            housekeeper: Some(Arc::new(Housekeeper::default())),
         }
     }
 
@@ -401,13 +385,13 @@ where
         inner: &impl InnerSync,
         ch: &Sender<WriteOp<K, V>>,
         now: Instant,
-        housekeeper: Option<&HouseKeeperArc<K, V, S>>,
+        housekeeper: Option<&HouseKeeperArc>,
     ) {
         let w_len = ch.len();
 
         if let Some(hk) = housekeeper {
             if Self::should_apply_writes(hk, w_len, now) {
-                hk.try_sync(inner);
+                hk.try_run_pending_tasks(inner);
             }
         }
     }
@@ -617,18 +601,18 @@ where
 
         if let Some(hk) = &self.housekeeper {
             if Self::should_apply_reads(hk, len, now) {
-                hk.try_sync(inner);
+                hk.try_run_pending_tasks(inner);
             }
         }
     }
 
     #[inline]
-    fn should_apply_reads(hk: &HouseKeeperArc<K, V, S>, ch_len: usize, now: Instant) -> bool {
+    fn should_apply_reads(hk: &HouseKeeperArc, ch_len: usize, now: Instant) -> bool {
         hk.should_apply_reads(ch_len, now)
     }
 
     #[inline]
-    fn should_apply_writes(hk: &HouseKeeperArc<K, V, S>, ch_len: usize, now: Instant) -> bool {
+    fn should_apply_writes(hk: &HouseKeeperArc, ch_len: usize, now: Instant) -> bool {
         hk.should_apply_writes(ch_len, now)
     }
 }
@@ -737,16 +721,20 @@ where
     }
 
     pub(crate) fn reconfigure_for_testing(&mut self) {
-        // Stop the housekeeping job that may cause sync() method to return earlier.
-        if let Some(housekeeper) = &self.housekeeper {
-            housekeeper.stop_periodical_sync_job();
-        }
         // Enable the frequency sketch.
         self.inner.enable_frequency_sketch_for_testing();
+        // Disable auto clean up of pending tasks.
+        if let Some(hk) = &self.housekeeper {
+            hk.disable_auto_run();
+        }
     }
 
     pub(crate) fn set_expiration_clock(&self, clock: Option<Clock>) {
         self.inner.set_expiration_clock(clock);
+        if let Some(hk) = &self.housekeeper {
+            let now = self.current_time_from_expiration_clock();
+            hk.reset_run_after(now);
+        }
     }
 
     pub(crate) fn key_locks_map_is_empty(&self) -> bool {
@@ -757,7 +745,6 @@ where
 struct EvictionState<'a, K, V> {
     counters: EvictionCounters,
     notifier: Option<&'a RemovalNotifier<K, V>>,
-    removed_entries: Option<Vec<RemovedEntry<K, V>>>,
 }
 
 impl<'a, K, V> EvictionState<'a, K, V> {
@@ -766,18 +753,9 @@ impl<'a, K, V> EvictionState<'a, K, V> {
         weighted_size: u64,
         notifier: Option<&'a RemovalNotifier<K, V>>,
     ) -> Self {
-        let removed_entries = notifier.and_then(|n| {
-            if n.is_batching_supported() {
-                Some(Vec::new())
-            } else {
-                None
-            }
-        });
-
         Self {
             counters: EvictionCounters::new(entry_count, weighted_size),
             notifier,
-            removed_entries,
         }
     }
 
@@ -796,21 +774,8 @@ impl<'a, K, V> EvictionState<'a, K, V> {
     {
         debug_assert!(self.is_notifier_enabled());
 
-        if let Some(removed) = &mut self.removed_entries {
-            removed.push(RemovedEntry::new(key, entry.value.clone(), cause));
-        } else if let Some(notifier) = self.notifier {
+        if let Some(notifier) = self.notifier {
             notifier.notify(key, entry.value.clone(), cause);
-        }
-    }
-
-    fn notify_multiple_removals(&mut self)
-    where
-        K: Send + Sync + 'static,
-        V: Send + Sync + 'static,
-    {
-        if let (Some(notifier), Some(removed)) = (self.notifier, self.removed_entries.take()) {
-            notifier.batch_notify(removed);
-            notifier.sync();
         }
     }
 }
@@ -935,7 +900,7 @@ pub(crate) struct Inner<K, V, S> {
     removal_notifier: Option<RemovalNotifier<K, V>>,
     key_locks: Option<KeyLockMap<K, S>>,
     invalidator_enabled: bool,
-    invalidator: RwLock<Option<Invalidator<K, V, S>>>,
+    invalidator: Option<Invalidator<K, V, S>>,
     clocks: Clocks,
 }
 
@@ -966,14 +931,6 @@ impl<K, V, S> Inner<K, V, S> {
     #[inline]
     fn is_removal_notifier_enabled(&self) -> bool {
         self.removal_notifier.is_some()
-    }
-
-    #[inline]
-    fn is_blocking_removal_notification(&self) -> bool {
-        self.removal_notifier
-            .as_ref()
-            .map(|rn| rn.is_blocking())
-            .unwrap_or_default()
     }
 
     fn maybe_key_lock(&self, key: &Arc<K>) -> Option<KeyLock<'_, K, S>>
@@ -1061,7 +1018,6 @@ where
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
         eviction_listener: Option<EvictionListener<K, V>>,
-        eviction_listener_conf: Option<notification::Configuration>,
         read_op_ch: Receiver<ReadOp<K, V>>,
         write_op_ch: Receiver<WriteOp<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
@@ -1089,19 +1045,17 @@ where
         let timer_wheel = Mutex::new(TimerWheel::new(now));
 
         let (removal_notifier, key_locks) = if let Some(listener) = eviction_listener {
-            let rn = RemovalNotifier::new(
-                listener,
-                eviction_listener_conf.unwrap_or_default(),
-                name.clone(),
-            );
-            if rn.is_blocking() {
-                let kl = KeyLockMap::with_hasher(build_hasher.clone());
-                (Some(rn), Some(kl))
-            } else {
-                (Some(rn), None)
-            }
+            let rn = RemovalNotifier::new(listener, name.clone());
+            let kl = KeyLockMap::with_hasher(build_hasher.clone());
+            (Some(rn), Some(kl))
         } else {
             (None, None)
+        };
+
+        let invalidator = if invalidator_enabled {
+            Some(Invalidator::new(build_hasher.clone()))
+        } else {
+            None
         };
 
         Self {
@@ -1123,14 +1077,9 @@ where
             removal_notifier,
             key_locks,
             invalidator_enabled,
-            // When enabled, this field will be set later via the set_invalidator method.
-            invalidator: Default::default(),
+            invalidator,
             clocks,
         }
-    }
-
-    fn set_invalidator(&self, self_ref: &Arc<Self>) {
-        *self.invalidator.write() = Some(Invalidator::new(Arc::downgrade(&Arc::clone(self_ref))));
     }
 
     #[inline]
@@ -1192,7 +1141,7 @@ where
         predicate: PredicateFun<K, V>,
         registered_at: Instant,
     ) -> Result<PredicateId, PredicateError> {
-        if let Some(inv) = &*self.invalidator.read() {
+        if let Some(inv) = &self.invalidator {
             inv.register_predicate(predicate, registered_at)
         } else {
             Err(PredicateError::InvalidationClosuresDisabled)
@@ -1201,9 +1150,12 @@ where
 
     /// Returns `true` if the entry is invalidated by `invalidate_entries_if` method.
     #[inline]
-    fn is_invalidated_entry(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>) -> bool {
+    fn is_invalidated_entry(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>) -> bool
+    where
+        V: Clone,
+    {
         if self.invalidator_enabled {
-            if let Some(inv) = &*self.invalidator.read() {
+            if let Some(inv) = &self.invalidator {
                 return inv.apply_predicates(key, entry);
             }
         }
@@ -1216,7 +1168,7 @@ where
     }
 }
 
-impl<K, V, S> GetOrRemoveEntry<K, V> for Arc<Inner<K, V, S>>
+impl<K, V, S> GetOrRemoveEntry<K, V> for Inner<K, V, S>
 where
     K: Hash + Eq,
     S: BuildHasher,
@@ -1273,9 +1225,24 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    fn sync(&self, max_repeats: usize) -> Option<SyncPace> {
+    fn run_pending_tasks(&self, max_repeats: usize) {
+        self.do_run_pending_tasks(max_repeats);
+    }
+
+    fn now(&self) -> Instant {
+        self.current_time_from_expiration_clock()
+    }
+}
+
+impl<K, V, S> Inner<K, V, S>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    fn do_run_pending_tasks(&self, max_repeats: usize) {
         if self.max_capacity == Some(0) {
-            return None;
+            return;
         }
 
         let mut deqs = self.deques.lock();
@@ -1325,17 +1292,15 @@ where
             );
         }
 
-        if self.invalidator_enabled {
-            if let Some(invalidator) = &*self.invalidator.read() {
-                if !invalidator.is_empty() && !invalidator.is_task_running() {
-                    self.invalidate_entries(
-                        invalidator,
-                        &mut deqs,
-                        &mut timer_wheel,
-                        batch_size::INVALIDATION_BATCH_SIZE,
-                        &mut eviction_state,
-                    );
-                }
+        if let Some(invalidator) = &self.invalidator {
+            if !invalidator.is_empty() {
+                self.invalidate_entries(
+                    invalidator,
+                    &mut deqs,
+                    &mut timer_wheel,
+                    batch_size::INVALIDATION_BATCH_SIZE,
+                    &mut eviction_state,
+                );
             }
         }
 
@@ -1351,8 +1316,6 @@ where
             );
         }
 
-        eviction_state.notify_multiple_removals();
-
         debug_assert_eq!(self.entry_count.load(), current_ec);
         debug_assert_eq!(self.weighted_size.load(), current_ws);
         self.entry_count.store(eviction_state.counters.entry_count);
@@ -1360,19 +1323,6 @@ where
             .store(eviction_state.counters.weighted_size);
 
         crossbeam_epoch::pin().flush();
-
-        if should_process_logs {
-            Some(SyncPace::Fast)
-        } else if self.write_op_ch.len() <= WRITE_LOG_LOW_WATER_MARK {
-            Some(SyncPace::Normal)
-        } else {
-            // Keep the current pace.
-            None
-        }
-    }
-
-    fn now(&self) -> Instant {
-        self.current_time_from_expiration_clock()
     }
 }
 
@@ -2098,72 +2048,52 @@ where
     ) where
         V: Clone,
     {
-        self.process_invalidation_result(invalidator, deqs, timer_wheel, eviction_state);
-        self.submit_invalidation_task(invalidator, &mut deqs.write_order, batch_size);
-    }
-
-    fn process_invalidation_result(
-        &self,
-        invalidator: &Invalidator<K, V, S>,
-        deqs: &mut Deques<K>,
-        timer_wheel: &mut TimerWheel<K>,
-        eviction_state: &mut EvictionState<'_, K, V>,
-    ) where
-        V: Clone,
-    {
-        if let Some(InvalidationResult {
-            invalidated,
-            is_done,
-        }) = invalidator.task_result()
-        {
-            for KvEntry { key: _key, entry } in invalidated {
-                Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters);
-            }
-            if is_done {
-                deqs.write_order.reset_cursor();
-            }
-        }
-    }
-
-    fn submit_invalidation_task(
-        &self,
-        invalidator: &Invalidator<K, V, S>,
-        write_order: &mut Deque<KeyHashDate<K>>,
-        batch_size: usize,
-    ) where
-        V: Clone,
-    {
         let now = self.current_time_from_expiration_clock();
 
         // If the write order queue is empty, we are done and can remove the predicates
         // that have been registered by now.
-        if write_order.len() == 0 {
+        if deqs.write_order.len() == 0 {
             invalidator.remove_predicates_registered_before(now);
             return;
         }
 
         let mut candidates = Vec::with_capacity(batch_size);
-        let mut iter = write_order.peekable();
         let mut len = 0;
+        let has_next;
+        {
+            let iter = &mut deqs.write_order.peekable();
 
-        while len < batch_size {
-            if let Some(kd) = iter.next() {
-                if !kd.is_dirty() {
-                    if let Some(ts) = kd.last_modified() {
-                        let key = kd.key();
-                        let hash = self.hash(key);
-                        candidates.push(KeyDateLite::new(key, hash, ts));
-                        len += 1;
+            while len < batch_size {
+                if let Some(kd) = iter.next() {
+                    if !kd.is_dirty() {
+                        if let Some(ts) = kd.last_modified() {
+                            let key = kd.key();
+                            let hash = self.hash(key);
+                            candidates.push(KeyDateLite::new(key, hash, ts));
+                            len += 1;
+                        }
                     }
+                } else {
+                    break;
                 }
-            } else {
-                break;
             }
+
+            has_next = iter.peek().is_some();
         }
 
-        if len > 0 {
-            let is_truncated = len == batch_size && iter.peek().is_some();
-            invalidator.submit_task(candidates, is_truncated);
+        if len == 0 {
+            return;
+        }
+
+        let is_truncated = len == batch_size && has_next;
+        let (invalidated, is_done) =
+            invalidator.scan_and_invalidate(self, candidates, is_truncated);
+
+        for KvEntry { key: _key, entry } in invalidated {
+            Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters);
+        }
+        if is_done {
+            deqs.write_order.reset_cursor();
         }
     }
 
@@ -2328,7 +2258,6 @@ where
 {
     fn invalidation_predicate_count(&self) -> usize {
         self.invalidator
-            .read()
             .as_ref()
             .map(|inv| inv.predicate_count())
             .unwrap_or(0)
@@ -2487,7 +2416,7 @@ fn is_expired_by_ttl(
 
 #[cfg(test)]
 mod tests {
-    use crate::{common::concurrent::housekeeper, policy::ExpirationPolicy};
+    use crate::policy::ExpirationPolicy;
 
     use super::BaseCache;
 
@@ -2507,10 +2436,8 @@ mod tests {
                 RandomState::default(),
                 None,
                 None,
-                None,
                 Default::default(),
                 false,
-                housekeeper::Configuration::new_thread_pool(true),
             );
             cache.inner.enable_frequency_sketch_for_testing();
             assert_eq!(
@@ -2595,19 +2522,19 @@ mod tests {
             ($cache:ident, $key:ident, $hash:ident, $mock:ident, $duration_secs:expr) => {
                 // Increment the time.
                 $mock.increment(Duration::from_millis($duration_secs * 1000 - 1));
-                $cache.inner.sync(1);
+                $cache.inner.run_pending_tasks(1);
                 assert!($cache.contains_key_with_hash(&$key, $hash));
                 assert_eq!($cache.entry_count(), 1);
 
                 // Increment the time by 1ms (3). The entry should be expired.
                 $mock.increment(Duration::from_millis(1));
-                $cache.inner.sync(1);
+                $cache.inner.run_pending_tasks(1);
                 assert!(!$cache.contains_key_with_hash(&$key, $hash));
 
                 // Increment the time again to ensure the entry has been evicted from the
                 // cache.
                 $mock.increment(Duration::from_secs(1));
-                $cache.inner.sync(1);
+                $cache.inner.run_pending_tasks(1);
                 assert_eq!($cache.entry_count(), 0);
             };
         }
@@ -2854,14 +2781,12 @@ mod tests {
             RandomState::default(),
             None,
             None,
-            None,
             ExpirationPolicy::new(
                 Some(Duration::from_secs(TTL)),
                 Some(Duration::from_secs(TTI)),
                 expiry,
             ),
             false,
-            housekeeper::Configuration::new_blocking(),
         );
         cache.reconfigure_for_testing();
 
@@ -2891,7 +2816,7 @@ mod tests {
         insert(&cache, key, hash, value);
         // Run a sync to register the entry to the internal data structures including
         // the timer wheel.
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert_eq!(cache.entry_count(), 1);
 
         assert_expiry!(cache, key, hash, mock, 1);
@@ -2913,12 +2838,12 @@ mod tests {
             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), None);
         let inserted_at = current_time(&cache);
         insert(&cache, key, hash, value);
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert_eq!(cache.entry_count(), 1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(1));
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert!(cache.contains_key_with_hash(&key, hash));
 
         // Read the entry (2).
@@ -2937,7 +2862,7 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
 
         assert_expiry!(cache, key, hash, mock, 3);
 
@@ -2959,12 +2884,12 @@ mod tests {
             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), None);
         let inserted_at = current_time(&cache);
         insert(&cache, key, hash, value);
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert_eq!(cache.entry_count(), 1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(1));
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert!(cache.contains_key_with_hash(&key, hash));
 
         // Read the entry (2).
@@ -2983,11 +2908,11 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(2));
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3002,7 +2927,7 @@ mod tests {
             Some(3),
         );
         insert(&cache, key, hash, value);
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert_eq!(cache.entry_count(), 1);
 
         assert_expiry!(cache, key, hash, mock, 3);
@@ -3025,12 +2950,12 @@ mod tests {
             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), None);
         let inserted_at = current_time(&cache);
         insert(&cache, key, hash, value);
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert_eq!(cache.entry_count(), 1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(1));
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3050,11 +2975,11 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(2));
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3069,7 +2994,7 @@ mod tests {
             None,
         );
         insert(&cache, key, hash, value);
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert_eq!(cache.entry_count(), 1);
 
         assert_expiry!(cache, key, hash, mock, 7);
@@ -3091,12 +3016,12 @@ mod tests {
             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(8));
         let inserted_at = current_time(&cache);
         insert(&cache, key, hash, value);
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert_eq!(cache.entry_count(), 1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(5));
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3116,7 +3041,7 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
 
         assert_expiry!(cache, key, hash, mock, 7);
 
@@ -3138,12 +3063,12 @@ mod tests {
             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(8));
         let inserted_at = current_time(&cache);
         insert(&cache, key, hash, value);
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert_eq!(cache.entry_count(), 1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(5));
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3163,11 +3088,11 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(6));
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3187,7 +3112,7 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
 
         assert_expiry!(cache, key, hash, mock, 5);
 
@@ -3208,12 +3133,12 @@ mod tests {
         *expectation.lock().unwrap() =
             ExpiryExpectation::after_create(line!(), key, value, current_time(&cache), Some(9));
         insert(&cache, key, hash, value);
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert_eq!(cache.entry_count(), 1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(6));
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3229,12 +3154,12 @@ mod tests {
         );
         let updated_at = current_time(&cache);
         insert(&cache, key, hash, value);
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert_eq!(cache.entry_count(), 1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(6));
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3254,11 +3179,11 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
 
         // Increment the time.
         mock.increment(Duration::from_secs(6));
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
         assert!(cache.contains_key_with_hash(&key, hash));
         assert_eq!(cache.entry_count(), 1);
 
@@ -3278,7 +3203,7 @@ mod tests {
                 .map(Entry::into_value),
             Some(value)
         );
-        cache.inner.sync(1);
+        cache.inner.run_pending_tasks(1);
 
         assert_expiry!(cache, key, hash, mock, 4);
     }

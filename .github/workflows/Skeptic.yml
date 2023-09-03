@@ -38,11 +38,11 @@ jobs:
         with:
           command: clean
 
-      - name: Run tests (no features)
+      - name: Run tests (sync feature)
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --release
+          args: --release --features sync
         env:
           RUSTFLAGS: '--cfg skeptic'
 

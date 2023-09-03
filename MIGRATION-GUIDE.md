@@ -5,43 +5,95 @@
 v0.12.0 has major breaking changes on the API and internal behavior. This section
 describes the code changes required to migrate to v0.12.0.
 
-### `future::Cache`
+### Highlights v0.12
 
-- The thread pool was removed from `future::Cache`. The background threads are no
-  longer spawned.
-- The `notification::DeliveryMode` for eviction listener was changed from `Queued` to
-  `Immediate`.
+**`sync` caches are no longer enabled by default**: Please use a crate feature `sync`
+to enable it.
 
-To support these changes, the following API changes were made:
+**No more background threads**: All cache types `future::Cache`, `sync::Cache`, and
+`sync::SegmentedCache` no longer spawn background threads.
 
-1. `future::Cache::get` method is now `async fn`, so you must `await` for the result.
-2. `future::Cache::blocking` method was removed.
+- The `scheduled-thread-pool` crate was removed from the dependency.
+- Because of this change, many external and internal methods of `future::Cache`
+  were converted to `async` methods. You may need to add `.await` to your code for
+  those methods.
+
+**Immediate notification delivery**: The `notification::DeliveryMode` enum for the
+eviction listener was removed. Now all cache types work as if the `Immediate`
+delivery mode is specified.
+
+- It had two variants `Immediate` and `Queued`.
+    - The former should be easier to use than other as it guarantees to preserve the
+      order of events on a given cache key.
+    - The latter would provide higher performance under heavy cache writes.
+- Now all cache types work as if the `Immediate` mode is specified.
+    - **`future::Cache`**: In earlier versions of `future::Cache`, the queued mode
+      was used. Now it works as if the immediate mode is specified.
+    - **`sync` caches**: From earlier versions of `sync::Cache` and
+      `sync::SegmentedCache`, the immediate mode is the default mode. So this change
+      should only affects those of you who are explicitly using the queued mode.
+- The queued mode was implemented by using a background thread. The queue mode was
+  removed because there is no thread pool available anymore.
+- If you need the queue mode back, please file a GitHub issue. We could provide
+  a way to use a user supplied thread pool.
+
+The following sections will describe about the changes you might need to make to your
+code.
+
+- [`sync::Cache` and `sync::SegmentedCache`](#synccache-and-syncsegmentedcache-v012)
+- [`future::Cache`](#futurecache-v012)
+- [The maintenance tasks](#the-maintenance-tasks)
+
+### `sync::Cache` and `sync::SegmentedCache` v0.12
+
+1. Please use a crate feature `sync` to enable `sync` caches.
+2. Since the background threads are removed, the maintenance tasks such as removing
+   expired entries are not executed periodically anymore.
+   - The `thread_pool_enabled` in `sync::CacheBuilder` was removed. The thread pool
+     is always disabled.
+   - See the [maintenance tasks](#the-maintenance-tasks) section for more details.
+3. The `sync` method of the `sync::ConcurrentCacheExt` trait was moved to
+   `sync::Cache` and `sync::SegmentedCache` types and renamed to `run_pending_tasks`.
+4. Now `sync` caches always work as if the immediate delivery mode is specified
+   for the eviction listener.
+   - In older versions, the immediate mode was the default mode. And the queued
+     mode can be optionally selected.
+
+### `future::Cache` v0.12
+
+#### API changes
+
+1. `get` method is now `async fn`, so you must `await` for the result.
+2. `blocking` method was removed.
    - Please use async runtime's blocking API instead.
-   - See [Replacing the blocking API](#replacing-the-blocking-api) for more details.
+   - See the [replacing the blocking API](#replacing-the-blocking-api) section for
+     more details.
 3. Now `or_insert_with_if` method of the entry API requires `Send` bound for the
    `replace_if` closure.
 4. `eviction_listener_with_queued_delivery_mode` method of `future::CacheBuilder` was
    removed.
-   - Please use one of the new methods `eviction_listener` or
-     `async_eviction_listener` instead.
-   - See [Updating the eviction listener](#updating-the-eviction-listener) for more
-     details.
-5. `future::ConcurrentCacheExt::sync` method was renamed to
-   `future::Cache::run_pending_tasks`. It was also changed to `async fn`.
+   - Please use one of the new methods instead:
+     - `eviction_listener`
+     - `async_eviction_listener`
+   - See the [updating the eviction listener](#updating-the-eviction-listener)
+     section for more details.
+5. The `sync` method of the `future::ConcurrentCacheExt` trait was moved to
+   `future::Cache` type and renamed to `run_pending_tasks`. It was also changed to
+   `async fn`.
 
-The following internal behavior changes were made:
+#### Behavior changes
 
-1. Maintenance tasks such as removing expired entries are not executed periodically
-   anymore.
-   - See [Maintenance tasks](#maintenance-tasks) for more details.
-2. Now `future::Cache` only supports `Immediate` delivery mode for eviction listener.
-   - In older versions, only `Queued` delivery mode was supported.
-   - If you need `Queued` delivery mode back, please file an issue.
+1. Since the background threads are removed, the maintenance tasks such as removing
+   expired entries are not executed periodically anymore.
+   - See the [maintenance tasks](#the-maintenance-tasks) section for more details.
+2. Now `future::Cache` always works as if the immediate delivery mode is specified
+   for eviction listener.
+   - In older versions, the queued delivery mode was used.
 
 #### Replacing the blocking API
 
-`future::Cache::blocking` method was removed. Please use async runtime's blocking API
-instead.
+The `blocking` method of `future::Cache` was removed. Please use async runtime's
+blocking API instead.
 
 **Tokio**
 
@@ -145,7 +197,7 @@ let cache = Cache::builder()
 ##### `async_eviction_listener` method
 
 `async_eviction_listener` takes a closure that returns a `Future`. If you need to
-`.await` something in the eviction listener, use this method. The actual return type
+`await` something in the eviction listener, use this method. The actual return type
 of the closure is `notification::ListenerFuture`, which is a type alias of
 `Pin<Box<dyn Future<Output = ()> + Send>>`. You can use the `boxed` method of
 `future::FutureExt` trait to convert a regular `Future` into this type.
@@ -191,11 +243,11 @@ let cache = Cache::builder()
 
 [listener-ex2]: https://docs.rs/moka/latest/moka/future/struct.Cache.html#example-eviction-listener
 
-#### Maintenance tasks
+### The maintenance tasks
 
 In older versions, the maintenance tasks needed by the cache were periodically
-executed in background by a global thread pool managed by `moka`. Now `future::Cache`
-does not use the thread pool anymore, so those maintenance tasks are executed
+executed in background by a global thread pool managed by `moka`. Now all cache types
+do not use the thread pool anymore, so those maintenance tasks are executed
 _sometimes_ in foreground when certain cache methods (`get`, `get_with`, `insert`,
 etc.) are called by user code.
 
@@ -206,46 +258,41 @@ Figure 1. The lifecycle of cached entries
 These maintenance tasks include:
 
 1. Determine whether to admit a "temporary admitted" entry or not.
-2. Apply the recording of cache reads and writes to the internal data structures,
-   such as LFU filter, LRU queues, and timer wheels.
-3. When cache's max capacity is exceeded, select existing entries to evict and remove
-   them from cache.
+2. Apply the recording of cache reads and writes to the internal data structures for
+   the cache policies, such as the LFU filter, LRU queues, and hierarchical timer
+   wheels.
+3. When cache's max capacity is exceeded, remove least recently used (LRU) entries.
 4. Remove expired entries.
-5. Remove entries that have been invalidated by `invalidate_all` or
+5. Find and remove the entries that have been invalidated by `invalidate_all` or
    `invalidate_entries_if` methods.
 6. Deliver removal notifications to the eviction listener. (Call the eviction
-   listener closure with the information about evicted entry)
+   listener closure with the information about the evicted entry)
 
-They will be executed in the following cache methods when necessary:
+They will be executed in the following cache methods when one of the following
+conditions is met:
+
+Cache Methods:
 
 - All cache write methods: `insert`, `get_with`, `invalidate`, etc.
 - Some of the cache read methods: `get`
 - `run_pending_tasks` method, which executes the pending maintenance tasks
   explicitly.
 
-Although expired entries will not be removed until the pending maintenance tasks are
-executed, they will not be returned by cache read methods such as `get`, `get_with`
-and `contains_key`. So unless you need to remove expired entries immediately (e.g. to
-free some memory), you do not need to call `run_pending_tasks` method.
+Conditions:
 
-### `sync::Cache` and `sync::SegmentedCache`
+- When one of the numbers of pending read and write recordings exceeds the threshold.
+    - It is currently hard-coded to 64 items.
+- When the time since the last execution of the maintenance tasks exceeds the
+  threshold.
+    - It is currently hard-coded to 300 milliseconds.
 
-1. (Not in v0.12.0-beta.1) `sync` caches will be no longer enabled by default. Use a
-   crate feature `sync` to enable it.
-2. (Not in v0.12.0-beta.1) The thread pool will be disabled by default.
-   - In older versions, the thread pool was used to execute maintenance tasks in
-     background.
-   - When disabled:
-      - those maintenance tasks are executed _sometimes_ in foreground when certain
-        cache methods (`get`, `get_with`, `insert`, etc.) are called by user code
-      -  See [Maintenance tasks](#maintenance-tasks) for more details.
-   - To enable it, see [Enabling the thread pool](#enabling-the-thread-pool) for more
-     details.
 
-#### Enabling the thread pool
+#### `run_pending_tasks` method
 
-To enable the thread pool, do the followings:
+You can execute the pending maintenance tasks explicitly by calling the
+`run_pending_tasks` method. This method is available for all cache types.
 
-- Specify a crate feature `thread-pool`.
-- At the cache creation time, call the `thread_pool_enabled` method of
-  `CacheBuilder`.
+Note that cache read methods such as `get`, `get_with` and `contains_key` never
+return expired entries although they are not removed immediately from the cache when
+they expire. You will not need to call `run_pending_tasks` method to remove expired
+entries unless you want to remove them immediately (e.g. to free some memory).

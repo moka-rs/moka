@@ -44,10 +44,10 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: miri
-          args: test deque
+          args: test deque --features 'sync, future'
 
       - name: Run Miri test (timer_wheel)
         uses: actions-rs/cargo@v1
         with:
           command: miri
-          args: test timer_wheel
+          args: test deque --features 'sync, future'

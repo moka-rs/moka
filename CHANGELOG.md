@@ -2,28 +2,33 @@
 
 ## Version 0.12.0 (Currently Beta)
 
-**IMPORTANT**: This release has major breaking changes.
+**ATTENTION**: `v0.12.0` has major breaking changes on the API and internal behavior.
+Please read the [MIGRATION-GUIDE.md][migration-guide-v012] for the details.
 
-- `future::Cache`
-    - The thread pool was removed from `future::Cache`. It no longer spawns
-      background threads.
-    - The `notification::DeliveryMode` for eviction listener was changed from
-      `Queued` to `Immediate`.
-    - To support these changes, some of the APIs were changed. Please see the
-      [MIGRATION-GUIDE.md](./MIGRATION-GUIDE.md#migrating-to-v0120-from-a-prior-version)
-      for more details.
-- `sync::Cache` and `sync::SegmentedCache`
-    - As of 0.12.0-beta.1, no breaking changes have been made to these caches.
-    - However, the future beta releases will have the following changes:
-        - (Not in 0.12.0-beta.1) `sync` caches will be no longer enabled by default.
-          Use a crate feature `sync` to enable it.
-        - (Not in 0.12.0-beta.1) The thread pool will be disabled by default.
+**`sync` caches are no longer enabled by default**: Please use a crate feature `sync`
+to enable it.
+
+**No more background threads**: All cache types `future::Cache`, `sync::Cache`, and
+`sync::SegmentedCache` no longer spawn background threads.
+
+- The `scheduled-thread-pool` crate was removed from the dependency.
+- Because of this change, many external and internal methods of `future::Cache`
+  were converted to `async` methods. You may need to add `.await` to your code for
+  those methods.
+
+**Immediate notification delivery**: The `notification::DeliveryMode` enum for the
+eviction listener was removed. Now all cache types work as if the `Immediate`
+delivery mode is specified.
+
+[migration-guide-v012]: ./MIGRATION-GUIDE.md#migrating-to-v0120-from-a-prior-version
 
 ### Changed
 
-- Remove the thread pool from `future::Cache`. ([#294][gh-pull-0294])
+- Remove the thread pool from `sync` caches. ([#316][gh-pull-0316])
+- Remove the thread pool from `future` cache`. ([#294][gh-pull-0294])
 - Add support for `Immediate` notification delivery mode to future cache.
  ([#228][gh-issue-0228])
+- Improve async cancellation safety of `future::Cache`. ([#309][gh-pull-0309])
 
 
 ## Version 0.11.3
@@ -712,6 +717,8 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0316]: https://github.com/moka-rs/moka/pull/316/
+[gh-pull-0309]: https://github.com/moka-rs/moka/pull/309/
 [gh-pull-0295]: https://github.com/moka-rs/moka/pull/295/
 [gh-pull-0294]: https://github.com/moka-rs/moka/pull/294/
 [gh-pull-0277]: https://github.com/moka-rs/moka/pull/277/

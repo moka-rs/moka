@@ -4,9 +4,15 @@
 [![crates.io release][release-badge]][crate]
 [![docs][docs-badge]][docs]
 [![dependency status][deps-rs-badge]][deps-rs]
-[![coverage status][coveralls-badge]][coveralls]
+<!-- [![coverage status][coveralls-badge]][coveralls] -->
 [![license][license-badge]](#license)
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_shield)
+
+**ATTENTION**: `v0.12.0` (currently beta) has major breaking changes on the API and
+internal behavior. Please read the [MIGRATION-GUIDE.md][migration-guide-v012] for the
+details.
+
+* * *
 
 Moka is a fast, concurrent cache library for Rust. Moka is inspired by the
 [Caffeine][caffeine-git] library for Java.
@@ -109,18 +115,16 @@ routers. Here are some highlights:
 [aliyundrive-webdav-git]: https://github.com/messense/aliyundrive-webdav
 
 
-## Change Log
+## Recent Changes
 
+**ATTENTION**: `v0.12.0` (currently beta) has major breaking changes on the API and
+internal behavior. Please read the [MIGRATION-GUIDE.md][migration-guide-v012] for the
+details.
+
+- [MIGRATION-GUIDE.md][migration-guide-v012]
 - [CHANGELOG.md](https://github.com/moka-rs/moka/blob/main/CHANGELOG.md)
 
-The `unsync::Cache` and `dash::Cache` have been moved to a separate crate called
-[Mini Moka][mini-moka-crate]:
-
-- `moka::unsync::Cache` → [`mini_moka::unsync::Cache`][unsync-cache-struct]
-- `moka::dash::Cache` → [`mini_moka::sync::Cache`][dash-cache-struct]
-
-[unsync-cache-struct]: https://docs.rs/mini-moka/latest/mini_moka/unsync/struct.Cache.html
-[dash-cache-struct]: https://docs.rs/mini-moka/latest/mini_moka/sync/struct.Cache.html
+[migration-guide-v012]: https://github.com/moka-rs/moka/blob/main/MIGRATION-GUIDE.md
 
 
 ## Table of Contents

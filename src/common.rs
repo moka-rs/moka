@@ -64,7 +64,7 @@ pub(crate) fn sketch_capacity(max_capacity: u64) -> u32 {
     max_capacity.try_into().unwrap_or(u32::MAX).max(128)
 }
 
-#[cfg(any(test, feature = "sync"))]
+#[cfg(test)]
 pub(crate) fn available_parallelism() -> usize {
     use std::{num::NonZeroUsize, thread::available_parallelism};
     available_parallelism().map(NonZeroUsize::get).unwrap_or(1)

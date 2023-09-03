@@ -50,7 +50,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     - [Per-entry expiration policy](#per-entry-expiration-policy)
 /// - [Example: Eviction Listener](#example-eviction-listener)
 ///     - [You should avoid eviction listener to panic](#you-should-avoid-eviction-listener-to-panic)
-///     - [Delivery modes for eviction listener](#delivery-modes-for-eviction-listener)
 ///
 /// # Example: `insert`, `get` and `invalidate`
 ///
@@ -484,28 +483,22 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///         }
 ///     }
 ///
-///     async fn write_data_file(&mut self, contents: String) -> io::Result<PathBuf> {
-///         loop {
-///             // Generate a unique file path.
-///             let mut path = self.base_dir.to_path_buf();
-///             path.push(Uuid::new_v4().as_hyphenated().to_string());
+///     async fn write_data_file(
+///         &mut self,
+///         key: impl AsRef<str>,
+///         contents: String
+///     ) -> io::Result<PathBuf> {
+///         // Use the key as a part of the filename.
+///         let mut path = self.base_dir.to_path_buf();
+///         path.push(key.as_ref());
 ///
-///             if path.exists() {
-///                 continue; // This path is already taken by others. Retry.
-///             }
+///         assert!(!path.exists(), "Path already exists: {:?}", path);
 ///
-///             // We have got a unique file path, so create the file at
-///             // the path and write the contents to the file.
-///             fs::write(&path, contents).await?;
-///             self.file_count += 1;
-///             println!(
-///                 "Created a data file at {:?} (file count: {})",
-///                 path, self.file_count
-///             );
-///
-///             // Return the path.
-///             return Ok(path);
-///         }
+///         // create the file at the path and write the contents to the file.
+///         fs::write(&path, contents).await?;
+///         self.file_count += 1;
+///         println!("Created a data file at {:?} (file count: {})", path, self.file_count);
+///         Ok(path)
 ///     }
 ///
 ///     async fn read_data_file(&self, path: impl AsRef<Path>) -> io::Result<String> {
@@ -531,7 +524,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// async fn main() -> anyhow::Result<()> {
 ///     // Create an instance of the DataFileManager and wrap it with
 ///     // Arc<RwLock<_>> so it can be shared across threads.
-///     let file_mgr = DataFileManager::new(std::env::temp_dir());
+///     let mut base_dir = std::env::temp_dir();
+///     base_dir.push(Uuid::new_v4().as_hyphenated().to_string());
+///     println!("base_dir: {:?}", base_dir);
+///     std::fs::create_dir(&base_dir)?;
+///
+///     let file_mgr = DataFileManager::new(base_dir);
 ///     let file_mgr = Arc::new(RwLock::new(file_mgr));
 ///
 ///     let file_mgr1 = Arc::clone(&file_mgr);
@@ -572,11 +570,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     // This will create and write a data file for the key "user1", store the
 ///     // path of the file to the cache, and return it.
 ///     println!("== try_get_with()");
+///     let key = "user1";
 ///     let path = cache
-///         .try_get_with("user1", async {
+///         .try_get_with(key, async {
 ///             let mut mgr = file_mgr.write().await;
 ///             let path = mgr
-///                 .write_data_file("user data".into())
+///                 .write_data_file(key, "user data".into())
 ///                 .await
 ///                 .with_context(|| format!("Failed to create a data file"))?;
 ///             Ok(path) as anyhow::Result<_>
@@ -599,6 +598,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     // will be expired and evicted, so the eviction lister will be called to
 ///     // remove the file.
 ///     tokio::time::sleep(Duration::from_secs(5)).await;
+///
+///     cache.run_pending_tasks();
 ///
 ///     Ok(())
 /// }
@@ -627,22 +628,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///    will appear in the log.
 ///
 /// [builder-name-method]: ./struct.CacheBuilder.html#method.name
-///
-/// ## Delivery Modes for eviction listener
-///
-/// The [`DeliveryMode`][delivery-mode] specifies how and when an eviction
-/// notification should be delivered to an eviction listener.
-///
-/// The `future::Cache` supports the following delivery mode:
-///
-/// - From v0.12.0, it only supports `Immediate` mode.
-/// - Up to v0.11.x, it only supported `Queued` modes.
-///
-/// For more details about the delivery modes, see [this section][sync-delivery-modes]
-/// of `sync::Cache` documentation.
-///
-/// [delivery-mode]: ../notification/enum.DeliveryMode.html
-/// [sync-delivery-modes]: ../sync/struct.Cache.html#delivery-modes-for-eviction-listener
 ///
 pub struct Cache<K, V, S = RandomState> {
     base: BaseCache<K, V, S>,
@@ -1599,6 +1584,7 @@ where
         Iter::new(inner)
     }
 
+    /// Performs any pending maintenance operations needed by the cache.
     pub async fn run_pending_tasks(&self) {
         if let Some(hk) = &self.base.housekeeper {
             self.base.retry_interrupted_ops().await;

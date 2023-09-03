@@ -1,7 +1,7 @@
 use super::{Cache, SegmentedCache};
 use crate::{
     common::{builder_utils, concurrent::Weigher},
-    notification::{self, EvictionListener, RemovalCause},
+    notification::{EvictionListener, RemovalCause},
     policy::ExpirationPolicy,
     Expiry,
 };
@@ -54,10 +54,8 @@ pub struct CacheBuilder<K, V, C> {
     num_segments: Option<usize>,
     weigher: Option<Weigher<K, V>>,
     eviction_listener: Option<EvictionListener<K, V>>,
-    eviction_listener_conf: Option<notification::Configuration>,
     expiration_policy: ExpirationPolicy<K, V>,
     invalidator_enabled: bool,
-    thread_pool_enabled: bool,
     cache_type: PhantomData<C>,
 }
 
@@ -74,11 +72,8 @@ where
             num_segments: None,
             weigher: None,
             eviction_listener: None,
-            eviction_listener_conf: None,
             expiration_policy: Default::default(),
             invalidator_enabled: false,
-            // TODO: Change this to `false` in Moka v0.12.0 or v0.13.0.
-            thread_pool_enabled: true,
             cache_type: Default::default(),
         }
     }
@@ -116,10 +111,8 @@ where
             num_segments: Some(num_segments),
             weigher: self.weigher,
             eviction_listener: self.eviction_listener,
-            eviction_listener_conf: self.eviction_listener_conf,
             expiration_policy: self.expiration_policy,
             invalidator_enabled: self.invalidator_enabled,
-            thread_pool_enabled: self.thread_pool_enabled,
             cache_type: PhantomData,
         }
     }
@@ -145,10 +138,8 @@ where
             build_hasher,
             self.weigher,
             self.eviction_listener,
-            self.eviction_listener_conf,
             self.expiration_policy,
             self.invalidator_enabled,
-            builder_utils::housekeeper_conf(self.thread_pool_enabled),
         )
     }
 
@@ -233,10 +224,8 @@ where
             hasher,
             self.weigher,
             self.eviction_listener,
-            self.eviction_listener_conf,
             self.expiration_policy,
             self.invalidator_enabled,
-            builder_utils::housekeeper_conf(self.thread_pool_enabled),
         )
     }
 }
@@ -268,10 +257,8 @@ where
             build_hasher,
             self.weigher,
             self.eviction_listener,
-            self.eviction_listener_conf,
             self.expiration_policy,
             self.invalidator_enabled,
-            builder_utils::housekeeper_conf(self.thread_pool_enabled),
         )
     }
 
@@ -358,10 +345,8 @@ where
             hasher,
             self.weigher,
             self.eviction_listener,
-            self.eviction_listener_conf,
             self.expiration_policy,
             self.invalidator_enabled,
-            builder_utils::housekeeper_conf(true),
         )
     }
 }
@@ -406,34 +391,6 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     /// Sets the eviction listener closure to the cache.
     ///
     /// The closure should take `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as
-    /// the arguments. The [immediate delivery mode][immediate-mode] is used for the
-    /// listener.
-    ///
-    /// # Panics
-    ///
-    /// It is very important to make the listener closure not to panic. Otherwise,
-    /// the cache will stop calling the listener after a panic. This is an intended
-    /// behavior because the cache cannot know whether is is memory safe or not to
-    /// call the panicked lister again.
-    ///
-    /// [removal-cause]: ../notification/enum.RemovalCause.html
-    /// [immediate-mode]: ../notification/enum.DeliveryMode.html#variant.Immediate
-    pub fn eviction_listener(
-        self,
-        listener: impl Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            eviction_listener: Some(Arc::new(listener)),
-            eviction_listener_conf: Some(Default::default()),
-            ..self
-        }
-    }
-
-    /// Sets the eviction listener closure to the cache with a custom
-    /// [`Configuration`][conf]. Use this method if you want to change the delivery
-    /// mode to the queued mode.
-    ///
-    /// The closure should take `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as
     /// the arguments.
     ///
     /// # Panics
@@ -444,15 +401,12 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     /// call the panicked lister again.
     ///
     /// [removal-cause]: ../notification/enum.RemovalCause.html
-    /// [conf]: ../notification/struct.Configuration.html
-    pub fn eviction_listener_with_conf(
+    pub fn eviction_listener(
         self,
         listener: impl Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
-        conf: notification::Configuration,
     ) -> Self {
         Self {
             eviction_listener: Some(Arc::new(listener)),
-            eviction_listener_conf: Some(conf),
             ..self
         }
     }
@@ -515,22 +469,6 @@ impl<K, V, C> CacheBuilder<K, V, C> {
             ..self
         }
     }
-
-    /// Specify whether or not to enable the thread pool for housekeeping tasks.
-    /// These tasks include removing expired entries and updating the LRU queue and
-    /// LFU filter. `true` to enable and `false` to disable. (Default: `true`)
-    ///
-    /// If disabled, the housekeeping tasks will be executed by a client thread when
-    /// necessary.
-    ///
-    /// NOTE: The default value will be changed to `false` in a future release
-    /// (v0.12.0 or v0.13.0).
-    pub fn thread_pool_enabled(self, v: bool) -> Self {
-        Self {
-            thread_pool_enabled: v,
-            ..self
-        }
-    }
 }
 
 #[cfg(test)]
@@ -570,8 +508,6 @@ mod tests {
 
     #[test]
     fn build_segmented_cache() {
-        use crate::notification;
-
         // SegmentCache<char, String>
         let cache = CacheBuilder::new(100).segments(15).build();
         let policy = cache.policy();
@@ -584,16 +520,12 @@ mod tests {
         cache.insert('b', "Bob");
         assert_eq!(cache.get(&'b'), Some("Bob"));
 
-        let notification_conf = notification::Configuration::builder()
-            .delivery_mode(notification::DeliveryMode::Queued)
-            .build();
-
         let listener = move |_key, _value, _cause| ();
 
         let builder = CacheBuilder::new(400)
             .time_to_live(Duration::from_secs(45 * 60))
             .time_to_idle(Duration::from_secs(15 * 60))
-            .eviction_listener_with_conf(listener, notification_conf)
+            .eviction_listener(listener)
             .name("tracked_sessions")
             // Call segments() at the end to check all field values in the current
             // builder struct are copied to the new builder:
@@ -601,7 +533,6 @@ mod tests {
             .segments(24);
 
         assert!(builder.eviction_listener.is_some());
-        assert!(builder.eviction_listener_conf.is_some());
 
         let cache = builder.build();
         let policy = cache.policy();

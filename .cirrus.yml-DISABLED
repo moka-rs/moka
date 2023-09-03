@@ -66,12 +66,6 @@ linux_arm64_task:
     # Run tests (release, sync feature)
     - cargo test -j 1 --release --features sync -- --test-threads=$NUM_CPUS
 
-    # Run tests (release, sync feature, thread-pool test for sync::Cache)
-    - cargo test --release --lib --features sync sync::cache::tests::enabling_and_disabling_thread_pools -- --exact --ignored
-
-    # Run tests (release, sync feature, thread-pool test for sync::SegmentedCache)
-    - cargo test --release --lib --features sync sync::segment::tests::enabling_and_disabling_thread_pools -- --exact --ignored
-
     # Run tests (sync feature, key lock test for notification)
     - cargo test --release --lib --features sync sync::cache::tests::test_key_lock_used_by_immediate_removal_notifications -- --exact --ignored
 
