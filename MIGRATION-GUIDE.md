@@ -7,35 +7,40 @@ describes the code changes required to migrate to v0.12.0.
 
 ### Highlights v0.12
 
-**`sync` caches are no longer enabled by default**: Please use a crate feature `sync`
-to enable it.
+- **`sync` caches are no longer enabled by default**: Please use a crate feature
+  `sync` to enable it.
 
-**No more background threads**: All cache types `future::Cache`, `sync::Cache`, and
-`sync::SegmentedCache` no longer spawn background threads.
+- **No more background threads**: All cache types `future::Cache`, `sync::Cache`, and
+  `sync::SegmentedCache` no longer spawn background threads.
+  - The `scheduled-thread-pool` crate was removed from the dependency.
+  - Because of this change, many private methods and some public methods under the
+    `future` module were converted to `async` methods. You may need to add `.await`
+    to your code for those methods.
 
-- The `scheduled-thread-pool` crate was removed from the dependency.
-- Because of this change, many external and internal methods of `future::Cache`
-  were converted to `async` methods. You may need to add `.await` to your code for
-  those methods.
+  - Because of this change, many external and internal methods of `future::Cache`
+    were converted to `async` methods. You may need to add `.await` to your code for
+    those methods.
 
-**Immediate notification delivery**: The `notification::DeliveryMode` enum for the
-eviction listener was removed. Now all cache types work as if the `Immediate`
-delivery mode is specified.
+- **Immediate notification delivery**: The `notification::DeliveryMode` enum for the
+  eviction listener was removed. Now all cache types behave as if the `Immediate`
+  delivery mode is specified.
 
-- It had two variants `Immediate` and `Queued`.
-    - The former should be easier to use than other as it guarantees to preserve the
-      order of events on a given cache key.
-    - The latter would provide higher performance under heavy cache writes.
-- Now all cache types work as if the `Immediate` mode is specified.
-    - **`future::Cache`**: In earlier versions of `future::Cache`, the queued mode
-      was used. Now it works as if the immediate mode is specified.
-    - **`sync` caches**: From earlier versions of `sync::Cache` and
-      `sync::SegmentedCache`, the immediate mode is the default mode. So this change
-      should only affects those of you who are explicitly using the queued mode.
-- The queued mode was implemented by using a background thread. The queue mode was
-  removed because there is no thread pool available anymore.
-- If you need the queue mode back, please file a GitHub issue. We could provide
-  a way to use a user supplied thread pool.
+  - `DeliveryMode` enum had two variants `Immediate` and `Queued`.
+      - The former should be easier to use than other as it guarantees to preserve
+        the order of events on a given cache key.
+      - The latter did not use internal locks and would provide higher performance
+        under heavy cache writes.
+  - Now all cache types work as if the `Immediate` mode is specified.
+      - **`future::Cache`**: In earlier versions of `future::Cache`, the queued mode
+        was used. Now it behaves as if the immediate mode is specified.
+      - **`sync` caches**: From earlier versions of `sync::Cache` and
+        `sync::SegmentedCache`, the immediate mode is the default mode. So this
+        change should only affects those of you who are explicitly using the queued
+        mode.
+  - The queued mode was implemented by using a background thread. The queued mode was
+    removed because there is no thread pool available anymore.
+  - If you need the queued mode back, please file a GitHub issue. We could provide
+    a way to use a user supplied thread pool.
 
 The following sections will describe about the changes you might need to make to your
 code.
@@ -58,7 +63,7 @@ code.
 4. Now `sync` caches always work as if the immediate delivery mode is specified
    for the eviction listener.
    - In older versions, the immediate mode was the default mode, and the queued
-     mode can be optionally selected.
+     mode could be optionally selected.
 
 ### `future::Cache` v0.12
 
@@ -87,8 +92,8 @@ code.
 1. Since the background threads were removed, the maintenance tasks such as removing
    expired entries are not executed periodically anymore.
    - See the [maintenance tasks](#the-maintenance-tasks) section for more details.
-2. Now `future::Cache` always works as if the immediate delivery mode is specified
-   for eviction listener.
+2. Now `future::Cache` always behaves as if the immediate delivery mode is specified
+   for the eviction listener.
    - In older versions, the queued delivery mode was used.
 
 #### Replacing the blocking API

@@ -4,20 +4,20 @@
 
 **ATTENTION**: `v0.12.0` has major breaking changes on the API and internal behavior.
 
-**`sync` caches are no longer enabled by default**: Please use a crate feature `sync`
-to enable it.
+- **`sync` caches are no longer enabled by default**: Please use a crate feature
+  `sync` to enable it.
 
-**No more background threads**: All cache types `future::Cache`, `sync::Cache`, and
-`sync::SegmentedCache` no longer spawn background threads.
+- **No more background threads**: All cache types `future::Cache`, `sync::Cache`, and
+  `sync::SegmentedCache` no longer spawn background threads.
 
-- The `scheduled-thread-pool` crate was removed from the dependency.
-- Because of this change, many external and internal methods of `future::Cache`
-  were converted to `async` methods. You may need to add `.await` to your code for
-  those methods.
+  - The `scheduled-thread-pool` crate was removed from the dependency.
+  - Because of this change, many private methods and some public methods under the
+    `future` module were converted to `async` methods. You may need to add `.await`
+    to your code for those methods.
 
-**Immediate notification delivery**: The `notification::DeliveryMode` enum for the
-eviction listener was removed. Now all cache types work as if the `Immediate`
-delivery mode is specified.
+- **Immediate notification delivery**: The `notification::DeliveryMode` enum for the
+  eviction listener was removed. Now all cache types behave as if the `Immediate`
+  delivery mode is specified.
 
 Please read the [MIGRATION-GUIDE.md][migration-guide-v012] for more details.
 
