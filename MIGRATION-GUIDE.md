@@ -7,9 +7,8 @@ describes the code changes required to migrate to v0.12.0.
 
 ### Highlights v0.12
 
-**`sync` feature is no longer in the default features**: The `sync` caches are now
-disabled by default (like the `future` cache). Use a crate feature `sync` to enable
-it.
+**`sync` caches are no longer enabled by default**: Please use a crate feature `sync`
+to enable it.
 
 **No more background threads**: All cache types `future::Cache`, `sync::Cache`, and
 `sync::SegmentedCache` no longer spawn background threads.
