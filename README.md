@@ -153,18 +153,14 @@ details.
 
 ## Usage
 
-Add this to your `Cargo.toml`:
+To add Moka to your dependencies, run `cargo add` as the followings:
 
-```toml
-[dependencies]
-moka = "0.12"
-```
+```console
+# To use the synchronous cache:
+cargo add moka --features sync
 
-To use the asynchronous cache, enable a crate feature called "future".
-
-```toml
-[dependencies]
-moka = { version = "0.12", features = ["future"] }
+# To use the asynchronous cache:
+cargo add moka --features future
 ```
 
 
@@ -508,14 +504,14 @@ $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test --all-features
 
 ```console
 $ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
-    --no-default-features --features future
+    --no-default-features --features 'future, sync'
 ```
 
 **Generating the Doc**
 
 ```console
 $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' \
-    doc --no-deps --features future
+    doc --no-deps --features 'future, sync'
 ```
 
 ## Road Map
@@ -529,11 +525,13 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
     - `blocking_insert(K, V)` → `blocking().insert(K, V)`
     - `time_to_live()` → `policy().time_to_live()`
 - [x] Notifications on eviction. (`v0.9.0` via [#145][gh-pull-145])
-- [x] Variable (per-entry) expiration, using a hierarchical timer wheel.
+- [x] Variable (per-entry) expiration, using hierarchical timer wheels.
   (`v0.11.0` via [#248][gh-pull-248])
-- [ ] Cache statistics. (Hit rate, etc.)
+- [ ] Cache statistics (Hit rate, etc.). ([details][cache-stats])
 - [x] Remove background threads. (`v0.12.0` via [#294][gh-pull-294] and
   [#316][gh-pull-316])
+- [ ] Restore cache from a snapshot. ([details][restore])
+- [ ] `and_compute` method. ([details][and-compute])
 - [ ] Upgrade TinyLFU to Window-TinyLFU. ([details][tiny-lfu])
 
 [gh-pull-024]: https://github.com/moka-rs/moka/pull/24
@@ -543,6 +541,9 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
 [gh-pull-294]: https://github.com/moka-rs/moka/pull/294
 [gh-pull-316]: https://github.com/moka-rs/moka/pull/316
 
+[and-compute]: https://github.com/moka-rs/moka/issues/227
+[cache-stats]: https://github.com/moka-rs/moka/issues/234
+[restore]: https://github.com/moka-rs/moka/issues/314
 
 ## About the Name
 

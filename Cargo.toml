@@ -94,9 +94,17 @@ rustc_version = "0.4.0"
 
 # https://docs.rs/about/metadata
 [package.metadata.docs.rs]
-# Build the doc with some features enabled.
-features = ["future"]
+# Build the doc at docs.rs with some features enabled.
+#
+# You can test locally with:
+# ```
+# cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' \
+#    doc --no-deps --features 'future, sync'
+# ```
+features = ["future", "sync"]
 rustdoc-args = ["--cfg", "docsrs"]
+
+# Examples
 
 [[example]]
 name = "async_example"
