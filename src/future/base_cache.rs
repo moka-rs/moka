@@ -35,9 +35,9 @@ use crate::{
 #[cfg(feature = "unstable-debug-counters")]
 use common::concurrent::debug_counters::CacheDebugStats;
 
+use async_channel::{Receiver, SendError, Sender, TrySendError};
 use async_lock::{Mutex, MutexGuard, RwLock};
 use async_trait::async_trait;
-use crossbeam_channel::{Receiver, Sender, TrySendError};
 use crossbeam_utils::atomic::AtomicCell;
 use futures_util::future::BoxFuture;
 use parking_lot::RwLock as SyncRwLock;
@@ -167,14 +167,15 @@ where
         invalidator_enabled: bool,
     ) -> Self {
         let (r_size, w_size) = if max_capacity == Some(0) {
-            (0, 0)
+            // async_channel::bounded(0) will panic. Use 1 instead.
+            (1, 1)
         } else {
             (READ_LOG_SIZE, WRITE_LOG_SIZE)
         };
 
-        let (r_snd, r_rcv) = crossbeam_channel::bounded(r_size);
-        let (w_snd, w_rcv) = crossbeam_channel::bounded(w_size);
-        let (i_snd, i_rcv) = crossbeam_channel::unbounded();
+        let (r_snd, r_rcv) = async_channel::bounded(r_size);
+        let (w_snd, w_rcv) = async_channel::bounded(w_size);
+        let (i_snd, i_rcv) = async_channel::unbounded();
 
         let inner = Arc::new(Inner::new(
             name,
@@ -461,7 +462,7 @@ where
         match ch.try_send(op) {
             // Discard the ReadOp when the channel is full.
             Ok(()) | Err(TrySendError::Full(_)) => Ok(()),
-            Err(e @ TrySendError::Disconnected(_)) => Err(e),
+            Err(e @ TrySendError::Closed(_)) => Err(e),
         }
     }
 
@@ -633,9 +634,11 @@ where
             mutex.lock().await;
         }
 
-        let mut op = op;
-        let mut spin_count = 0u8;
-        loop {
+        const MAX_SPINS_BEFORE_BLOCKING: u8 = 10;
+        let mut op: WriteOp<K, V> = op;
+
+        // Try to send the op with some quick retries.
+        for _ in 0..MAX_SPINS_BEFORE_BLOCKING {
             BaseCache::<K, V, S>::apply_reads_writes_if_needed(
                 Arc::clone(inner),
                 ch,
@@ -643,31 +646,32 @@ where
                 housekeeper,
             )
             .await;
+
             match ch.try_send(op) {
                 Ok(()) => return Ok(()),
                 Err(TrySendError::Full(op1)) => {
                     op = op1;
-                }
-                Err(e @ TrySendError::Disconnected(_)) => return Err(e),
-            }
 
-            // We have got a `TrySendError::Full` above. Wait for a bit and try
-            // again.
-            if spin_count < 10 {
-                spin_count += 1;
-                // Wastes some CPU time with a hint to indicate to the CPU that we
-                // are spinning
-                for _ in 0..8 {
-                    std::hint::spin_loop();
+                    // The channel is full. Let's wastes some CPU time with a hint to
+                    // indicate to the CPU that we are spinning.
+                    //
+                    // NOTE: Recent x86_64 processors should have much longer latency
+                    // for the `pause` instruction than the equivalent instructions
+                    // in other architectures. We might want to adjust the number of
+                    // iterations here depending on the target architecture.
+                    for _ in 0..8 {
+                        std::hint::spin_loop();
+                    }
                 }
-            } else {
-                spin_count = 0;
-                // Try to yield to other tasks. We have to yield sometimes, otherwise
-                // other task, which is draining the `ch`, will not make any
-                // progress. If this happens, we will stuck in this loop forever.
-                super::may_yield().await;
+                Err(e @ TrySendError::Closed(_)) => return Err(e),
             }
         }
+
+        // Still cannot send the op. Calling `send` may cause us to yield to other
+        // async tasks if the channel is still full.
+        ch.send(op)
+            .await
+            .map_err(|SendError(op)| TrySendError::Closed(op))
     }
 
     pub(crate) async fn retry_interrupted_ops(&self) {
@@ -2731,7 +2735,7 @@ mod tests {
 
         async fn insert(cache: &BaseCache<Key, Value>, key: Key, hash: u64, value: Value) {
             let (op, _now) = cache.do_insert_with_hash(Arc::new(key), hash, value).await;
-            cache.write_op_ch.send(op).expect("Failed to send");
+            cache.write_op_ch.send(op).await.expect("Failed to send");
         }
 
         fn never_ignore<'a, V>() -> Option<&'a mut fn(&V) -> bool> {

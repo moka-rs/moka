@@ -3,10 +3,8 @@
 //!
 //! To use this module, enable a crate feature called "future".
 
-use async_lock::Mutex;
-use crossbeam_channel::Sender;
+use async_channel::Sender;
 use futures_util::future::{BoxFuture, Shared};
-use once_cell::sync::Lazy;
 use std::{future::Future, hash::Hash, sync::Arc};
 
 use crate::common::{concurrent::WriteOp, time::Instant};
@@ -143,18 +141,7 @@ impl<'a, K, V> Drop for CancelGuard<'a, K, V> {
         };
 
         self.interrupted_op_ch
-            .send(interrupted_op)
+            .send_blocking(interrupted_op)
             .expect("Failed to send a pending op");
     }
-}
-
-/// May yield to other async tasks.
-pub(crate) async fn may_yield() {
-    static LOCK: Lazy<Mutex<()>> = Lazy::new(Default::default);
-
-    // Acquire the lock then immediately release it. This `await` may yield to other
-    // tasks.
-    //
-    // NOTE: This behavior was tested with Tokio and async-std.
-    let _ = LOCK.lock().await;
 }
