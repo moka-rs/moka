@@ -14,12 +14,8 @@ describes the code changes required to migrate to v0.12.0.
   `sync::SegmentedCache` no longer spawn background threads.
   - The `scheduled-thread-pool` crate was removed from the dependency.
   - Because of this change, many private methods and some public methods under the
-    `future` module were converted to `async` methods. You may need to add `.await`
+    `future` module were converted to `async` methods. You will need to add `.await`
     to your code for those methods.
-
-  - Because of this change, many external and internal methods of `future::Cache`
-    were converted to `async` methods. You may need to add `.await` to your code for
-    those methods.
 
 - **Immediate notification delivery**: The `notification::DeliveryMode` enum for the
   eviction listener was removed. Now all cache types behave as if the `Immediate`
