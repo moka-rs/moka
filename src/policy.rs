@@ -86,12 +86,17 @@ pub trait Expiry<K, V> {
     ///
     /// - `key` &mdash; A reference to the key of the entry.
     /// - `value` &mdash; A reference to the value of the entry.
-    /// - `current_time` &mdash; The current instant.
+    /// - `created_at` &mdash; The time when this entry was inserted.
     ///
-    /// # Returning `None`
+    /// # Return value
     ///
-    /// - Returning `None` indicates no expiration for the entry.
-    /// - The default implementation returns `None`.
+    /// The returned `Option<Duration>` is used to set the expiration time of the
+    /// entry.
+    ///
+    /// - Returning `Some(duration)` &mdash; The expiration time is set to
+    ///   `created_at + duration`.
+    /// - Returning `None` &mdash; The expiration time is cleared (no expiration).
+    ///   - This is the value that the default implementation returns.
     ///
     /// # Notes on `time_to_live` and `time_to_idle` policies
     ///
@@ -99,30 +104,34 @@ pub trait Expiry<K, V> {
     /// policies, the entry will be evicted after the earliest of the expiration time
     /// returned by this expiry, the `time_to_live` and `time_to_idle` policies.
     #[allow(unused_variables)]
-    fn expire_after_create(&self, key: &K, value: &V, current_time: Instant) -> Option<Duration> {
+    fn expire_after_create(&self, key: &K, value: &V, created_at: Instant) -> Option<Duration> {
         None
     }
 
     /// Specifies that the entry should be automatically removed from the cache once
     /// the duration has elapsed after its last read. This method is called for cache
-    /// read methods such as `get` and `get_with` but only when the key is present
-    /// in the cache.
+    /// read methods such as `get` and `get_with` but only when the key is present in
+    /// the cache.
     ///
     /// # Parameters
     ///
     /// - `key` &mdash; A reference to the key of the entry.
     /// - `value` &mdash; A reference to the value of the entry.
-    /// - `current_time` &mdash; The current instant.
-    /// - `current_duration` &mdash; The remaining duration until the entry expires.
-    /// - `last_modified_at` &mdash; The instant when the entry was created or
-    ///   updated.
+    /// - `read_at` &mdash; The time when this entry was read.
+    /// - `duration_until_expiry` &mdash; The remaining duration until the entry
+    ///   expires. (Calculated by `expiration_time - read_at`)
+    /// - `last_modified_at` &mdash; The time when this entry was created or updated.
     ///
-    /// # Returning `None` or `current_duration`
+    /// # Return value
     ///
-    /// - Returning `None` indicates no expiration for the entry.
-    /// - Returning `current_duration` will not modify the expiration time.
-    /// - The default implementation returns `current_duration` (not modify the
-    ///   expiration time)
+    /// The returned `Option<Duration>` is used to set the expiration time of the
+    /// entry.
+    ///
+    /// - Returning `Some(duration)` &mdash; The expiration time is set to
+    ///   `read_at + duration`.
+    /// - Returning `None` &mdash; The expiration time is cleared (no expiration).
+    /// - Returning `duration_until_expiry` will not modify the expiration time.
+    ///   - This is the value that the default implementation returns.
     ///
     /// # Notes on `time_to_live` and `time_to_idle` policies
     ///
@@ -131,18 +140,18 @@ pub trait Expiry<K, V> {
     ///
     /// - The entry will be evicted after the earliest of the expiration time
     ///   returned by this expiry, the `time_to_live` and `time_to_idle` policies.
-    /// - The `current_duration` takes in account the `time_to_live` and
+    /// - The `duration_until_expiry` takes in account the `time_to_live` and
     ///   `time_to_idle` policies.
     #[allow(unused_variables)]
     fn expire_after_read(
         &self,
         key: &K,
         value: &V,
-        current_time: Instant,
-        current_duration: Option<Duration>,
+        read_at: Instant,
+        duration_until_expiry: Option<Duration>,
         last_modified_at: Instant,
     ) -> Option<Duration> {
-        current_duration
+        duration_until_expiry
     }
 
     /// Specifies that the entry should be automatically removed from the cache once
@@ -154,15 +163,20 @@ pub trait Expiry<K, V> {
     ///
     /// - `key` &mdash; A reference to the key of the entry.
     /// - `value` &mdash; A reference to the value of the entry.
-    /// - `current_time` &mdash; The current instant.
-    /// - `current_duration` &mdash; The remaining duration until the entry expires.
+    /// - `updated_at` &mdash; The time when this entry was updated.
+    /// - `duration_until_expiry` &mdash; The remaining duration until the entry
+    ///   expires. (Calculated by `expiration_time - updated_at`)
     ///
-    /// # Returning `None` or `current_duration`
+    /// # Return value
     ///
-    /// - Returning `None` indicates no expiration for the entry.
-    /// - Returning `current_duration` will not modify the expiration time.
-    /// - The default implementation returns `current_duration` (not modify the
-    ///   expiration time)
+    /// The returned `Option<Duration>` is used to set the expiration time of the
+    /// entry.
+    ///
+    /// - Returning `Some(duration)` &mdash; The expiration time is set to
+    ///   `updated_at + duration`.
+    /// - Returning `None` &mdash; The expiration time is cleared (no expiration).
+    /// - Returning `duration_until_expiry` will not modify the expiration time.
+    ///   - This is the value that the default implementation returns.
     ///
     /// # Notes on `time_to_live` and `time_to_idle` policies
     ///
@@ -171,17 +185,17 @@ pub trait Expiry<K, V> {
     ///
     /// - The entry will be evicted after the earliest of the expiration time
     ///   returned by this expiry, the `time_to_live` and `time_to_idle` policies.
-    /// - The `current_duration` takes in account the `time_to_live` and
+    /// - The `duration_until_expiry` takes in account the `time_to_live` and
     ///   `time_to_idle` policies.
     #[allow(unused_variables)]
     fn expire_after_update(
         &self,
         key: &K,
         value: &V,
-        current_time: Instant,
-        current_duration: Option<Duration>,
+        updated_at: Instant,
+        duration_until_expiry: Option<Duration>,
     ) -> Option<Duration> {
-        current_duration
+        duration_until_expiry
     }
 }
 
