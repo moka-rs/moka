@@ -29,6 +29,11 @@ Please read the [MIGRATION-GUIDE.md][migration-guide-v012] for more details.
   caches ([#316][gh-pull-0316]).
 - Improved async cancellation safety of `future::Cache`. ([#309][gh-pull-0309])
 
+### Fixed
+
+- Fixed a bug that an internal `do_insert_with_hash` method gets the current
+  `Instant` too early when eviction listener is enabled. ([#322][gh-issue-0322])
+
 
 ## Version 0.11.3
 
@@ -696,6 +701,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-tinou98]: https://github.com/tinou98
 
+[gh-issue-0322]: https://github.com/moka-rs/moka/issues/322/
 [gh-issue-0255]: https://github.com/moka-rs/moka/issues/255/
 [gh-issue-0252]: https://github.com/moka-rs/moka/issues/252/
 [gh-issue-0243]: https://github.com/moka-rs/moka/issues/243/
