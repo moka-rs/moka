@@ -1446,8 +1446,6 @@ where
                 std::mem::drop(klg);
                 std::mem::drop(kl);
 
-                let hk = self.base.housekeeper.as_ref();
-
                 let should_block;
                 #[cfg(not(test))]
                 {
@@ -1458,9 +1456,13 @@ where
                     should_block = self.schedule_write_op_should_block.load(Ordering::Acquire);
                 }
 
+                let lock = self.base.maintenance_task_lock();
+                let hk = self.base.housekeeper.as_ref();
+
                 BaseCache::<K, V, S>::schedule_write_op(
                     &self.base.inner,
                     &self.base.write_op_ch,
+                    lock,
                     op,
                     now,
                     hk,
@@ -1914,7 +1916,6 @@ where
         }
 
         let (op, ts) = self.base.do_insert_with_hash(key, hash, value).await;
-        let hk = self.base.housekeeper.as_ref();
         let mut cancel_guard = CancelGuard::new(&self.base.interrupted_op_ch_snd, ts);
         cancel_guard.set_op(op.clone());
 
@@ -1928,9 +1929,13 @@ where
             should_block = self.schedule_write_op_should_block.load(Ordering::Acquire);
         }
 
+        let hk = self.base.housekeeper.as_ref();
+        let lock = self.base.maintenance_task_lock();
+
         BaseCache::<K, V, S>::schedule_write_op(
             &self.base.inner,
             &self.base.write_op_ch,
+            lock,
             op,
             ts,
             hk,

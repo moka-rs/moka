@@ -120,6 +120,11 @@ impl<K, V, S> BaseCache<K, V, S> {
         self.inner.current_time_from_expiration_clock()
     }
 
+    #[inline]
+    pub(crate) fn maintenance_task_lock(&self) -> &RwLock<()> {
+        &self.inner.maintenance_task_lock
+    }
+
     pub(crate) fn notify_invalidate(
         &self,
         key: &Arc<K>,
@@ -617,6 +622,7 @@ where
     pub(crate) async fn schedule_write_op(
         inner: &Arc<impl InnerSync + Send + Sync + 'static>,
         ch: &Sender<WriteOp<K, V>>,
+        maintenance_task_lock: &RwLock<()>,
         op: WriteOp<K, V>,
         ts: Instant,
         housekeeper: Option<&HouseKeeperArc>,
@@ -634,7 +640,7 @@ where
         }
 
         let mut op = op;
-        let mut spin_count = 0u8;
+        let mut spin_loop_attempts = 0u8;
         loop {
             BaseCache::<K, V, S>::apply_reads_writes_if_needed(
                 Arc::clone(inner),
@@ -651,21 +657,39 @@ where
                 Err(e @ TrySendError::Disconnected(_)) => return Err(e),
             }
 
-            // We have got a `TrySendError::Full` above. Wait for a bit and try
+            // We have got a `TrySendError::Full` above. Wait for a moment and try
             // again.
-            if spin_count < 10 {
-                spin_count += 1;
+
+            if spin_loop_attempts < 4 {
+                spin_loop_attempts += 1;
                 // Wastes some CPU time with a hint to indicate to the CPU that we
-                // are spinning
-                for _ in 0..8 {
+                // are spinning. Adjust the SPIN_COUNT because the `pause`
+                // instruction of recent x86_64 CPUs may have longer latency than the
+                // alternatives in other CPU architectures.
+                const SPIN_COUNT: usize = if cfg!(target_arch = "x86_64") { 8 } else { 32 };
+                for _ in 0..SPIN_COUNT {
                     std::hint::spin_loop();
                 }
             } else {
-                spin_count = 0;
-                // Try to yield to other tasks. We have to yield sometimes, otherwise
-                // other task, which is draining the `ch`, will not make any
-                // progress. If this happens, we will stuck in this loop forever.
-                super::may_yield().await;
+                // Wait for a shared (reader) lock to become available. The exclusive
+                // (writer) lock will be already held by another async task that is
+                // currently calling `do_run_pending_tasks` method via
+                // `apply_reads_writes_if_needed` method above.
+                //
+                // `do_run_pending_tasks` will receive some of the ops from the
+                // channel and apply them to the data structures for the cache
+                // policies, so the channel will have some room for the new ops.
+                //
+                // A shared lock will become available once the async task has
+                // returned from `do_run_pending_tasks`. We release the lock
+                // immediately after we acquire it.
+                let _ = maintenance_task_lock.read().await;
+                spin_loop_attempts = 0;
+
+                // We are going to retry. If the write op channel has enough room, we
+                // will be able to send our op to the channel and we are done. If
+                // not, we (or somebody else) will become the next exclusive writer
+                // when we (or somebody) call `apply_reads_writes_if_needed` above.
             }
         }
     }
@@ -698,9 +722,10 @@ where
 
             // Retry to schedule the write op.
             let ts = cancel_guard.ts;
+            let lock = self.maintenance_task_lock();
             let op = cancel_guard.op.as_ref().cloned().unwrap();
             let hk = self.housekeeper.as_ref();
-            Self::schedule_write_op(&self.inner, &self.write_op_ch, op, ts, hk, false)
+            Self::schedule_write_op(&self.inner, &self.write_op_ch, lock, op, ts, hk, false)
                 .await
                 .expect("Failed to reschedule a write op");
 
@@ -1012,6 +1037,7 @@ pub(crate) struct Inner<K, V, S> {
     frequency_sketch_enabled: AtomicBool,
     read_op_ch: Receiver<ReadOp<K, V>>,
     write_op_ch: Receiver<WriteOp<K, V>>,
+    maintenance_task_lock: RwLock<()>,
     expiration_policy: ExpirationPolicy<K, V>,
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
@@ -1206,6 +1232,7 @@ where
             frequency_sketch_enabled: Default::default(),
             read_op_ch,
             write_op_ch,
+            maintenance_task_lock: Default::default(),
             expiration_policy,
             valid_after: Default::default(),
             weigher,
@@ -1379,8 +1406,14 @@ where
             return;
         }
 
+        // Acquire some locks.
+
+        // SAFETY: the write lock below should never be starved, because the lock
+        // strategy of async_lock::RwLock is write-preferring.
+        let write_op_ch_lock = self.maintenance_task_lock.write().await;
         let mut deqs = self.deques.lock().await;
         let mut timer_wheel = self.timer_wheel.lock().await;
+
         let mut calls = 0;
         let current_ec = self.entry_count.load();
         let current_ws = self.weighted_size.load();
@@ -1462,6 +1495,10 @@ where
             .store(eviction_state.counters.weighted_size);
 
         crossbeam_epoch::pin().flush();
+
+        // Ensure some of the locks are held until here.
+        drop(deqs);
+        drop(write_op_ch_lock);
     }
 }
 
