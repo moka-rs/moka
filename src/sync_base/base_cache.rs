@@ -480,7 +480,6 @@ where
         hash: u64,
         value: V,
     ) -> (WriteOp<K, V>, Instant) {
-        let ts = self.current_time_from_expiration_clock();
         let weight = self.inner.weigh(&key, &value);
         let op_cnt1 = Rc::new(AtomicU8::new(0));
         let op_cnt2 = Rc::clone(&op_cnt1);
@@ -490,6 +489,8 @@ where
         // Lock the key for update if blocking removal notification is enabled.
         let kl = self.maybe_key_lock(&key);
         let _klg = &kl.as_ref().map(|kl| kl.lock());
+
+        let ts = self.current_time_from_expiration_clock();
 
         // Since the cache (cht::SegmentedHashMap) employs optimistic locking
         // strategy, insert_with_or_modify() may get an insert/modify operation

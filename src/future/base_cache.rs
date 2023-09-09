@@ -479,7 +479,6 @@ where
     ) -> (WriteOp<K, V>, Instant) {
         self.retry_interrupted_ops().await;
 
-        let ts = self.current_time_from_expiration_clock();
         let weight = self.inner.weigh(&key, &value);
         let op_cnt1 = Arc::new(AtomicU8::new(0));
         let op_cnt2 = Arc::clone(&op_cnt1);
@@ -493,6 +492,8 @@ where
         } else {
             None
         };
+
+        let ts = self.current_time_from_expiration_clock();
 
         // Since the cache (cht::SegmentedHashMap) employs optimistic locking
         // strategy, insert_with_or_modify() may get an insert/modify operation
