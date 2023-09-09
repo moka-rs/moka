@@ -657,13 +657,12 @@ where
                 Err(e @ TrySendError::Disconnected(_)) => return Err(e),
             }
 
-            // We have got a `TrySendError::Full` above. Wait for a moment and try
-            // again.
+            // We have got a `TrySendError::Full` above. Wait a moment and try again.
 
             if spin_loop_attempts < 4 {
                 spin_loop_attempts += 1;
                 // Wastes some CPU time with a hint to indicate to the CPU that we
-                // are spinning. Adjust the SPIN_COUNT because the `pause`
+                // are spinning. Adjust the SPIN_COUNT because the `PAUSE`
                 // instruction of recent x86_64 CPUs may have longer latency than the
                 // alternatives in other CPU architectures.
                 const SPIN_COUNT: usize = if cfg!(target_arch = "x86_64") { 8 } else { 32 };
@@ -671,8 +670,8 @@ where
                     std::hint::spin_loop();
                 }
             } else {
-                // Wait for a shared (reader) lock to become available. The exclusive
-                // (writer) lock will be already held by another async task that is
+                // Wait for a shared reader lock to become available. The exclusive
+                // writer lock will be already held by another async task that is
                 // currently calling `do_run_pending_tasks` method via
                 // `apply_reads_writes_if_needed` method above.
                 //
