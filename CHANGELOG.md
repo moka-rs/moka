@@ -1,8 +1,9 @@
 # Moka Cache &mdash; Change Log
 
-## Version 0.12.0 (Currently Beta)
+## Version 0.12.0
 
-**ATTENTION**: `v0.12.0` has major breaking changes on the API and internal behavior.
+> **Note**
+> `v0.12.0` has major breaking changes on the API and internal behavior.
 
 - **`sync` caches are no longer enabled by default**: Please use a crate feature
   `sync` to enable it.

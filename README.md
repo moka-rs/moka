@@ -8,9 +8,9 @@
 [![license][license-badge]](#license)
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_shield)
 
-**ATTENTION**: `v0.12.0` (currently beta) has major breaking changes on the API and
-internal behavior. Please read the [MIGRATION-GUIDE.md][migration-guide-v012] for the
-details.
+> **note**
+> `v0.12.0` has major breaking changes on the API and internal behavior. Please read
+> the [MIGRATION-GUIDE.md][migration-guide-v012] for the details.
 
 * * *
 
@@ -117,9 +117,9 @@ routers. Here are some highlights:
 
 ## Recent Changes
 
-**ATTENTION**: `v0.12.0` (currently beta) has major breaking changes on the API and
-internal behavior. Please read the [MIGRATION-GUIDE.md][migration-guide-v012] for the
-details.
+> **Note**
+> `v0.12.0` has major breaking changes on the API and internal behavior. Please read
+> the [MIGRATION-GUIDE.md][migration-guide-v012] for the details.
 
 - [MIGRATION-GUIDE.md][migration-guide-v012]
 - [CHANGELOG.md](https://github.com/moka-rs/moka/blob/main/CHANGELOG.md)
