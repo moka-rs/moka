@@ -251,7 +251,7 @@ It works with asynchronous runtime such as [Tokio][tokio-crate],
 To use the asynchronous cache, [enable a crate feature called "future"](#usage).
 
 [tokio-crate]: https://crates.io/crates/tokio
-[async-std-crate]: https://crates.io/crates/asinc-std
+[async-std-crate]: https://crates.io/crates/async-std
 [actix-rt-crate]: https://crates.io/crates/actix-rt
 
 Cache entries are manually added using an insert method, and are stored in the cache
