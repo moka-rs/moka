@@ -1761,6 +1761,7 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
+    // TODO: Like future::Cache, move this method to BaseCache.
     #[inline]
     fn schedule_write_op(
         inner: &impl InnerSync,

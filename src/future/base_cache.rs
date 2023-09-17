@@ -218,6 +218,7 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
+        // TODO: Maybe we can just call ScanningGet::scanning_get.
         self.inner
             .get_key_value_and(key, hash, |k, entry| {
                 let i = &self.inner;
@@ -494,6 +495,10 @@ where
         };
 
         let ts = self.current_time_from_expiration_clock();
+
+        // TODO: Instead using Arc<AtomicU8> to check if the actual operation was
+        // insert or update, check the return value of insert_with_or_modify. If it
+        // is_some, the value was inserted, otherwise the value was updated.
 
         // Since the cache (cht::SegmentedHashMap) employs optimistic locking
         // strategy, insert_with_or_modify() may get an insert/modify operation
@@ -1089,6 +1094,14 @@ impl<K, V, S> Inner<K, V, S> {
         )
     }
 
+    fn maybe_key_lock(&self, key: &Arc<K>) -> Option<KeyLock<'_, K, S>>
+    where
+        K: Hash + Eq,
+        S: BuildHasher,
+    {
+        self.key_locks.as_ref().map(|kls| kls.key_lock(key))
+    }
+
     #[inline]
     fn current_time_from_expiration_clock(&self) -> Instant {
         if self.clocks.has_expiration_clock.load(Ordering::Relaxed) {
@@ -1152,20 +1165,6 @@ impl<K, V, S> Inner<K, V, S> {
 
 impl<K, V, S> Inner<K, V, S>
 where
-    K: Hash + Eq,
-    S: BuildHasher,
-{
-    fn maybe_key_lock(&self, key: &Arc<K>) -> Option<KeyLock<'_, K, S>>
-    where
-        K: Hash + Eq,
-        S: BuildHasher,
-    {
-        self.key_locks.as_ref().map(|kls| kls.key_lock(key))
-    }
-}
-
-impl<K, V, S> Inner<K, V, S>
-where
     K: Hash + Eq + Send + Sync + 'static,
     V: Send + Sync + 'static,
     S: BuildHasher + Clone,
@@ -1185,6 +1184,8 @@ where
         expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
     ) -> Self {
+        // TODO: Calculate the number of segments based on the max capacity and
+        // the number of CPUs.
         let (num_segments, initial_capacity) = if max_capacity == Some(0) {
             (1, 0)
         } else {
@@ -1367,6 +1368,9 @@ where
     }
 }
 
+// TODO: Calculate the batch size based on the number of entries in the cache (or an
+// estimated number of entries to evict)
+
 #[cfg(feature = "unstable-debug-counters")]
 mod batch_size {
     pub(crate) const EVICTION_BATCH_SIZE: usize = 10_000;
@@ -1452,6 +1456,8 @@ where
             .await;
         }
 
+        // TODO: When run_pending_tasks was called explicitly, do not stop evicting
+        // at the batch size.
         if self.has_expiry() || self.has_valid_after() {
             self.evict_expired_entries_using_deqs(
                 &mut deqs,
@@ -1462,6 +1468,8 @@ where
             .await;
         }
 
+        // TODO: When run_pending_tasks was called explicitly, do not stop
+        // invalidating at the batch size.
         if let Some(invalidator) = &self.invalidator {
             if !invalidator.is_empty() {
                 self.invalidate_entries(
@@ -1474,6 +1482,9 @@ where
                 .await;
             }
         }
+
+        // TODO: When run_pending_tasks was called explicitly, do not stop evicting
+        // at the batch size.
 
         // Evict if this cache has more entries than its capacity.
         let weights_to_evict = self.weights_to_evict(&eviction_state.counters);
