@@ -190,6 +190,7 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
     {
+        // TODO: Maybe we can just call ScanningGet::scanning_get.
         self.inner
             .get_key_value_and(key, hash, |k, entry| {
                 let i = &self.inner;
@@ -491,6 +492,10 @@ where
         let _klg = &kl.as_ref().map(|kl| kl.lock());
 
         let ts = self.current_time_from_expiration_clock();
+
+        // TODO: Instead using Arc<AtomicU8> to check if the actual operation was
+        // insert or update, check the return value of insert_with_or_modify. If it
+        // is_some, the value was inserted, otherwise the value was updated.
 
         // Since the cache (cht::SegmentedHashMap) employs optimistic locking
         // strategy, insert_with_or_modify() may get an insert/modify operation
@@ -900,7 +905,6 @@ pub(crate) struct Inner<K, V, S> {
     weigher: Option<Weigher<K, V>>,
     removal_notifier: Option<RemovalNotifier<K, V>>,
     key_locks: Option<KeyLockMap<K, S>>,
-    invalidator_enabled: bool,
     invalidator: Option<Invalidator<K, V, S>>,
     clocks: Clocks,
 }
@@ -984,7 +988,7 @@ impl<K, V, S> Inner<K, V, S> {
 
     #[inline]
     fn is_write_order_queue_enabled(&self) -> bool {
-        self.expiration_policy.time_to_live().is_some() || self.invalidator_enabled
+        self.expiration_policy.time_to_live().is_some() || self.invalidator.is_some()
     }
 
     #[inline]
@@ -1024,6 +1028,8 @@ where
         expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
     ) -> Self {
+        // TODO: Calculate the number of segments based on the max capacity and the
+        // number of CPUs.
         let (num_segments, initial_capacity) = if max_capacity == Some(0) {
             (1, 0)
         } else {
@@ -1077,7 +1083,6 @@ where
             weigher,
             removal_notifier,
             key_locks,
-            invalidator_enabled,
             invalidator,
             clocks,
         }
@@ -1155,10 +1160,8 @@ where
     where
         V: Clone,
     {
-        if self.invalidator_enabled {
-            if let Some(inv) = &self.invalidator {
-                return inv.apply_predicates(key, entry);
-            }
+        if let Some(inv) = &self.invalidator {
+            return inv.apply_predicates(key, entry);
         }
         false
     }
@@ -1202,6 +1205,9 @@ where
     }
 }
 
+// TODO: Calculate the batch size based on the number of entries in the cache (or an
+// estimated number of entries to evict)
+
 #[cfg(feature = "unstable-debug-counters")]
 mod batch_size {
     pub(crate) const EVICTION_BATCH_SIZE: usize = 10_000;
@@ -1214,12 +1220,6 @@ mod batch_size {
     pub(crate) const INVALIDATION_BATCH_SIZE: usize = 500;
 }
 
-// TODO: Divide this method into smaller methods so that unit tests can do more
-// precise testing.
-// - sync_reads
-// - sync_writes
-// - evict
-// - invalidate_entries
 impl<K, V, S> InnerSync for Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -1246,8 +1246,10 @@ where
             return;
         }
 
+        // Acquire some locks.
         let mut deqs = self.deques.lock();
         let mut timer_wheel = self.timer_wheel.lock();
+
         let mut calls = 0;
         let current_ec = self.entry_count.load();
         let current_ws = self.weighted_size.load();
@@ -1284,6 +1286,8 @@ where
             );
         }
 
+        // TODO: When run_pending_tasks was called explicitly, do not stop evicting
+        // at the batch size.
         if self.has_expiry() || self.has_valid_after() {
             self.evict_expired_entries_using_deqs(
                 &mut deqs,
@@ -1293,6 +1297,8 @@ where
             );
         }
 
+        // TODO: When run_pending_tasks was called explicitly, do not stop
+        // invalidating at the batch size.
         if let Some(invalidator) = &self.invalidator {
             if !invalidator.is_empty() {
                 self.invalidate_entries(
@@ -1304,6 +1310,9 @@ where
                 );
             }
         }
+
+        // TODO: When run_pending_tasks was called explicitly, do not stop evicting
+        // at the batch size.
 
         // Evict if this cache has more entries than its capacity.
         let weights_to_evict = self.weights_to_evict(&eviction_state.counters);
@@ -1324,6 +1333,9 @@ where
             .store(eviction_state.counters.weighted_size);
 
         crossbeam_epoch::pin().flush();
+
+        // Ensure the deqs lock is held until here.
+        drop(deqs);
     }
 }
 
@@ -1841,14 +1853,14 @@ where
         deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
         batch_size: usize,
-        eviction_state: &mut EvictionState<'_, K, V>,
+        state: &mut EvictionState<'_, K, V>,
     ) where
         V: Clone,
     {
         let now = self.current_time_from_expiration_clock();
 
         if self.is_write_order_queue_enabled() {
-            self.remove_expired_wo(deqs, timer_wheel, batch_size, now, eviction_state);
+            self.remove_expired_wo(deqs, timer_wheel, batch_size, now, state);
         }
 
         if self.expiration_policy.time_to_idle().is_some() || self.has_valid_after() {
@@ -1860,7 +1872,7 @@ where
             );
 
             let mut rm_expired_ao = |name, deq| {
-                self.remove_expired_ao(name, deq, wo, timer_wheel, batch_size, now, eviction_state)
+                self.remove_expired_ao(name, deq, wo, timer_wheel, batch_size, now, state)
             };
 
             rm_expired_ao("window", window);
@@ -2258,10 +2270,11 @@ where
     S: BuildHasher + Clone,
 {
     fn invalidation_predicate_count(&self) -> usize {
-        self.invalidator
-            .as_ref()
-            .map(|inv| inv.predicate_count())
-            .unwrap_or(0)
+        if let Some(inv) = &self.invalidator {
+            inv.predicate_count()
+        } else {
+            0
+        }
     }
 
     fn set_expiration_clock(&self, clock: Option<Clock>) {
