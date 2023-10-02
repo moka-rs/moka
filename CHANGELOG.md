@@ -1,5 +1,15 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.1
+
+### Fixed
+
+- Fixed memory leak in `future::Cache` when `get_with()`, `entry().or_insert_with()`,
+  and friend methods are used ([#329][gh-issue-0329]).
+    - This bug was introduced in `v0.12.0`. Versions earlier than `v0.12.0` do not
+      have this bug.
+
+
 ## Version 0.12.0
 
 > **Note**
@@ -702,6 +712,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-tinou98]: https://github.com/tinou98
 
+[gh-issue-0329]: https://github.com/moka-rs/moka/issues/329/
 [gh-issue-0322]: https://github.com/moka-rs/moka/issues/322/
 [gh-issue-0255]: https://github.com/moka-rs/moka/issues/255/
 [gh-issue-0252]: https://github.com/moka-rs/moka/issues/252/
