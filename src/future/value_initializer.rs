@@ -1,4 +1,4 @@
-use async_lock::{Mutex, RwLock, RwLockWriteGuard};
+use async_lock::{RwLock, RwLockWriteGuard};
 use async_trait::async_trait;
 use futures_util::FutureExt;
 use std::{
@@ -150,7 +150,7 @@ where
         c_hash: u64,
         type_id: TypeId,
         cache: &C,
-        ignore_if: Arc<Mutex<Option<I>>>,
+        mut ignore_if: Option<I>,
         // Future to initialize a new value.
         init: Pin<&mut impl Future<Output = O>>,
         // Function to convert a value O, returned from the init future, into
@@ -219,7 +219,7 @@ where
 
         // Check if the value has already been inserted by other thread.
         if let Some(value) = cache
-            .get_without_recording(c_key, c_hash, ignore_if.lock().await.as_mut())
+            .get_without_recording(c_key, c_hash, ignore_if.as_mut())
             .await
         {
             // Yes. Set the waiter value, remove our waiter, and return

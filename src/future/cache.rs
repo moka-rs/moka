@@ -12,7 +12,6 @@ use crate::{
 #[cfg(feature = "unstable-debug-counters")]
 use crate::common::concurrent::debug_counters::CacheDebugStats;
 
-use async_lock::Mutex;
 use async_trait::async_trait;
 use std::{
     borrow::Borrow,
@@ -1678,7 +1677,6 @@ where
             None
         };
 
-        let replace_if = Arc::new(Mutex::new(replace_if));
         let type_id = ValueInitializer::<K, V, S>::type_id_for_get_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_get_with;
 
@@ -1806,13 +1804,12 @@ where
             None
         };
 
-        let ignore_if = Arc::new(Mutex::new(never_ignore()));
         let type_id = ValueInitializer::<K, V, S>::type_id_for_optionally_get_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_optionally_get_with;
 
         match self
             .value_initializer
-            .try_init_or_read(&key, hash, type_id, self, ignore_if, init, post_init)
+            .try_init_or_read(&key, hash, type_id, self, never_ignore(), init, post_init)
             .await
         {
             InitResult::Initialized(v) => {
@@ -1889,13 +1886,12 @@ where
             None
         };
 
-        let ignore_if = Arc::new(Mutex::new(never_ignore()));
         let type_id = ValueInitializer::<K, V, S>::type_id_for_try_get_with::<E>();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_try_get_with;
 
         match self
             .value_initializer
-            .try_init_or_read(&key, hash, type_id, self, ignore_if, init, post_init)
+            .try_init_or_read(&key, hash, type_id, self, never_ignore(), init, post_init)
             .await
         {
             InitResult::Initialized(v) => {
