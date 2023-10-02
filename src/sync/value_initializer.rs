@@ -68,13 +68,13 @@ where
         const MAX_RETRIES: usize = 200;
         let mut retries = 0;
 
-        let (cht_key, hash) = self.cht_key_hash(key, type_id);
+        let (w_key, w_hash) = self.waiter_key_hash(key, type_id);
 
         loop {
             let waiter = TrioArc::new(RwLock::new(None));
             let mut lock = waiter.write();
 
-            match self.try_insert_waiter(cht_key.clone(), hash, &waiter) {
+            match self.try_insert_waiter(w_key.clone(), w_hash, &waiter) {
                 None => {
                     // Our waiter was inserted.
                     // Check if the value has already been inserted by other thread.
@@ -82,7 +82,7 @@ where
                         // Yes. Set the waiter value, remove our waiter, and return
                         // the existing value.
                         *lock = Some(Ok(value.clone()));
-                        self.remove_waiter(cht_key, hash);
+                        self.remove_waiter(w_key, w_hash);
                         return InitResult::ReadExisting(value);
                     }
 
@@ -106,14 +106,14 @@ where
                                 }
                             };
                             *lock = waiter_val;
-                            self.remove_waiter(cht_key, hash);
+                            self.remove_waiter(w_key, w_hash);
                             return init_res;
                         }
                         // Panicked.
                         Err(payload) => {
                             *lock = None;
                             // Remove the waiter so that others can retry.
-                            self.remove_waiter(cht_key, hash);
+                            self.remove_waiter(w_key, w_hash);
                             resume_unwind(payload);
                         }
                     } // The write lock will be unlocked here.
@@ -184,25 +184,25 @@ where
     }
 
     #[inline]
-    fn remove_waiter(&self, cht_key: (Arc<K>, TypeId), hash: u64) {
-        self.waiters.remove(hash, |k| k == &cht_key);
+    fn remove_waiter(&self, w_key: (Arc<K>, TypeId), w_hash: u64) {
+        self.waiters.remove(w_hash, |k| k == &w_key);
     }
 
     #[inline]
     fn try_insert_waiter(
         &self,
-        cht_key: (Arc<K>, TypeId),
-        hash: u64,
+        w_key: (Arc<K>, TypeId),
+        w_hash: u64,
         waiter: &Waiter<V>,
     ) -> Option<Waiter<V>> {
         let waiter = TrioArc::clone(waiter);
-        self.waiters.insert_if_not_present(cht_key, hash, waiter)
+        self.waiters.insert_if_not_present(w_key, w_hash, waiter)
     }
 
     #[inline]
-    fn cht_key_hash(&self, key: &Arc<K>, type_id: TypeId) -> ((Arc<K>, TypeId), u64) {
-        let cht_key = (Arc::clone(key), type_id);
-        let hash = self.waiters.hash(&cht_key);
-        (cht_key, hash)
+    fn waiter_key_hash(&self, c_key: &Arc<K>, type_id: TypeId) -> ((Arc<K>, TypeId), u64) {
+        let w_key = (Arc::clone(c_key), type_id);
+        let w_hash = self.waiters.hash(&w_key);
+        (w_key, w_hash)
     }
 }
