@@ -57,10 +57,9 @@ where
     V: Clone,
     S: BuildHasher,
 {
-    is_waiter_value_set: bool,
-    w_key: (Arc<K>, TypeId),
+    w_key: Option<(Arc<K>, TypeId)>,
     w_hash: u64,
-    waiters: TrioArc<WaiterMap<K, V, S>>,
+    waiters: &'a WaiterMap<K, V, S>,
     write_lock: RwLockWriteGuard<'a, WaiterValue<V>>,
 }
 
@@ -73,21 +72,22 @@ where
     fn new(
         w_key: (Arc<K>, TypeId),
         w_hash: u64,
-        waiters: TrioArc<WaiterMap<K, V, S>>,
+        waiters: &'a WaiterMap<K, V, S>,
         write_lock: RwLockWriteGuard<'a, WaiterValue<V>>,
     ) -> Self {
         Self {
-            is_waiter_value_set: false,
-            w_key,
+            w_key: Some(w_key),
             w_hash,
             waiters,
             write_lock,
         }
     }
 
-    fn set_waiter_value(&mut self, v: WaiterValue<V>) {
+    fn set_waiter_value(mut self, v: WaiterValue<V>) {
         *self.write_lock = v;
-        self.is_waiter_value_set = true;
+        if let Some(w_key) = self.w_key.take() {
+            remove_waiter(self.waiters, w_key, self.w_hash);
+        }
     }
 }
 
@@ -98,13 +98,12 @@ where
     S: BuildHasher,
 {
     fn drop(&mut self) {
-        if !self.is_waiter_value_set {
+        if let Some(w_key) = self.w_key.take() {
             // Value is not set. This means the future containing `*get_with` method
             // has been aborted. Remove our waiter to prevent the issue described in
             // https://github.com/moka-rs/moka/issues/59
             *self.write_lock = WaiterValue::EnclosingFutureAborted;
-            remove_waiter(&self.waiters, self.w_key.clone(), self.w_hash);
-            self.is_waiter_value_set = true;
+            remove_waiter(self.waiters, w_key, self.w_hash);
         }
     }
 }
@@ -171,104 +170,88 @@ where
 
         let (w_key, w_hash) = waiter_key_hash(&self.waiters, c_key, type_id);
 
+        let waiter = TrioArc::new(RwLock::new(WaiterValue::Computing));
+        // NOTE: We have to acquire a write lock before `try_insert_waiter`,
+        // so that any concurrent attempt will get our lock and wait on it.
+        let lock = waiter.write().await;
+
         loop {
-            let waiter = TrioArc::new(RwLock::new(WaiterValue::Computing));
-            let lock = waiter.write().await;
+            let Some(existing_waiter) =
+                try_insert_waiter(&self.waiters, w_key.clone(), w_hash, &waiter)
+            else {
+                break;
+            };
 
-            match try_insert_waiter(&self.waiters, w_key.clone(), w_hash, &waiter) {
-                None => {
-                    // Our waiter was inserted.
-
-                    // Create a guard. This will ensure to remove our waiter when the
-                    // enclosing future has been aborted:
-                    // https://github.com/moka-rs/moka/issues/59
-                    let mut waiter_guard = WaiterGuard::new(
-                        w_key.clone(),
-                        w_hash,
-                        TrioArc::clone(&self.waiters),
-                        lock,
-                    );
-
-                    // Check if the value has already been inserted by other thread.
-                    if let Some(value) = cache
-                        .get_without_recording(c_key, c_hash, ignore_if.lock().await.as_mut())
-                        .await
-                    {
-                        // Yes. Set the waiter value, remove our waiter, and return
-                        // the existing value.
-                        waiter_guard.set_waiter_value(WaiterValue::Ready(Ok(value.clone())));
-                        remove_waiter(&self.waiters, w_key, w_hash);
-                        return InitResult::ReadExisting(value);
-                    }
-
-                    // The value still does note exist. Let's resolve the init
-                    // future. Catching panic is safe here as we do not try to
-                    // resolve the future again.
-                    match AssertUnwindSafe(init).catch_unwind().await {
-                        // Resolved.
-                        Ok(value) => {
-                            let (waiter_val, init_res) = match post_init(value) {
-                                Ok(value) => {
-                                    cache.insert(Arc::clone(c_key), c_hash, value.clone()).await;
-                                    (
-                                        WaiterValue::Ready(Ok(value.clone())),
-                                        InitResult::Initialized(value),
-                                    )
-                                }
-                                Err(e) => {
-                                    let err: ErrorObject = Arc::new(e);
-                                    (
-                                        WaiterValue::Ready(Err(Arc::clone(&err))),
-                                        InitResult::InitErr(err.downcast().unwrap()),
-                                    )
-                                }
-                            };
-                            waiter_guard.set_waiter_value(waiter_val);
-                            remove_waiter(&self.waiters, w_key, w_hash);
-                            return init_res;
-                        }
-                        // Panicked.
-                        Err(payload) => {
-                            waiter_guard.set_waiter_value(WaiterValue::InitFuturePanicked);
-                            // Remove the waiter so that others can retry.
-                            remove_waiter(&self.waiters, w_key, w_hash);
-                            resume_unwind(payload);
-                        }
-                    } // The lock will be unlocked here.
+            // Somebody else's waiter already exists, so wait for its result to become available.
+            let waiter_result = existing_waiter.read().await;
+            match &*waiter_result {
+                WaiterValue::Ready(Ok(value)) => return ReadExisting(value.clone()),
+                WaiterValue::Ready(Err(e)) => return InitErr(Arc::clone(e).downcast().unwrap()),
+                // Somebody else's init future has been panicked.
+                WaiterValue::InitFuturePanicked => {
+                    retries += 1;
+                    panic_if_retry_exhausted_for_panicking(retries, MAX_RETRIES);
+                    // Retry from the beginning.
+                    continue;
                 }
-                Some(res) => {
-                    // Somebody else's waiter already exists. Drop our write lock and
-                    // wait for the read lock to become available.
-                    std::mem::drop(lock);
-                    match &*res.read().await {
-                        WaiterValue::Ready(Ok(value)) => return ReadExisting(value.clone()),
-                        WaiterValue::Ready(Err(e)) => {
-                            return InitErr(Arc::clone(e).downcast().unwrap())
-                        }
-                        // Somebody else's init future has been panicked.
-                        WaiterValue::InitFuturePanicked => {
-                            retries += 1;
-                            panic_if_retry_exhausted_for_panicking(retries, MAX_RETRIES);
-                            // Retry from the beginning.
-                            continue;
-                        }
-                        // Somebody else (a future containing `get_with`/`try_get_with`)
-                        // has been aborted.
-                        WaiterValue::EnclosingFutureAborted => {
-                            retries += 1;
-                            panic_if_retry_exhausted_for_aborting(retries, MAX_RETRIES);
-                            // Retry from the beginning.
-                            continue;
-                        }
-                        // Unexpected state.
-                        WaiterValue::Computing => panic!(
-                            "Got unexpected state `Computing` after resolving `init` future. \
-                        This might be a bug in Moka"
-                        ),
-                    }
+                // Somebody else (a future containing `get_with`/`try_get_with`)
+                // has been aborted.
+                WaiterValue::EnclosingFutureAborted => {
+                    retries += 1;
+                    panic_if_retry_exhausted_for_aborting(retries, MAX_RETRIES);
+                    // Retry from the beginning.
+                    continue;
                 }
+                // Unexpected state.
+                WaiterValue::Computing => panic!(
+                    "Got unexpected state `Computing` after resolving `init` future. \
+                    This might be a bug in Moka"
+                ),
             }
         }
+
+        // Our waiter was inserted.
+
+        // Create a guard. This will ensure to remove our waiter when the
+        // enclosing future has been aborted:
+        // https://github.com/moka-rs/moka/issues/59
+        let waiter_guard = WaiterGuard::new(w_key, w_hash, &self.waiters, lock);
+
+        // Check if the value has already been inserted by other thread.
+        if let Some(value) = cache
+            .get_without_recording(c_key, c_hash, ignore_if.lock().await.as_mut())
+            .await
+        {
+            // Yes. Set the waiter value, remove our waiter, and return
+            // the existing value.
+            waiter_guard.set_waiter_value(WaiterValue::Ready(Ok(value.clone())));
+            return ReadExisting(value);
+        }
+
+        // The value still does note exist. Let's resolve the init
+        // future. Catching panic is safe here as we do not try to
+        // resolve the future again.
+        match AssertUnwindSafe(init).catch_unwind().await {
+            // Resolved.
+            Ok(value) => match post_init(value) {
+                Ok(value) => {
+                    cache.insert(Arc::clone(c_key), c_hash, value.clone()).await;
+                    waiter_guard.set_waiter_value(WaiterValue::Ready(Ok(value.clone())));
+                    Initialized(value)
+                }
+                Err(e) => {
+                    let err: ErrorObject = Arc::new(e);
+                    waiter_guard.set_waiter_value(WaiterValue::Ready(Err(Arc::clone(&err))));
+                    InitErr(err.downcast().unwrap())
+                }
+            },
+            // Panicked.
+            Err(payload) => {
+                waiter_guard.set_waiter_value(WaiterValue::InitFuturePanicked);
+                resume_unwind(payload);
+            }
+        }
+        // The lock will be unlocked here.
     }
 
     /// The `post_init` function for the `get_with` method of cache.
