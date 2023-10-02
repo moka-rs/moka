@@ -495,7 +495,7 @@ where
 
         // TODO: Instead using Arc<AtomicU8> to check if the actual operation was
         // insert or update, check the return value of insert_with_or_modify. If it
-        // is_some, the value was inserted, otherwise the value was updated.
+        // is_some, the value was updated, otherwise the value was inserted.
 
         // Since the cache (cht::SegmentedHashMap) employs optimistic locking
         // strategy, insert_with_or_modify() may get an insert/modify operation
