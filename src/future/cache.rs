@@ -2046,6 +2046,59 @@ mod tests {
     };
     use tokio::time::sleep;
 
+    #[test]
+    fn futures_are_send() {
+        let cache = Cache::new(0);
+
+        fn is_send(_: impl Send) {}
+
+        // pub fns
+        is_send(cache.get(&()));
+        is_send(cache.get_with((), async {}));
+        is_send(cache.get_with_by_ref(&(), async {}));
+        #[allow(deprecated)]
+        is_send(cache.get_with_if((), async {}, |_| false));
+        is_send(cache.insert((), ()));
+        is_send(cache.invalidate(&()));
+        is_send(cache.optionally_get_with((), async { None }));
+        is_send(cache.optionally_get_with_by_ref(&(), async { None }));
+        is_send(cache.remove(&()));
+        is_send(cache.run_pending_tasks());
+        is_send(cache.try_get_with((), async { Err(()) }));
+        is_send(cache.try_get_with_by_ref(&(), async { Err(()) }));
+
+        // entry fns
+        is_send(cache.entry(()).or_default());
+        is_send(cache.entry(()).or_insert(()));
+        is_send(cache.entry(()).or_insert_with(async {}));
+        is_send(cache.entry(()).or_insert_with_if(async {}, |_| false));
+        is_send(cache.entry(()).or_optionally_insert_with(async { None }));
+        is_send(cache.entry(()).or_try_insert_with(async { Err(()) }));
+
+        // entry_by_ref fns
+        is_send(cache.entry_by_ref(&()).or_default());
+        is_send(cache.entry_by_ref(&()).or_insert(()));
+        is_send(cache.entry_by_ref(&()).or_insert_with(async {}));
+        is_send(
+            cache
+                .entry_by_ref(&())
+                .or_insert_with_if(async {}, |_| false),
+        );
+        is_send(
+            cache
+                .entry_by_ref(&())
+                .or_optionally_insert_with(async { None }),
+        );
+        is_send(
+            cache
+                .entry_by_ref(&())
+                .or_try_insert_with(async { Err(()) }),
+        );
+
+        // NOTE: is this fn really supposed to be public?
+        is_send(cache.invalidate_with_hash(&(), 0, true));
+    }
+
     #[tokio::test]
     async fn max_capacity_zero() {
         let mut cache = Cache::new(0);
