@@ -9,6 +9,11 @@
     - This bug was introduced in `v0.12.0`. Versions prior to `v0.12.0` do not
       have this bug.
 
+### Changed
+
+- (Performance)  Micro-optimize `ValueInitializer` ([#331][gh-pull-0331], by
+  [@Swatinem][gh-Swatinem]).
+
 
 ## Version 0.12.0
 
@@ -733,6 +738,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0331]: https://github.com/moka-rs/moka/pull/331/
 [gh-pull-0316]: https://github.com/moka-rs/moka/pull/316/
 [gh-pull-0309]: https://github.com/moka-rs/moka/pull/309/
 [gh-pull-0295]: https://github.com/moka-rs/moka/pull/295/
