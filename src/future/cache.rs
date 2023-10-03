@@ -1370,113 +1370,6 @@ where
         self.invalidate_with_hash(key, hash, true).await
     }
 
-    pub async fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64, need_value: bool) -> Option<V>
-    where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
-    {
-        use futures_util::FutureExt;
-
-        self.base.retry_interrupted_ops().await;
-
-        // Lock the key for removal if blocking removal notification is enabled.
-        let mut kl = None;
-        let mut klg = None;
-        if self.base.is_removal_notifier_enabled() {
-            // To lock the key, we have to get Arc<K> for key (&Q).
-            //
-            // TODO: Enhance this if possible. This is rather hack now because
-            // it cannot prevent race conditions like this:
-            //
-            // 1. We miss the key because it does not exist. So we do not lock
-            //    the key.
-            // 2. Somebody else (other thread) inserts the key.
-            // 3. We remove the entry for the key, but without the key lock!
-            //
-            if let Some(arc_key) = self.base.get_key_with_hash(key, hash) {
-                kl = self.base.maybe_key_lock(&arc_key);
-                klg = if let Some(lock) = &kl {
-                    Some(lock.lock().await)
-                } else {
-                    None
-                };
-            }
-        }
-
-        match self.base.remove_entry(key, hash) {
-            None => None,
-            Some(kv) => {
-                let now = self.base.current_time_from_expiration_clock();
-
-                let maybe_v = if need_value {
-                    Some(kv.entry.value.clone())
-                } else {
-                    None
-                };
-
-                let op = WriteOp::Remove(kv.clone());
-
-                // Async Cancellation Safety: To ensure the below future should be
-                // executed even if our caller async task is cancelled, we create a
-                // cancel guard for the future (and the op). If our caller is
-                // cancelled while we are awaiting for the future, the cancel guard
-                // will save the future and the op to the interrupted_op_ch channel,
-                // so that we can resume/retry later.
-                let mut cancel_guard = CancelGuard::new(&self.base.interrupted_op_ch_snd, now);
-
-                if self.base.is_removal_notifier_enabled() {
-                    let future = self
-                        .base
-                        .notify_invalidate(&kv.key, &kv.entry)
-                        .boxed()
-                        .shared();
-                    cancel_guard.set_future_and_op(future.clone(), op.clone());
-                    // Send notification to the eviction listener.
-                    future.await;
-                    cancel_guard.unset_future();
-                } else {
-                    cancel_guard.set_op(op.clone());
-                }
-
-                // Drop the locks before scheduling write op to avoid a potential
-                // dead lock. (Scheduling write can do spin lock when the queue is
-                // full, and queue will be drained by the housekeeping thread that
-                // can lock the same key)
-                std::mem::drop(klg);
-                std::mem::drop(kl);
-
-                let should_block;
-                #[cfg(not(test))]
-                {
-                    should_block = false;
-                }
-                #[cfg(test)]
-                {
-                    should_block = self.schedule_write_op_should_block.load(Ordering::Acquire);
-                }
-
-                let lock = self.base.maintenance_task_lock();
-                let hk = self.base.housekeeper.as_ref();
-
-                BaseCache::<K, V, S>::schedule_write_op(
-                    &self.base.inner,
-                    &self.base.write_op_ch,
-                    lock,
-                    op,
-                    now,
-                    hk,
-                    should_block,
-                )
-                .await
-                .expect("Failed to schedule write op for remove");
-                cancel_guard.clear();
-
-                crossbeam_epoch::pin().flush();
-                maybe_v
-            }
-        }
-    }
-
     /// Discards all cached values.
     ///
     /// This method returns immediately and a background thread will evict all the
@@ -1941,6 +1834,113 @@ where
         .expect("Failed to schedule write op for insert");
         cancel_guard.clear();
     }
+
+    async fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64, need_value: bool) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq + ?Sized,
+    {
+        use futures_util::FutureExt;
+
+        self.base.retry_interrupted_ops().await;
+
+        // Lock the key for removal if blocking removal notification is enabled.
+        let mut kl = None;
+        let mut klg = None;
+        if self.base.is_removal_notifier_enabled() {
+            // To lock the key, we have to get Arc<K> for key (&Q).
+            //
+            // TODO: Enhance this if possible. This is rather hack now because
+            // it cannot prevent race conditions like this:
+            //
+            // 1. We miss the key because it does not exist. So we do not lock
+            //    the key.
+            // 2. Somebody else (other thread) inserts the key.
+            // 3. We remove the entry for the key, but without the key lock!
+            //
+            if let Some(arc_key) = self.base.get_key_with_hash(key, hash) {
+                kl = self.base.maybe_key_lock(&arc_key);
+                klg = if let Some(lock) = &kl {
+                    Some(lock.lock().await)
+                } else {
+                    None
+                };
+            }
+        }
+
+        match self.base.remove_entry(key, hash) {
+            None => None,
+            Some(kv) => {
+                let now = self.base.current_time_from_expiration_clock();
+
+                let maybe_v = if need_value {
+                    Some(kv.entry.value.clone())
+                } else {
+                    None
+                };
+
+                let op = WriteOp::Remove(kv.clone());
+
+                // Async Cancellation Safety: To ensure the below future should be
+                // executed even if our caller async task is cancelled, we create a
+                // cancel guard for the future (and the op). If our caller is
+                // cancelled while we are awaiting for the future, the cancel guard
+                // will save the future and the op to the interrupted_op_ch channel,
+                // so that we can resume/retry later.
+                let mut cancel_guard = CancelGuard::new(&self.base.interrupted_op_ch_snd, now);
+
+                if self.base.is_removal_notifier_enabled() {
+                    let future = self
+                        .base
+                        .notify_invalidate(&kv.key, &kv.entry)
+                        .boxed()
+                        .shared();
+                    cancel_guard.set_future_and_op(future.clone(), op.clone());
+                    // Send notification to the eviction listener.
+                    future.await;
+                    cancel_guard.unset_future();
+                } else {
+                    cancel_guard.set_op(op.clone());
+                }
+
+                // Drop the locks before scheduling write op to avoid a potential
+                // dead lock. (Scheduling write can do spin lock when the queue is
+                // full, and queue will be drained by the housekeeping thread that
+                // can lock the same key)
+                std::mem::drop(klg);
+                std::mem::drop(kl);
+
+                let should_block;
+                #[cfg(not(test))]
+                {
+                    should_block = false;
+                }
+                #[cfg(test)]
+                {
+                    should_block = self.schedule_write_op_should_block.load(Ordering::Acquire);
+                }
+
+                let lock = self.base.maintenance_task_lock();
+                let hk = self.base.housekeeper.as_ref();
+
+                BaseCache::<K, V, S>::schedule_write_op(
+                    &self.base.inner,
+                    &self.base.write_op_ch,
+                    lock,
+                    op,
+                    now,
+                    hk,
+                    should_block,
+                )
+                .await
+                .expect("Failed to schedule write op for remove");
+                cancel_guard.clear();
+
+                crossbeam_epoch::pin().flush();
+                maybe_v
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -2094,9 +2094,6 @@ mod tests {
                 .entry_by_ref(&())
                 .or_try_insert_with(async { Err(()) }),
         );
-
-        // NOTE: is this fn really supposed to be public?
-        is_send(cache.invalidate_with_hash(&(), 0, true));
     }
 
     #[tokio::test]
