@@ -4,9 +4,9 @@
 
 ### Fixed
 
-- Fixed memory leak in `future::Cache` when `get_with()`, `entry().or_insert_with()`,
-  and friend methods are used ([#329][gh-issue-0329]).
-    - This bug was introduced in `v0.12.0`. Versions earlier than `v0.12.0` do not
+- Fixed memory leak in `future::Cache` that occurred when `get_with()`,
+  `entry().or_insert_with()`, and similar methods were used ([#329][gh-issue-0329]).
+    - This bug was introduced in `v0.12.0`. Versions prior to `v0.12.0` do not
       have this bug.
 
 
