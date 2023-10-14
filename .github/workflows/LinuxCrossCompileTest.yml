@@ -21,30 +21,43 @@ jobs:
   linux-cross:
     runs-on: ubuntu-latest
     strategy:
+      # Continue running other jobs in the matrix even if one fails.
+      fail-fast: false
       matrix:
         platform:
           - target: aarch64-unknown-linux-musl
+            rust-version: stable
           - target: i686-unknown-linux-musl
+            rust-version: stable
           - target: armv7-unknown-linux-musleabihf
+            rust-version: stable
           # Platforms without AtomicU64 support.
           - target: armv5te-unknown-linux-musleabi
             cargo-opts: "--no-default-features"  # Disable atomic64 and quanta features.
+            rust-version: stable
           - target: mips-unknown-linux-musl
             cargo-opts: "--no-default-features"  # Disable atomic64 and quanta features.
+            rust-version: "1.72.1"
+            cargo-version: "+1.72.1"
           - target: mipsel-unknown-linux-musl
             cargo-opts: "--no-default-features"  # Disable atomic64 and quanta features.
+            rust-version: "1.72.1"
+            cargo-version: "+1.72.1"
 
     steps:
       - name: Checkout Moka
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
-          toolchain: stable
-          target: ${{ matrix.platform.target }}
-          override: true
+          toolchain: ${{ matrix.platform.rust-version }}
+          targets: ${{ matrix.platform.target }}
+
+      - name: Install cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
 
       - name: Remove integration tests and force enable rustc_version crate
         run: |
@@ -54,25 +67,16 @@ jobs:
           sed -i 's/build = "build.rs"/build = ".ci_extras\/build_linux_cross.rs"/' Cargo.toml
           cat Cargo.toml
 
-      - uses: Swatinem/rust-cache@v1
-
-      - name: cargo clean
-        uses: actions-rs/cargo@v1
-        with:
-          command: clean
+      - run: cargo clean
 
       - name: Run tests (sync feature)
-        uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: test
-          args: --release --features sync --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
+        run: |
+          cross ${{ matrix.platform.carge-version }} test --release -F sync \
+            --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
         env:
           RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (future feature)
-        uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: test
-          args: --release --features future --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
+        run: |
+          cross ${{ matrix.platform.cargo-version }} test --release -F future \
+            --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}

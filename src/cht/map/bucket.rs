@@ -83,7 +83,9 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
         mut eq: impl FnMut(&K) -> bool,
     ) -> Result<Shared<'g, Bucket<K, V>>, RelocatedError> {
         for bucket in self.probe(guard, hash) {
-            let Ok((_, _, this_bucket_ptr)) = bucket else { return Err(RelocatedError); };
+            let Ok((_, _, this_bucket_ptr)) = bucket else {
+                return Err(RelocatedError);
+            };
 
             let this_bucket_ref = if let Some(r) = unsafe { this_bucket_ptr.as_ref() } {
                 r
@@ -121,7 +123,9 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
     {
         let mut probe = self.probe(guard, hash);
         while let Some(bucket) = probe.next() {
-            let Ok((_, this_bucket, this_bucket_ptr)) = bucket else { return Err(condition); };
+            let Ok((_, this_bucket, this_bucket_ptr)) = bucket else {
+                return Err(condition);
+            };
 
             let this_bucket_ref = if let Some(r) = unsafe { this_bucket_ptr.as_ref() } {
                 r
@@ -233,7 +237,9 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
     {
         let mut probe = self.probe(guard, hash);
         while let Some(bucket) = probe.next() {
-            let Ok((_, this_bucket, this_bucket_ptr)) = bucket else { return Err((state, modifier)); };
+            let Ok((_, this_bucket, this_bucket_ptr)) = bucket else {
+                return Err((state, modifier));
+            };
 
             let (new_bucket, maybe_insert_value) =
                 if let Some(this_bucket_ref) = unsafe { this_bucket_ptr.as_ref() } {
@@ -294,7 +300,9 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
 
         let mut probe = self.probe(guard, hash);
         while let Some(bucket) = probe.next() {
-            let Ok((i, this_bucket, this_bucket_ptr)) = bucket else { return None; };
+            let Ok((i, this_bucket, this_bucket_ptr)) = bucket else {
+                return None;
+            };
 
             if let Some(Bucket { key: this_key, .. }) = unsafe { this_bucket_ptr.as_ref() } {
                 if this_bucket_ptr == bucket_ptr {
