@@ -36,15 +36,13 @@ jobs:
 
     steps:
       - name: Checkout Moka
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: stable
-          target: ${{ matrix.platform.target }}
-          override: true
+          targets: ${{ matrix.platform.target }}
 
       - name: Remove integration tests and force enable rustc_version crate
         run: |
@@ -54,32 +52,15 @@ jobs:
           sed -i 's/build = "build.rs"/build = ".ci_extras\/build_linux_cross.rs"/' Cargo.toml
           cat Cargo.toml
 
-      - uses: Swatinem/rust-cache@v1
-
-      - name: cargo clean
-        uses: actions-rs/cargo@v1
-        with:
-          command: clean
+      - run: cargo clean
 
       - name: Run tests (sync feature)
-        uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: test
-          args: --release --features sync --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
+        run: cross test --release --features sync --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
         env:
           RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (future feature)
-        uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: test
-          args: --release --features future --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
+        run: cross test --release --features future --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
 
       - name: Run tests (dash feature)
-        uses: actions-rs/cargo@v1
-        with:
-          use-cross: true
-          command: test
-          args: --release --features dash --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
+        run: cross test --release --features dash --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
