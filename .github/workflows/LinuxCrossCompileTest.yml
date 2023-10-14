@@ -21,6 +21,8 @@ jobs:
   linux-cross:
     runs-on: ubuntu-latest
     strategy:
+      # Continue running other jobs in the matrix even if one fails.
+      fail-fast: false
       matrix:
         platform:
           - target: aarch64-unknown-linux-musl
