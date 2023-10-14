@@ -54,6 +54,11 @@ jobs:
           toolchain: ${{ matrix.platform.rust-version }}
           targets: ${{ matrix.platform.target }}
 
+      - name: Install cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+
       - name: Remove integration tests and force enable rustc_version crate
         run: |
           rm -rf tests
