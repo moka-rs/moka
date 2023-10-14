@@ -26,15 +26,23 @@ jobs:
       matrix:
         platform:
           - target: aarch64-unknown-linux-musl
+            rust-version: stable
           - target: i686-unknown-linux-musl
+            rust-version: stable
           - target: armv7-unknown-linux-musleabihf
+            rust-version: stable
           # Platforms without AtomicU64 support.
           - target: armv5te-unknown-linux-musleabi
             cargo-opts: "--no-default-features"  # Disable atomic64 and quanta features.
+            rust-version: stable
           - target: mips-unknown-linux-musl
             cargo-opts: "--no-default-features"  # Disable atomic64 and quanta features.
+            rust-version: "1.72.1"
+            cargo-version: "+1.72.1"
           - target: mipsel-unknown-linux-musl
             cargo-opts: "--no-default-features"  # Disable atomic64 and quanta features.
+            rust-version: "1.72.1"
+            cargo-version: "+1.72.1"
 
     steps:
       - name: Checkout Moka
@@ -43,7 +51,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: stable
+          toolchain: ${{ matrix.platform.rust-version }}
           targets: ${{ matrix.platform.target }}
 
       - name: Install cross
@@ -62,9 +70,13 @@ jobs:
       - run: cargo clean
 
       - name: Run tests (sync feature)
-        run: cross test --release -F sync --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
+        run: |
+          cross ${{ matrix.platform.carge-version }} test --release -F sync \
+            --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
         env:
           RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (future feature)
-        run: cross test --release -F future --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
+        run: |
+          cross ${{ matrix.platform.cargo-version }} test --release -F future \
+            --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
