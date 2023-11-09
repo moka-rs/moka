@@ -1,7 +1,7 @@
 [package]
 name = "moka"
 version = "0.12.1"
-edition = "2018"
+edition = "2021"
 # Rust 1.65 was released on Nov 3, 2022.
 rust-version = "1.65"
 description = "A fast and concurrent cache library inspired by Java Caffeine"

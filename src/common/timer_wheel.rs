@@ -373,9 +373,6 @@ impl<K> TimerWheel<K> {
     //   which is ~584 years in nanoseconds.
     //
     fn time_nanos(&self, time: Instant) -> u64 {
-        // `TryInto` will be in the prelude starting in Rust 2021 Edition.
-        use std::convert::TryInto;
-
         let nanos_u128 = time
             .checked_duration_since(self.origin)
             // If `time` is earlier than `self.origin`, use zero. This would never
