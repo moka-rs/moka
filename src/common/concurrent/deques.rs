@@ -106,10 +106,7 @@ impl<K> Deques<K> {
                     unsafe { deq.move_to_back(node) };
                 }
             } else {
-                panic!(
-                    "move_to_back_ao_in_deque - node is not a member of {} deque. {:?}",
-                    deq_name, p,
-                )
+                panic!("move_to_back_ao_in_deque - node is not a member of {deq_name} deque. {p:?}")
             }
         }
     }
@@ -187,10 +184,7 @@ impl<K> Deques<K> {
                 deq.unlink_and_drop(node);
             }
         } else {
-            panic!(
-                "unlink_node - node is not a member of {} deque. {:?}",
-                deq_name, p
-            )
+            panic!("unlink_node - node is not a member of {deq_name} deque. {p:?}")
         }
     }
 

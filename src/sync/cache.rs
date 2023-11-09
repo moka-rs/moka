@@ -68,7 +68,7 @@ use std::{
 /// use std::thread;
 ///
 /// fn value(n: usize) -> String {
-///     format!("value {}", n)
+///     format!("value {n}")
 /// }
 ///
 /// const NUM_THREADS: usize = 16;
@@ -436,12 +436,12 @@ use std::{
 ///         let mut path = self.base_dir.to_path_buf();
 ///         path.push(key.as_ref());
 ///
-///         assert!(!path.exists(), "Path already exists: {:?}", path);
+///         assert!(!path.exists(), "Path already exists: {path:?}");
 ///
 ///         // create the file at the path and write the contents to the file.
 ///         fs::write(&path, contents)?;
 ///         self.file_count += 1;
-///         println!("Created a data file at {:?} (file count: {})", path, self.file_count);
+///         println!("Created a data file at {path:?} (file count: {})", self.file_count);
 ///         Ok(path)
 ///     }
 ///
@@ -469,7 +469,7 @@ use std::{
 ///     // Arc<RwLock<_>> so it can be shared across threads.
 ///     let mut base_dir = std::env::temp_dir();
 ///     base_dir.push(Uuid::new_v4().as_hyphenated().to_string());
-///     println!("base_dir: {:?}", base_dir);
+///     println!("base_dir: {base_dir:?}");
 ///     std::fs::create_dir(&base_dir)?;
 ///
 ///     let file_mgr = DataFileManager::new(base_dir);
@@ -480,10 +480,7 @@ use std::{
 ///     // Create an eviction lister closure.
 ///     let eviction_listener = move |k, v: PathBuf, cause| {
 ///         // Try to remove the data file at the path `v`.
-///         println!(
-///             "\n== An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
-///             k, v, cause
-///         );
+///         println!("\n== An entry has been evicted. k: {k:?}, v: {v:?}, cause: {cause:?}");
 ///
 ///         // Acquire the write lock of the DataFileManager. We must handle
 ///         // error cases here to prevent the listener from panicking.
@@ -494,7 +491,7 @@ use std::{
 ///             Ok(mut mgr) => {
 ///                 // Remove the data file using the DataFileManager.
 ///                 if let Err(_e) = mgr.remove_data_file(v.as_path()) {
-///                     eprintln!("Failed to remove a data file at {:?}", v);
+///                     eprintln!("Failed to remove a data file at {v:?}");
 ///                 }
 ///             }
 ///         }
@@ -523,7 +520,7 @@ use std::{
 ///                 .with_context(|| format!("Failed to create a data file"))?;
 ///             Ok(path)
 ///         })
-///         .map_err(|e| anyhow!("{}", e))?;
+///         .map_err(|e| anyhow!("{e}"))?;
 ///
 ///     // Read the data file at the path and print the contents.
 ///     println!("\n== read_data_file()");
@@ -533,8 +530,8 @@ use std::{
 ///             .map_err(|_e| anyhow::anyhow!("The lock has been poisoned"))?;
 ///         let contents = mgr
 ///             .read_data_file(path.as_path())
-///             .with_context(|| format!("Failed to read data from {:?}", path))?;
-///         println!("contents: {}", contents);
+///             .with_context(|| format!("Failed to read data from {path:?}"))?;
+///         println!("contents: {contents}");
 ///     }
 ///
 ///     // Sleep for five seconds. While sleeping, the cache entry for key "user1"
@@ -895,13 +892,13 @@ where
     ///     .map(|task_id| {
     ///         let my_cache = cache.clone();
     ///         thread::spawn(move || {
-    ///             println!("Thread {} started.", task_id);
+    ///             println!("Thread {task_id} started.");
     ///
     ///             // Try to insert and get the value for key1. Although all four
     ///             // threads will call `get_with` at the same time, the `init` closure
     ///             // must be evaluated only once.
     ///             let value = my_cache.get_with("key1", || {
-    ///                 println!("Thread {} inserting a value.", task_id);
+    ///                 println!("Thread {task_id} inserting a value.");
     ///                 Arc::new(vec![0u8; TEN_MIB])
     ///             });
     ///
@@ -909,7 +906,7 @@ where
     ///             assert_eq!(value.len(), TEN_MIB);
     ///             assert!(my_cache.get(&"key1").is_some());
     ///
-    ///             println!("Thread {} got the value. (len: {})", task_id, value.len());
+    ///             println!("Thread {task_id} got the value. (len: {})", value.len());
     ///         })
     ///     })
     ///     .collect();
@@ -1113,7 +1110,7 @@ where
     ///
     /// /// This function tries to get the file size in bytes.
     /// fn get_file_size(thread_id: u8, path: impl AsRef<Path>) -> Option<u64> {
-    ///     println!("get_file_size() called by thread {}.", thread_id);
+    ///     println!("get_file_size() called by thread {thread_id}.");
     ///     std::fs::metadata(path).ok().map(|m| m.len())
     /// }
     ///
@@ -1124,7 +1121,7 @@ where
     ///     .map(|thread_id| {
     ///         let my_cache = cache.clone();
     ///         thread::spawn(move || {
-    ///             println!("Thread {} started.", thread_id);
+    ///             println!("Thread {thread_id} started.");
     ///
     ///             // Try to insert and get the value for key1. Although all four
     ///             // threads will call `optionally_get_with` at the same time,
@@ -1139,8 +1136,7 @@ where
     ///             assert!(my_cache.get(&"key1").is_some());
     ///
     ///             println!(
-    ///                 "Thread {} got the value. (len: {})",
-    ///                 thread_id,
+    ///                 "Thread {thread_id} got the value. (len: {})",
     ///                 value.unwrap()
     ///             );
     ///         })
@@ -1307,7 +1303,7 @@ where
     ///
     /// /// This function tries to get the file size in bytes.
     /// fn get_file_size(thread_id: u8, path: impl AsRef<Path>) -> Result<u64, std::io::Error> {
-    ///     println!("get_file_size() called by thread {}.", thread_id);
+    ///     println!("get_file_size() called by thread {thread_id}.");
     ///     Ok(std::fs::metadata(path)?.len())
     /// }
     ///
@@ -1318,7 +1314,7 @@ where
     ///     .map(|thread_id| {
     ///         let my_cache = cache.clone();
     ///         thread::spawn(move || {
-    ///             println!("Thread {} started.", thread_id);
+    ///             println!("Thread {thread_id} started.");
     ///
     ///             // Try to insert and get the value for key1. Although all four
     ///             // threads will call `try_get_with` at the same time,
@@ -1333,8 +1329,7 @@ where
     ///             assert!(my_cache.get(&"key1").is_some());
     ///
     ///             println!(
-    ///                 "Thread {} got the value. (len: {})",
-    ///                 thread_id,
+    ///                 "Thread {thread_id} got the value. (len: {})",
     ///                 value.unwrap()
     ///             );
     ///         })
@@ -2074,9 +2069,9 @@ mod tests {
             .map(|id| {
                 let cache = cache.clone();
                 std::thread::spawn(move || {
-                    cache.insert(10, format!("{}-100", id));
+                    cache.insert(10, format!("{id}-100"));
                     cache.get(&10);
-                    cache.insert(20, format!("{}-200", id));
+                    cache.insert(20, format!("{id}-200"));
                     cache.invalidate(&10);
                 })
             })
@@ -2728,7 +2723,7 @@ mod tests {
         const NUM_KEYS: usize = 50;
 
         fn make_value(key: usize) -> String {
-            format!("val: {}", key)
+            format!("val: {key}")
         }
 
         let cache = Cache::builder()
@@ -2765,7 +2760,7 @@ mod tests {
         const NUM_THREADS: usize = 16;
 
         fn make_value(key: usize) -> String {
-            format!("val: {}", key)
+            format!("val: {key}")
         }
 
         let cache = Cache::builder()
@@ -4149,7 +4144,7 @@ mod tests {
         assert_eq!(actual.len(), expected.len());
 
         for (i, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
-            assert_eq!(actual, expected, "expected[{}]", i);
+            assert_eq!(actual, expected, "expected[{i}]");
         }
 
         assert!(cache.key_locks_map_is_empty());
@@ -4303,7 +4298,7 @@ mod tests {
         cache.insert('b', "bob");
         cache.insert('c', "cindy");
 
-        let debug_str = format!("{:?}", cache);
+        let debug_str = format!("{cache:?}");
         assert!(debug_str.starts_with('{'));
         assert!(debug_str.contains(r#"'a': "alice""#));
         assert!(debug_str.contains(r#"'b': "bob""#));
@@ -4336,12 +4331,12 @@ mod tests {
                     retries += 1;
                     continue;
                 } else {
-                    assert_eq!(actual.len(), expected.len(), "Retries exhausted",);
+                    assert_eq!(actual.len(), expected.len(), "Retries exhausted");
                 }
             }
 
             for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-                assert_eq!(actual, expected, "expected[{}]", i,);
+                assert_eq!(actual, expected, "expected[{i}]");
             }
 
             break;

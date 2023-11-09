@@ -30,7 +30,7 @@ impl From<usize> for CacheRegion {
             1 => Self::MainProbation,
             2 => Self::MainProtected,
             3 => Self::Other,
-            _ => panic!("No such CacheRegion variant for {}", n),
+            _ => panic!("No such CacheRegion variant for {n}"),
         }
     }
 }

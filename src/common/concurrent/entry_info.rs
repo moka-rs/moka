@@ -179,7 +179,7 @@ mod test {
         if let Some(size) = expected {
             assert_eq!(size_of::<EntryInfo<()>>(), size);
         } else {
-            panic!("No expected size for {:?} with Rust version {}", arch, ver);
+            panic!("No expected size for {arch:?} with Rust version {ver}");
         }
     }
 }

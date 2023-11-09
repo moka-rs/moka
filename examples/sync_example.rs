@@ -4,7 +4,7 @@ use moka::sync::Cache;
 use std::thread;
 
 fn value(n: usize) -> String {
-    format!("value {}", n)
+    format!("value {n}")
 }
 
 fn main() {

@@ -1053,10 +1053,10 @@ mod tests {
             .map(|id| {
                 let cache = cache.clone();
                 std::thread::spawn(move || {
-                    cache.insert(10, format!("{}-100", id));
+                    cache.insert(10, format!("{id}-100"));
                     cache.get(&10);
                     cache.run_pending_tasks();
-                    cache.insert(20, format!("{}-200", id));
+                    cache.insert(20, format!("{id}-200"));
                     cache.invalidate(&10);
                 })
             })
@@ -1178,7 +1178,7 @@ mod tests {
 
         let names = ["alice", "alex"].iter().cloned().collect::<HashSet<_>>();
         cache.invalidate_entries_if(move |_k, &v| names.contains(v))?;
-        assert_eq!(cache.invalidation_predicate_count(), SEGMENTS,);
+        assert_eq!(cache.invalidation_predicate_count(), SEGMENTS);
         expected.insert(Arc::new(0), ("alice", RemovalCause::Explicit));
         expected.insert(Arc::new(2), ("alex", RemovalCause::Explicit));
 
@@ -1210,7 +1210,7 @@ mod tests {
 
         cache.invalidate_entries_if(|_k, &v| v == "alice")?;
         cache.invalidate_entries_if(|_k, &v| v == "bob")?;
-        assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 2,);
+        assert_eq!(cache.invalidation_predicate_count(), SEGMENTS * 2);
         expected.insert(Arc::new(1), ("bob", RemovalCause::Explicit));
         expected.insert(Arc::new(3), ("alice", RemovalCause::Explicit));
 
@@ -1239,7 +1239,7 @@ mod tests {
         const NUM_KEYS: usize = 50;
 
         fn make_value(key: usize) -> String {
-            format!("val: {}", key)
+            format!("val: {key}")
         }
 
         // let cache = SegmentedCache::builder(5)
@@ -1277,7 +1277,7 @@ mod tests {
         const NUM_THREADS: usize = 16;
 
         fn make_value(key: usize) -> String {
-            format!("val: {}", key)
+            format!("val: {key}")
         }
 
         let cache = SegmentedCache::builder(4)
@@ -1908,7 +1908,7 @@ mod tests {
         cache.insert('b', "bob");
         cache.insert('c', "cindy");
 
-        let debug_str = format!("{:?}", cache);
+        let debug_str = format!("{cache:?}");
         assert!(debug_str.starts_with('{'));
         assert!(debug_str.contains(r#"'a': "alice""#));
         assert!(debug_str.contains(r#"'b': "bob""#));
@@ -1942,12 +1942,12 @@ mod tests {
                     cache.run_pending_tasks();
                     continue;
                 } else {
-                    assert_eq!(actual.len(), expected.len(), "Retries exhausted",);
+                    assert_eq!(actual.len(), expected.len(), "Retries exhausted");
                 }
             }
 
             for (i, (actual, expected)) in actual.iter().zip(expected).enumerate() {
-                assert_eq!(actual, expected, "expected[{}]", i);
+                assert_eq!(actual, expected, "expected[{i}]");
             }
 
             break;
@@ -1977,7 +1977,7 @@ mod tests {
                     cache.run_pending_tasks();
                     continue;
                 } else {
-                    assert_eq!(actual.len(), expected.len(), "Retries exhausted",);
+                    assert_eq!(actual.len(), expected.len(), "Retries exhausted");
                 }
             }
 
@@ -1985,8 +1985,7 @@ mod tests {
                 assert_eq!(
                     actual.get(actual_key),
                     expected.get(actual_key),
-                    "expected[{}]",
-                    actual_key,
+                    "expected[{actual_key}]",
                 );
             }
 

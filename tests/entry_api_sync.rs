@@ -36,31 +36,31 @@ macro_rules! generate_test_get_with {
                         thread::spawn(move || {
                             my_barrier.wait();
 
-                            println!("Thread {} started.", thread_id);
+                            println!("Thread {thread_id} started.");
 
                             let key = "key1".to_string();
                             let value = match thread_id % 4 {
                                 0 => my_cache.get_with(key.clone(), || {
-                                    println!("Thread {} inserting a value.", thread_id);
+                                    println!("Thread {thread_id} inserting a value.");
                                     my_call_counter.fetch_add(1, Ordering::AcqRel);
                                     Arc::new(vec![0u8; TEN_MIB])
                                 }),
                                 1 => my_cache.get_with_by_ref(key.as_str(), || {
-                                    println!("Thread {} inserting a value.", thread_id);
+                                    println!("Thread {thread_id} inserting a value.");
                                     my_call_counter.fetch_add(1, Ordering::AcqRel);
                                     Arc::new(vec![0u8; TEN_MIB])
                                 }),
                                 2 => my_cache
                                         .entry(key.clone())
                                         .or_insert_with(|| {
-                                    println!("Thread {} inserting a value.", thread_id);
+                                    println!("Thread {thread_id} inserting a value.");
                                     my_call_counter.fetch_add(1, Ordering::AcqRel);
                                     Arc::new(vec![0u8; TEN_MIB])
                                 }).into_value(),
                                 3 => my_cache
                                         .entry_by_ref(key.as_str())
                                         .or_insert_with(|| {
-                                    println!("Thread {} inserting a value.", thread_id);
+                                    println!("Thread {thread_id} inserting a value.");
                                     my_call_counter.fetch_add(1, Ordering::AcqRel);
                                     Arc::new(vec![0u8; TEN_MIB])
                                 }).into_value(),
@@ -70,7 +70,7 @@ macro_rules! generate_test_get_with {
                             assert_eq!(value.len(), TEN_MIB);
                             assert!(my_cache.get(key.as_str()).is_some());
 
-                            println!("Thread {} got the value. (len: {})", thread_id, value.len());
+                            println!("Thread {thread_id} got the value. (len: {})", value.len());
                         })
                     })
                     .collect();
@@ -99,7 +99,7 @@ macro_rules! generate_test_optionally_get_with {
                     path: impl AsRef<Path>,
                     call_counter: &AtomicUsize,
                 ) -> Option<u64> {
-                    println!("get_file_size() called by thread {}.", thread_id);
+                    println!("get_file_size() called by thread {thread_id}.");
                     call_counter.fetch_add(1, Ordering::AcqRel);
                     std::fs::metadata(path).ok().map(|m| m.len())
                 }
@@ -113,7 +113,7 @@ macro_rules! generate_test_optionally_get_with {
                         thread::spawn(move || {
                             my_barrier.wait();
 
-                            println!("Thread {} started.", thread_id);
+                            println!("Thread {thread_id} started.");
 
                             let key = "key1".to_string();
                             let value = match thread_id % 4 {
@@ -144,8 +144,7 @@ macro_rules! generate_test_optionally_get_with {
                             assert!(my_cache.get(key.as_str()).is_some());
 
                             println!(
-                                "Thread {} got the value. (len: {})",
-                                thread_id,
+                                "Thread {thread_id} got the value. (len: {})",
                                 value.unwrap()
                             );
                         })
@@ -176,7 +175,7 @@ macro_rules! generate_test_try_get_with {
                     path: impl AsRef<Path>,
                     call_counter: &AtomicUsize,
                 ) -> Result<u64, std::io::Error> {
-                    println!("get_file_size() called by thread {}.", thread_id);
+                    println!("get_file_size() called by thread {thread_id}.");
                     call_counter.fetch_add(1, Ordering::AcqRel);
                     Ok(std::fs::metadata(path)?.len())
                 }
@@ -190,7 +189,7 @@ macro_rules! generate_test_try_get_with {
                         thread::spawn(move || {
                             my_barrier.wait();
 
-                            println!("Thread {} started.", thread_id);
+                            println!("Thread {thread_id} started.");
 
                             let key = "key1".to_string();
                             let value = match thread_id % 4 {
@@ -221,8 +220,7 @@ macro_rules! generate_test_try_get_with {
                             assert!(my_cache.get(key.as_str()).is_some());
 
                             println!(
-                                "Thread {} got the value. (len: {})",
-                                thread_id,
+                                "Thread {thread_id} got the value. (len: {})",
                                 value.unwrap()
                             );
                         })

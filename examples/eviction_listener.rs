@@ -9,7 +9,7 @@ fn main() {
             .max_capacity(2)
             .time_to_live(Duration::from_secs(1))
             .eviction_listener(|key, value, cause| {
-                println!("Evicted ({:?},{:?}) because {:?}", key, value, cause)
+                println!("Evicted ({key:?},{value:?}) because {cause:?}")
             })
             .build();
         // Overload capacity of the cache.
