@@ -336,8 +336,7 @@ fn panic_if_retry_exhausted_for_panicking(retries: usize, max: usize) {
     if retries >= max {
         panic!(
             "Too many retries. Tried to read the return value from the `init` future \
-    but failed {} times. Maybe the `init` kept panicking?",
-            retries
+    but failed {retries} times. Maybe the `init` kept panicking?"
         );
     }
 }
@@ -346,9 +345,8 @@ fn panic_if_retry_exhausted_for_aborting(retries: usize, max: usize) {
     if retries >= max {
         panic!(
             "Too many retries. Tried to read the return value from the `init` future \
-    but failed {} times. Maybe the future containing `get_with`/`try_get_with` \
-    kept being aborted?",
-            retries
+    but failed {retries} times. Maybe the future containing `get_with`/`try_get_with` \
+    kept being aborted?"
         );
     }
 }

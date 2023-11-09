@@ -443,7 +443,7 @@ impl<'g, K: 'g, V: 'g> BucketArray<K, V> {
                 // We need to return here to see if rehashing is still needed.
                 return None;
             }
-            Err(e @ TryLockError::Poisoned(_)) => panic!("{:?}", e),
+            Err(e @ TryLockError::Poisoned(_)) => panic!("{e:?}"),
         };
 
         let next_array = self.next_array(guard, rehash_op);

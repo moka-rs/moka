@@ -211,10 +211,7 @@ use moka::notification::ListenerFuture;
 use moka::future::FutureExt;
 
 let eviction_listener = move |k, v: PathBuf, cause| -> ListenerFuture {
-    println!(
-        "\n== An entry has been evicted. k: {:?}, v: {:?}, cause: {:?}",
-        k, v, cause
-    );
+    println!("\n== An entry has been evicted. k: {k:?}, v: {v:?}, cause: {cause:?}");
     let file_mgr2 = Arc::clone(&file_mgr1);
 
     // Create a Future that removes the data file at the path `v`.
@@ -224,7 +221,7 @@ let eviction_listener = move |k, v: PathBuf, cause| -> ListenerFuture {
         // Remove the data file. We must handle error cases here to
         // prevent the listener from panicking.
         if let Err(_e) = mgr.remove_data_file(v.as_path()).await {
-            eprintln!("Failed to remove a data file at {:?}", v);
+            eprintln!("Failed to remove a data file at {v:?}");
         }
     }
     // Convert the regular Future into ListenerFuture. This method is

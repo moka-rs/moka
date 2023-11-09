@@ -27,14 +27,14 @@ async fn test_get_with() {
             tokio::spawn(async move {
                 my_barrier.wait().await;
 
-                println!("Task {} started.", task_id);
+                println!("Task {task_id} started.");
 
                 let key = "key1".to_string();
                 let value = match task_id % 4 {
                     0 => {
                         my_cache
                             .get_with(key.clone(), async move {
-                                println!("Task {} inserting a value.", task_id);
+                                println!("Task {task_id} inserting a value.");
                                 my_call_counter.fetch_add(1, Ordering::AcqRel);
                                 Arc::new(vec![0u8; TEN_MIB])
                             })
@@ -43,7 +43,7 @@ async fn test_get_with() {
                     1 => {
                         my_cache
                             .get_with_by_ref(key.as_str(), async move {
-                                println!("Task {} inserting a value.", task_id);
+                                println!("Task {task_id} inserting a value.");
                                 my_call_counter.fetch_add(1, Ordering::AcqRel);
                                 Arc::new(vec![0u8; TEN_MIB])
                             })
@@ -52,7 +52,7 @@ async fn test_get_with() {
                     2 => my_cache
                         .entry(key.clone())
                         .or_insert_with(async move {
-                            println!("Task {} inserting a value.", task_id);
+                            println!("Task {task_id} inserting a value.");
                             my_call_counter.fetch_add(1, Ordering::AcqRel);
                             Arc::new(vec![0u8; TEN_MIB])
                         })
@@ -61,7 +61,7 @@ async fn test_get_with() {
                     3 => my_cache
                         .entry_by_ref(key.as_str())
                         .or_insert_with(async move {
-                            println!("Task {} inserting a value.", task_id);
+                            println!("Task {task_id} inserting a value.");
                             my_call_counter.fetch_add(1, Ordering::AcqRel);
                             Arc::new(vec![0u8; TEN_MIB])
                         })
@@ -73,7 +73,7 @@ async fn test_get_with() {
                 assert_eq!(value.len(), TEN_MIB);
                 assert!(my_cache.get(key.as_str()).await.is_some());
 
-                println!("Task {} got the value. (len: {})", task_id, value.len());
+                println!("Task {task_id} got the value. (len: {})", value.len());
             })
         })
         .collect();
@@ -89,7 +89,7 @@ async fn test_optionally_get_with() {
     let barrier = Arc::new(Barrier::new(NUM_THREADS as usize));
 
     async fn get_html(task_id: u8, uri: &str, call_counter: &AtomicUsize) -> Option<String> {
-        println!("get_html() called by task {}.", task_id);
+        println!("get_html() called by task {task_id}.");
         call_counter.fetch_add(1, Ordering::AcqRel);
         reqwest::get(uri).await.ok()?.text().await.ok()
     }
@@ -103,7 +103,7 @@ async fn test_optionally_get_with() {
             tokio::spawn(async move {
                 my_barrier.wait().await;
 
-                println!("Task {} started.", task_id);
+                println!("Task {task_id} started.");
 
                 let key = "key1".to_string();
                 let value = match task_id % 4 {
@@ -140,8 +140,7 @@ async fn test_optionally_get_with() {
                 assert!(my_cache.get(key.as_str()).await.is_some());
 
                 println!(
-                    "Task {} got the value. (len: {})",
-                    task_id,
+                    "Task {task_id} got the value. (len: {})",
                     value.unwrap().len()
                 );
             })
@@ -163,7 +162,7 @@ async fn test_try_get_with() {
         uri: &str,
         call_counter: &AtomicUsize,
     ) -> Result<String, reqwest::Error> {
-        println!("get_html() called by task {}.", task_id);
+        println!("get_html() called by task {task_id}.");
         call_counter.fetch_add(1, Ordering::AcqRel);
         reqwest::get(uri).await?.text().await
     }
@@ -177,7 +176,7 @@ async fn test_try_get_with() {
             tokio::spawn(async move {
                 my_barrier.wait().await;
 
-                println!("Task {} started.", task_id);
+                println!("Task {task_id} started.");
 
                 let key = "key1".to_string();
                 let value = match task_id % 4 {
@@ -211,8 +210,7 @@ async fn test_try_get_with() {
                 assert!(my_cache.get(key.as_str()).await.is_some());
 
                 println!(
-                    "Task {} got the value. (len: {})",
-                    task_id,
+                    "Task {task_id} got the value. (len: {})",
                     value.unwrap().len()
                 );
             })

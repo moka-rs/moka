@@ -53,16 +53,12 @@ fn log_panic(payload: &(dyn std::any::Any + Send + 'static), cache_name: Option<
             .or_else(|| payload.downcast_ref::<String>().map(Into::into));
 
     let cn = cache_name
-        .map(|name| format!("[{}] ", name))
+        .map(|name| format!("[{name}] "))
         .unwrap_or_default();
 
     if let Some(m) = message {
-        log::error!(
-            "{}Disabled the eviction listener because it panicked at '{}'",
-            cn,
-            m
-        );
+        log::error!("{cn}Disabled the eviction listener because it panicked at '{m}'");
     } else {
-        log::error!("{}Disabled the eviction listener because it panicked", cn);
+        log::error!("{cn}Disabled the eviction listener because it panicked");
     }
 }

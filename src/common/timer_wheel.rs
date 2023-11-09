@@ -327,9 +327,7 @@ impl<K> TimerWheel<K> {
         let deque = &mut self.wheels[level][index];
         debug_assert!(
             deque.len() > 0,
-            "BUG: The queue is empty. level: {}, index: {}",
-            level,
-            index
+            "BUG: The queue is empty. level: {level}, index: {index}"
         );
 
         // Rotate the nodes in the queue until we see the sentinel at the back of the
@@ -661,7 +659,7 @@ mod tests {
             let entry = maybe_entry.expect("entry is none");
             match entry {
                 TimerEvent::Expired(node) => *node.element.entry_info().key_hash().key,
-                _ => panic!("Expected an expired entry. Got {:?}", entry),
+                _ => panic!("Expected an expired entry. Got {entry:?}"),
             }
         }
 
@@ -669,7 +667,7 @@ mod tests {
             let entry = maybe_entry.expect("entry is none");
             match entry {
                 TimerEvent::Rescheduled(entry) => *entry.key_hash().key,
-                _ => panic!("Expected a rescheduled entry. Got {:?}", entry),
+                _ => panic!("Expected a rescheduled entry. Got {entry:?}"),
             }
         }
 

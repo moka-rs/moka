@@ -93,8 +93,7 @@ where
                     } else {
                         panic!(
                             "Too many retries. Tried to read the return value from the `init` \
-                            closure but failed {} times. Maybe the `init` kept panicking?",
-                            retries
+                            closure but failed {retries} times. Maybe the `init` kept panicking?"
                         );
                     }
                 }

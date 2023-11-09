@@ -2457,8 +2457,7 @@ mod tests {
             assert_eq!(
                 cache.inner.frequency_sketch.read().table_len(),
                 len as usize,
-                "{}",
-                name
+                "{name}"
             );
         };
 
@@ -2675,8 +2674,9 @@ mod tests {
                         new_duration.map(Duration::from_secs)
                     }
                     expected => {
-                        panic!("Unexpected call to expire_after_create: caller_line {}, expected: {:?}",
-                            line!(), expected
+                        panic!(
+                            "Unexpected call to expire_after_create: caller_line {}, expected: {expected:?}",
+                            line!()
                         );
                     }
                 }
@@ -2728,9 +2728,8 @@ mod tests {
                     }
                     expected => {
                         panic!(
-                            "Unexpected call to expire_after_read: caller_line {}, expected: {:?}",
-                            line!(),
-                            expected
+                            "Unexpected call to expire_after_read: caller_line {}, expected: {expected:?}",
+                            line!()
                         );
                     }
                 }
@@ -2773,8 +2772,9 @@ mod tests {
                         new_duration_secs.map(Duration::from_secs)
                     }
                     expected => {
-                        panic!("Unexpected call to expire_after_update: caller_line {}, expected: {:?}",
-                            line!(), expected
+                        panic!(
+                            "Unexpected call to expire_after_update: caller_line {}, expected: {expected:?}",
+                            line!()
                         );
                     }
                 }
