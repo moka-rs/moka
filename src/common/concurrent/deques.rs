@@ -101,12 +101,13 @@ impl<K> Deques<K> {
         if let Some(tagged_node) = entry.access_order_q_node() {
             let (node, tag) = tagged_node.decompose();
             let p = unsafe { node.as_ref() };
-            if deq.region() == tag {
-                if deq.contains(p) {
-                    unsafe { deq.move_to_back(node) };
-                }
-            } else {
-                panic!("move_to_back_ao_in_deque - node is not a member of {deq_name} deque. {p:?}")
+            assert_eq!(
+                deq.region(),
+                tag,
+                "move_to_back_ao_in_deque - node is not a member of {deq_name} deque. {p:?}"
+            );
+            if deq.contains(p) {
+                unsafe { deq.move_to_back(node) };
             }
         }
     }
@@ -178,13 +179,14 @@ impl<K> Deques<K> {
     ) {
         let (node, tag) = tagged_node.decompose();
         let p = node.as_ref();
-        if deq.region() == tag {
-            if deq.contains(p) {
-                // https://github.com/moka-rs/moka/issues/64
-                deq.unlink_and_drop(node);
-            }
-        } else {
-            panic!("unlink_node - node is not a member of {deq_name} deque. {p:?}")
+        assert_eq!(
+            deq.region(),
+            tag,
+            "unlink_node - node is not a member of {deq_name} deque. {p:?}"
+        );
+        if deq.contains(p) {
+            // https://github.com/moka-rs/moka/issues/64
+            deq.unlink_and_drop(node);
         }
     }
 
