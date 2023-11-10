@@ -163,7 +163,7 @@ where
         E: Send + Sync + 'static,
     {
         use std::panic::{resume_unwind, AssertUnwindSafe};
-        use InitResult::*;
+        use InitResult::{InitErr, Initialized, ReadExisting};
 
         const MAX_RETRIES: usize = 200;
         let mut retries = 0;
@@ -333,20 +333,18 @@ where
 }
 
 fn panic_if_retry_exhausted_for_panicking(retries: usize, max: usize) {
-    if retries >= max {
-        panic!(
-            "Too many retries. Tried to read the return value from the `init` future \
+    assert!(
+        retries < max,
+        "Too many retries. Tried to read the return value from the `init` future \
     but failed {retries} times. Maybe the `init` kept panicking?"
-        );
-    }
+    );
 }
 
 fn panic_if_retry_exhausted_for_aborting(retries: usize, max: usize) {
-    if retries >= max {
-        panic!(
-            "Too many retries. Tried to read the return value from the `init` future \
+    assert!(
+        retries < max,
+        "Too many retries. Tried to read the return value from the `init` future \
     but failed {retries} times. Maybe the future containing `get_with`/`try_get_with` \
     kept being aborted?"
-        );
-    }
+    );
 }

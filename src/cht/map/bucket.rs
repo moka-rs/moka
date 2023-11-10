@@ -54,7 +54,7 @@ impl<K, V> BucketArray<K, V> {
             next: Atomic::null(),
             epoch,
             rehash_lock: Arc::new(Mutex::new(())),
-            tombstone_count: Default::default(),
+            tombstone_count: AtomicUsize::default(),
         }
     }
 
@@ -87,9 +87,7 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
                 return Err(RelocatedError);
             };
 
-            let this_bucket_ref = if let Some(r) = unsafe { this_bucket_ptr.as_ref() } {
-                r
-            } else {
+            let Some(this_bucket_ref) = (unsafe { this_bucket_ptr.as_ref() }) else {
                 // Not found.
                 return Ok(Shared::null());
             };
@@ -127,9 +125,7 @@ impl<'g, K: 'g + Eq, V: 'g> BucketArray<K, V> {
                 return Err(condition);
             };
 
-            let this_bucket_ref = if let Some(r) = unsafe { this_bucket_ptr.as_ref() } {
-                r
-            } else {
+            let Some(this_bucket_ref) = (unsafe { this_bucket_ptr.as_ref() }) else {
                 // Nothing to remove.
                 return Ok(Shared::null());
             };
@@ -611,7 +607,7 @@ impl<K, V, F: FnOnce() -> V> InsertOrModifyState<K, V, F> {
                     mem::drop(
                         mem::replace(&mut b.maybe_value, MaybeUninit::new(v_or_f.into_value()))
                             .assume_init(),
-                    )
+                    );
                 };
 
                 b
@@ -636,8 +632,8 @@ impl<K, V, F: FnOnce() -> V> InsertOrModifyState<K, V, F> {
                 unsafe {
                     mem::drop(
                         mem::replace(&mut b.maybe_value, MaybeUninit::new(value)).assume_init(),
-                    )
-                };
+                    );
+                }
 
                 (b, v_or_f)
             }
@@ -749,11 +745,11 @@ impl RehashOp {
         Self::Skip
     }
 
-    pub(crate) fn is_skip(&self) -> bool {
-        matches!(self, &Self::Skip)
+    pub(crate) fn is_skip(self) -> bool {
+        matches!(self, Self::Skip)
     }
 
-    fn new_len(&self, current_len: usize) -> usize {
+    fn new_len(self, current_len: usize) -> usize {
         match self {
             Self::Expand => current_len * 2,
             Self::Shrink => current_len / 2,

@@ -171,13 +171,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// # Hashing Algorithm
 ///
 /// By default, `Cache` uses a hashing algorithm selected to provide resistance
-/// against HashDoS attacks. It will be the same one used by
-/// `std::collections::HashMap`, which is currently SipHash 1-3.
+/// against `HashDoS` attacks. It will be the same one used by
+/// `std::collections::HashMap`, which is currently `SipHash` 1-3.
 ///
-/// While SipHash's performance is very competitive for medium sized keys, other
+/// While `SipHash`'s performance is very competitive for medium sized keys, other
 /// hashing algorithms will outperform it for small keys such as integers as well as
 /// large keys such as long strings. However those algorithms will typically not
-/// protect against attacks such as HashDoS.
+/// protect against attacks such as `HashDoS`.
 ///
 /// The hashing algorithm can be replaced on a per-`Cache` basis using the
 /// [`build_with_hasher`][build-with-hasher-method] method of the `CacheBuilder`.
@@ -680,7 +680,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d_map = f.debug_map();
 
-        for (k, v) in self.iter() {
+        for (k, v) in self {
             d_map.entry(&k, &v);
         }
 
@@ -785,7 +785,7 @@ where
             build_hasher,
             None,
             None,
-            Default::default(),
+            ExpirationPolicy::default(),
             false,
         )
     }
@@ -1330,7 +1330,7 @@ where
     pub async fn insert(&self, key: K, value: V) {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
-        self.insert_with_hash(key, hash, value).await
+        self.insert_with_hash(key, hash, value).await;
     }
 
     /// Discards any cached value for the key.

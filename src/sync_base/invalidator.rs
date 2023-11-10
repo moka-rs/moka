@@ -203,7 +203,7 @@ impl<K, V, S> Invalidator<K, V, S> {
                     invalidated.push(KvEntry {
                         key: Arc::clone(key),
                         entry,
-                    })
+                    });
                 }
             }
             newest_timestamp = Some(ts);
@@ -267,10 +267,10 @@ impl<K, V, S> Invalidator<K, V, S> {
         S: BuildHasher,
     {
         let pred_map = &self.predicates;
-        predicates.iter().for_each(|p| {
+        for p in predicates.iter() {
             let hash = pred_map.hash(p.id());
             pred_map.remove(hash, |k| k == p.id());
-        });
+        }
 
         if pred_map.is_empty() {
             self.is_empty.store(true, Ordering::Release);

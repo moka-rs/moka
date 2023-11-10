@@ -22,8 +22,8 @@
 //! adds another layer of indirection between the hash table and its buckets.
 //!
 //! The idea for segmenting hash tables was inspired by the
-//! [`ConcurrentHashMap`] from OpenJDK 7, which consists of a number of
-//! separately-locked segments. OpenJDK 8 introduced a striped concurrent hash
+//! [`ConcurrentHashMap`] from `OpenJDK` 7, which consists of a number of
+//! separately-locked segments. `OpenJDK` 8 introduced a striped concurrent hash
 //! map that stripes a set of bucket locks across the set of buckets using the
 //! least significant bits of hashed keys.
 //!
@@ -50,15 +50,15 @@ use crossbeam_epoch::Atomic;
 /// addressing, and linear probing.
 ///
 /// By default, `Cache` uses a hashing algorithm selected to provide resistance
-/// against HashDoS attacks.
+/// against `HashDoS` attacks.
 ///
 /// The default hashing algorithm is the one used by `std::collections::HashMap`,
-/// which is currently SipHash 1-3.
+/// which is currently `SipHash` 1-3.
 ///
 /// While its performance is very competitive for medium sized keys, other hashing
 /// algorithms will outperform it for small keys such as integers as well as large
 /// keys such as long strings. However those algorithms will typically not protect
-/// against attacks such as HashDoS.
+/// against attacks such as `HashDoS`.
 ///
 /// The hashing algorithm can be replaced on a per-`HashMap` basis using the
 /// [`default`], [`with_hasher`], [`with_capacity_and_hasher`],
@@ -237,7 +237,7 @@ impl<K, V, S> HashMap<K, V, S> {
             .iter()
             .map(|s| s.bucket_array.load_consume(guard))
             .map(|p| unsafe { p.as_ref() })
-            .map(|a| a.map(BucketArray::capacity).unwrap_or(0))
+            .map(|a| a.map_or(0, BucketArray::capacity))
             .sum::<usize>()
     }
 

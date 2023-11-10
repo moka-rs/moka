@@ -78,9 +78,9 @@ where
             initial_capacity: None,
             weigher: None,
             eviction_listener: None,
-            expiration_policy: Default::default(),
+            expiration_policy: ExpirationPolicy::default(),
             invalidator_enabled: false,
-            cache_type: Default::default(),
+            cache_type: PhantomData::default(),
         }
     }
 }
@@ -126,7 +126,7 @@ where
     ///
     /// # Examples
     ///
-    /// This example uses AHash hasher from [AHash][ahash-crate] crate.
+    /// This example uses `AHash` hasher from [AHash][ahash-crate] crate.
     ///
     /// [ahash-crate]: https://crates.io/crates/ahash
     ///
@@ -377,7 +377,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         builder
     }
 
-    /// Enables support for [Cache::invalidate_entries_if][cache-invalidate-if]
+    /// Enables support for [`Cache::invalidate_entries_if`][cache-invalidate-if]
     /// method.
     ///
     /// The cache will maintain additional internal data structures to support

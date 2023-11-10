@@ -28,7 +28,7 @@ impl<K> EntryInfo<K> {
 
         Self {
             key_hash,
-            is_admitted: Default::default(),
+            is_admitted: AtomicBool::default(),
             is_dirty: AtomicBool::new(true),
             last_accessed: AtomicInstant::new(timestamp),
             last_modified: AtomicInstant::new(timestamp),

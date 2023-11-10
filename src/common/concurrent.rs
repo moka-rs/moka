@@ -320,7 +320,7 @@ pub(crate) enum WriteOp<K, V> {
     Remove(KvEntry<K, V>),
 }
 
-/// Cloning a WriteOp is safe and cheap because it uses Arc and TrioArc pointers to
+/// Cloning a `WriteOp` is safe and cheap because it uses `Arc` and `TrioArc` pointers to
 /// the actual data.
 impl<K, V> Clone for WriteOp<K, V> {
     fn clone(&self) -> Self {

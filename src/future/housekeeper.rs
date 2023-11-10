@@ -44,7 +44,7 @@ pub(crate) struct Housekeeper {
 impl Default for Housekeeper {
     fn default() -> Self {
         Self {
-            current_task: Default::default(),
+            current_task: Mutex::default(),
             run_after: AtomicInstant::new(Self::sync_after(Instant::now())),
             auto_run_enabled: AtomicBool::new(true),
             #[cfg(test)]

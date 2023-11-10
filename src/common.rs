@@ -37,7 +37,7 @@ impl From<usize> for CacheRegion {
 
 #[cfg(feature = "future")]
 impl CacheRegion {
-    pub(crate) fn name(&self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             Self::Window => "window",
             Self::MainProbation => "main probation",

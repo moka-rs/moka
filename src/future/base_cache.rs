@@ -339,23 +339,20 @@ where
                 }
             });
 
-        match maybe_kv_and_op {
-            Some((ent, maybe_op, now)) => {
-                if let Some(op) = maybe_op {
-                    self.record_read_op(op, now)
-                        .await
-                        .expect("Failed to record a get op");
-                }
-                Some(ent)
+        if let Some((ent, maybe_op, now)) = maybe_kv_and_op {
+            if let Some(op) = maybe_op {
+                self.record_read_op(op, now)
+                    .await
+                    .expect("Failed to record a get op");
             }
-            None => {
-                if record_read {
-                    self.record_read_op(ReadOp::Miss(hash), now)
-                        .await
-                        .expect("Failed to record a get op");
-                }
-                None
+            Some(ent)
+        } else {
+            if record_read {
+                self.record_read_op(ReadOp::Miss(hash), now)
+                    .await
+                    .expect("Failed to record a get op");
             }
+            None
         }
     }
 
@@ -1003,8 +1000,8 @@ struct Clocks {
 impl Clocks {
     fn new(time: Instant, std_time: StdInstant) -> Self {
         Self {
-            _lock: Default::default(),
-            has_expiration_clock: Default::default(),
+            _lock: Mutex::default(),
+            has_expiration_clock: AtomicBool::default(),
             expiration_clock: Default::default(),
             origin: time,
             origin_std: std_time,
@@ -1223,19 +1220,19 @@ where
         Self {
             name,
             max_capacity,
-            entry_count: Default::default(),
-            weighted_size: Default::default(),
+            entry_count: AtomicCell::default(),
+            weighted_size: AtomicCell::default(),
             cache,
             build_hasher,
-            deques: Default::default(),
+            deques: Mutex::default(),
             timer_wheel,
-            frequency_sketch: RwLock::new(Default::default()),
-            frequency_sketch_enabled: Default::default(),
+            frequency_sketch: RwLock::new(FrequencySketch::default()),
+            frequency_sketch_enabled: AtomicBool::default(),
             read_op_ch,
             write_op_ch,
-            maintenance_task_lock: Default::default(),
+            maintenance_task_lock: RwLock::default(),
             expiration_policy,
-            valid_after: Default::default(),
+            valid_after: AtomicInstant::default(),
             weigher,
             removal_notifier,
             key_locks,
@@ -1324,7 +1321,7 @@ where
 
     #[inline]
     fn weigh(&self, key: &K, value: &V) -> u32 {
-        self.weigher.as_ref().map(|w| w(key, value)).unwrap_or(1)
+        self.weigher.as_ref().map_or(1, |w| w(key, value))
     }
 }
 
@@ -1523,9 +1520,9 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn has_enough_capacity(&self, candidate_weight: u32, counters: &EvictionCounters) -> bool {
-        self.max_capacity
-            .map(|limit| counters.weighted_size + candidate_weight as u64 <= limit)
-            .unwrap_or(true)
+        self.max_capacity.map_or(true, |limit| {
+            counters.weighted_size + candidate_weight as u64 <= limit
+        })
     }
 
     fn weights_to_evict(&self, counters: &EvictionCounters) -> u64 {
@@ -1584,7 +1581,7 @@ where
         timer_wheel: &mut TimerWheel<K>,
         count: usize,
     ) {
-        use ReadOp::*;
+        use ReadOp::{Hit, Miss};
         let mut freq = self.frequency_sketch.write().await;
         let ch = &self.read_op_ch;
         for _ in 0..count {
@@ -1617,7 +1614,7 @@ where
     ) where
         V: Clone,
     {
-        use WriteOp::*;
+        use WriteOp::{Remove, Upsert};
         let freq = self.frequency_sketch.read().await;
         let ch = &self.write_op_ch;
 
@@ -1639,10 +1636,10 @@ where
                         &freq,
                         eviction_state,
                     )
-                    .await
+                    .await;
                 }
                 Ok(Remove(KvEntry { key: _key, entry })) => {
-                    Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters)
+                    Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters);
                 }
                 Err(_) => break,
             };
@@ -2285,7 +2282,7 @@ where
         // If the write order queue is empty, we are done and can remove the predicates
         // that have been registered by now.
         if deqs.write_order.len() == 0 {
-            invalidator.remove_predicates_registered_before(now).await;
+            invalidator.remove_predicates_registered_before(now);
             return;
         }
 
@@ -2367,7 +2364,7 @@ where
                 // TODO: Remove the second pattern `Some((_key, false, None))` once we change
                 // `last_modified` and `last_accessed` in `EntryInfo` from `Option<Instant>` to
                 // `Instant`.
-                Some((key, hash, true, _)) | Some((key, hash, false, None)) => {
+                Some((key, hash, true, _) | (key, hash, false, None)) => {
                     let (deq, write_order_deq) = deqs.select_mut(CacheRegion::MainProbation);
                     if self.try_skip_updated_entry(&key, hash, DEQ_NAME, deq, write_order_deq) {
                         continue;
@@ -2437,7 +2434,7 @@ where
         cause: RemovalCause,
     ) {
         if let Some(notifier) = &self.removal_notifier {
-            notifier.notify(key, entry.value.clone(), cause).await
+            notifier.notify(key, entry.value.clone(), cause).await;
         }
     }
 
@@ -2665,10 +2662,7 @@ fn is_expired_by_tti(
 ) -> bool {
     if let Some(tti) = time_to_idle {
         let checked_add = entry_last_accessed.checked_add(*tti);
-        if checked_add.is_none() {
-            panic!("tti overflow")
-        }
-        return checked_add.unwrap() <= now;
+        return checked_add.expect("tti overflow") <= now;
     }
     false
 }
@@ -2681,10 +2675,7 @@ fn is_expired_by_ttl(
 ) -> bool {
     if let Some(ttl) = time_to_live {
         let checked_add = entry_last_modified.checked_add(*ttl);
-        if checked_add.is_none() {
-            panic!("ttl overflow");
-        }
-        return checked_add.unwrap() <= now;
+        return checked_add.expect("ttl overflow") <= now;
     }
     false
 }
