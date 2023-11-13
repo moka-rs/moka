@@ -96,7 +96,7 @@ impl<K, V, S> Invalidator<K, V, S> {
         self.is_empty.load(Ordering::Acquire)
     }
 
-    pub(crate) async fn remove_predicates_registered_before(&self, ts: Instant)
+    pub(crate) fn remove_predicates_registered_before(&self, ts: Instant)
     where
         K: Hash + Eq + Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
@@ -206,14 +206,13 @@ impl<K, V, S> Invalidator<K, V, S> {
                     invalidated.push(KvEntry {
                         key: Arc::clone(key),
                         entry,
-                    })
+                    });
                 }
             }
             newest_timestamp = Some(ts);
         }
 
-        self.remove_finished_predicates(predicates, is_truncated, newest_timestamp)
-            .await;
+        self.remove_finished_predicates(predicates, is_truncated, newest_timestamp);
 
         (invalidated, self.predicates.is_empty())
     }
@@ -236,7 +235,7 @@ impl<K, V, S> Invalidator<K, V, S> {
         false
     }
 
-    async fn remove_finished_predicates(
+    fn remove_finished_predicates(
         &self,
         mut predicates: MutexGuard<'_, Vec<Predicate<K, V>>>,
         is_truncated: bool,
@@ -252,7 +251,7 @@ impl<K, V, S> Invalidator<K, V, S> {
                     predicates.drain(..).partition(|p| p.is_applicable(ts));
 
                 // Remove finished predicates from the predicate registry.
-                self.remove_predicates(&finished).await;
+                self.remove_predicates(&finished);
                 // Set the active predicates to the scan context.
                 *predicates = active;
             } else {
@@ -260,21 +259,21 @@ impl<K, V, S> Invalidator<K, V, S> {
             }
         } else {
             // Remove all the predicates from the predicate registry and scan context.
-            self.remove_predicates(predicates).await;
+            self.remove_predicates(predicates);
             predicates.clear();
         }
     }
 
-    async fn remove_predicates(&self, predicates: &[Predicate<K, V>])
+    fn remove_predicates(&self, predicates: &[Predicate<K, V>])
     where
         K: Hash + Eq,
         S: BuildHasher,
     {
         let pred_map = &self.predicates;
-        predicates.iter().for_each(|p| {
+        for p in predicates {
             let hash = pred_map.hash(p.id());
             pred_map.remove(hash, |k| k == p.id());
-        });
+        }
 
         if pred_map.is_empty() {
             self.is_empty.store(true, Ordering::Release);

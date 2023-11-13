@@ -617,7 +617,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d_map = f.debug_map();
 
-        for (k, v) in self.iter() {
+        for (k, v) in self {
             d_map.entry(&k, &v);
         }
 
@@ -707,7 +707,7 @@ where
             build_hasher,
             None,
             None,
-            Default::default(),
+            ExpirationPolicy::default(),
             false,
         )
     }
@@ -1481,7 +1481,7 @@ where
     pub fn insert(&self, key: K, value: V) {
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
-        self.insert_with_hash(key, hash, value)
+        self.insert_with_hash(key, hash, value);
     }
 
     pub(crate) fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
@@ -1564,7 +1564,7 @@ where
                 let now = self.base.current_time_from_expiration_clock();
 
                 if self.base.is_removal_notifier_enabled() {
-                    self.base.notify_invalidate(&kv.key, &kv.entry)
+                    self.base.notify_invalidate(&kv.key, &kv.entry);
                 }
                 // Drop the locks before scheduling write op to avoid a potential
                 // dead lock. (Scheduling write can do spin lock when the queue is

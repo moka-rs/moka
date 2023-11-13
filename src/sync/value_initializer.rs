@@ -63,7 +63,7 @@ where
         E: Send + Sync + 'static,
     {
         use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
-        use InitResult::*;
+        use InitResult::{InitErr, ReadExisting};
 
         const MAX_RETRIES: usize = 200;
         let mut retries = 0;
@@ -87,15 +87,14 @@ where
                 // None means somebody else's init closure has been panicked.
                 None => {
                     retries += 1;
-                    if retries < MAX_RETRIES {
-                        // Retry from the beginning.
-                        continue;
-                    } else {
-                        panic!(
-                            "Too many retries. Tried to read the return value from the `init` \
-                            closure but failed {retries} times. Maybe the `init` kept panicking?"
-                        );
-                    }
+                    assert!(
+                        retries < MAX_RETRIES,
+                        "Too many retries. Tried to read the return value from the `init` \
+                        closure but failed {retries} times. Maybe the `init` kept panicking?"
+                    );
+
+                    // Retry from the beginning.
+                    continue;
                 }
             }
         }

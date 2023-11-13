@@ -862,7 +862,7 @@ struct Clocks {
 impl Clocks {
     fn new(time: Instant, std_time: StdInstant) -> Self {
         Self {
-            has_expiration_clock: Default::default(),
+            has_expiration_clock: AtomicBool::default(),
             expiration_clock: Default::default(),
             origin: time,
             origin_std: std_time,
@@ -1068,18 +1068,18 @@ where
         Self {
             name,
             max_capacity,
-            entry_count: Default::default(),
-            weighted_size: Default::default(),
+            entry_count: AtomicCell::default(),
+            weighted_size: AtomicCell::default(),
             cache,
             build_hasher,
-            deques: Default::default(),
+            deques: Mutex::default(),
             timer_wheel,
-            frequency_sketch: RwLock::new(Default::default()),
-            frequency_sketch_enabled: Default::default(),
+            frequency_sketch: RwLock::new(FrequencySketch::default()),
+            frequency_sketch_enabled: AtomicBool::default(),
             read_op_ch,
             write_op_ch,
             expiration_policy,
-            valid_after: Default::default(),
+            valid_after: AtomicInstant::default(),
             weigher,
             removal_notifier,
             key_locks,
@@ -1168,7 +1168,7 @@ where
 
     #[inline]
     fn weigh(&self, key: &K, value: &V) -> u32 {
-        self.weigher.as_ref().map(|w| w(key, value)).unwrap_or(1)
+        self.weigher.as_ref().map_or(1, |w| w(key, value))
     }
 }
 
@@ -1349,9 +1349,9 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn has_enough_capacity(&self, candidate_weight: u32, counters: &EvictionCounters) -> bool {
-        self.max_capacity
-            .map(|limit| counters.weighted_size + candidate_weight as u64 <= limit)
-            .unwrap_or(true)
+        self.max_capacity.map_or(true, |limit| {
+            counters.weighted_size + candidate_weight as u64 <= limit
+        })
     }
 
     fn weights_to_evict(&self, counters: &EvictionCounters) -> u64 {
@@ -1402,7 +1402,7 @@ where
     }
 
     fn apply_reads(&self, deqs: &mut Deques<K>, timer_wheel: &mut TimerWheel<K>, count: usize) {
-        use ReadOp::*;
+        use ReadOp::{Hit, Miss};
         let mut freq = self.frequency_sketch.write();
         let ch = &self.read_op_ch;
         for _ in 0..count {
@@ -1435,7 +1435,7 @@ where
     ) where
         V: Clone,
     {
-        use WriteOp::*;
+        use WriteOp::{Remove, Upsert};
         let freq = self.frequency_sketch.read();
         let ch = &self.write_op_ch;
 
@@ -1457,7 +1457,7 @@ where
                     eviction_state,
                 ),
                 Ok(Remove(KvEntry { key: _key, entry })) => {
-                    Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters)
+                    Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters);
                 }
                 Err(_) => break,
             };
@@ -1872,7 +1872,7 @@ where
             );
 
             let mut rm_expired_ao = |name, deq| {
-                self.remove_expired_ao(name, deq, wo, timer_wheel, batch_size, now, state)
+                self.remove_expired_ao(name, deq, wo, timer_wheel, batch_size, now, state);
             };
 
             rm_expired_ao("window", window);
@@ -2144,7 +2144,7 @@ where
                 // TODO: Remove the second pattern `Some((_key, false, None))` once we change
                 // `last_modified` and `last_accessed` in `EntryInfo` from `Option<Instant>` to
                 // `Instant`.
-                Some((key, hash, true, _)) | Some((key, hash, false, None)) => {
+                Some((key, hash, true, _) | (key, hash, false, None)) => {
                     if self.try_skip_updated_entry(&key, hash, DEQ_NAME, deq, write_order_deq) {
                         continue;
                     } else {
@@ -2203,7 +2203,7 @@ where
         cause: RemovalCause,
     ) {
         if let Some(notifier) = &self.removal_notifier {
-            notifier.notify(key, entry.value.clone(), cause)
+            notifier.notify(key, entry.value.clone(), cause);
         }
     }
 
@@ -2404,10 +2404,7 @@ fn is_expired_by_tti(
 ) -> bool {
     if let Some(tti) = time_to_idle {
         let checked_add = entry_last_accessed.checked_add(*tti);
-        if checked_add.is_none() {
-            panic!("tti overflow")
-        }
-        return checked_add.unwrap() <= now;
+        return checked_add.expect("tti overflow") <= now;
     }
     false
 }
@@ -2420,10 +2417,7 @@ fn is_expired_by_ttl(
 ) -> bool {
     if let Some(ttl) = time_to_live {
         let checked_add = entry_last_modified.checked_add(*ttl);
-        if checked_add.is_none() {
-            panic!("ttl overflow");
-        }
-        return checked_add.unwrap() <= now;
+        return checked_add.expect("tti overflow") <= now;
     }
     false
 }

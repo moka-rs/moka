@@ -69,7 +69,7 @@ where
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut d_map = f.debug_map();
 
-        for (k, v) in self.iter() {
+        for (k, v) in self {
             d_map.entry(&k, &v);
         }
 
@@ -103,7 +103,7 @@ where
             build_hasher,
             None,
             None,
-            Default::default(),
+            ExpirationPolicy::default(),
             false,
         )
     }

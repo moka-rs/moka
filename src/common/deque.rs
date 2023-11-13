@@ -129,7 +129,7 @@ impl<T> Deque<T> {
     }
 
     pub(crate) fn peek_front_ptr(&self) -> Option<NonNull<DeqNode<T>>> {
-        self.head.as_ref().cloned()
+        self.head.as_ref().copied()
     }
 
     /// Removes and returns the node at the front of the list.
@@ -212,7 +212,7 @@ impl<T> Deque<T> {
                 // Not creating new mutable (unique!) references overlapping `element`.
                 Some(tail) => {
                     node.as_mut().prev = Some(tail);
-                    (*tail.as_ptr()).next = Some(node)
+                    (*tail.as_ptr()).next = Some(node);
                 }
                 None => unreachable!(),
             }

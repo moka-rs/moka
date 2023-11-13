@@ -34,7 +34,7 @@ impl Instant {
     }
 
     #[cfg(feature = "quanta")]
-    pub(crate) fn inner_clock(&self) -> clock::Instant {
+    pub(crate) fn inner_clock(self) -> clock::Instant {
         self.0
     }
 }

@@ -104,8 +104,8 @@ impl<'a, K, V> CancelGuard<'a, K, V> {
         Self {
             interrupted_op_ch,
             ts,
-            future: Default::default(),
-            op: Default::default(),
+            future: None,
+            op: None,
         }
     }
 

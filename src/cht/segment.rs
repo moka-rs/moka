@@ -237,7 +237,7 @@ impl<K, V, S> HashMap<K, V, S> {
             .iter()
             .map(|s| s.bucket_array.load_consume(guard))
             .map(|p| unsafe { p.as_ref() })
-            .map(|a| a.map(BucketArray::capacity).unwrap_or(0))
+            .map(|a| a.map_or(0, BucketArray::capacity))
             .sum::<usize>()
     }
 

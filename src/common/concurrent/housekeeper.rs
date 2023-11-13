@@ -27,7 +27,7 @@ pub(crate) struct Housekeeper {
 impl Default for Housekeeper {
     fn default() -> Self {
         Self {
-            run_lock: Default::default(),
+            run_lock: Mutex::default(),
             run_after: AtomicInstant::new(Self::sync_after(Instant::now())),
             auto_run_enabled: AtomicBool::new(true),
         }

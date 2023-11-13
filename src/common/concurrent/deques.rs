@@ -43,7 +43,7 @@ impl<K> Deques<K> {
             CacheRegion::Window => (&mut self.window, &mut self.write_order),
             CacheRegion::MainProbation => (&mut self.probation, &mut self.write_order),
             CacheRegion::MainProtected => (&mut self.protected, &mut self.write_order),
-            _ => unreachable!(),
+            CacheRegion::Other => unreachable!(),
         }
     }
 
@@ -58,7 +58,7 @@ impl<K> Deques<K> {
             CacheRegion::Window => self.window.push_back(node),
             CacheRegion::MainProbation => self.probation.push_back(node),
             CacheRegion::MainProtected => self.protected.push_back(node),
-            _ => unreachable!(),
+            CacheRegion::Other => unreachable!(),
         };
         let tagged_node = TagNonNull::compose(node, region as usize);
         entry.set_access_order_q_node(Some(tagged_node));
@@ -158,15 +158,15 @@ impl<K> Deques<K> {
         unsafe {
             match tagged_node.decompose_tag().into() {
                 CacheRegion::Window => {
-                    Self::unlink_node_ao_from_deque("window", &mut self.window, tagged_node)
+                    Self::unlink_node_ao_from_deque("window", &mut self.window, tagged_node);
                 }
                 CacheRegion::MainProbation => {
-                    Self::unlink_node_ao_from_deque("probation", &mut self.probation, tagged_node)
+                    Self::unlink_node_ao_from_deque("probation", &mut self.probation, tagged_node);
                 }
                 CacheRegion::MainProtected => {
-                    Self::unlink_node_ao_from_deque("protected", &mut self.protected, tagged_node)
+                    Self::unlink_node_ao_from_deque("protected", &mut self.protected, tagged_node);
                 }
-                _ => unreachable!(),
+                CacheRegion::Other => unreachable!(),
             }
         }
     }
