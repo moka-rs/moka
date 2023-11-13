@@ -50,7 +50,7 @@ use crossbeam_epoch::Atomic;
 /// addressing, and linear probing.
 ///
 /// By default, `Cache` uses a hashing algorithm selected to provide resistance
-/// against `HashDoS` attacks.
+/// against HashDoS attacks.
 ///
 /// The default hashing algorithm is the one used by `std::collections::HashMap`,
 /// which is currently `SipHash` 1-3.
