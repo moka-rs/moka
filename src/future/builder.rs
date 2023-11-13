@@ -126,7 +126,7 @@ where
     ///
     /// # Examples
     ///
-    /// This example uses `AHash` hasher from [AHash][ahash-crate] crate.
+    /// This example uses AHash hasher from [AHash][ahash-crate] crate.
     ///
     /// [ahash-crate]: https://crates.io/crates/ahash
     ///

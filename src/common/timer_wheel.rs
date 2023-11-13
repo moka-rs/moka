@@ -522,6 +522,8 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
                     }
                 }
             } else {
+                // Done with the current queue. Move to the next index
+                // and/or next level.
                 self.index += 1;
                 self.is_new_index = true;
 

@@ -157,13 +157,13 @@ use std::{
 /// # Hashing Algorithm
 ///
 /// By default, `Cache` uses a hashing algorithm selected to provide resistance
-/// against `HashDoS` attacks. It will be the same one used by
-/// `std::collections::HashMap`, which is currently `SipHash` 1-3.
+/// against HashDoS attacks. It will be the same one used by
+/// `std::collections::HashMap`, which is currently SipHash 1-3.
 ///
-/// While `SipHash`'s performance is very competitive for medium sized keys, other
+/// While SipHash's performance is very competitive for medium sized keys, other
 /// hashing algorithms will outperform it for small keys such as integers as well as
 /// large keys such as long strings. However those algorithms will typically not
-/// protect against attacks such as `HashDoS`.
+/// protect against attacks such as HashDoS.
 ///
 /// The hashing algorithm can be replaced on a per-`Cache` basis using the
 /// [`build_with_hasher`][build-with-hasher-method] method of the `CacheBuilder`.
