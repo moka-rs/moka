@@ -22,8 +22,8 @@
 //! adds another layer of indirection between the hash table and its buckets.
 //!
 //! The idea for segmenting hash tables was inspired by the
-//! [`ConcurrentHashMap`] from `OpenJDK` 7, which consists of a number of
-//! separately-locked segments. `OpenJDK` 8 introduced a striped concurrent hash
+//! [`ConcurrentHashMap`] from OpenJDK 7, which consists of a number of
+//! separately-locked segments. OpenJDK 8 introduced a striped concurrent hash
 //! map that stripes a set of bucket locks across the set of buckets using the
 //! least significant bits of hashed keys.
 //!
