@@ -53,7 +53,7 @@ use crossbeam_epoch::Atomic;
 /// against HashDoS attacks.
 ///
 /// The default hashing algorithm is the one used by `std::collections::HashMap`,
-/// which is currently `SipHash` 1-3.
+/// which is currently SipHash 1-3.
 ///
 /// While its performance is very competitive for medium sized keys, other hashing
 /// algorithms will outperform it for small keys such as integers as well as large
