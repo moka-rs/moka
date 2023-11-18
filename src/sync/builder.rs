@@ -74,7 +74,7 @@ where
             eviction_listener: None,
             expiration_policy: ExpirationPolicy::default(),
             invalidator_enabled: false,
-            cache_type: PhantomData::default(),
+            cache_type: PhantomData,
         }
     }
 }
