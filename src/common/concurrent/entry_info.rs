@@ -190,7 +190,7 @@ mod test {
                     Linux32X86
                 } else if cfg!(target_arch = "arm") {
                     Linux32Arm
-                } else if cfg!(target_arch = "x86") {
+                } else if cfg!(target_arch = "mips") {
                     Linux32Mips
                 } else {
                     unimplemented!();
