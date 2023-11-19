@@ -511,12 +511,7 @@ where
             // on_insert
             || {
                 let entry = self.new_value_entry(&key, hash, value.clone(), ts, weight);
-                let ins_op = WriteOp::Upsert {
-                    key_hash: KeyHash::new(Arc::clone(&key), hash),
-                    value_entry: TrioArc::clone(&entry),
-                    old_weight: 0,
-                    new_weight: weight,
-                };
+                let ins_op = WriteOp::new_upsert(&key, hash, &entry, 0, 0, weight);
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((cnt, ins_op));
                 entry
@@ -529,13 +524,8 @@ where
                 // that the OldEntryInfo can preserve the old EntryInfo's
                 // last_accessed and last_modified timestamps.
                 let old_info = OldEntryInfo::new(old_entry);
-                let entry = self.new_value_entry_from(value.clone(), ts, weight, old_entry);
-                let upd_op = WriteOp::Upsert {
-                    key_hash: KeyHash::new(Arc::clone(&key), hash),
-                    value_entry: TrioArc::clone(&entry),
-                    old_weight,
-                    new_weight: weight,
-                };
+                let (entry, gen) = self.new_value_entry_from(value.clone(), ts, weight, old_entry);
+                let upd_op = WriteOp::new_upsert(&key, hash, &entry, gen, old_weight, weight);
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((cnt, old_info, upd_op));
                 entry
@@ -645,15 +635,15 @@ impl<K, V, S> BaseCache<K, V, S> {
         timestamp: Instant,
         policy_weight: u32,
         other: &ValueEntry<K, V>,
-    ) -> TrioArc<ValueEntry<K, V>> {
+    ) -> (TrioArc<ValueEntry<K, V>>, u16) {
         let info = TrioArc::clone(other.entry_info());
         // To prevent this updated ValueEntry from being evicted by an expiration policy,
-        // set the dirty flag to true. It will be reset to false when the write is applied.
-        info.set_dirty(true);
+        // increment the entry generation.
+        let gen = info.incr_entry_gen();
         info.set_last_accessed(timestamp);
         info.set_last_modified(timestamp);
         info.set_policy_weight(policy_weight);
-        TrioArc::new(ValueEntry::new_from(value, info, other))
+        (TrioArc::new(ValueEntry::new_from(value, info, other)), gen)
     }
 
     fn expire_after_create(
@@ -1444,11 +1434,13 @@ where
                 Ok(Upsert {
                     key_hash: kh,
                     value_entry: entry,
+                    entry_gen: gen,
                     old_weight,
                     new_weight,
                 }) => self.handle_upsert(
                     kh,
                     entry,
+                    gen,
                     old_weight,
                     new_weight,
                     deqs,
@@ -1469,6 +1461,7 @@ where
         &self,
         kh: KeyHash<K>,
         entry: TrioArc<ValueEntry<K, V>>,
+        gen: u16,
         old_weight: u32,
         new_weight: u32,
         deqs: &mut Deques<K>,
@@ -1478,8 +1471,6 @@ where
     ) where
         V: Clone,
     {
-        entry.set_dirty(false);
-
         {
             let counters = &mut eviction_state.counters;
 
@@ -1490,6 +1481,7 @@ where
                 self.update_timer_wheel(&entry, timer_wheel);
                 deqs.move_to_back_ao(&entry);
                 deqs.move_to_back_wo(&entry);
+                entry.entry_info().set_policy_gen(gen);
                 return;
             }
 
@@ -1497,6 +1489,7 @@ where
                 // There are enough room in the cache (or the cache is unbounded).
                 // Add the candidate to the deques.
                 self.handle_admit(&entry, new_weight, deqs, timer_wheel, counters);
+                entry.entry_info().set_policy_gen(gen);
                 return;
             }
         }
@@ -1509,13 +1502,18 @@ where
                 let kl = self.maybe_key_lock(&kh.key);
                 let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-                let removed = self.cache.remove(kh.hash, |k| k == &kh.key);
+                let removed = self.cache.remove_if(
+                    kh.hash,
+                    |k| k == &kh.key,
+                    |_, entry| entry.entry_info().entry_gen() == gen,
+                );
                 if let Some(entry) = removed {
                     if eviction_state.is_notifier_enabled() {
                         let key = Arc::clone(&kh.key);
                         eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
                     }
                 }
+                entry.entry_info().set_policy_gen(gen);
                 return;
             }
         }
@@ -1536,6 +1534,7 @@ where
                     let _klg = &kl.as_ref().map(|kl| kl.lock());
 
                     if let Some((vic_key, vic_entry)) =
+                        // TODO: Check if the entry generation matches.
                         self.cache.remove_entry(vic_hash, |k| k == &vic_key)
                     {
                         if eviction_state.is_notifier_enabled() {
@@ -1577,14 +1576,23 @@ where
                 let kl = self.maybe_key_lock(&kh.key);
                 let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-                // Remove the candidate from the cache (hash map).
+                // Remove the candidate from the cache (hash map) if the entry
+                // generation matches.
                 let key = Arc::clone(&kh.key);
-                self.cache.remove(kh.hash, |k| k == &key);
-                if eviction_state.is_notifier_enabled() {
-                    eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
+                let removed = self.cache.remove_if(
+                    kh.hash,
+                    |k| k == &key,
+                    |_, entry| entry.entry_info().entry_gen() == gen,
+                );
+
+                if let Some(entry) = removed {
+                    if eviction_state.is_notifier_enabled() {
+                        eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
+                    }
                 }
             }
         };
+        entry.entry_info().set_policy_gen(gen);
     }
 
     /// Performs size-aware admission explained in the paper:
@@ -1637,6 +1645,7 @@ where
                 if let Some(vic_entry) = cache.get(hash, |k| k == key) {
                     victims.add_policy_weight(vic_entry.policy_weight());
                     victims.add_frequency(freq, hash);
+                    // TODO: Record the entry generation too.
                     victim_keys.push(KeyHash::new(Arc::clone(key), hash));
                     retries = 0;
                 } else {

@@ -215,10 +215,6 @@ impl<K, V> ValueEntry<K, V> {
         self.info.is_dirty()
     }
 
-    pub(crate) fn set_dirty(&self, value: bool) {
-        self.info.set_dirty(value);
-    }
-
     #[inline]
     pub(crate) fn policy_weight(&self) -> u32 {
         self.info.policy_weight()
@@ -314,6 +310,8 @@ pub(crate) enum WriteOp<K, V> {
     Upsert {
         key_hash: KeyHash<K>,
         value_entry: TrioArc<ValueEntry<K, V>>,
+        /// Entry generation after the operation.
+        entry_gen: u16,
         old_weight: u32,
         new_weight: u32,
     },
@@ -328,11 +326,13 @@ impl<K, V> Clone for WriteOp<K, V> {
             Self::Upsert {
                 key_hash,
                 value_entry,
+                entry_gen,
                 old_weight,
                 new_weight,
             } => Self::Upsert {
                 key_hash: key_hash.clone(),
                 value_entry: TrioArc::clone(value_entry),
+                entry_gen: *entry_gen,
                 old_weight: *old_weight,
                 new_weight: *new_weight,
             },
@@ -346,6 +346,27 @@ impl<K, V> fmt::Debug for WriteOp<K, V> {
         match self {
             Self::Upsert { .. } => f.debug_struct("Upsert").finish(),
             Self::Remove(..) => f.debug_tuple("Remove").finish(),
+        }
+    }
+}
+
+impl<K, V> WriteOp<K, V> {
+    pub(crate) fn new_upsert(
+        key: &Arc<K>,
+        hash: u64,
+        value_entry: &TrioArc<ValueEntry<K, V>>,
+        entry_generation: u16,
+        old_weight: u32,
+        new_weight: u32,
+    ) -> Self {
+        let key_hash = KeyHash::new(Arc::clone(key), hash);
+        let value_entry = TrioArc::clone(value_entry);
+        Self::Upsert {
+            key_hash,
+            value_entry,
+            entry_gen: entry_generation,
+            old_weight,
+            new_weight,
         }
     }
 }

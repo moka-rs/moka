@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
 
 use super::{AccessTime, KeyHash};
 use crate::common::{concurrent::atomic_time::AtomicInstant, time::Instant};
@@ -10,10 +10,12 @@ pub(crate) struct EntryInfo<K> {
     /// cache. When `false`, it means the entry is _temporary_ admitted to
     /// the cache or evicted from the cache (so it should not have LRU nodes).
     is_admitted: AtomicBool,
-    /// `is_dirty` indicates that the entry has been inserted (or updated)
-    /// in the hash table, but the history of the insertion has not yet
-    /// been applied to the LRU deques and LFU estimator.
-    is_dirty: AtomicBool,
+    /// `entry_gen` (entry generation) is incremented every time the entry is updated
+    /// in the concurrent hash table.
+    entry_gen: AtomicU16,
+    /// `policy_gen` (policy generation) is incremented every time entry's WriteOpe
+    /// is applied to the cache policies including the LRU deque and LFU estimator.
+    policy_gen: AtomicU16,
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
     expiration_time: AtomicInstant,
@@ -29,7 +31,8 @@ impl<K> EntryInfo<K> {
         Self {
             key_hash,
             is_admitted: AtomicBool::default(),
-            is_dirty: AtomicBool::new(true),
+            entry_gen: AtomicU16::new(0),
+            policy_gen: AtomicU16::new(0),
             last_accessed: AtomicInstant::new(timestamp),
             last_modified: AtomicInstant::new(timestamp),
             expiration_time: AtomicInstant::default(),
@@ -54,12 +57,40 @@ impl<K> EntryInfo<K> {
 
     #[inline]
     pub(crate) fn is_dirty(&self) -> bool {
-        self.is_dirty.load(Ordering::Acquire)
+        self.entry_gen.load(Ordering::Acquire) != self.policy_gen.load(Ordering::Acquire)
     }
 
     #[inline]
-    pub(crate) fn set_dirty(&self, value: bool) {
-        self.is_dirty.store(value, Ordering::Release);
+    pub(crate) fn entry_gen(&self) -> u16 {
+        self.entry_gen.load(Ordering::Acquire)
+    }
+
+    /// Increments the entry generation and returns the new value.
+    #[inline]
+    pub(crate) fn incr_entry_gen(&self) -> u16 {
+        // NOTE: This operation wraps around on overflow.
+        let prev = self.entry_gen.fetch_add(1, Ordering::AcqRel);
+        prev.wrapping_add(1)
+    }
+
+    /// Sets the policy generation to the given value.
+    #[inline]
+    pub(crate) fn set_policy_gen(&self, value: u16) {
+        let g = &self.policy_gen;
+        loop {
+            let current = g.load(Ordering::Acquire);
+            // TODO: Find a way to handle the case that the current value has been
+            // wrapped around. In such a case, `current < value`` actually means
+            // `current > value`.
+            if current >= value {
+                break;
+            }
+            if g.compare_exchange_weak(current, value, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                break;
+            }
+        }
     }
 
     #[inline]
