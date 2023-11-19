@@ -1542,7 +1542,6 @@ where
                     let _klg = &kl.as_ref().map(|kl| kl.lock());
 
                     if let Some((vic_key, vic_entry)) =
-                        // TODO: Check if the entry generation matches.
                         self.cache.remove_entry_if_and(
                             vic_hash,
                             |k| k == &vic_key,

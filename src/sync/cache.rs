@@ -2751,7 +2751,7 @@ mod tests {
 
         // The following `run_pending_tasks` will do the followings:
         // 1. Admits "c" (c2) to the cache. (Create a node in the LRU deque)
-        // 2. Because of c-remove, removes c2's deque node from the cache.
+        // 2. Because of c-remove, removes c2's node from the LRU deque.
         cache.run_pending_tasks();
         assert_eq!(cache.entry_count(), 0);
     }
