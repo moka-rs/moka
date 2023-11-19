@@ -10,6 +10,11 @@
       a second time when there is room in the cache, the key may not remain in the
       cache after the second insertion. However, the `entry_count` method may return
       a non zero number after calling the `invalidate_all` method.
+    - With this fix, the key should remain in the cache after the second insertion,
+      and the `entry_count` method should return zero after calling the
+      `invalidate_all` method.
+    - These issues were already present in `v0.11.x` and older versions, but were
+      less likely to occur.
 
 
 ## Version 0.12.1
