@@ -3080,9 +3080,9 @@ mod tests {
         // The following `insert` will do the followings:
         // 1. Replaces current "c" (c1) in the concurrent hash table (cht).
         // 2. Runs the pending tasks implicitly.
-        //    (1) c1 will be evicted by size constraint.
-        //    (2) "a" will be admitted.
-        //    (3) "b" will be admitted.
+        //    (1) "a" will be admitted.
+        //    (2) "b" will be admitted.
+        //    (3) c1 will be evicted by size constraint.
         //    (4) "a" will be evicted due to expiration.
         //    (5) "b" will be evicted due to expiration.
         // 3. Send its `WriteOp` log to the channel.

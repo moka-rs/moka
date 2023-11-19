@@ -169,7 +169,9 @@ mod test {
         #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
         enum TargetArch {
             Linux64,
-            Linux32,
+            Linux32X86,
+            Linux32Arm,
+            Linux32Mips,
             MacOS64,
         }
 
@@ -184,9 +186,17 @@ mod test {
             if cfg!(target_pointer_width = "64") {
                 Linux64
             } else if cfg!(target_pointer_width = "32") {
-                Linux32
+                if cfg!(target_arch = "x86") {
+                    Linux32X86
+                } else if cfg!(target_arch = "arm") {
+                    Linux32Arm
+                } else if cfg!(target_arch = "x86") {
+                    Linux32Mips
+                } else {
+                    unimplemented!();
+                }
             } else {
-                panic!("Unsupported pointer width for Linux");
+                unimplemented!();
             }
         } else if cfg!(target_os = "macos") {
             MacOS64
@@ -195,11 +205,13 @@ mod test {
         };
 
         let expected_sizes = match (arch, is_quanta_enabled) {
-            (Linux64, true) => vec![("1.51", 56)],
-            (Linux32, true) => vec![("1.51", 56)],
+            (Linux64 | Linux32Arm, true) => vec![("1.51", 56)],
+            (Linux32X86, true) => vec![("1.51", 48)],
+            (Linux32Mips, true) => unimplemented!(),
             (MacOS64, true) => vec![("1.62", 56)],
             (Linux64, false) => vec![("1.66", 104), ("1.60", 128)],
-            (Linux32, false) => vec![("1.66", 96), ("1.62", 120), ("1.60", 72)],
+            (Linux32X86, false) => unimplemented!(),
+            (Linux32Arm | Linux32Mips, false) => vec![("1.66", 104), ("1.62", 128), ("1.60", 80)],
             (MacOS64, false) => vec![("1.62", 104)],
         };
 
