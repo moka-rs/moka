@@ -1541,14 +1541,12 @@ where
                     let kl = self.maybe_key_lock(&vic_key);
                     let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-                    if let Some((vic_key, vic_entry)) =
-                        self.cache.remove_entry_if_and(
-                            vic_hash,
-                            |k| k == &vic_key,
-                            |_, entry| entry.entry_info().entry_gen() == vic_gen,
-                            |k, v| (k.clone(), v.clone()),
-                        )
-                    {
+                    if let Some((vic_key, vic_entry)) = self.cache.remove_entry_if_and(
+                        vic_hash,
+                        |k| k == &vic_key,
+                        |_, entry| entry.entry_info().entry_gen() == vic_gen,
+                        |k, v| (k.clone(), v.clone()),
+                    ) {
                         if eviction_state.is_notifier_enabled() {
                             eviction_state.add_removed_entry(
                                 vic_key,
