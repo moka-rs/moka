@@ -1,5 +1,17 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.2
+
+### Fixed
+
+- Prevent timing issues that cause inconsistencies between the cache's internal data
+  structures ([#348][gh-pull-0348]):
+    - e.g. If you insert the same key twice quickly, once when the cache is full and
+      a second time when there is room in the cache, the key may not remain in the
+      cache after the second insertion. However, the `entry_count` method may return
+      a non zero number after calling the `invalidate_all` method.
+
+
 ## Version 0.12.1
 
 ### Fixed
@@ -738,6 +750,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0348]: https://github.com/moka-rs/moka/pull/348/
 [gh-pull-0331]: https://github.com/moka-rs/moka/pull/331/
 [gh-pull-0316]: https://github.com/moka-rs/moka/pull/316/
 [gh-pull-0309]: https://github.com/moka-rs/moka/pull/309/

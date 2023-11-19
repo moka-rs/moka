@@ -2,7 +2,7 @@
 
 ## Migrating to v0.12 from a prior version
 
-v0.12.0 has major breaking changes on the API and internal behavior. This section
+v0.12.0 had major breaking changes on the API and internal behavior. This section
 describes the code changes required to migrate to v0.12.0.
 
 ### Highlights v0.12
