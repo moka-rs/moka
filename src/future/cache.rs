@@ -3062,6 +3062,46 @@ mod tests {
         expiry_counters.verify();
     }
 
+    // https://github.com/moka-rs/moka/issues/345
+    #[tokio::test]
+    async fn test_race_between_updating_entry_and_processing_its_write_op() {
+        let cache = Cache::builder()
+            .max_capacity(2)
+            .time_to_idle(Duration::from_secs(1))
+            .build();
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock)).await;
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice").await;
+        cache.insert("b", "bob").await;
+        cache.insert("c", "cathy").await; // c1
+        mock.increment(Duration::from_secs(2));
+
+        // The following `insert` will do the followings:
+        // 1. Replaces current "c" (c1) in the concurrent hash table (cht).
+        // 2. Runs the pending tasks implicitly.
+        //    (1) c1 will be evicted by size constraint.
+        //    (2) "a" will be admitted.
+        //    (3) "b" will be admitted.
+        //    (4) "a" will be evicted due to expiration.
+        //    (5) "b" will be evicted due to expiration.
+        // 3. Send its `WriteOp` log to the channel.
+        cache.insert("c", "cindy").await; // c2
+
+        // Remove "c" (c2) from the cht.
+        assert_eq!(cache.remove(&"c").await, Some("cindy")); // c-remove
+
+        mock.increment(Duration::from_secs(2));
+
+        // The following `run_pending_tasks` will do the followings:
+        // 1. Admits "c" (c2) to the cache. (Create a node in the LRU deque)
+        // 2. Because of c-remove, removes c2's deque node from the cache.
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.entry_count(), 0);
+    }
+
     #[tokio::test]
     async fn test_iter() {
         const NUM_KEYS: usize = 50;

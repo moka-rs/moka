@@ -828,9 +828,17 @@ impl EntrySizeAndFrequency {
     }
 }
 
+// NOTE: Clippy detected `Admitted` variant contains at least 208 bytes of data and
+// `Rejected` variant contains no data at all. It suggests to box the `SmallVec`.
+//
+// We ignore this suggestion because (1) the `SmallVec` is used for avoiding heap
+// allocation as it will be used in a performance hot spot, and (2) this enum has a
+// very short lifetime and there will only one instance at a time.
+#[allow(clippy::large_enum_variant)]
 enum AdmissionResult<K> {
     Admitted {
-        victim_keys: SmallVec<[KeyHash<K>; 8]>,
+        /// A vec of pairs of KeyHash and entry generation.
+        victim_keys: SmallVec<[(KeyHash<K>, u16); 8]>,
     },
     Rejected,
 }
@@ -1525,9 +1533,9 @@ where
         match Self::admit(&candidate, &self.cache, deqs, freq) {
             AdmissionResult::Admitted { victim_keys } => {
                 // Try to remove the victims from the hash map.
-                for victim in victim_keys {
-                    let vic_key = victim.key;
-                    let vic_hash = victim.hash;
+                for (vic_kh, vic_gen) in victim_keys {
+                    let vic_key = vic_kh.key;
+                    let vic_hash = vic_kh.hash;
 
                     // Lock the key for removal if blocking removal notification is enabled.
                     let kl = self.maybe_key_lock(&vic_key);
@@ -1535,7 +1543,12 @@ where
 
                     if let Some((vic_key, vic_entry)) =
                         // TODO: Check if the entry generation matches.
-                        self.cache.remove_entry(vic_hash, |k| k == &vic_key)
+                        self.cache.remove_entry_if_and(
+                            vic_hash,
+                            |k| k == &vic_key,
+                            |_, entry| entry.entry_info().entry_gen() == vic_gen,
+                            |k, v| (k.clone(), v.clone()),
+                        )
                     {
                         if eviction_state.is_notifier_enabled() {
                             eviction_state.add_removed_entry(
@@ -1641,12 +1654,12 @@ where
                 let vic_elem = &unsafe { victim.as_ref() }.element;
                 let key = vic_elem.key();
                 let hash = vic_elem.hash();
+                let gen = vic_elem.entry_info().entry_gen();
 
                 if let Some(vic_entry) = cache.get(hash, |k| k == key) {
                     victims.add_policy_weight(vic_entry.policy_weight());
                     victims.add_frequency(freq, hash);
-                    // TODO: Record the entry generation too.
-                    victim_keys.push(KeyHash::new(Arc::clone(key), hash));
+                    victim_keys.push((KeyHash::new(Arc::clone(key), hash), gen));
                     retries = 0;
                 } else {
                     // Could not get the victim from the cache (hash map). Skip this node

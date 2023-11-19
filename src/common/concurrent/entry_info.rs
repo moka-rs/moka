@@ -6,14 +6,14 @@ use crate::common::{concurrent::atomic_time::AtomicInstant, time::Instant};
 #[derive(Debug)]
 pub(crate) struct EntryInfo<K> {
     key_hash: KeyHash<K>,
-    /// `is_admitted` indicates that the entry has been admitted to the
-    /// cache. When `false`, it means the entry is _temporary_ admitted to
-    /// the cache or evicted from the cache (so it should not have LRU nodes).
+    /// `is_admitted` indicates that the entry has been admitted to the cache. When
+    /// `false`, it means the entry is _temporary_ admitted to the cache or evicted
+    /// from the cache (so it should not have LRU nodes).
     is_admitted: AtomicBool,
     /// `entry_gen` (entry generation) is incremented every time the entry is updated
     /// in the concurrent hash table.
     entry_gen: AtomicU16,
-    /// `policy_gen` (policy generation) is incremented every time entry's WriteOpe
+    /// `policy_gen` (policy generation) is incremented every time entry's `WriteOpe`
     /// is applied to the cache policies including the LRU deque and LFU estimator.
     policy_gen: AtomicU16,
     last_accessed: AtomicInstant,
@@ -79,12 +79,16 @@ impl<K> EntryInfo<K> {
         let g = &self.policy_gen;
         loop {
             let current = g.load(Ordering::Acquire);
-            // TODO: Find a way to handle the case that the current value has been
-            // wrapped around. In such a case, `current < value`` actually means
-            // `current > value`.
-            if current >= value {
+
+            // Do not set the given value if it is smaller than the current value of
+            // `policy_gen`. Note that the current value may have been wrapped
+            // around. If the value is much larger than the current value, it is
+            // likely that the value of `policy_gen` has been wrapped around.
+            if current >= value || value.wrapping_sub(current) > u16::MAX / 2 {
                 break;
             }
+
+            // Try to set the value.
             if g.compare_exchange_weak(current, value, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
             {
@@ -195,7 +199,7 @@ mod test {
             (Linux32, true) => vec![("1.51", 56)],
             (MacOS64, true) => vec![("1.62", 56)],
             (Linux64, false) => vec![("1.66", 104), ("1.60", 128)],
-            (Linux32, false) => vec![("1.66", 104), ("1.62", 128), ("1.60", 80)],
+            (Linux32, false) => vec![("1.66", 96), ("1.62", 120), ("1.60", 72)],
             (MacOS64, false) => vec![("1.62", 104)],
         };
 
