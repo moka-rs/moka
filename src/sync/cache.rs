@@ -2727,8 +2727,6 @@ mod tests {
             .build();
         let (clock, mock) = Clock::mock();
         cache.set_expiration_clock(Some(clock));
-        // Make the cache exterior immutable.
-        let cache = cache;
 
         cache.insert("a", "alice");
         cache.insert("b", "bob");
