@@ -97,14 +97,10 @@ async fn main() {
             let mut verify_queue = Vec::new();
             match group_tree_cl.lock().unwrap().entry(u) {
                 btree_map::Entry::Occupied(e) if Arc::strong_count(e.get()) < 2 => {
-                    match Some(e.remove()) {
-                        Some(u) => {
-                            for f in u.lock().unwrap().friends.iter() {
-                                let u = f.lock().unwrap().user_id;
-                                verify_queue.push(u);
-                            }
-                        }
-                        None => {}
+                    let u = e.remove();
+                    for f in u.lock().unwrap().friends.iter() {
+                        let u = f.lock().unwrap().user_id;
+                        verify_queue.push(u);
                     }
                 }
                 _ => {}
