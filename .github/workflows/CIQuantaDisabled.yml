@@ -54,14 +54,11 @@ jobs:
 
       - name: Pin some dependencies to specific versions (Nightly only)
         if: ${{ matrix.rust == 'nightly' }}
-        run: |
-          cargo update -p openssl --precise 0.10.39
-          cargo update -p cc --precise 1.0.61
+        run: ./.ci_extras/pin-crate-vers-nightly.sh
 
-      # - name: Pin some dependencies to specific versions (MSRV only)
-      #   if: ${{ matrix.rust == '1.65.0' }}
-      #   run: |
-      #     cargo update -p <crate> --precise <version>
+      - name: Pin some dependencies to specific versions (MSRV only)
+        if: ${{ matrix.rust == '1.65.0' }}
+        run: ./.ci_extras/pin-crate-vers-msrv.sh
 
       - name: Run tests (debug, but no quanta feature)
         uses: actions-rs/cargo@v1
