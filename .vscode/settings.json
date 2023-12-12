@@ -44,7 +44,6 @@
         "rustdoc",
         "RUSTFLAGS",
         "rustfmt",
-        "rustls",
         "rustver",
         "semver",
         "SIGABRT",
