@@ -75,11 +75,11 @@ log = { version = "0.4", optional = true }
 actix-rt = "2.8"
 ahash = "0.8.3"
 anyhow = "1.0.19"
-async-std = { version = "1.11", features = ["attributes"] }
+async-std = { version = "1.12", features = ["attributes"] }
 env_logger = "0.10.0"
 getrandom = "0.2"
 paste = "1.0.9"
-reqwest = "0.11.11"
+reqwest = { version = "0.11.11", default-features = false, features = ["rustls-tls"] }
 skeptic = "0.13"
 tokio = { version = "1.19", features = ["fs", "macros", "rt-multi-thread", "sync", "time" ] }
 
