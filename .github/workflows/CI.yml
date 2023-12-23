@@ -19,6 +19,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
+      # Continue running other jobs in the matrix even if one fails.
+      fail-fast: false
       matrix:
         rust:
           - stable
