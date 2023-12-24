@@ -1874,7 +1874,13 @@ where
                     None
                 };
 
-                let op = WriteOp::Remove(kv.clone());
+                let info = kv.entry.entry_info();
+                let entry_gen = info.incr_entry_gen();
+
+                let op: WriteOp<K, V> = WriteOp::Remove {
+                    kv_entry: kv.clone(),
+                    entry_gen,
+                };
 
                 // Async Cancellation Safety: To ensure the below future should be
                 // executed even if our caller async task is cancelled, we create a

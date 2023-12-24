@@ -215,6 +215,10 @@ impl<K, V> ValueEntry<K, V> {
         self.info.set_admitted(value);
     }
 
+    pub(crate) fn is_dirty(&self) -> bool {
+        self.info.is_dirty()
+    }
+
     #[inline]
     pub(crate) fn policy_weight(&self) -> u32 {
         self.info.policy_weight()
@@ -315,7 +319,10 @@ pub(crate) enum WriteOp<K, V> {
         old_weight: u32,
         new_weight: u32,
     },
-    Remove(KvEntry<K, V>),
+    Remove {
+        kv_entry: KvEntry<K, V>,
+        entry_gen: u16,
+    },
 }
 
 /// Cloning a `WriteOp` is safe and cheap because it uses `Arc` and `TrioArc` pointers to
@@ -336,7 +343,13 @@ impl<K, V> Clone for WriteOp<K, V> {
                 old_weight: *old_weight,
                 new_weight: *new_weight,
             },
-            Self::Remove(kv_hash) => Self::Remove(kv_hash.clone()),
+            Self::Remove {
+                kv_entry,
+                entry_gen,
+            } => Self::Remove {
+                kv_entry: kv_entry.clone(),
+                entry_gen: *entry_gen,
+            },
         }
     }
 }
@@ -345,7 +358,7 @@ impl<K, V> fmt::Debug for WriteOp<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Upsert { .. } => f.debug_struct("Upsert").finish(),
-            Self::Remove(..) => f.debug_tuple("Remove").finish(),
+            Self::Remove { .. } => f.debug_tuple("Remove").finish(),
         }
     }
 }

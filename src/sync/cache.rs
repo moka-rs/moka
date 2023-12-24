@@ -1563,6 +1563,9 @@ where
             Some(kv) => {
                 let now = self.base.current_time_from_expiration_clock();
 
+                let info = kv.entry.entry_info();
+                let entry_gen = info.incr_entry_gen();
+
                 if self.base.is_removal_notifier_enabled() {
                     self.base.notify_invalidate(&kv.key, &kv.entry);
                 }
@@ -1579,7 +1582,10 @@ where
                     None
                 };
 
-                let op = WriteOp::Remove(kv);
+                let op = WriteOp::Remove {
+                    kv_entry: kv,
+                    entry_gen,
+                };
                 let hk = self.base.housekeeper.as_ref();
                 Self::schedule_write_op(
                     self.base.inner.as_ref(),

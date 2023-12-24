@@ -1638,8 +1638,17 @@ where
                     )
                     .await;
                 }
-                Ok(Remove(KvEntry { key: _key, entry })) => {
-                    Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters);
+                Ok(Remove {
+                    kv_entry: KvEntry { key: _key, entry },
+                    entry_gen: gen,
+                }) => {
+                    Self::handle_remove(
+                        deqs,
+                        timer_wheel,
+                        entry,
+                        Some(gen),
+                        &mut eviction_state.counters,
+                    );
                 }
                 Err(_) => break,
             };
@@ -1754,6 +1763,7 @@ where
                             deqs,
                             timer_wheel,
                             vic_entry,
+                            None,
                             &mut eviction_state.counters,
                         );
                     } else {
@@ -1964,17 +1974,19 @@ where
         deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
         entry: TrioArc<ValueEntry<K, V>>,
+        gen: Option<u16>,
         counters: &mut EvictionCounters,
     ) {
         if let Some(timer_node) = entry.take_timer_node() {
             timer_wheel.deschedule(timer_node);
         }
-        Self::handle_remove_without_timer_wheel(deqs, entry, counters);
+        Self::handle_remove_without_timer_wheel(deqs, entry, gen, counters);
     }
 
     fn handle_remove_without_timer_wheel(
         deqs: &mut Deques<K>,
         entry: TrioArc<ValueEntry<K, V>>,
+        gen: Option<u16>,
         counters: &mut EvictionCounters,
     ) {
         if entry.is_admitted() {
@@ -1985,6 +1997,9 @@ where
             Deques::unlink_wo(&mut deqs.write_order, &entry);
         } else {
             entry.unset_q_nodes();
+        }
+        if let Some(g) = gen {
+            entry.entry_info().set_policy_gen(g);
         }
     }
 
@@ -2076,7 +2091,12 @@ where
                         .add_removed_entry(key, &entry, RemovalCause::Expired)
                         .await;
                 }
-                Self::handle_remove_without_timer_wheel(deqs, entry, &mut eviction_state.counters);
+                Self::handle_remove_without_timer_wheel(
+                    deqs,
+                    entry,
+                    None,
+                    &mut eviction_state.counters,
+                );
             } else {
                 // Skip this entry as the key might have been read, updated or
                 // invalidated by other thread.
@@ -2211,7 +2231,9 @@ where
             // The key exists and the entry may have been read or updated by other
             // thread.
             Deques::move_to_back_ao_in_deque(deq_name, deq, &entry);
-            Deques::move_to_back_wo_in_deque(write_order_deq, &entry);
+            if entry.is_dirty() {
+                Deques::move_to_back_wo_in_deque(write_order_deq, &entry);
+            }
         } else {
             // Skip this entry as the key may have been invalidated by other thread.
             // Since the invalidated ValueEntry (which should be still in the write
@@ -2299,7 +2321,7 @@ where
                 if eviction_state.is_notifier_enabled() {
                     eviction_state.add_removed_entry(key, &entry, cause).await;
                 }
-                Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters);
+                Self::handle_remove(deqs, timer_wheel, entry, None, &mut eviction_state.counters);
             } else {
                 self.skip_updated_entry_wo(&key, hash, deqs);
             }
@@ -2359,7 +2381,7 @@ where
             .await;
 
         for KvEntry { key: _key, entry } in invalidated {
-            Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters);
+            Self::handle_remove(deqs, timer_wheel, entry, None, &mut eviction_state.counters);
         }
         if is_done {
             deqs.write_order.reset_cursor();
