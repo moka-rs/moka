@@ -6,14 +6,11 @@
 
 - Prevent timing issues that cause inconsistencies between the cache's internal data
   structures ([#348][gh-pull-0348]):
-    - Steps to reproduce: Insert the same key twice quickly, once when the cache is
-      full and a second time when there is room in the cache. And then call the
-      `invalidate_all` and `entry_count` methods.
-    - The expected behavior is: (1) the key should exist after the second insertion,
-      and (2) the `entry_count` method should return zero shortly after calling the
-      `invalidate_all` method.
-    - The actual behavior was: (1) the key may not exist after the second insertion,
-      and (2) the `entry_count` method may keep returning a non zero number.
+    - One way to trigger the issue is that insert the same key twice quickly, once
+      when the cache is full and a second time when there is a room in the cache.
+      - When it occurs, the cache will not return the value inserted in the second
+        call (which is wrong), and the `entry_count` method will keep returning a non
+        zero value after calling the `invalidate_all` method (which is also wrong).
     - These issues were already present in `v0.11.x` and older versions, but less
       likely to occur because these versions had background threads to periodically
       process pending tasks.
