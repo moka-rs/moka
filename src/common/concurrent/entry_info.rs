@@ -55,6 +55,10 @@ impl<K> EntryInfo<K> {
         self.is_admitted.store(value, Ordering::Release);
     }
 
+    /// Returns `true` if the `ValueEntry` having this `EntryInfo` is dirty.
+    ///
+    /// Dirty means that the entry has been updated in the concurrent hash table but
+    /// not yet in the cache policies such as access-order queue.
     #[inline]
     pub(crate) fn is_dirty(&self) -> bool {
         self.entry_gen.load(Ordering::Acquire) != self.policy_gen.load(Ordering::Acquire)

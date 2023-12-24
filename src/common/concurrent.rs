@@ -90,6 +90,10 @@ impl<K> KeyHashDate<K> {
         self.entry_info.last_modified()
     }
 
+    pub(crate) fn last_accessed(&self) -> Option<Instant> {
+        self.entry_info.last_accessed()
+    }
+
     pub(crate) fn is_dirty(&self) -> bool {
         self.entry_info.is_dirty()
     }
@@ -209,10 +213,6 @@ impl<K, V> ValueEntry<K, V> {
 
     pub(crate) fn set_admitted(&self, value: bool) {
         self.info.set_admitted(value);
-    }
-
-    pub(crate) fn is_dirty(&self) -> bool {
-        self.info.is_dirty()
     }
 
     #[inline]

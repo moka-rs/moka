@@ -773,8 +773,8 @@ impl<K, V, S> BaseCache<K, V, S> {
         other: &ValueEntry<K, V>,
     ) -> (TrioArc<ValueEntry<K, V>>, u16) {
         let info = TrioArc::clone(other.entry_info());
-        // To prevent this updated ValueEntry from being evicted by an expiration policy,
-        // increment the entry generation.
+        // To prevent this updated ValueEntry from being evicted by an expiration
+        // policy, increment the entry generation.
         let gen = info.incr_entry_gen();
         info.set_last_accessed(timestamp);
         info.set_last_modified(timestamp);
@@ -2032,16 +2032,30 @@ where
                 if let TimerEvent::Expired(node) = event {
                     let entry_info = node.element.entry_info();
                     let kh = entry_info.key_hash();
-                    Some((Arc::clone(&kh.key), kh.hash))
+                    Some((Arc::clone(&kh.key), kh.hash, entry_info.is_dirty()))
                 } else {
                     None
                 }
             })
             .collect::<Vec<_>>();
 
-        for (key, hash) in expired_keys {
-            // Lock the key for removal if blocking removal notification is
-            // enabled.
+        // Process each expired key.
+        //
+        // If it is dirty or `cache.remove_if` returns `None`, we will skip it as it
+        // has been read, updated or invalidated by other thread.
+        //
+        // - The timer node should have been unset in the current `ValueEntry` as
+        //   described above.
+        // - When necessary, a new timer node will be recreated for the current or
+        //   new `ValueEntry` when its `WriteOp` or `ReadOp` is processed.
+        for (key, hash, is_dirty) in expired_keys {
+            if is_dirty {
+                // Skip this entry as it has been updated or invalidated by other
+                // thread.
+                continue;
+            }
+
+            // Lock the key for removal if blocking removal notification is enabled.
             let kl = self.maybe_key_lock(&key);
             let _klg = if let Some(lock) = &kl {
                 Some(lock.lock().await)
@@ -2049,8 +2063,7 @@ where
                 None
             };
 
-            // Remove the key from the map only when the entry is really
-            // expired.
+            // Remove the key from the map only when the entry is really expired.
             let maybe_entry = self.cache.remove_if(
                 hash,
                 |k| k == &key,
@@ -2065,12 +2078,8 @@ where
                 }
                 Self::handle_remove_without_timer_wheel(deqs, entry, &mut eviction_state.counters);
             } else {
-                // Other thread might have updated or invalidated the entry
-                // already. We have nothing to do here as the `advance()`
-                // iterator has unset the timer node pointer in the old
-                // `ValueEntry`. (In the case of update, the timer node will be
-                // recreated for the new `ValueEntry` when it is processed by the
-                // `handle_upsert` method.)
+                // Skip this entry as the key might have been read, updated or
+                // invalidated by other thread.
             }
         }
     }
@@ -2093,12 +2102,14 @@ where
                 .await;
         }
 
-        self.remove_expired_ao(Window, deqs, timer_wheel, batch_size, now, state)
-            .await;
-        self.remove_expired_ao(Probation, deqs, timer_wheel, batch_size, now, state)
-            .await;
-        self.remove_expired_ao(Protected, deqs, timer_wheel, batch_size, now, state)
-            .await;
+        if self.expiration_policy.time_to_idle().is_some() || self.has_valid_after() {
+            self.remove_expired_ao(Window, deqs, timer_wheel, batch_size, now, state)
+                .await;
+            self.remove_expired_ao(Probation, deqs, timer_wheel, batch_size, now, state)
+                .await;
+            self.remove_expired_ao(Protected, deqs, timer_wheel, batch_size, now, state)
+                .await;
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2106,7 +2117,7 @@ where
     async fn remove_expired_ao(
         &self,
         cache_region: CacheRegion,
-        deqs: &mut MutexGuard<'_, Deques<K>>,
+        deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
         batch_size: usize,
         now: Instant,
@@ -2117,40 +2128,40 @@ where
         let tti = &self.expiration_policy.time_to_idle();
         let va = &self.valid_after();
         let deq_name = cache_region.name();
+
         for _ in 0..batch_size {
-            // Peek the front node of the deque and check if it is expired.
-            let key_hash_cause = deqs
-                .select_mut(cache_region)
-                .0
-                .peek_front()
-                .and_then(|node| {
-                    // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
-                    match is_entry_expired_ao_or_invalid(tti, va, node, now) {
-                        (true, _) => Some((
-                            Arc::clone(node.element.key()),
-                            node.element.hash(),
-                            RemovalCause::Expired,
-                        )),
-                        (false, true) => Some((
-                            Arc::clone(node.element.key()),
-                            node.element.hash(),
-                            RemovalCause::Explicit,
-                        )),
-                        (false, false) => None,
-                    }
-                });
+            let maybe_key_hash_ts = deqs.select_mut(cache_region).0.peek_front().map(|node| {
+                let elem = &node.element;
+                (
+                    Arc::clone(elem.key()),
+                    elem.hash(),
+                    elem.is_dirty(),
+                    elem.last_accessed(),
+                )
+            });
 
-            if key_hash_cause.is_none() {
-                break;
-            }
-
-            let (key, hash, cause) = key_hash_cause
-                .as_ref()
-                .map(|(k, h, c)| (k, *h, *c))
-                .unwrap();
+            let (key, hash, cause) = match maybe_key_hash_ts {
+                Some((key, hash, false, Some(ts))) => {
+                    let cause = match is_entry_expired_ao_or_invalid(tti, va, ts, now) {
+                        (true, _) => RemovalCause::Expired,
+                        (false, true) => RemovalCause::Explicit,
+                        (false, false) => break,
+                    };
+                    (key, hash, cause)
+                }
+                // TODO: Remove the second pattern `Some((_key, false, None))` once
+                // we change `last_modified` and `last_accessed` in `EntryInfo` from
+                // `Option<Instant>` to `Instant`.
+                Some((key, hash, true, _) | (key, hash, false, None)) => {
+                    let (ao_deq, wo_deq) = deqs.select_mut(cache_region);
+                    self.skip_updated_entry_ao(&key, hash, deq_name, ao_deq, wo_deq);
+                    continue;
+                }
+                None => break,
+            };
 
             // Lock the key for removal if blocking removal notification is enabled.
-            let kl = self.maybe_key_lock(key);
+            let kl = self.maybe_key_lock(&key);
             let _klg = if let Some(lock) = &kl {
                 Some(lock.lock().await)
             } else {
@@ -2163,18 +2174,17 @@ where
             // above has not been updated yet.
             let maybe_entry = self.cache.remove_if(
                 hash,
-                |k| k == key,
+                |k| k == &key,
                 |_, v| is_expired_entry_ao(tti, va, v, now),
             );
 
             if let Some(entry) = maybe_entry {
                 if eviction_state.is_notifier_enabled() {
-                    let key = Arc::clone(key);
                     eviction_state.add_removed_entry(key, &entry, cause).await;
                 }
                 let (ao_deq, wo_deq) = deqs.select_mut(cache_region);
                 Self::handle_remove_with_deques(
-                    cache_region.name(),
+                    deq_name,
                     ao_deq,
                     wo_deq,
                     timer_wheel,
@@ -2183,39 +2193,47 @@ where
                 );
             } else {
                 let (ao_deq, wo_deq) = deqs.select_mut(cache_region);
-                if !self.try_skip_updated_entry(key, hash, deq_name, ao_deq, wo_deq) {
-                    break;
-                }
+                self.skip_updated_entry_ao(&key, hash, deq_name, ao_deq, wo_deq);
             }
         }
     }
 
     #[inline]
-    fn try_skip_updated_entry(
+    fn skip_updated_entry_ao(
         &self,
         key: &K,
         hash: u64,
         deq_name: &str,
         deq: &mut Deque<KeyHashDate<K>>,
         write_order_deq: &mut Deque<KeyHashDate<K>>,
-    ) -> bool {
+    ) {
         if let Some(entry) = self.cache.get(hash, |k| (k.borrow() as &K) == key) {
-            if entry.is_dirty() {
-                // The key exists and the entry has been updated.
-                Deques::move_to_back_ao_in_deque(deq_name, deq, &entry);
-                Deques::move_to_back_wo_in_deque(write_order_deq, &entry);
-                true
-            } else {
-                // The key exists but something unexpected.
-                false
-            }
+            // The key exists and the entry may have been read or updated by other
+            // thread.
+            Deques::move_to_back_ao_in_deque(deq_name, deq, &entry);
+            Deques::move_to_back_wo_in_deque(write_order_deq, &entry);
         } else {
-            // Skip this entry as the key might have been invalidated. Since the
-            // invalidated ValueEntry (which should be still in the write op queue)
-            // has a pointer to this node, move the node to the back of the deque
-            // instead of popping (dropping) it.
+            // Skip this entry as the key may have been invalidated by other thread.
+            // Since the invalidated ValueEntry (which should be still in the write
+            // op queue) has a pointer to this node, move the node to the back of the
+            // deque instead of popping (dropping) it.
             deq.move_front_to_back();
-            true
+        }
+    }
+
+    #[inline]
+    fn skip_updated_entry_wo(&self, key: &K, hash: u64, deqs: &mut Deques<K>) {
+        if let Some(entry) = self.cache.get(hash, |k| (k.borrow() as &K) == key) {
+            // The key exists and the entry may have been read or updated by other
+            // thread.
+            deqs.move_to_back_ao(&entry);
+            deqs.move_to_back_wo(&entry);
+        } else {
+            // Skip this entry as the key may have been invalidated by other thread.
+            // Since the invalidated `ValueEntry` (which should be still in the write
+            // op queue) has a pointer to this node, move the node to the back of the
+            // deque instead of popping (dropping) it.
+            deqs.write_order.move_front_to_back();
         }
     }
 
@@ -2232,25 +2250,39 @@ where
     {
         let ttl = &self.expiration_policy.time_to_live();
         let va = &self.valid_after();
+
         for _ in 0..batch_size {
-            let key_cause = deqs.write_order.peek_front().and_then(
-                // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
-                |node| match is_entry_expired_wo_or_invalid(ttl, va, node, now) {
-                    (true, _) => Some((Arc::clone(node.element.key()), RemovalCause::Expired)),
-                    (false, true) => Some((Arc::clone(node.element.key()), RemovalCause::Explicit)),
-                    (false, false) => None,
-                },
-            );
+            let maybe_key_hash_ts = deqs.write_order.peek_front().map(|node| {
+                let elem = &node.element;
+                (
+                    Arc::clone(elem.key()),
+                    elem.hash(),
+                    elem.is_dirty(),
+                    elem.last_modified(),
+                )
+            });
 
-            if key_cause.is_none() {
-                break;
-            }
-
-            let (key, cause) = key_cause.as_ref().unwrap();
-            let hash = self.hash(key);
+            let (key, hash, cause) = match maybe_key_hash_ts {
+                Some((key, hash, false, Some(ts))) => {
+                    let cause = match is_entry_expired_wo_or_invalid(ttl, va, ts, now) {
+                        (true, _) => RemovalCause::Expired,
+                        (false, true) => RemovalCause::Explicit,
+                        (false, false) => break,
+                    };
+                    (key, hash, cause)
+                }
+                // TODO: Remove the second pattern `Some((_key, false, None))` once
+                // we change `last_modified` and `last_accessed` in `EntryInfo` from
+                // `Option<Instant>` to `Instant`.
+                Some((key, hash, true, _) | (key, hash, false, None)) => {
+                    self.skip_updated_entry_wo(&key, hash, deqs);
+                    continue;
+                }
+                None => break,
+            };
 
             // Lock the key for removal if blocking removal notification is enabled.
-            let kl = self.maybe_key_lock(key);
+            let kl = self.maybe_key_lock(&key);
             let _klg = if let Some(lock) = &kl {
                 Some(lock.lock().await)
             } else {
@@ -2259,30 +2291,17 @@ where
 
             let maybe_entry = self.cache.remove_if(
                 hash,
-                |k| k == key,
+                |k| k == &key,
                 |_, v| is_expired_entry_wo(ttl, va, v, now),
             );
 
             if let Some(entry) = maybe_entry {
                 if eviction_state.is_notifier_enabled() {
-                    let key = Arc::clone(key);
-                    eviction_state.add_removed_entry(key, &entry, *cause).await;
+                    eviction_state.add_removed_entry(key, &entry, cause).await;
                 }
                 Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters);
-            } else if let Some(entry) = self.cache.get(hash, |k| k == key) {
-                if entry.is_dirty() {
-                    deqs.move_to_back_ao(&entry);
-                    deqs.move_to_back_wo(&entry);
-                } else {
-                    // The key exists but something unexpected. Break.
-                    break;
-                }
             } else {
-                // Skip this entry as the key might have been invalidated. Since the
-                // invalidated ValueEntry (which should be still in the write op
-                // queue) has a pointer to this node, move the node to the back of
-                // the deque instead of popping (dropping) it.
-                deqs.write_order.move_front_to_back();
+                self.skip_updated_entry_wo(&key, hash, deqs);
             }
         }
     }
@@ -2357,7 +2376,8 @@ where
     ) where
         V: Clone,
     {
-        const DEQ_NAME: &str = "probation";
+        const CACHE_REGION: CacheRegion = CacheRegion::MainProbation;
+        let deq_name = CACHE_REGION.name();
         let mut evicted = 0u64;
 
         for _ in 0..batch_size {
@@ -2375,22 +2395,19 @@ where
                         Arc::clone(node.element.key()),
                         node.element.hash(),
                         entry_info.is_dirty(),
-                        entry_info.last_modified(),
+                        entry_info.last_accessed(),
                     )
                 });
 
             let (key, hash, ts) = match maybe_key_hash_ts {
                 Some((key, hash, false, Some(ts))) => (key, hash, ts),
-                // TODO: Remove the second pattern `Some((_key, false, None))` once we change
-                // `last_modified` and `last_accessed` in `EntryInfo` from `Option<Instant>` to
-                // `Instant`.
+                // TODO: Remove the second pattern `Some((_key, false, None))` once
+                // we change `last_modified` and `last_accessed` in `EntryInfo` from
+                // `Option<Instant>` to `Instant`.
                 Some((key, hash, true, _) | (key, hash, false, None)) => {
-                    let (deq, write_order_deq) = deqs.select_mut(CacheRegion::MainProbation);
-                    if self.try_skip_updated_entry(&key, hash, DEQ_NAME, deq, write_order_deq) {
-                        continue;
-                    } else {
-                        break;
-                    }
+                    let (ao_deq, wo_deq) = deqs.select_mut(CACHE_REGION);
+                    self.skip_updated_entry_ao(&key, hash, deq_name, ao_deq, wo_deq);
+                    continue;
                 }
                 None => break,
             };
@@ -2407,8 +2424,8 @@ where
                 hash,
                 |k| k == &key,
                 |_, v| {
-                    if let Some(lm) = v.last_modified() {
-                        lm == ts
+                    if let Some(la) = v.last_accessed() {
+                        la == ts
                     } else {
                         false
                     }
@@ -2424,7 +2441,7 @@ where
                 let weight = entry.policy_weight();
                 let (deq, write_order_deq) = deqs.select_mut(CacheRegion::MainProbation);
                 Self::handle_remove_with_deques(
-                    DEQ_NAME,
+                    deq_name,
                     deq,
                     write_order_deq,
                     timer_wheel,
@@ -2433,10 +2450,8 @@ where
                 );
                 evicted = evicted.saturating_add(weight as u64);
             } else {
-                let (deq, write_order_deq) = deqs.select_mut(CacheRegion::MainProbation);
-                if !self.try_skip_updated_entry(&key, hash, DEQ_NAME, deq, write_order_deq) {
-                    break;
-                }
+                let (ao_deq, wo_deq) = deqs.select_mut(CacheRegion::MainProbation);
+                self.skip_updated_entry_ao(&key, hash, deq_name, ao_deq, wo_deq);
             }
         }
     }
@@ -2591,9 +2606,10 @@ where
 #[inline]
 fn is_expired_by_per_entry_ttl<K>(entry_info: &TrioArc<EntryInfo<K>>, now: Instant) -> bool {
     if let Some(ts) = entry_info.expiration_time() {
-        return ts <= now;
+        ts <= now
+    } else {
+        false
     }
-    false
 }
 
 /// Returns `true` when one of the followings conditions is met:
@@ -2608,11 +2624,10 @@ fn is_expired_entry_ao(
     now: Instant,
 ) -> bool {
     if let Some(ts) = entry.last_accessed() {
-        if is_invalid_entry(valid_after, ts) || is_expired_by_tti(time_to_idle, ts, now) {
-            return true;
-        }
+        is_invalid_entry(valid_after, ts) || is_expired_by_tti(time_to_idle, ts, now)
+    } else {
+        false
     }
-    false
 }
 
 /// Returns `true` when one of the following conditions is met:
@@ -2627,51 +2642,45 @@ fn is_expired_entry_wo(
     now: Instant,
 ) -> bool {
     if let Some(ts) = entry.last_modified() {
-        if is_invalid_entry(valid_after, ts) || is_expired_by_ttl(time_to_live, ts, now) {
-            return true;
-        }
+        is_invalid_entry(valid_after, ts) || is_expired_by_ttl(time_to_live, ts, now)
+    } else {
+        false
     }
-    false
 }
 
 #[inline]
 fn is_entry_expired_ao_or_invalid(
     time_to_idle: &Option<Duration>,
     valid_after: &Option<Instant>,
-    entry: &impl AccessTime,
+    entry_last_accessed: Instant,
     now: Instant,
 ) -> (bool, bool) {
-    if let Some(ts) = entry.last_accessed() {
-        let expired = is_expired_by_tti(time_to_idle, ts, now);
-        let invalid = is_invalid_entry(valid_after, ts);
-        return (expired, invalid);
-    }
-    (false, false)
+    let ts = entry_last_accessed;
+    let expired = is_expired_by_tti(time_to_idle, ts, now);
+    let invalid = is_invalid_entry(valid_after, ts);
+    (expired, invalid)
 }
 
 #[inline]
 fn is_entry_expired_wo_or_invalid(
     time_to_live: &Option<Duration>,
     valid_after: &Option<Instant>,
-    entry: &impl AccessTime,
+    entry_last_modified: Instant,
     now: Instant,
 ) -> (bool, bool) {
-    if let Some(ts) = entry.last_modified() {
-        let expired = is_expired_by_ttl(time_to_live, ts, now);
-        let invalid = is_invalid_entry(valid_after, ts);
-        return (expired, invalid);
-    }
-    (false, false)
+    let ts = entry_last_modified;
+    let expired = is_expired_by_ttl(time_to_live, ts, now);
+    let invalid = is_invalid_entry(valid_after, ts);
+    (expired, invalid)
 }
 
 #[inline]
 fn is_invalid_entry(valid_after: &Option<Instant>, entry_ts: Instant) -> bool {
     if let Some(va) = valid_after {
-        if entry_ts < *va {
-            return true;
-        }
+        entry_ts < *va
+    } else {
+        false
     }
-    false
 }
 
 #[inline]
@@ -2681,10 +2690,11 @@ fn is_expired_by_tti(
     now: Instant,
 ) -> bool {
     if let Some(tti) = time_to_idle {
-        let checked_add = entry_last_accessed.checked_add(*tti);
-        return checked_add.expect("tti overflow") <= now;
+        let checked_add = entry_last_accessed.checked_add(*tti).expect("tti overflow");
+        checked_add <= now
+    } else {
+        false
     }
-    false
 }
 
 #[inline]
@@ -2694,10 +2704,11 @@ fn is_expired_by_ttl(
     now: Instant,
 ) -> bool {
     if let Some(ttl) = time_to_live {
-        let checked_add = entry_last_modified.checked_add(*ttl);
-        return checked_add.expect("ttl overflow") <= now;
+        let checked_add = entry_last_modified.checked_add(*ttl).expect("ttl overflow");
+        checked_add <= now
+    } else {
+        false
     }
-    false
 }
 
 #[cfg(test)]
