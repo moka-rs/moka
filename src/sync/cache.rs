@@ -2407,6 +2407,32 @@ mod tests {
         verify_notification_vec(&cache, actual, &expected);
     }
 
+    // https://github.com/moka-rs/moka/issues/359
+    #[test]
+    fn ensure_access_time_is_updated_immediately_after_read() {
+        let mut cache = Cache::builder()
+            .max_capacity(10)
+            .time_to_idle(Duration::from_secs(5))
+            .build();
+        cache.reconfigure_for_testing();
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert(1, 1);
+
+        mock.increment(Duration::from_secs(4));
+        assert_eq!(cache.get(&1), Some(1));
+
+        mock.increment(Duration::from_secs(2));
+        assert_eq!(cache.get(&1), Some(1));
+        cache.run_pending_tasks();
+        assert_eq!(cache.get(&1), Some(1));
+    }
+
     #[test]
     fn time_to_live_by_expiry_type() {
         // Define an expiry type.

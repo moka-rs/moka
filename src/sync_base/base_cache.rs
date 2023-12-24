@@ -349,10 +349,11 @@ where
                 );
             }
 
+            entry.set_last_accessed(now);
+
             let v = entry.value.clone();
             let op = ReadOp::Hit {
                 value_entry: entry,
-                timestamp: now,
                 is_expiry_modified,
             };
             read_recorder(op, now);
@@ -1407,12 +1408,10 @@ where
             match ch.try_recv() {
                 Ok(Hit {
                     value_entry,
-                    timestamp,
                     is_expiry_modified,
                 }) => {
                     let kh = value_entry.entry_info().key_hash();
                     freq.increment(kh.hash);
-                    value_entry.set_last_accessed(timestamp);
                     if is_expiry_modified {
                         self.update_timer_wheel(&value_entry, timer_wheel);
                     }
