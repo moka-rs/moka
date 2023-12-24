@@ -6,15 +6,24 @@
 
 - Prevent timing issues that cause inconsistencies between the cache's internal data
   structures ([#348][gh-pull-0348]):
-    - e.g. If you insert the same key twice quickly, once when the cache is full and
-      a second time when there is room in the cache, the key may not remain in the
-      cache after the second insertion. However, the `entry_count` method may return
-      a non zero number after calling the `invalidate_all` method.
-    - With this fix, the key should remain in the cache after the second insertion,
-      and the `entry_count` method should return zero after calling the
+    - Steps to reproduce: Insert the same key twice quickly, once when the cache is
+      full and a second time when there is room in the cache. And then call the
+      `invalidate_all` and `entry_count` methods.
+    - The expected behavior is: (1) the key should exist after the second insertion,
+      and (2) the `entry_count` method should return zero shortly after calling the
       `invalidate_all` method.
-    - These issues were already present in `v0.11.x` and older versions, but were
-      less likely to occur.
+    - The actual behavior was: (1) the key may not exist after the second insertion,
+      and (2) the `entry_count` method may keep returning a non zero number.
+    - These issues were already present in `v0.11.x` and older versions, but less
+      likely to occur because these versions had background threads to periodically
+      process pending tasks.
+
+### Changed
+
+- Updated the Rust edition from 2018 to 2021. ([#339][gh-pull-0339], by
+  [@nyurik][gh-nyurik])
+- Changed to use inline format arguments throughout the code, including examples.
+  ([#340][gh-pull-0340], by [@nyurik][gh-nyurik])
 
 
 ## Version 0.12.1
@@ -728,6 +737,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-LMJW]: https://github.com/LMJW
 [gh-Milo123459]: https://github.com/Milo123459
 [gh-messense]: https://github.com/messense
+[gh-nyurik]: https://github.com/nyurik
 [gh-paolobarbolini]: https://github.com/paolobarbolini
 [gh-peter-scholtens]: https://github.com/peter-scholtens
 [gh-saethlin]: https://github.com/saethlin
@@ -756,6 +766,8 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
 [gh-pull-0348]: https://github.com/moka-rs/moka/pull/348/
+[gh-pull-0340]: https://github.com/moka-rs/moka/pull/340/
+[gh-pull-0339]: https://github.com/moka-rs/moka/pull/339/
 [gh-pull-0331]: https://github.com/moka-rs/moka/pull/331/
 [gh-pull-0316]: https://github.com/moka-rs/moka/pull/316/
 [gh-pull-0309]: https://github.com/moka-rs/moka/pull/309/
