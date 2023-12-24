@@ -35,7 +35,6 @@ impl From<usize> for CacheRegion {
     }
 }
 
-#[cfg(feature = "future")]
 impl CacheRegion {
     pub(crate) fn name(self) -> &'static str {
         match self {
