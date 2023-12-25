@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, Ordering};
+use std::sync::atomic::{self, AtomicBool, AtomicU16, AtomicU32, Ordering};
 
 use super::{AccessTime, KeyHash};
 use crate::common::{concurrent::atomic_time::AtomicInstant, time::Instant};
@@ -61,7 +61,10 @@ impl<K> EntryInfo<K> {
     /// not yet in the cache policies such as access-order queue.
     #[inline]
     pub(crate) fn is_dirty(&self) -> bool {
-        self.entry_gen.load(Ordering::Acquire) != self.policy_gen.load(Ordering::Acquire)
+        let result =
+            self.entry_gen.load(Ordering::Relaxed) != self.policy_gen.load(Ordering::Relaxed);
+        atomic::fence(Ordering::Acquire);
+        result
     }
 
     #[inline]

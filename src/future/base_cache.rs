@@ -1784,6 +1784,7 @@ where
                     timer_wheel,
                     &mut eviction_state.counters,
                 );
+                entry.entry_info().set_policy_gen(gen);
             }
             AdmissionResult::Rejected => {
                 // Lock the key for removal if blocking removal notification is enabled.
@@ -1804,8 +1805,8 @@ where
                 );
 
                 if let Some(entry) = removed {
-                    if eviction_state.is_notifier_enabled() && entry.entry_info().entry_gen() == gen
-                    {
+                    entry.entry_info().set_policy_gen(gen);
+                    if eviction_state.is_notifier_enabled() {
                         eviction_state
                             .add_removed_entry(key, &entry, RemovalCause::Size)
                             .await;
@@ -1813,7 +1814,6 @@ where
                 }
             }
         }
-        entry.entry_info().set_policy_gen(gen);
     }
 
     /// Performs size-aware admission explained in the paper:
@@ -1852,36 +1852,39 @@ where
         let mut next_victim = deq.peek_front_ptr();
 
         // Aggregate potential victims.
-        while victims.policy_weight < candidate.policy_weight {
-            if candidate.freq < victims.freq {
-                break;
-            }
-            if let Some(victim) = next_victim.take() {
-                next_victim = DeqNode::next_node_ptr(victim);
-
-                let vic_elem = &unsafe { victim.as_ref() }.element;
-                let key = vic_elem.key();
-                let hash = vic_elem.hash();
-                let gen = vic_elem.entry_info().entry_gen();
-
-                if let Some(vic_entry) = cache.get(hash, |k| k == key) {
-                    victims.add_policy_weight(vic_entry.policy_weight());
-                    victims.add_frequency(freq, hash);
-                    victim_keys.push((KeyHash::new(Arc::clone(key), hash), gen));
-                    retries = 0;
-                } else {
-                    // Could not get the victim from the cache (hash map). Skip this node
-                    // as its ValueEntry might have been invalidated.
-                    unsafe { deq.move_to_back(victim) };
-                    retries += 1;
-                }
-            } else {
+        while victims.policy_weight < candidate.policy_weight
+            && victims.freq <= candidate.freq
+            && retries <= MAX_CONSECUTIVE_RETRIES
+        {
+            let Some(victim) = next_victim.take() else {
                 // No more potential victims.
                 break;
+            };
+            next_victim = DeqNode::next_node_ptr(victim);
+
+            let vic_elem = &unsafe { victim.as_ref() }.element;
+            if vic_elem.is_dirty() {
+                // Skip this node as its ValueEntry have been updated or invalidated.
+                unsafe { deq.move_to_back(victim) };
+                retries += 1;
+                continue;
             }
 
-            if retries > MAX_CONSECUTIVE_RETRIES {
-                break;
+            let key = vic_elem.key();
+            let hash = vic_elem.hash();
+            let gen = vic_elem.entry_info().entry_gen();
+
+            if let Some(vic_entry) = cache.get(hash, |k| k == key) {
+                victims.add_policy_weight(vic_entry.policy_weight());
+                victims.add_frequency(freq, hash);
+                victim_keys.push((KeyHash::new(Arc::clone(key), hash), gen));
+                retries = 0;
+            } else {
+                // Could not get the victim from the cache (hash map). Skip this node
+                // as its ValueEntry might have been invalidated (after we checked
+                // `is_dirty` above`).
+                unsafe { deq.move_to_back(victim) };
+                retries += 1;
             }
         }
 
