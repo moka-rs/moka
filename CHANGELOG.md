@@ -4,16 +4,16 @@
 
 ### Fixed
 
-- Prevent timing issues that cause inconsistencies between the cache's internal data
-  structures ([#348][gh-pull-0348]):
+- Prevent timing issues in writes that cause inconsistencies between the cache's
+  internal data structures ([#348][gh-pull-0348]):
     - One way to trigger the issue is that insert the same key twice quickly, once
       when the cache is full and a second time when there is a room in the cache.
       - When it occurs, the cache will not return the value inserted in the second
         call (which is wrong), and the `entry_count` method will keep returning a non
         zero value after calling the `invalidate_all` method (which is also wrong).
     - These issues were already present in `v0.11.x` and older versions, but less
-      likely to occur because these versions had background threads to periodically
-      process pending tasks.
+      likely to occur because these versions had smaller time windows for the issues
+      to occur by having a background threads to periodically process pending tasks.
 
 ### Changed
 

@@ -14,7 +14,8 @@ pub(crate) struct EntryInfo<K> {
     /// in the concurrent hash table.
     entry_gen: AtomicU16,
     /// `policy_gen` (policy generation) is incremented every time entry's `WriteOpe`
-    /// is applied to the cache policies including the LRU deque and LFU estimator.
+    /// is applied to the cache policies including the access-order queue (the LRU
+    /// deque).
     policy_gen: AtomicU16,
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
@@ -77,6 +78,7 @@ impl<K> EntryInfo<K> {
     pub(crate) fn incr_entry_gen(&self) -> u16 {
         // NOTE: This operation wraps around on overflow.
         let prev = self.entry_gen.fetch_add(1, Ordering::AcqRel);
+        // Need to add `1` to the previous value to get the current value.
         prev.wrapping_add(1)
     }
 
