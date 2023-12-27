@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{self, AtomicBool, AtomicU16, AtomicU32, Ordering};
 
 use super::{AccessTime, KeyHash};
 use crate::common::{concurrent::atomic_time::AtomicInstant, time::Instant};
@@ -6,14 +6,17 @@ use crate::common::{concurrent::atomic_time::AtomicInstant, time::Instant};
 #[derive(Debug)]
 pub(crate) struct EntryInfo<K> {
     key_hash: KeyHash<K>,
-    /// `is_admitted` indicates that the entry has been admitted to the
-    /// cache. When `false`, it means the entry is _temporary_ admitted to
-    /// the cache or evicted from the cache (so it should not have LRU nodes).
+    /// `is_admitted` indicates that the entry has been admitted to the cache. When
+    /// `false`, it means the entry is _temporary_ admitted to the cache or evicted
+    /// from the cache (so it should not have LRU nodes).
     is_admitted: AtomicBool,
-    /// `is_dirty` indicates that the entry has been inserted (or updated)
-    /// in the hash table, but the history of the insertion has not yet
-    /// been applied to the LRU deques and LFU estimator.
-    is_dirty: AtomicBool,
+    /// `entry_gen` (entry generation) is incremented every time the entry is updated
+    /// in the concurrent hash table.
+    entry_gen: AtomicU16,
+    /// `policy_gen` (policy generation) is incremented every time entry's `WriteOp`
+    /// is applied to the cache policies including the access-order queue (the LRU
+    /// deque).
+    policy_gen: AtomicU16,
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
     expiration_time: AtomicInstant,
@@ -29,7 +32,9 @@ impl<K> EntryInfo<K> {
         Self {
             key_hash,
             is_admitted: AtomicBool::default(),
-            is_dirty: AtomicBool::new(true),
+            // `entry_gen` starts at 1 and `policy_gen` start at 0.
+            entry_gen: AtomicU16::new(1),
+            policy_gen: AtomicU16::new(0),
             last_accessed: AtomicInstant::new(timestamp),
             last_modified: AtomicInstant::new(timestamp),
             expiration_time: AtomicInstant::default(),
@@ -52,14 +57,54 @@ impl<K> EntryInfo<K> {
         self.is_admitted.store(value, Ordering::Release);
     }
 
+    /// Returns `true` if the `ValueEntry` having this `EntryInfo` is dirty.
+    ///
+    /// Dirty means that the entry has been updated in the concurrent hash table but
+    /// not yet in the cache policies such as access-order queue.
     #[inline]
     pub(crate) fn is_dirty(&self) -> bool {
-        self.is_dirty.load(Ordering::Acquire)
+        let result =
+            self.entry_gen.load(Ordering::Relaxed) != self.policy_gen.load(Ordering::Relaxed);
+        atomic::fence(Ordering::Acquire);
+        result
     }
 
     #[inline]
-    pub(crate) fn set_dirty(&self, value: bool) {
-        self.is_dirty.store(value, Ordering::Release);
+    pub(crate) fn entry_gen(&self) -> u16 {
+        self.entry_gen.load(Ordering::Acquire)
+    }
+
+    /// Increments the entry generation and returns the new value.
+    #[inline]
+    pub(crate) fn incr_entry_gen(&self) -> u16 {
+        // NOTE: This operation wraps around on overflow.
+        let prev = self.entry_gen.fetch_add(1, Ordering::AcqRel);
+        // Need to add `1` to the previous value to get the current value.
+        prev.wrapping_add(1)
+    }
+
+    /// Sets the policy generation to the given value.
+    #[inline]
+    pub(crate) fn set_policy_gen(&self, value: u16) {
+        let g = &self.policy_gen;
+        loop {
+            let current = g.load(Ordering::Acquire);
+
+            // Do not set the given value if it is smaller than the current value of
+            // `policy_gen`. Note that the current value may have been wrapped
+            // around. If the value is much larger than the current value, it is
+            // likely that the value of `policy_gen` has been wrapped around.
+            if current >= value || value.wrapping_sub(current) > u16::MAX / 2 {
+                break;
+            }
+
+            // Try to set the value.
+            if g.compare_exchange_weak(current, value, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                break;
+            }
+        }
     }
 
     #[inline]
@@ -134,7 +179,9 @@ mod test {
         #[derive(PartialEq, Eq, Hash, Clone, Copy, Debug)]
         enum TargetArch {
             Linux64,
-            Linux32,
+            Linux32X86,
+            Linux32Arm,
+            Linux32Mips,
             MacOS64,
         }
 
@@ -149,9 +196,17 @@ mod test {
             if cfg!(target_pointer_width = "64") {
                 Linux64
             } else if cfg!(target_pointer_width = "32") {
-                Linux32
+                if cfg!(target_arch = "x86") {
+                    Linux32X86
+                } else if cfg!(target_arch = "arm") {
+                    Linux32Arm
+                } else if cfg!(target_arch = "mips") {
+                    Linux32Mips
+                } else {
+                    unimplemented!();
+                }
             } else {
-                panic!("Unsupported pointer width for Linux");
+                unimplemented!();
             }
         } else if cfg!(target_os = "macos") {
             MacOS64
@@ -160,12 +215,14 @@ mod test {
         };
 
         let expected_sizes = match (arch, is_quanta_enabled) {
-            (Linux64, true) => vec![("1.51", 48)],
-            (Linux32, true) => vec![("1.51", 48)],
-            (MacOS64, true) => vec![("1.62", 48)],
-            (Linux64, false) => vec![("1.66", 96), ("1.60", 120)],
-            (Linux32, false) => vec![("1.66", 96), ("1.62", 120), ("1.60", 72)],
-            (MacOS64, false) => vec![("1.62", 96)],
+            (Linux64 | Linux32Arm, true) => vec![("1.51", 56)],
+            (Linux32X86, true) => vec![("1.51", 48)],
+            (Linux32Mips, true) => unimplemented!(),
+            (MacOS64, true) => vec![("1.62", 56)],
+            (Linux64, false) => vec![("1.66", 104), ("1.60", 128)],
+            (Linux32X86, false) => unimplemented!(),
+            (Linux32Arm | Linux32Mips, false) => vec![("1.66", 104), ("1.62", 128), ("1.60", 80)],
+            (MacOS64, false) => vec![("1.62", 104)],
         };
 
         let mut expected = None;

@@ -90,6 +90,10 @@ impl<K> KeyHashDate<K> {
         self.entry_info.last_modified()
     }
 
+    pub(crate) fn last_accessed(&self) -> Option<Instant> {
+        self.entry_info.last_accessed()
+    }
+
     pub(crate) fn is_dirty(&self) -> bool {
         self.entry_info.is_dirty()
     }
@@ -215,10 +219,6 @@ impl<K, V> ValueEntry<K, V> {
         self.info.is_dirty()
     }
 
-    pub(crate) fn set_dirty(&self, value: bool) {
-        self.info.set_dirty(value);
-    }
-
     #[inline]
     pub(crate) fn policy_weight(&self) -> u32 {
         self.info.policy_weight()
@@ -303,7 +303,6 @@ impl<K, V> AccessTime for TrioArc<ValueEntry<K, V>> {
 pub(crate) enum ReadOp<K, V> {
     Hit {
         value_entry: TrioArc<ValueEntry<K, V>>,
-        timestamp: Instant,
         is_expiry_modified: bool,
     },
     // u64 is the hash of the key.
@@ -314,10 +313,15 @@ pub(crate) enum WriteOp<K, V> {
     Upsert {
         key_hash: KeyHash<K>,
         value_entry: TrioArc<ValueEntry<K, V>>,
+        /// Entry generation after the operation.
+        entry_gen: u16,
         old_weight: u32,
         new_weight: u32,
     },
-    Remove(KvEntry<K, V>),
+    Remove {
+        kv_entry: KvEntry<K, V>,
+        entry_gen: u16,
+    },
 }
 
 /// Cloning a `WriteOp` is safe and cheap because it uses `Arc` and `TrioArc` pointers to
@@ -328,15 +332,23 @@ impl<K, V> Clone for WriteOp<K, V> {
             Self::Upsert {
                 key_hash,
                 value_entry,
+                entry_gen,
                 old_weight,
                 new_weight,
             } => Self::Upsert {
                 key_hash: key_hash.clone(),
                 value_entry: TrioArc::clone(value_entry),
+                entry_gen: *entry_gen,
                 old_weight: *old_weight,
                 new_weight: *new_weight,
             },
-            Self::Remove(kv_hash) => Self::Remove(kv_hash.clone()),
+            Self::Remove {
+                kv_entry,
+                entry_gen,
+            } => Self::Remove {
+                kv_entry: kv_entry.clone(),
+                entry_gen: *entry_gen,
+            },
         }
     }
 }
@@ -345,7 +357,28 @@ impl<K, V> fmt::Debug for WriteOp<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Upsert { .. } => f.debug_struct("Upsert").finish(),
-            Self::Remove(..) => f.debug_tuple("Remove").finish(),
+            Self::Remove { .. } => f.debug_tuple("Remove").finish(),
+        }
+    }
+}
+
+impl<K, V> WriteOp<K, V> {
+    pub(crate) fn new_upsert(
+        key: &Arc<K>,
+        hash: u64,
+        value_entry: &TrioArc<ValueEntry<K, V>>,
+        entry_generation: u16,
+        old_weight: u32,
+        new_weight: u32,
+    ) -> Self {
+        let key_hash = KeyHash::new(Arc::clone(key), hash);
+        let value_entry = TrioArc::clone(value_entry);
+        Self::Upsert {
+            key_hash,
+            value_entry,
+            entry_gen: entry_generation,
+            old_weight,
+            new_weight,
         }
     }
 }

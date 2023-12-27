@@ -1,5 +1,28 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.2
+
+### Fixed
+
+- Prevent timing issues in writes that cause inconsistencies between the cache's
+  internal data structures ([#348][gh-pull-0348]):
+    - One way to trigger the issue is that insert the same key twice quickly, once
+      when the cache is full and a second time when there is a room in the cache.
+      - When it occurs, the cache will not return the value inserted in the second
+        call (which is wrong), and the `entry_count` method will keep returning a non
+        zero value after calling the `invalidate_all` method (which is also wrong).
+    - These issues were already present in `v0.11.x` and older versions, but less
+      likely to occur because these versions had smaller time windows for the issues
+      to occur by having a background threads to periodically process pending tasks.
+
+### Changed
+
+- Updated the Rust edition from 2018 to 2021. ([#339][gh-pull-0339], by
+  [@nyurik][gh-nyurik])
+- Changed to use inline format arguments throughout the code, including examples.
+  ([#340][gh-pull-0340], by [@nyurik][gh-nyurik])
+
+
 ## Version 0.12.1
 
 ### Fixed
@@ -711,6 +734,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-LMJW]: https://github.com/LMJW
 [gh-Milo123459]: https://github.com/Milo123459
 [gh-messense]: https://github.com/messense
+[gh-nyurik]: https://github.com/nyurik
 [gh-paolobarbolini]: https://github.com/paolobarbolini
 [gh-peter-scholtens]: https://github.com/peter-scholtens
 [gh-saethlin]: https://github.com/saethlin
@@ -738,6 +762,9 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0348]: https://github.com/moka-rs/moka/pull/348/
+[gh-pull-0340]: https://github.com/moka-rs/moka/pull/340/
+[gh-pull-0339]: https://github.com/moka-rs/moka/pull/339/
 [gh-pull-0331]: https://github.com/moka-rs/moka/pull/331/
 [gh-pull-0316]: https://github.com/moka-rs/moka/pull/316/
 [gh-pull-0309]: https://github.com/moka-rs/moka/pull/309/

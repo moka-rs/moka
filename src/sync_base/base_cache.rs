@@ -349,10 +349,11 @@ where
                 );
             }
 
+            entry.set_last_accessed(now);
+
             let v = entry.value.clone();
             let op = ReadOp::Hit {
                 value_entry: entry,
-                timestamp: now,
                 is_expiry_modified,
             };
             read_recorder(op, now);
@@ -510,13 +511,8 @@ where
             hash,
             // on_insert
             || {
-                let entry = self.new_value_entry(&key, hash, value.clone(), ts, weight);
-                let ins_op = WriteOp::Upsert {
-                    key_hash: KeyHash::new(Arc::clone(&key), hash),
-                    value_entry: TrioArc::clone(&entry),
-                    old_weight: 0,
-                    new_weight: weight,
-                };
+                let (entry, gen) = self.new_value_entry(&key, hash, value.clone(), ts, weight);
+                let ins_op = WriteOp::new_upsert(&key, hash, &entry, gen, 0, weight);
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((cnt, ins_op));
                 entry
@@ -529,13 +525,8 @@ where
                 // that the OldEntryInfo can preserve the old EntryInfo's
                 // last_accessed and last_modified timestamps.
                 let old_info = OldEntryInfo::new(old_entry);
-                let entry = self.new_value_entry_from(value.clone(), ts, weight, old_entry);
-                let upd_op = WriteOp::Upsert {
-                    key_hash: KeyHash::new(Arc::clone(&key), hash),
-                    value_entry: TrioArc::clone(&entry),
-                    old_weight,
-                    new_weight: weight,
-                };
+                let (entry, gen) = self.new_value_entry_from(value.clone(), ts, weight, old_entry);
+                let upd_op = WriteOp::new_upsert(&key, hash, &entry, gen, old_weight, weight);
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((cnt, old_info, upd_op));
                 entry
@@ -632,10 +623,11 @@ impl<K, V, S> BaseCache<K, V, S> {
         value: V,
         timestamp: Instant,
         policy_weight: u32,
-    ) -> TrioArc<ValueEntry<K, V>> {
+    ) -> (TrioArc<ValueEntry<K, V>>, u16) {
         let key_hash = KeyHash::new(Arc::clone(key), hash);
         let info = TrioArc::new(EntryInfo::new(key_hash, timestamp, policy_weight));
-        TrioArc::new(ValueEntry::new(value, info))
+        let gen: u16 = info.entry_gen();
+        (TrioArc::new(ValueEntry::new(value, info)), gen)
     }
 
     #[inline]
@@ -645,15 +637,15 @@ impl<K, V, S> BaseCache<K, V, S> {
         timestamp: Instant,
         policy_weight: u32,
         other: &ValueEntry<K, V>,
-    ) -> TrioArc<ValueEntry<K, V>> {
+    ) -> (TrioArc<ValueEntry<K, V>>, u16) {
         let info = TrioArc::clone(other.entry_info());
-        // To prevent this updated ValueEntry from being evicted by an expiration policy,
-        // set the dirty flag to true. It will be reset to false when the write is applied.
-        info.set_dirty(true);
+        // To prevent this updated ValueEntry from being evicted by an expiration
+        // policy, increment the entry generation.
+        let gen = info.incr_entry_gen();
         info.set_last_accessed(timestamp);
         info.set_last_modified(timestamp);
         info.set_policy_weight(policy_weight);
-        TrioArc::new(ValueEntry::new_from(value, info, other))
+        (TrioArc::new(ValueEntry::new_from(value, info, other)), gen)
     }
 
     fn expire_after_create(
@@ -838,9 +830,18 @@ impl EntrySizeAndFrequency {
     }
 }
 
+// NOTE: Clippy found that the `Admitted` variant contains at least a few hundred
+// bytes of data and the `Rejected` variant contains no data at all. It suggested to
+// box the `SmallVec`.
+//
+// We ignore the suggestion because (1) the `SmallVec` is used to avoid heap
+// allocation as it will be used in a performance hot spot, and (2) this enum has a
+// very short lifetime and there will only one instance at a time.
+#[allow(clippy::large_enum_variant)]
 enum AdmissionResult<K> {
     Admitted {
-        victim_keys: SmallVec<[KeyHash<K>; 8]>,
+        /// A vec of pairs of `KeyHash` and `last_accessed`.
+        victim_keys: SmallVec<[(KeyHash<K>, Option<Instant>); 8]>,
     },
     Rejected,
 }
@@ -1409,12 +1410,10 @@ where
             match ch.try_recv() {
                 Ok(Hit {
                     value_entry,
-                    timestamp,
                     is_expiry_modified,
                 }) => {
                     let kh = value_entry.entry_info().key_hash();
                     freq.increment(kh.hash);
-                    value_entry.set_last_accessed(timestamp);
                     if is_expiry_modified {
                         self.update_timer_wheel(&value_entry, timer_wheel);
                     }
@@ -1444,11 +1443,13 @@ where
                 Ok(Upsert {
                     key_hash: kh,
                     value_entry: entry,
+                    entry_gen: gen,
                     old_weight,
                     new_weight,
                 }) => self.handle_upsert(
                     kh,
                     entry,
+                    gen,
                     old_weight,
                     new_weight,
                     deqs,
@@ -1456,8 +1457,17 @@ where
                     &freq,
                     eviction_state,
                 ),
-                Ok(Remove(KvEntry { key: _key, entry })) => {
-                    Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters);
+                Ok(Remove {
+                    kv_entry: KvEntry { key: _key, entry },
+                    entry_gen: gen,
+                }) => {
+                    Self::handle_remove(
+                        deqs,
+                        timer_wheel,
+                        entry,
+                        Some(gen),
+                        &mut eviction_state.counters,
+                    );
                 }
                 Err(_) => break,
             };
@@ -1469,6 +1479,7 @@ where
         &self,
         kh: KeyHash<K>,
         entry: TrioArc<ValueEntry<K, V>>,
+        gen: u16,
         old_weight: u32,
         new_weight: u32,
         deqs: &mut Deques<K>,
@@ -1478,8 +1489,6 @@ where
     ) where
         V: Clone,
     {
-        entry.set_dirty(false);
-
         {
             let counters = &mut eviction_state.counters;
 
@@ -1490,6 +1499,7 @@ where
                 self.update_timer_wheel(&entry, timer_wheel);
                 deqs.move_to_back_ao(&entry);
                 deqs.move_to_back_wo(&entry);
+                entry.entry_info().set_policy_gen(gen);
                 return;
             }
 
@@ -1497,6 +1507,7 @@ where
                 // There are enough room in the cache (or the cache is unbounded).
                 // Add the candidate to the deques.
                 self.handle_admit(&entry, new_weight, deqs, timer_wheel, counters);
+                entry.entry_info().set_policy_gen(gen);
                 return;
             }
         }
@@ -1509,13 +1520,21 @@ where
                 let kl = self.maybe_key_lock(&kh.key);
                 let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-                let removed = self.cache.remove(kh.hash, |k| k == &kh.key);
+                let removed = self.cache.remove_if(
+                    kh.hash,
+                    |k| k == &kh.key,
+                    |_, current_entry| {
+                        TrioArc::ptr_eq(entry.entry_info(), current_entry.entry_info())
+                            && current_entry.entry_info().entry_gen() == gen
+                    },
+                );
                 if let Some(entry) = removed {
                     if eviction_state.is_notifier_enabled() {
                         let key = Arc::clone(&kh.key);
                         eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
                     }
                 }
+                entry.entry_info().set_policy_gen(gen);
                 return;
             }
         }
@@ -1527,17 +1546,20 @@ where
         match Self::admit(&candidate, &self.cache, deqs, freq) {
             AdmissionResult::Admitted { victim_keys } => {
                 // Try to remove the victims from the hash map.
-                for victim in victim_keys {
-                    let vic_key = victim.key;
-                    let vic_hash = victim.hash;
+                for (vic_kh, vic_la) in victim_keys {
+                    let vic_key = vic_kh.key;
+                    let vic_hash = vic_kh.hash;
 
                     // Lock the key for removal if blocking removal notification is enabled.
                     let kl = self.maybe_key_lock(&vic_key);
                     let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-                    if let Some((vic_key, vic_entry)) =
-                        self.cache.remove_entry(vic_hash, |k| k == &vic_key)
-                    {
+                    if let Some((vic_key, vic_entry)) = self.cache.remove_entry_if_and(
+                        vic_hash,
+                        |k| k == &vic_key,
+                        |_, entry| entry.entry_info().last_accessed() == vic_la,
+                        |k, v| (k.clone(), v.clone()),
+                    ) {
                         if eviction_state.is_notifier_enabled() {
                             eviction_state.add_removed_entry(
                                 vic_key,
@@ -1550,6 +1572,7 @@ where
                             deqs,
                             timer_wheel,
                             vic_entry,
+                            None,
                             &mut eviction_state.counters,
                         );
                     } else {
@@ -1571,17 +1594,30 @@ where
                     timer_wheel,
                     &mut eviction_state.counters,
                 );
+                entry.entry_info().set_policy_gen(gen);
             }
             AdmissionResult::Rejected => {
                 // Lock the key for removal if blocking removal notification is enabled.
                 let kl = self.maybe_key_lock(&kh.key);
                 let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-                // Remove the candidate from the cache (hash map).
+                // Remove the candidate from the cache (hash map) if the entry
+                // generation matches.
                 let key = Arc::clone(&kh.key);
-                self.cache.remove(kh.hash, |k| k == &key);
-                if eviction_state.is_notifier_enabled() {
-                    eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
+                let removed = self.cache.remove_if(
+                    kh.hash,
+                    |k| k == &key,
+                    |_, current_entry| {
+                        TrioArc::ptr_eq(entry.entry_info(), current_entry.entry_info())
+                            && current_entry.entry_info().entry_gen() == gen
+                    },
+                );
+
+                if let Some(entry) = removed {
+                    entry.entry_info().set_policy_gen(gen);
+                    if eviction_state.is_notifier_enabled() {
+                        eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
+                    }
                 }
             }
         };
@@ -1623,35 +1659,39 @@ where
         let mut next_victim = deq.peek_front_ptr();
 
         // Aggregate potential victims.
-        while victims.policy_weight < candidate.policy_weight {
-            if candidate.freq < victims.freq {
-                break;
-            }
-            if let Some(victim) = next_victim.take() {
-                next_victim = DeqNode::next_node_ptr(victim);
-
-                let vic_elem = &unsafe { victim.as_ref() }.element;
-                let key = vic_elem.key();
-                let hash = vic_elem.hash();
-
-                if let Some(vic_entry) = cache.get(hash, |k| k == key) {
-                    victims.add_policy_weight(vic_entry.policy_weight());
-                    victims.add_frequency(freq, hash);
-                    victim_keys.push(KeyHash::new(Arc::clone(key), hash));
-                    retries = 0;
-                } else {
-                    // Could not get the victim from the cache (hash map). Skip this node
-                    // as its ValueEntry might have been invalidated.
-                    unsafe { deq.move_to_back(victim) };
-                    retries += 1;
-                }
-            } else {
+        while victims.policy_weight < candidate.policy_weight
+            && victims.freq <= candidate.freq
+            && retries <= MAX_CONSECUTIVE_RETRIES
+        {
+            let Some(victim) = next_victim.take() else {
                 // No more potential victims.
                 break;
+            };
+            next_victim = DeqNode::next_node_ptr(victim);
+
+            let vic_elem = &unsafe { victim.as_ref() }.element;
+            if vic_elem.is_dirty() {
+                // Skip this node as its ValueEntry have been updated or invalidated.
+                unsafe { deq.move_to_back(victim) };
+                retries += 1;
+                continue;
             }
 
-            if retries > MAX_CONSECUTIVE_RETRIES {
-                break;
+            let key = vic_elem.key();
+            let hash = vic_elem.hash();
+            let last_accessed = vic_elem.entry_info().last_accessed();
+
+            if let Some(vic_entry) = cache.get(hash, |k| k == key) {
+                victims.add_policy_weight(vic_entry.policy_weight());
+                victims.add_frequency(freq, hash);
+                victim_keys.push((KeyHash::new(Arc::clone(key), hash), last_accessed));
+                retries = 0;
+            } else {
+                // Could not get the victim from the cache (hash map). Skip this node
+                // as its ValueEntry might have been invalidated (after we checked
+                // `is_dirty` above`).
+                unsafe { deq.move_to_back(victim) };
+                retries += 1;
             }
         }
 
@@ -1744,17 +1784,19 @@ where
         deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
         entry: TrioArc<ValueEntry<K, V>>,
+        gen: Option<u16>,
         counters: &mut EvictionCounters,
     ) {
         if let Some(timer_node) = entry.take_timer_node() {
             timer_wheel.deschedule(timer_node);
         }
-        Self::handle_remove_without_timer_wheel(deqs, entry, counters);
+        Self::handle_remove_without_timer_wheel(deqs, entry, gen, counters);
     }
 
     fn handle_remove_without_timer_wheel(
         deqs: &mut Deques<K>,
         entry: TrioArc<ValueEntry<K, V>>,
+        gen: Option<u16>,
         counters: &mut EvictionCounters,
     ) {
         if entry.is_admitted() {
@@ -1765,6 +1807,9 @@ where
             Deques::unlink_wo(&mut deqs.write_order, &entry);
         } else {
             entry.unset_q_nodes();
+        }
+        if let Some(g) = gen {
+            entry.entry_info().set_policy_gen(g);
         }
     }
 
@@ -1802,13 +1847,29 @@ where
 
         let now = self.current_time_from_expiration_clock();
 
-        // NOTE: When necessary, the iterator returned from advance() will unset the
-        // timer node pointer in the `ValueEntry`, so we do not have to do it here.
+        // NOTES:
+        //
+        // 1. When necessary, the iterator returned from advance() will unset the
+        //    timer node pointer in the `ValueEntry`, so we do not have to do it
+        //    here.
+        // 2. If an entry is dirty or `cache.remove_if` returns `None`, we will skip
+        //    it as it has been read, updated or invalidated by other thread.
+        //    - The timer node should have been unset in the current `ValueEntry` as
+        //      described above.
+        //    - When necessary, a new timer node will be recreated for the current or
+        //      new `ValueEntry` when its `WriteOp` or `ReadOp` is processed.
         for event in timer_wheel.advance(now) {
             // We do not have to do anything if event is `TimerEvent::Descheduled(_)`
             // or `TimerEvent::Rescheduled(_)`.
             if let TimerEvent::Expired(node) = event {
                 let entry_info = node.element.entry_info();
+
+                if entry_info.is_dirty() {
+                    // Skip this entry as it has been updated or invalidated by other
+                    // thread.
+                    continue;
+                }
+
                 let kh = entry_info.key_hash();
                 let key = &kh.key;
                 let hash = kh.hash;
@@ -1818,8 +1879,7 @@ where
                 let kl = self.maybe_key_lock(key);
                 let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-                // Remove the key from the map only when the entry is really
-                // expired.
+                // Remove the key from the map only when the entry is really expired.
                 let maybe_entry = self.cache.remove_if(
                     hash,
                     |k| k == key,
@@ -1834,15 +1894,12 @@ where
                     Self::handle_remove_without_timer_wheel(
                         deqs,
                         entry,
+                        None,
                         &mut eviction_state.counters,
                     );
                 } else {
-                    // Other thread might have updated or invalidated the entry
-                    // already. We have nothing to do here as the `advance()`
-                    // iterator has unset the timer node pointer in the old
-                    // `ValueEntry`. (In the case of update, the timer node will be
-                    // recreated for the new `ValueEntry` when it is processed by the
-                    // `handle_upsert` method.)
+                    // Skip this entry as the key might have been read, updated or
+                    // invalidated by other thread.
                 }
             }
         }
@@ -1857,6 +1914,8 @@ where
     ) where
         V: Clone,
     {
+        use CacheRegion::{MainProbation as Probation, MainProtected as Protected, Window};
+
         let now = self.current_time_from_expiration_clock();
 
         if self.is_write_order_queue_enabled() {
@@ -1864,20 +1923,9 @@ where
         }
 
         if self.expiration_policy.time_to_idle().is_some() || self.has_valid_after() {
-            let (window, probation, protected, wo) = (
-                &mut deqs.window,
-                &mut deqs.probation,
-                &mut deqs.protected,
-                &mut deqs.write_order,
-            );
-
-            let mut rm_expired_ao = |name, deq| {
-                self.remove_expired_ao(name, deq, wo, timer_wheel, batch_size, now, state);
-            };
-
-            rm_expired_ao("window", window);
-            rm_expired_ao("probation", probation);
-            rm_expired_ao("protected", protected);
+            self.remove_expired_ao(Window, deqs, timer_wheel, batch_size, now, state);
+            self.remove_expired_ao(Probation, deqs, timer_wheel, batch_size, now, state);
+            self.remove_expired_ao(Protected, deqs, timer_wheel, batch_size, now, state);
         }
     }
 
@@ -1885,9 +1933,8 @@ where
     #[inline]
     fn remove_expired_ao(
         &self,
-        deq_name: &str,
-        deq: &mut Deque<KeyHashDate<K>>,
-        write_order_deq: &mut Deque<KeyHashDate<K>>,
+        cache_region: CacheRegion,
+        deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
         batch_size: usize,
         now: Instant,
@@ -1897,36 +1944,41 @@ where
     {
         let tti = &self.expiration_policy.time_to_idle();
         let va = &self.valid_after();
+        let deq_name = cache_region.name();
+        let (ao_deq, wo_deq) = deqs.select_mut(cache_region);
+
         for _ in 0..batch_size {
-            // Peek the front node of the deque and check if it is expired.
-            let key_hash_cause = deq.peek_front().and_then(|node| {
-                // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
-                match is_entry_expired_ao_or_invalid(tti, va, node, now) {
-                    (true, _) => Some((
-                        Arc::clone(node.element.key()),
-                        node.element.hash(),
-                        RemovalCause::Expired,
-                    )),
-                    (false, true) => Some((
-                        Arc::clone(node.element.key()),
-                        node.element.hash(),
-                        RemovalCause::Explicit,
-                    )),
-                    (false, false) => None,
-                }
+            let maybe_key_hash_ts = ao_deq.peek_front().map(|node| {
+                let elem = &node.element;
+                (
+                    Arc::clone(elem.key()),
+                    elem.hash(),
+                    elem.is_dirty(),
+                    elem.last_accessed(),
+                )
             });
 
-            if key_hash_cause.is_none() {
-                break;
-            }
-
-            let (key, hash, cause) = key_hash_cause
-                .as_ref()
-                .map(|(k, h, c)| (k, *h, *c))
-                .unwrap();
+            let (key, hash, cause) = match maybe_key_hash_ts {
+                Some((key, hash, false, Some(ts))) => {
+                    let cause = match is_entry_expired_ao_or_invalid(tti, va, ts, now) {
+                        (true, _) => RemovalCause::Expired,
+                        (false, true) => RemovalCause::Explicit,
+                        (false, false) => break,
+                    };
+                    (key, hash, cause)
+                }
+                // TODO: Remove the second pattern `Some((_key, false, None))` once
+                // we change `last_modified` and `last_accessed` in `EntryInfo` from
+                // `Option<Instant>` to `Instant`.
+                Some((key, hash, true, _) | (key, hash, false, None)) => {
+                    self.skip_updated_entry_ao(&key, hash, deq_name, ao_deq, wo_deq);
+                    continue;
+                }
+                None => break,
+            };
 
             // Lock the key for removal if blocking removal notification is enabled.
-            let kl = self.maybe_key_lock(key);
+            let kl = self.maybe_key_lock(&key);
             let _klg = &kl.as_ref().map(|kl| kl.lock());
 
             // Remove the key from the map only when the entry is really
@@ -1935,55 +1987,66 @@ where
             // above has not been updated yet.
             let maybe_entry = self.cache.remove_if(
                 hash,
-                |k| k == key,
+                |k| k == &key,
                 |_, v| is_expired_entry_ao(tti, va, v, now),
             );
 
             if let Some(entry) = maybe_entry {
                 if eviction_state.is_notifier_enabled() {
-                    let key = Arc::clone(key);
                     eviction_state.add_removed_entry(key, &entry, cause);
                 }
                 Self::handle_remove_with_deques(
                     deq_name,
-                    deq,
-                    write_order_deq,
+                    ao_deq,
+                    wo_deq,
                     timer_wheel,
                     entry,
                     &mut eviction_state.counters,
                 );
-            } else if !self.try_skip_updated_entry(key, hash, deq_name, deq, write_order_deq) {
-                break;
+            } else {
+                self.skip_updated_entry_ao(&key, hash, deq_name, ao_deq, wo_deq);
             }
         }
     }
 
     #[inline]
-    fn try_skip_updated_entry(
+    fn skip_updated_entry_ao(
         &self,
         key: &K,
         hash: u64,
         deq_name: &str,
         deq: &mut Deque<KeyHashDate<K>>,
         write_order_deq: &mut Deque<KeyHashDate<K>>,
-    ) -> bool {
+    ) {
         if let Some(entry) = self.cache.get(hash, |k| (k.borrow() as &K) == key) {
+            // The key exists and the entry may have been read or updated by other
+            // thread.
+            Deques::move_to_back_ao_in_deque(deq_name, deq, &entry);
             if entry.is_dirty() {
-                // The key exists and the entry has been updated.
-                Deques::move_to_back_ao_in_deque(deq_name, deq, &entry);
                 Deques::move_to_back_wo_in_deque(write_order_deq, &entry);
-                true
-            } else {
-                // The key exists but something unexpected.
-                false
             }
         } else {
-            // Skip this entry as the key might have been invalidated. Since the
-            // invalidated ValueEntry (which should be still in the write op queue)
-            // has a pointer to this node, move the node to the back of the deque
-            // instead of popping (dropping) it.
+            // Skip this entry as the key may have been invalidated by other thread.
+            // Since the invalidated ValueEntry (which should be still in the write
+            // op queue) has a pointer to this node, move the node to the back of the
+            // deque instead of popping (dropping) it.
             deq.move_front_to_back();
-            true
+        }
+    }
+
+    #[inline]
+    fn skip_updated_entry_wo(&self, key: &K, hash: u64, deqs: &mut Deques<K>) {
+        if let Some(entry) = self.cache.get(hash, |k| (k.borrow() as &K) == key) {
+            // The key exists and the entry may have been read or updated by other
+            // thread.
+            deqs.move_to_back_ao(&entry);
+            deqs.move_to_back_wo(&entry);
+        } else {
+            // Skip this entry as the key may have been invalidated by other thread.
+            // Since the invalidated `ValueEntry` (which should be still in the write
+            // op queue) has a pointer to this node, move the node to the back of the
+            // deque instead of popping (dropping) it.
+            deqs.write_order.move_front_to_back();
         }
     }
 
@@ -2000,53 +2063,54 @@ where
     {
         let ttl = &self.expiration_policy.time_to_live();
         let va = &self.valid_after();
+
         for _ in 0..batch_size {
-            let key_cause = deqs.write_order.peek_front().and_then(
-                // TODO: Skip the entry if it is dirty. See `evict_lru_entries` method as an example.
-                |node| match is_entry_expired_wo_or_invalid(ttl, va, node, now) {
-                    (true, _) => Some((Arc::clone(node.element.key()), RemovalCause::Expired)),
-                    (false, true) => Some((Arc::clone(node.element.key()), RemovalCause::Explicit)),
-                    (false, false) => None,
-                },
-            );
+            let maybe_key_hash_ts = deqs.write_order.peek_front().map(|node| {
+                let elem = &node.element;
+                (
+                    Arc::clone(elem.key()),
+                    elem.hash(),
+                    elem.is_dirty(),
+                    elem.last_modified(),
+                )
+            });
 
-            if key_cause.is_none() {
-                break;
-            }
-
-            let (key, cause) = key_cause.as_ref().unwrap();
-            let hash = self.hash(key);
+            let (key, hash, cause) = match maybe_key_hash_ts {
+                Some((key, hash, false, Some(ts))) => {
+                    let cause = match is_entry_expired_wo_or_invalid(ttl, va, ts, now) {
+                        (true, _) => RemovalCause::Expired,
+                        (false, true) => RemovalCause::Explicit,
+                        (false, false) => break,
+                    };
+                    (key, hash, cause)
+                }
+                // TODO: Remove the second pattern `Some((_key, false, None))` once
+                // we change `last_modified` and `last_accessed` in `EntryInfo` from
+                // `Option<Instant>` to `Instant`.
+                Some((key, hash, true, _) | (key, hash, false, None)) => {
+                    self.skip_updated_entry_wo(&key, hash, deqs);
+                    continue;
+                }
+                None => break,
+            };
 
             // Lock the key for removal if blocking removal notification is enabled.
-            let kl = self.maybe_key_lock(key);
+            let kl = self.maybe_key_lock(&key);
             let _klg = &kl.as_ref().map(|kl| kl.lock());
 
             let maybe_entry = self.cache.remove_if(
                 hash,
-                |k| k == key,
+                |k| k == &key,
                 |_, v| is_expired_entry_wo(ttl, va, v, now),
             );
 
             if let Some(entry) = maybe_entry {
                 if eviction_state.is_notifier_enabled() {
-                    let key = Arc::clone(key);
-                    eviction_state.add_removed_entry(key, &entry, *cause);
+                    eviction_state.add_removed_entry(key, &entry, cause);
                 }
-                Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters);
-            } else if let Some(entry) = self.cache.get(hash, |k| k == key) {
-                if entry.is_dirty() {
-                    deqs.move_to_back_ao(&entry);
-                    deqs.move_to_back_wo(&entry);
-                } else {
-                    // The key exists but something unexpected. Break.
-                    break;
-                }
+                Self::handle_remove(deqs, timer_wheel, entry, None, &mut eviction_state.counters);
             } else {
-                // Skip this entry as the key might have been invalidated. Since the
-                // invalidated ValueEntry (which should be still in the write op
-                // queue) has a pointer to this node, move the node to the back of
-                // the deque instead of popping (dropping) it.
-                deqs.write_order.move_front_to_back();
+                self.skip_updated_entry_wo(&key, hash, deqs);
             }
         }
     }
@@ -2103,7 +2167,7 @@ where
             invalidator.scan_and_invalidate(self, candidates, is_truncated);
 
         for KvEntry { key: _key, entry } in invalidated {
-            Self::handle_remove(deqs, timer_wheel, entry, &mut eviction_state.counters);
+            Self::handle_remove(deqs, timer_wheel, entry, None, &mut eviction_state.counters);
         }
         if is_done {
             deqs.write_order.reset_cursor();
@@ -2120,22 +2184,23 @@ where
     ) where
         V: Clone,
     {
-        const DEQ_NAME: &str = "probation";
+        const CACHE_REGION: CacheRegion = CacheRegion::MainProbation;
+        let deq_name = CACHE_REGION.name();
+        let (ao_deq, wo_deq) = deqs.select_mut(CACHE_REGION);
         let mut evicted = 0u64;
-        let (deq, write_order_deq) = (&mut deqs.probation, &mut deqs.write_order);
 
         for _ in 0..batch_size {
             if evicted >= weights_to_evict {
                 break;
             }
 
-            let maybe_key_hash_ts = deq.peek_front().map(|node| {
+            let maybe_key_hash_ts = ao_deq.peek_front().map(|node| {
                 let entry_info = node.element.entry_info();
                 (
                     Arc::clone(node.element.key()),
                     node.element.hash(),
                     entry_info.is_dirty(),
-                    entry_info.last_modified(),
+                    entry_info.last_accessed(),
                 )
             });
 
@@ -2145,11 +2210,8 @@ where
                 // `last_modified` and `last_accessed` in `EntryInfo` from `Option<Instant>` to
                 // `Instant`.
                 Some((key, hash, true, _) | (key, hash, false, None)) => {
-                    if self.try_skip_updated_entry(&key, hash, DEQ_NAME, deq, write_order_deq) {
-                        continue;
-                    } else {
-                        break;
-                    }
+                    self.skip_updated_entry_ao(&key, hash, deq_name, ao_deq, wo_deq);
+                    continue;
                 }
                 None => break,
             };
@@ -2162,8 +2224,8 @@ where
                 hash,
                 |k| k == &key,
                 |_, v| {
-                    if let Some(lm) = v.last_modified() {
-                        lm == ts
+                    if let Some(la) = v.last_accessed() {
+                        la == ts
                     } else {
                         false
                     }
@@ -2176,16 +2238,16 @@ where
                 }
                 let weight = entry.policy_weight();
                 Self::handle_remove_with_deques(
-                    DEQ_NAME,
-                    deq,
-                    write_order_deq,
+                    deq_name,
+                    ao_deq,
+                    wo_deq,
                     timer_wheel,
                     entry,
                     &mut eviction_state.counters,
                 );
                 evicted = evicted.saturating_add(weight as u64);
-            } else if !self.try_skip_updated_entry(&key, hash, DEQ_NAME, deq, write_order_deq) {
-                break;
+            } else {
+                self.skip_updated_entry_ao(&key, hash, deq_name, ao_deq, wo_deq);
             }
         }
     }
@@ -2313,9 +2375,10 @@ where
 #[inline]
 fn is_expired_by_per_entry_ttl<K>(entry_info: &TrioArc<EntryInfo<K>>, now: Instant) -> bool {
     if let Some(ts) = entry_info.expiration_time() {
-        return ts <= now;
+        ts <= now
+    } else {
+        false
     }
-    false
 }
 
 /// Returns `true` when one of the followings conditions is met:
@@ -2330,11 +2393,10 @@ fn is_expired_entry_ao(
     now: Instant,
 ) -> bool {
     if let Some(ts) = entry.last_accessed() {
-        if is_invalid_entry(valid_after, ts) || is_expired_by_tti(time_to_idle, ts, now) {
-            return true;
-        }
+        is_invalid_entry(valid_after, ts) || is_expired_by_tti(time_to_idle, ts, now)
+    } else {
+        false
     }
-    false
 }
 
 /// Returns `true` when one of the following conditions is met:
@@ -2349,51 +2411,45 @@ fn is_expired_entry_wo(
     now: Instant,
 ) -> bool {
     if let Some(ts) = entry.last_modified() {
-        if is_invalid_entry(valid_after, ts) || is_expired_by_ttl(time_to_live, ts, now) {
-            return true;
-        }
+        is_invalid_entry(valid_after, ts) || is_expired_by_ttl(time_to_live, ts, now)
+    } else {
+        false
     }
-    false
 }
 
 #[inline]
 fn is_entry_expired_ao_or_invalid(
     time_to_idle: &Option<Duration>,
     valid_after: &Option<Instant>,
-    entry: &impl AccessTime,
+    entry_last_accessed: Instant,
     now: Instant,
 ) -> (bool, bool) {
-    if let Some(ts) = entry.last_accessed() {
-        let expired = is_expired_by_tti(time_to_idle, ts, now);
-        let invalid = is_invalid_entry(valid_after, ts);
-        return (expired, invalid);
-    }
-    (false, false)
+    let ts = entry_last_accessed;
+    let expired = is_expired_by_tti(time_to_idle, ts, now);
+    let invalid = is_invalid_entry(valid_after, ts);
+    (expired, invalid)
 }
 
 #[inline]
 fn is_entry_expired_wo_or_invalid(
     time_to_live: &Option<Duration>,
     valid_after: &Option<Instant>,
-    entry: &impl AccessTime,
+    entry_last_modified: Instant,
     now: Instant,
 ) -> (bool, bool) {
-    if let Some(ts) = entry.last_modified() {
-        let expired = is_expired_by_ttl(time_to_live, ts, now);
-        let invalid = is_invalid_entry(valid_after, ts);
-        return (expired, invalid);
-    }
-    (false, false)
+    let ts = entry_last_modified;
+    let expired = is_expired_by_ttl(time_to_live, ts, now);
+    let invalid = is_invalid_entry(valid_after, ts);
+    (expired, invalid)
 }
 
 #[inline]
 fn is_invalid_entry(valid_after: &Option<Instant>, entry_ts: Instant) -> bool {
     if let Some(va) = valid_after {
-        if entry_ts < *va {
-            return true;
-        }
+        entry_ts < *va
+    } else {
+        false
     }
-    false
 }
 
 #[inline]
@@ -2403,10 +2459,11 @@ fn is_expired_by_tti(
     now: Instant,
 ) -> bool {
     if let Some(tti) = time_to_idle {
-        let checked_add = entry_last_accessed.checked_add(*tti);
-        return checked_add.expect("tti overflow") <= now;
+        let checked_add = entry_last_accessed.checked_add(*tti).expect("tti overflow");
+        checked_add <= now
+    } else {
+        false
     }
-    false
 }
 
 #[inline]
@@ -2416,10 +2473,11 @@ fn is_expired_by_ttl(
     now: Instant,
 ) -> bool {
     if let Some(ttl) = time_to_live {
-        let checked_add = entry_last_modified.checked_add(*ttl);
-        return checked_add.expect("tti overflow") <= now;
+        let checked_add = entry_last_modified.checked_add(*ttl).expect("tti overflow");
+        checked_add <= now
+    } else {
+        false
     }
-    false
 }
 
 #[cfg(test)]

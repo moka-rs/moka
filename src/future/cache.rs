@@ -1874,7 +1874,13 @@ where
                     None
                 };
 
-                let op = WriteOp::Remove(kv.clone());
+                let info = kv.entry.entry_info();
+                let entry_gen = info.incr_entry_gen();
+
+                let op: WriteOp<K, V> = WriteOp::Remove {
+                    kv_entry: kv.clone(),
+                    entry_gen,
+                };
 
                 // Async Cancellation Safety: To ensure the below future should be
                 // executed even if our caller async task is cancelled, we create a
@@ -2733,6 +2739,32 @@ mod tests {
         verify_notification_vec(&cache, actual, &expected).await;
     }
 
+    // https://github.com/moka-rs/moka/issues/359
+    #[tokio::test]
+    async fn ensure_access_time_is_updated_immediately_after_read() {
+        let mut cache = Cache::builder()
+            .max_capacity(10)
+            .time_to_idle(Duration::from_secs(5))
+            .build();
+        cache.reconfigure_for_testing().await;
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock)).await;
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert(1, 1).await;
+
+        mock.increment(Duration::from_secs(4));
+        assert_eq!(cache.get(&1).await, Some(1));
+
+        mock.increment(Duration::from_secs(2));
+        assert_eq!(cache.get(&1).await, Some(1));
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.get(&1).await, Some(1));
+    }
+
     #[tokio::test]
     async fn time_to_live_by_expiry_type() {
         // The following `Vec`s will hold actual and expected notifications.
@@ -3060,6 +3092,73 @@ mod tests {
         cache.run_pending_tasks().await;
 
         expiry_counters.verify();
+    }
+
+    // https://github.com/moka-rs/moka/issues/345
+    #[tokio::test]
+    async fn test_race_between_updating_entry_and_processing_its_write_ops() {
+        let cache = Cache::builder()
+            .max_capacity(2)
+            .time_to_idle(Duration::from_secs(1))
+            .build();
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock)).await;
+
+        cache.insert("a", "alice").await;
+        cache.insert("b", "bob").await;
+        cache.insert("c", "cathy").await; // c1
+        mock.increment(Duration::from_secs(2));
+
+        // The following `insert` will do the followings:
+        // 1. Replaces current "c" (c1) in the concurrent hash table (cht).
+        // 2. Runs the pending tasks implicitly.
+        //    (1) "a" will be admitted.
+        //    (2) "b" will be admitted.
+        //    (3) c1 will be evicted by size constraint.
+        //    (4) "a" will be evicted due to expiration.
+        //    (5) "b" will be evicted due to expiration.
+        // 3. Send its `WriteOp` log to the channel.
+        cache.insert("c", "cindy").await; // c2
+
+        // Remove "c" (c2) from the cht.
+        assert_eq!(cache.remove(&"c").await, Some("cindy")); // c-remove
+
+        mock.increment(Duration::from_secs(2));
+
+        // The following `run_pending_tasks` will do the followings:
+        // 1. Admits "c" (c2) to the cache. (Create a node in the LRU deque)
+        // 2. Because of c-remove, removes c2's node from the LRU deque.
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.entry_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_race_between_recreating_entry_and_processing_its_write_ops() {
+        let cache = Cache::builder().max_capacity(2).build();
+
+        cache.insert('a', "a").await;
+        cache.insert('b', "b").await;
+        cache.run_pending_tasks().await;
+
+        cache.insert('c', "c1").await; // (a) `EntryInfo` 1, gen: 1
+        assert!(cache.remove(&'a').await.is_some()); // (b)
+        assert!(cache.remove(&'b').await.is_some()); // (c)
+        assert!(cache.remove(&'c').await.is_some()); // (d) `EntryInfo` 1, gen: 2
+        cache.insert('c', "c2").await; // (e) `EntryInfo` 2, gen: 1
+
+        // Now the `write_op_ch` channel contains the following `WriteOp`s:
+        //
+        // - 0: (a) insert "c1" (`EntryInfo` 1, gen: 1)
+        // - 1: (b) remove "a"
+        // - 2: (c) remove "b"
+        // - 3: (d) remove "c1" (`EntryInfo` 1, gen: 2)
+        // - 4: (e) insert "c2" (`EntryInfo` 2, gen: 1)
+        //
+        // 0 for "c1" is going to be rejected because the cache is full. Let's ensure
+        // processing 0 must not remove "c2" from the concurrent hash table. (Their
+        // gen are the same, but `EntryInfo`s are different)
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.get(&'c').await, Some("c2"));
     }
 
     #[tokio::test]
