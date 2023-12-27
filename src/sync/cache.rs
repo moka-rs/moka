@@ -1563,6 +1563,9 @@ where
             Some(kv) => {
                 let now = self.base.current_time_from_expiration_clock();
 
+                let info = kv.entry.entry_info();
+                let entry_gen = info.incr_entry_gen();
+
                 if self.base.is_removal_notifier_enabled() {
                     self.base.notify_invalidate(&kv.key, &kv.entry);
                 }
@@ -1579,7 +1582,10 @@ where
                     None
                 };
 
-                let op = WriteOp::Remove(kv);
+                let op = WriteOp::Remove {
+                    kv_entry: kv,
+                    entry_gen,
+                };
                 let hk = self.base.housekeeper.as_ref();
                 Self::schedule_write_op(
                     self.base.inner.as_ref(),
@@ -2716,6 +2722,73 @@ mod tests {
         cache.run_pending_tasks();
 
         expiry_counters.verify();
+    }
+
+    // https://github.com/moka-rs/moka/issues/345
+    #[test]
+    fn test_race_between_updating_entry_and_processing_its_write_ops() {
+        let cache = Cache::builder()
+            .max_capacity(2)
+            .time_to_idle(Duration::from_secs(1))
+            .build();
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock));
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        cache.insert("c", "cathy"); // c1
+        mock.increment(Duration::from_secs(2));
+
+        // The following `insert` will do the followings:
+        // 1. Replaces current "c" (c1) in the concurrent hash table (cht).
+        // 2. Runs the pending tasks implicitly.
+        //    (1) "a" will be admitted.
+        //    (2) "b" will be admitted.
+        //    (3) c1 will be evicted by size constraint.
+        //    (4) "a" will be evicted due to expiration.
+        //    (5) "b" will be evicted due to expiration.
+        // 3. Send its `WriteOp` log to the channel.
+        cache.insert("c", "cindy"); // c2
+
+        // Remove "c" (c2) from the cht.
+        assert_eq!(cache.remove(&"c"), Some("cindy")); // c-remove
+
+        mock.increment(Duration::from_secs(2));
+
+        // The following `run_pending_tasks` will do the followings:
+        // 1. Admits "c" (c2) to the cache. (Create a node in the LRU deque)
+        // 2. Because of c-remove, removes c2's node from the LRU deque.
+        cache.run_pending_tasks();
+        assert_eq!(cache.entry_count(), 0);
+    }
+
+    #[test]
+    fn test_race_between_recreating_entry_and_processing_its_write_ops() {
+        let cache = Cache::builder().max_capacity(2).build();
+
+        cache.insert('a', "a");
+        cache.insert('b', "b");
+        cache.run_pending_tasks();
+
+        cache.insert('c', "c1"); // (a) `EntryInfo` 1, gen: 1
+        assert!(cache.remove(&'a').is_some()); // (b)
+        assert!(cache.remove(&'b').is_some()); // (c)
+        assert!(cache.remove(&'c').is_some()); // (d) `EntryInfo` 1, gen: 2
+        cache.insert('c', "c2"); // (e) `EntryInfo` 2, gen: 1
+
+        // Now the `write_op_ch` channel contains the following `WriteOp`s:
+        //
+        // - 0: (a) insert "c1" (`EntryInfo` 1, gen: 1)
+        // - 1: (b) remove "a"
+        // - 2: (c) remove "b"
+        // - 3: (d) remove "c1" (`EntryInfo` 1, gen: 2)
+        // - 4: (e) insert "c2" (`EntryInfo` 2, gen: 1)
+        //
+        // 0 for "c1" is going to be rejected because the cache is full. Let's ensure
+        // processing 0 must not remove "c2" from the concurrent hash table. (Their
+        // gen are the same, but `EntryInfo`s are different)
+        cache.run_pending_tasks();
+        assert_eq!(cache.get(&'c'), Some("c2"));
     }
 
     #[test]
