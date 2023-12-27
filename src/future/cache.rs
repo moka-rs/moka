@@ -3070,7 +3070,7 @@ mod tests {
 
     // https://github.com/moka-rs/moka/issues/345
     #[tokio::test]
-    async fn test_race_between_updating_entry_and_processing_its_write_op() {
+    async fn test_race_between_updating_entry_and_processing_its_write_ops() {
         let cache = Cache::builder()
             .max_capacity(2)
             .time_to_idle(Duration::from_secs(1))
@@ -3104,6 +3104,35 @@ mod tests {
         // 2. Because of c-remove, removes c2's node from the LRU deque.
         cache.run_pending_tasks().await;
         assert_eq!(cache.entry_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_race_between_recreating_entry_and_processing_its_write_ops() {
+        let cache = Cache::builder().max_capacity(2).build();
+
+        cache.insert('a', "a").await;
+        cache.insert('b', "b").await;
+        cache.run_pending_tasks().await;
+
+        cache.insert('c', "c1").await; // (a) `EntryInfo` 1, gen: 1
+        assert!(cache.remove(&'a').await.is_some()); // (b)
+        assert!(cache.remove(&'b').await.is_some()); // (c)
+        assert!(cache.remove(&'c').await.is_some()); // (d) `EntryInfo` 1, gen: 2
+        cache.insert('c', "c2").await; // (e) `EntryInfo` 2, gen: 1
+
+        // Now the `write_op_ch` channel contains the following `WriteOp`s:
+        //
+        // - 0: (a) insert "c1" (`EntryInfo` 1, gen: 1)
+        // - 1: (b) remove "a"
+        // - 2: (c) remove "b"
+        // - 3: (d) remove "c1" (`EntryInfo` 1, gen: 2)
+        // - 4: (e) insert "c2" (`EntryInfo` 2, gen: 1)
+        //
+        // 0 for "c1" is going to be rejected because the cache is full. Let's ensure
+        // processing 0 must not remove "c2" from the concurrent hash table. (Their
+        // gen are the same, but `EntryInfo`s are different)
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.get(&'c').await, Some("c2"));
     }
 
     #[tokio::test]

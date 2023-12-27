@@ -510,8 +510,8 @@ where
             hash,
             // on_insert
             || {
-                let entry = self.new_value_entry(&key, hash, value.clone(), ts, weight);
-                let ins_op = WriteOp::new_upsert(&key, hash, &entry, 0, 0, weight);
+                let (entry, gen) = self.new_value_entry(&key, hash, value.clone(), ts, weight);
+                let ins_op = WriteOp::new_upsert(&key, hash, &entry, gen, 0, weight);
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((cnt, ins_op));
                 entry
@@ -622,10 +622,11 @@ impl<K, V, S> BaseCache<K, V, S> {
         value: V,
         timestamp: Instant,
         policy_weight: u32,
-    ) -> TrioArc<ValueEntry<K, V>> {
+    ) -> (TrioArc<ValueEntry<K, V>>, u16) {
         let key_hash = KeyHash::new(Arc::clone(key), hash);
         let info = TrioArc::new(EntryInfo::new(key_hash, timestamp, policy_weight));
-        TrioArc::new(ValueEntry::new(value, info))
+        let gen: u16 = info.entry_gen();
+        (TrioArc::new(ValueEntry::new(value, info)), gen)
     }
 
     #[inline]
@@ -828,17 +829,18 @@ impl EntrySizeAndFrequency {
     }
 }
 
-// NOTE: Clippy detected `Admitted` variant contains at least 208 bytes of data and
-// `Rejected` variant contains no data at all. It suggests to box the `SmallVec`.
+// NOTE: Clippy found that the `Admitted` variant contains at least a few hundred
+// bytes of data and the `Rejected` variant contains no data at all. It suggested to
+// box the `SmallVec`.
 //
-// We ignore this suggestion because (1) the `SmallVec` is used for avoiding heap
+// We ignore the suggestion because (1) the `SmallVec` is used to avoid heap
 // allocation as it will be used in a performance hot spot, and (2) this enum has a
 // very short lifetime and there will only one instance at a time.
 #[allow(clippy::large_enum_variant)]
 enum AdmissionResult<K> {
     Admitted {
-        /// A vec of pairs of KeyHash and entry generation.
-        victim_keys: SmallVec<[(KeyHash<K>, u16); 8]>,
+        /// A vec of pairs of `KeyHash` and `last_accessed`.
+        victim_keys: SmallVec<[(KeyHash<K>, Option<Instant>); 8]>,
     },
     Rejected,
 }
@@ -1522,7 +1524,10 @@ where
                 let removed = self.cache.remove_if(
                     kh.hash,
                     |k| k == &kh.key,
-                    |_, entry| entry.entry_info().entry_gen() == gen,
+                    |_, current_entry| {
+                        TrioArc::ptr_eq(entry.entry_info(), current_entry.entry_info())
+                            && current_entry.entry_info().entry_gen() == gen
+                    },
                 );
                 if let Some(entry) = removed {
                     if eviction_state.is_notifier_enabled() {
@@ -1542,7 +1547,7 @@ where
         match Self::admit(&candidate, &self.cache, deqs, freq) {
             AdmissionResult::Admitted { victim_keys } => {
                 // Try to remove the victims from the hash map.
-                for (vic_kh, vic_gen) in victim_keys {
+                for (vic_kh, vic_la) in victim_keys {
                     let vic_key = vic_kh.key;
                     let vic_hash = vic_kh.hash;
 
@@ -1553,7 +1558,7 @@ where
                     if let Some((vic_key, vic_entry)) = self.cache.remove_entry_if_and(
                         vic_hash,
                         |k| k == &vic_key,
-                        |_, entry| entry.entry_info().entry_gen() == vic_gen,
+                        |_, entry| entry.entry_info().last_accessed() == vic_la,
                         |k, v| (k.clone(), v.clone()),
                     ) {
                         if eviction_state.is_notifier_enabled() {
@@ -1603,7 +1608,10 @@ where
                 let removed = self.cache.remove_if(
                     kh.hash,
                     |k| k == &key,
-                    |_, entry| entry.entry_info().entry_gen() == gen,
+                    |_, current_entry| {
+                        TrioArc::ptr_eq(entry.entry_info(), current_entry.entry_info())
+                            && current_entry.entry_info().entry_gen() == gen
+                    },
                 );
 
                 if let Some(entry) = removed {
@@ -1672,12 +1680,12 @@ where
 
             let key = vic_elem.key();
             let hash = vic_elem.hash();
-            let gen = vic_elem.entry_info().entry_gen();
+            let last_accessed = vic_elem.entry_info().last_accessed();
 
             if let Some(vic_entry) = cache.get(hash, |k| k == key) {
                 victims.add_policy_weight(vic_entry.policy_weight());
                 victims.add_frequency(freq, hash);
-                victim_keys.push((KeyHash::new(Arc::clone(key), hash), gen));
+                victim_keys.push((KeyHash::new(Arc::clone(key), hash), last_accessed));
                 retries = 0;
             } else {
                 // Could not get the victim from the cache (hash map). Skip this node

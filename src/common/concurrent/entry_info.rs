@@ -13,7 +13,7 @@ pub(crate) struct EntryInfo<K> {
     /// `entry_gen` (entry generation) is incremented every time the entry is updated
     /// in the concurrent hash table.
     entry_gen: AtomicU16,
-    /// `policy_gen` (policy generation) is incremented every time entry's `WriteOpe`
+    /// `policy_gen` (policy generation) is incremented every time entry's `WriteOp`
     /// is applied to the cache policies including the access-order queue (the LRU
     /// deque).
     policy_gen: AtomicU16,
@@ -32,7 +32,8 @@ impl<K> EntryInfo<K> {
         Self {
             key_hash,
             is_admitted: AtomicBool::default(),
-            entry_gen: AtomicU16::new(0),
+            // `entry_gen` starts at 1 and `policy_gen` start at 0.
+            entry_gen: AtomicU16::new(1),
             policy_gen: AtomicU16::new(0),
             last_accessed: AtomicInstant::new(timestamp),
             last_modified: AtomicInstant::new(timestamp),

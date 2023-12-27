@@ -2726,7 +2726,7 @@ mod tests {
 
     // https://github.com/moka-rs/moka/issues/345
     #[test]
-    fn test_race_between_updating_entry_and_processing_its_write_op() {
+    fn test_race_between_updating_entry_and_processing_its_write_ops() {
         let cache = Cache::builder()
             .max_capacity(2)
             .time_to_idle(Duration::from_secs(1))
@@ -2760,6 +2760,35 @@ mod tests {
         // 2. Because of c-remove, removes c2's node from the LRU deque.
         cache.run_pending_tasks();
         assert_eq!(cache.entry_count(), 0);
+    }
+
+    #[test]
+    fn test_race_between_recreating_entry_and_processing_its_write_ops() {
+        let cache = Cache::builder().max_capacity(2).build();
+
+        cache.insert('a', "a");
+        cache.insert('b', "b");
+        cache.run_pending_tasks();
+
+        cache.insert('c', "c1"); // (a) `EntryInfo` 1, gen: 1
+        assert!(cache.remove(&'a').is_some()); // (b)
+        assert!(cache.remove(&'b').is_some()); // (c)
+        assert!(cache.remove(&'c').is_some()); // (d) `EntryInfo` 1, gen: 2
+        cache.insert('c', "c2"); // (e) `EntryInfo` 2, gen: 1
+
+        // Now the `write_op_ch` channel contains the following `WriteOp`s:
+        //
+        // - 0: (a) insert "c1" (`EntryInfo` 1, gen: 1)
+        // - 1: (b) remove "a"
+        // - 2: (c) remove "b"
+        // - 3: (d) remove "c1" (`EntryInfo` 1, gen: 2)
+        // - 4: (e) insert "c2" (`EntryInfo` 2, gen: 1)
+        //
+        // 0 for "c1" is going to be rejected because the cache is full. Let's ensure
+        // processing 0 must not remove "c2" from the concurrent hash table. (Their
+        // gen are the same, but `EntryInfo`s are different)
+        cache.run_pending_tasks();
+        assert_eq!(cache.get(&'c'), Some("c2"));
     }
 
     #[test]
