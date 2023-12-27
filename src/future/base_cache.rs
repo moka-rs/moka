@@ -323,12 +323,13 @@ where
                         );
                     }
 
+                    entry.set_last_accessed(now);
+
                     let maybe_key = if need_key { Some(Arc::clone(k)) } else { None };
                     let ent = Entry::new(maybe_key, entry.value.clone(), false);
                     let maybe_op = if record_read {
                         Some(ReadOp::Hit {
                             value_entry: TrioArc::clone(entry),
-                            timestamp: now,
                             is_expiry_modified,
                         })
                     } else {
@@ -1588,12 +1589,10 @@ where
             match ch.try_recv() {
                 Ok(Hit {
                     value_entry,
-                    timestamp,
                     is_expiry_modified,
                 }) => {
                     let kh = value_entry.entry_info().key_hash();
                     freq.increment(kh.hash);
-                    value_entry.set_last_accessed(timestamp);
                     if is_expiry_modified {
                         self.update_timer_wheel(&value_entry, timer_wheel);
                     }

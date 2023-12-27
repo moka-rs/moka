@@ -2739,6 +2739,32 @@ mod tests {
         verify_notification_vec(&cache, actual, &expected).await;
     }
 
+    // https://github.com/moka-rs/moka/issues/359
+    #[tokio::test]
+    async fn ensure_access_time_is_updated_immediately_after_read() {
+        let mut cache = Cache::builder()
+            .max_capacity(10)
+            .time_to_idle(Duration::from_secs(5))
+            .build();
+        cache.reconfigure_for_testing().await;
+
+        let (clock, mock) = Clock::mock();
+        cache.set_expiration_clock(Some(clock)).await;
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert(1, 1).await;
+
+        mock.increment(Duration::from_secs(4));
+        assert_eq!(cache.get(&1).await, Some(1));
+
+        mock.increment(Duration::from_secs(2));
+        assert_eq!(cache.get(&1).await, Some(1));
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.get(&1).await, Some(1));
+    }
+
     #[tokio::test]
     async fn time_to_live_by_expiry_type() {
         // The following `Vec`s will hold actual and expected notifications.
