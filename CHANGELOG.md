@@ -11,14 +11,28 @@
       - When it occurs, the cache will not return the value inserted in the second
         call (which is wrong), and the `entry_count` method will keep returning a non
         zero value after calling the `invalidate_all` method (which is also wrong).
-    - These issues were already present in `v0.11.x` and older versions, but less
-      likely to occur because these versions had smaller time windows for the issues
-      to occur by having a background threads to periodically process pending tasks.
+- Now the last access time of a cached entry is updated immediately after the entry
+  is read ([#363][gh-pull-0363]):
+    - When the time-to-idle of a cache is set, the last access time of a cached entry
+      is used to determine if the entry has been expired.
+    - Before this fix, the access time was updated (to the time when it was read)
+      when pending tasks were processed. This delay caused issue that some entries
+      become temporarily unavailable for reads even though they have been accessed
+      recently. And then they will become available again after the pending tasks are
+      processed.
+    - Now the last access time is updated immediately after the entry is read. The
+      entry will remain valid until the time-to-idle has elapsed.
+
+Note that both of [#348][gh-pull-0348] and [#363][gh-pull-0363] were already present
+in `v0.11.x` and older versions. However they were less likely to occur because they
+had background threads to periodically process pending tasks. So there were much
+shorter time windows for these issues to occur.
 
 ### Changed
 
 - Updated the Rust edition from 2018 to 2021. ([#339][gh-pull-0339], by
   [@nyurik][gh-nyurik])
+    - The MSRV remains at Rust 1.65.
 - Changed to use inline format arguments throughout the code, including examples.
   ([#340][gh-pull-0340], by [@nyurik][gh-nyurik])
 
@@ -762,6 +776,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0363]: https://github.com/moka-rs/moka/pull/363/
 [gh-pull-0348]: https://github.com/moka-rs/moka/pull/348/
 [gh-pull-0340]: https://github.com/moka-rs/moka/pull/340/
 [gh-pull-0339]: https://github.com/moka-rs/moka/pull/339/
