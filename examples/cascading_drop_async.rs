@@ -115,11 +115,17 @@ async fn main() {
         }
     });
 
-    // Make an artificially small cache and 1-second ttl to observe pruning of the tree.
-    let ttl = 3;
+    // Later, we will check the entry count of the session_cache with this time_step
+    // interval.
+    let time_step = 1; // second
+
+    // Make an artificially small cache and 2.5-second ttl to observe pruning of the tree.
+    // Caution: setting ttl to exact integer multiples of the time steps may cause
+    // different behavior than you expect, due to rounding or race conditions.
+    let ttl_ms = 2500;
     let sessions_cache = Cache::builder()
         .max_capacity(10)
-        .time_to_live(Duration::from_secs(ttl))
+        .time_to_live(Duration::from_millis(ttl_ms))
         .eviction_listener(|key, value: Arc<Mutex<Session>>, cause| {
             println!(
                 "Evicted session with key {:08X} of user_id {:?} because {:?}",
@@ -178,8 +184,8 @@ async fn main() {
     }
 
     println!("Waiting");
-    for t in 1..=ttl + 1 {
-        sleep(Duration::from_secs(1));
+    for t in 1..=4 {
+        sleep(Duration::from_secs(time_step));
         sessions_cache.get(&0).await;
         sessions_cache.run_pending_tasks().await;
         println!("t = {}, pending: {}", t, sessions_cache.entry_count());
