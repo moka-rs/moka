@@ -36,6 +36,11 @@ shorter time windows for these issues to occur.
 - Changed to use inline format arguments throughout the code, including examples.
   ([#340][gh-pull-0340], by [@nyurik][gh-nyurik])
 
+### Added
+
+- Added an example for cascading drop triggered by eviction ([#350][gh-pull-0350], by
+  [@peter-scholtens][gh-peter-scholtens])
+
 
 ## Version 0.12.1
 
