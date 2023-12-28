@@ -38,8 +38,7 @@ pub struct Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        let user_id;
-        user_id = self.ptr.as_ref().unwrap().lock().unwrap().user_id;
+        let user_id = self.ptr.as_ref().unwrap().lock().unwrap().user_id;
         println!("Dropping session holding a reference to user {}", user_id);
         self.ptr = None; // Must drop Arc before verify Btree!!!
         let _ = self.sender.send(user_id);
