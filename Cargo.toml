@@ -111,6 +111,10 @@ name = "async_example"
 required-features = ["future"]
 
 [[example]]
+name = "cascading_drop_async"
+required-features = ["future"]
+
+[[example]]
 name = "sync_example"
 required-features = ["sync"]
 
