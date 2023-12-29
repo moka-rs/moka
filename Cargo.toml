@@ -12,7 +12,7 @@ repository = "https://github.com/moka-rs/moka"
 keywords = ["cache", "concurrent"]
 categories = ["caching", "concurrency"]
 readme = "README.md"
-exclude = [".circleci", ".cirrus.yml-DISABLED", ".devcontainer", ".github", ".gitpod.yml", ".vscode"]
+exclude = [".circleci", ".cirrus.yml", ".devcontainer", ".github", ".gitpod.yml", ".vscode"]
 build = "build.rs"
 
 [features]

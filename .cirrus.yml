@@ -39,17 +39,13 @@ linux_arm64_task:
   check_version_script: rustc -Vv
 
   # Downgrade dependencies to minimal versions (Nightly only)
-  downgrade_deps_script: |
-    # The nightly image has no RUST_VERSION set
-    if [ -z "$RUST_VERSION" ]; then
-      echo 'Downgrading dependencies to minimal versions'
-      cargo update -Z minimal-versions
-      cargo update -p openssl --precise 0.10.39
-      cargo update -p cc --precise 1.0.61
-      cargo update -p proc-macro2 --precise 1.0.60
-    else
-      echo 'Skipped'
-    fi
+  # downgrade_deps_script: |
+  #   # The nightly image has no RUST_VERSION set
+  #   if [ -z "$RUST_VERSION" ]; then
+  #     echo 'Downgrading dependencies to minimal versions'
+  #   else
+  #     echo 'Skipped'
+  #   fi
 
   # Pin some dependencies to specific versions (MSRV only)
   # pin_deps_script: |
