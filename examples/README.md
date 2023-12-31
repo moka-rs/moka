@@ -12,19 +12,19 @@ Each example has a suffix `_async` or `_sync`:
 
 ## Basics of the Cache API
 
-- [basic_async](./basic_async.rs) and [basic_sync](./basic_sync.rs)
+- [basics_async](./basics_async.rs) and [basics_sync](./basics_sync.rs)
     - Sharing a cache between async tasks or OS threads.
         - Do not wrap a `Cache` with `Arc<Mutex<_>>`! Just clone the `Cache` and you
           are all set.
     - `insert`, `get` and `invalidate` methods.
 
-- [size_aware_eviction_async](./size_aware_eviction_async.rs)
+- [size_aware_eviction_sync](./size_aware_eviction_sync.rs)
     - Configuring the max capacity of the cache based on the total size of the cached
       entries.
 
 ## Expiration and Eviction Listener
 
-- [eviction_listener_async](./eviction_listener_async.rs)
+- [eviction_listener_sync](./eviction_listener_sync.rs)
     - Setting the `time_to_live` expiration policy.
     - Registering a listener (closure) to be notified when an entry is evicted from
       the cache.
