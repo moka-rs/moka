@@ -704,4 +704,14 @@ where
             .get_or_try_insert_with_hash_by_ref_and_fun(self.ref_key, self.hash, init, true)
             .await
     }
+
+    pub async fn and_upsert_with<F, Fut>(self, f: F) -> Entry<K, V>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = V>,
+    {
+        self.cache
+            .upsert_with_hash_by_ref_and_fun(self.ref_key, self.hash, f)
+            .await
+    }
 }

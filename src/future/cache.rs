@@ -1,6 +1,6 @@
 use super::{
     base_cache::BaseCache,
-    value_initializer::{GetOrInsert, InitResult, ValueInitializer},
+    value_initializer::{ComputeResult, GetOrInsert, InitResult, ValueInitializer},
     CacheBuilder, CancelGuard, Iter, OwnedKeyEntrySelector, PredicateId, RefKeyEntrySelector,
     WriteOp,
 };
@@ -1830,6 +1830,41 @@ where
         cancel_guard.clear();
     }
 
+    pub(crate) async fn upsert_with_hash_by_ref_and_fun<Q, F, Fut>(
+        &self,
+        key: &Q,
+        hash: u64,
+        f: F,
+    ) -> Entry<K, V>
+    where
+        K: Borrow<Q>,
+        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = V>,
+    {
+        let key = Arc::new(key.to_owned());
+        let type_id = ValueInitializer::<K, V, S>::type_id_for_compute_with();
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_compute_with;
+
+        match self
+            .value_initializer
+            .try_compute(&key, hash, type_id, self, f, post_init)
+            .await
+        {
+            ComputeResult::Inserted(value) => {
+                crossbeam_epoch::pin().flush();
+                Entry::new(Some(key), value, true)
+            }
+            ComputeResult::Updated(value) => {
+                crossbeam_epoch::pin().flush();
+                Entry::new(Some(key), value, false)
+            }
+            ComputeResult::Nop(_) | ComputeResult::Removed(_) | ComputeResult::EvalErr(_) => {
+                unreachable!()
+            }
+        }
+    }
+
     async fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64, need_value: bool) -> Option<V>
     where
         K: Borrow<Q>,
@@ -1964,6 +1999,13 @@ where
             .get_with_hash(key, hash, replace_if, false, false)
             .await
             .map(Entry::into_value)
+    }
+
+    async fn get_entry_without_recording(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>> {
+        let ignore_if = None as Option<&mut fn(&V) -> bool>;
+        self.base
+            .get_with_hash(key, hash, ignore_if, true, false)
+            .await
     }
 
     async fn insert(&self, key: Arc<K>, hash: u64, value: V) {

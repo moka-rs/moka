@@ -107,6 +107,10 @@ rustdoc-args = ["--cfg", "docsrs"]
 # Examples
 
 [[example]]
+name = "append_value_async"
+required-features = ["future"]
+
+[[example]]
 name = "basics_async"
 required-features = ["future"]
 
@@ -116,6 +120,10 @@ required-features = ["sync"]
 
 [[example]]
 name = "cascading_drop_async"
+required-features = ["future"]
+
+[[example]]
+name = "counter_async"
 required-features = ["future"]
 
 [[example]]
