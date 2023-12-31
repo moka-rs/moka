@@ -353,6 +353,17 @@ where
             .get_or_try_insert_with_hash_and_fun(key, self.hash, init, true)
             .await
     }
+
+    pub async fn and_upsert_with<F, Fut>(self, f: F) -> Entry<K, V>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = V>,
+    {
+        let key = Arc::new(self.owned_key);
+        self.cache
+            .upsert_with_hash_and_fun(key, self.hash, f)
+            .await
+    }
 }
 
 /// Provides advanced methods to select or insert an entry of the cache.
@@ -710,8 +721,9 @@ where
         F: FnOnce(Option<Entry<K, V>>) -> Fut,
         Fut: Future<Output = V>,
     {
+        let key = Arc::new(self.ref_key.to_owned());
         self.cache
-            .upsert_with_hash_by_ref_and_fun(self.ref_key, self.hash, f)
+            .upsert_with_hash_and_fun(key, self.hash, f)
             .await
     }
 }

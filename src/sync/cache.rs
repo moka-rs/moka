@@ -1047,9 +1047,9 @@ where
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
-                Entry::new(k, v, true)
+                Entry::new(k, v, true, false)
             }
-            InitResult::ReadExisting(v) => Entry::new(k, v, false),
+            InitResult::ReadExisting(v) => Entry::new(k, v, false, false),
             InitResult::InitErr(_) => unreachable!(),
         }
     }
@@ -1065,7 +1065,7 @@ where
             None => {
                 let value = init();
                 self.insert_with_hash(Arc::clone(&key), hash, value.clone());
-                Entry::new(Some(key), value, true)
+                Entry::new(Some(key), value, true, false)
             }
         }
     }
@@ -1086,7 +1086,7 @@ where
                 let key = Arc::new(key.to_owned());
                 let value = init();
                 self.insert_with_hash(Arc::clone(&key), hash, value.clone());
-                Entry::new(Some(key), value, true)
+                Entry::new(Some(key), value, true, false)
             }
         }
     }
@@ -1271,9 +1271,9 @@ where
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
-                Some(Entry::new(k, v, true))
+                Some(Entry::new(k, v, true, false))
             }
-            InitResult::ReadExisting(v) => Some(Entry::new(k, v, false)),
+            InitResult::ReadExisting(v) => Some(Entry::new(k, v, false, false)),
             InitResult::InitErr(_) => {
                 crossbeam_epoch::pin().flush();
                 None
@@ -1465,9 +1465,9 @@ where
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
-                Ok(Entry::new(k, v, true))
+                Ok(Entry::new(k, v, true, false))
             }
-            InitResult::ReadExisting(v) => Ok(Entry::new(k, v, false)),
+            InitResult::ReadExisting(v) => Ok(Entry::new(k, v, false, false)),
             InitResult::InitErr(e) => {
                 crossbeam_epoch::pin().flush();
                 Err(e)

@@ -8,14 +8,18 @@ async fn main() {
     let key = "key".to_string();
 
     let entry = inclement_counter(&cache, &key).await;
-    // assert_eq!(performed_op, PerformedOp::Inserted);
+    assert!(entry.is_fresh());
+    assert!(!entry.is_updated());
     assert_eq!(entry.into_value(), 1);
 
     let entry = inclement_counter(&cache, &key).await;
-    // assert_eq!(performed_op, PerformedOp::Updated);
+    assert!(entry.is_fresh());
+    assert!(entry.is_updated());
     assert_eq!(entry.into_value(), 2);
 
     let entry = inclement_counter(&cache, &key).await;
+    assert!(entry.is_fresh());
+    assert!(entry.is_updated());
     assert_eq!(entry.into_value(), 3);
 }
 

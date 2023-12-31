@@ -1575,9 +1575,9 @@ where
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
-                Entry::new(k, v, true)
+                Entry::new(k, v, true, false)
             }
-            InitResult::ReadExisting(v) => Entry::new(k, v, false),
+            InitResult::ReadExisting(v) => Entry::new(k, v, false, false),
             InitResult::InitErr(_) => unreachable!(),
         }
     }
@@ -1598,7 +1598,7 @@ where
                 let value = init();
                 self.insert_with_hash(Arc::clone(&key), hash, value.clone())
                     .await;
-                Entry::new(Some(key), value, true)
+                Entry::new(Some(key), value, true, false)
             }
         }
     }
@@ -1624,7 +1624,7 @@ where
                 let value = init();
                 self.insert_with_hash(Arc::clone(&key), hash, value.clone())
                     .await;
-                Entry::new(Some(key), value, true)
+                Entry::new(Some(key), value, true, false)
             }
         }
     }
@@ -1702,9 +1702,9 @@ where
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
-                Some(Entry::new(k, v, true))
+                Some(Entry::new(k, v, true, false))
             }
-            InitResult::ReadExisting(v) => Some(Entry::new(k, v, false)),
+            InitResult::ReadExisting(v) => Some(Entry::new(k, v, false, false)),
             InitResult::InitErr(_) => None,
         }
     }
@@ -1784,9 +1784,9 @@ where
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
-                Ok(Entry::new(k, v, true))
+                Ok(Entry::new(k, v, true, false))
             }
-            InitResult::ReadExisting(v) => Ok(Entry::new(k, v, false)),
+            InitResult::ReadExisting(v) => Ok(Entry::new(k, v, false, false)),
             InitResult::InitErr(e) => {
                 crossbeam_epoch::pin().flush();
                 Err(e)
@@ -1830,19 +1830,16 @@ where
         cancel_guard.clear();
     }
 
-    pub(crate) async fn upsert_with_hash_by_ref_and_fun<Q, F, Fut>(
+    pub(crate) async fn upsert_with_hash_and_fun<F, Fut>(
         &self,
-        key: &Q,
+        key: Arc<K>,
         hash: u64,
         f: F,
     ) -> Entry<K, V>
     where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
         F: FnOnce(Option<Entry<K, V>>) -> Fut,
         Fut: Future<Output = V>,
     {
-        let key = Arc::new(key.to_owned());
         let type_id = ValueInitializer::<K, V, S>::type_id_for_compute_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_compute_with;
 
@@ -1853,11 +1850,11 @@ where
         {
             ComputeResult::Inserted(value) => {
                 crossbeam_epoch::pin().flush();
-                Entry::new(Some(key), value, true)
+                Entry::new(Some(key), value, true, false)
             }
             ComputeResult::Updated(value) => {
                 crossbeam_epoch::pin().flush();
-                Entry::new(Some(key), value, false)
+                Entry::new(Some(key), value, true, true)
             }
             ComputeResult::Nop(_) | ComputeResult::Removed(_) | ComputeResult::EvalErr(_) => {
                 unreachable!()

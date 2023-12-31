@@ -26,14 +26,18 @@ async fn main() {
     let key = "key".to_string();
 
     let entry = append_to_cached_vec(&cache, &key, 1).await;
-    // assert_eq!(performed_op, PerformedOp::Inserted);
+    assert!(entry.is_fresh());
+    assert!(!entry.is_updated());
     assert_eq!(*entry.into_value().read().await, &[1]);
 
     let entry = append_to_cached_vec(&cache, &key, 2).await;
-    // assert_eq!(performed_op, PerformedOp::Updated);
+    assert!(entry.is_fresh());
+    assert!(entry.is_updated());
     assert_eq!(*entry.into_value().read().await, &[1, 2]);
 
     let entry = append_to_cached_vec(&cache, &key, 3).await;
+    assert!(entry.is_fresh());
+    assert!(entry.is_updated());
     assert_eq!(*entry.into_value().read().await, &[1, 2, 3]);
 }
 

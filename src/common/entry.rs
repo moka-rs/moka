@@ -21,6 +21,7 @@ pub struct Entry<K, V> {
     key: Option<Arc<K>>,
     value: V,
     is_fresh: bool,
+    is_updated: bool,
 }
 
 impl<K, V> Debug for Entry<K, V>
@@ -33,16 +34,18 @@ where
             .field("key", self.key())
             .field("value", &self.value)
             .field("is_fresh", &self.is_fresh)
+            .field("is_updated", &self.is_updated)
             .finish()
     }
 }
 
 impl<K, V> Entry<K, V> {
-    pub(crate) fn new(key: Option<Arc<K>>, value: V, is_fresh: bool) -> Self {
+    pub(crate) fn new(key: Option<Arc<K>>, value: V, is_fresh: bool, is_updated: bool) -> Self {
         Self {
             key,
             value,
             is_fresh,
+            is_updated,
         }
     }
 
@@ -71,5 +74,10 @@ impl<K, V> Entry<K, V> {
     /// computed.
     pub fn is_fresh(&self) -> bool {
         self.is_fresh
+    }
+
+    /// Returns `true` if the value in this `Entry` replaced an old cached value.
+    pub fn is_updated(&self) -> bool {
+        self.is_updated
     }
 }
