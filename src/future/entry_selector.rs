@@ -360,9 +360,7 @@ where
         Fut: Future<Output = V>,
     {
         let key = Arc::new(self.owned_key);
-        self.cache
-            .upsert_with_hash_and_fun(key, self.hash, f)
-            .await
+        self.cache.upsert_with_hash_and_fun(key, self.hash, f).await
     }
 }
 
@@ -722,8 +720,6 @@ where
         Fut: Future<Output = V>,
     {
         let key = Arc::new(self.ref_key.to_owned());
-        self.cache
-            .upsert_with_hash_and_fun(key, self.hash, f)
-            .await
+        self.cache.upsert_with_hash_and_fun(key, self.hash, f).await
     }
 }
