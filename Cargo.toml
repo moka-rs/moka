@@ -107,21 +107,21 @@ rustdoc-args = ["--cfg", "docsrs"]
 # Examples
 
 [[example]]
-name = "async_example"
+name = "basics_async"
 required-features = ["future"]
+
+[[example]]
+name = "basics_sync"
+required-features = ["sync"]
 
 [[example]]
 name = "cascading_drop_async"
 required-features = ["future"]
 
 [[example]]
-name = "sync_example"
+name = "eviction_listener_sync"
 required-features = ["sync"]
 
 [[example]]
-name = "eviction_listener"
-required-features = ["sync"]
-
-[[example]]
-name = "size_aware_eviction"
+name = "size_aware_eviction_sync"
 required-features = ["sync"]
