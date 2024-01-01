@@ -17,8 +17,7 @@ fn main() {
         cache.insert(&0, "zero".to_string());
         cache.insert(&1, "one".to_string());
         cache.insert(&2, "twice".to_string());
-        // Due to race condition spilled over maybe evicted twice by cause
-        // Replaced and Size.
+        // This causes "twice" to be evicted by cause Replaced.
         cache.insert(&2, "two".to_string());
         // With 1-second ttl, keys 0 and 1 will be evicted if we wait long enough.
         sleep(Duration::from_secs(ttl + 1));

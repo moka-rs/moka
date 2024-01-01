@@ -1,7 +1,11 @@
 # Moka Examples
 
 This directory contains examples of how to use Moka cache. Each example is a
-standalone binary that can be run with `cargo run --example <example_name>`.
+standalone binary that can be run with the following command:
+
+```console
+$ cargo run --example <example_name> -F sync,future
+```
 
 Each example has a suffix `_async` or `_sync`:
 
