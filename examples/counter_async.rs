@@ -27,15 +27,15 @@ async fn inclement_counter(cache: &Cache<String, u64>, key: &str) -> Entry<Strin
     cache
         .entry_by_ref(key)
         .and_upsert_with(|maybe_entry| {
-            let v = if let Some(entry) = maybe_entry {
+            let counter = if let Some(entry) = maybe_entry {
                 // The entry exists, increment the value by 1.
                 entry.into_value().saturating_add(1)
             } else {
                 // The entry does not exist, insert a new value of 1.
                 1
             };
-            // Return a Future that is resolved to `v` immediately.
-            std::future::ready(v)
+            // Return a Future that is resolved to `counter` immediately.
+            std::future::ready(counter)
         })
         .await
 }

@@ -34,6 +34,8 @@ pub(crate) trait GetOrInsert<K, V> {
         V: 'static;
 
     async fn insert(&self, key: Arc<K>, hash: u64, value: V);
+
+    async fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V>;
 }
 
 type ErrorObject = Arc<dyn Any + Send + Sync + 'static>;
@@ -47,7 +49,6 @@ pub(crate) enum InitResult<V, E> {
 pub(crate) enum ComputeResult<V, E> {
     Inserted(V),
     Updated(V),
-    #[allow(unused)]
     Removed(V),
     Nop(Option<V>),
     EvalErr(E),
@@ -301,7 +302,7 @@ where
         E: Send + Sync + 'static,
     {
         use std::panic::{resume_unwind, AssertUnwindSafe};
-        use ComputeResult::{EvalErr, Inserted, Nop, Updated};
+        use ComputeResult::{EvalErr, Inserted, Nop, Removed, Updated};
 
         let (w_key, w_hash) = waiter_key_hash(&self.waiters, c_key, type_id);
 
@@ -375,7 +376,12 @@ where
                             }
                         }
                         compute::Op::Remove => {
-                            todo!()
+                            let maybe_prev_v = cache.remove(c_key, c_hash).await;
+                            if let Some(prev_v) = maybe_prev_v {
+                                Removed(prev_v)
+                            } else {
+                                Nop(None)
+                            }
                         }
                     },
                     Err(e) => EvalErr(e),
@@ -411,9 +417,14 @@ where
         result
     }
 
+    /// The `post_init` function for the `and_upsert_with` method of cache.
+    pub(crate) fn post_init_for_upsert_with(value: V) -> Result<compute::Op<V>, ()> {
+        Ok(compute::Op::Put(value))
+    }
+
     /// The `post_init` function for the `and_compute_with` method of cache.
-    pub(crate) fn post_init_for_compute_with(op: V) -> Result<compute::Op<V>, ()> {
-        Ok(compute::Op::Put(op))
+    pub(crate) fn post_init_for_compute_with(op: compute::Op<V>) -> Result<compute::Op<V>, ()> {
+        Ok(op)
     }
 
     /// Returns the `type_id` for `get_with` method of cache.

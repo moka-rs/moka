@@ -5,8 +5,8 @@ use super::{
     WriteOp,
 };
 use crate::{
-    common::concurrent::Weigher, notification::AsyncEvictionListener, policy::ExpirationPolicy,
-    Entry, Policy, PredicateError,
+    common::concurrent::Weigher, notification::AsyncEvictionListener, ops::compute,
+    policy::ExpirationPolicy, Entry, Policy, PredicateError,
 };
 
 #[cfg(feature = "unstable-debug-counters")]
@@ -1841,7 +1841,7 @@ where
         Fut: Future<Output = V>,
     {
         let type_id = ValueInitializer::<K, V, S>::type_id_for_compute_with();
-        let post_init = ValueInitializer::<K, V, S>::post_init_for_compute_with;
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_upsert_with;
 
         match self
             .value_initializer
@@ -1857,6 +1857,50 @@ where
                 Entry::new(Some(key), value, true, true)
             }
             ComputeResult::Nop(_) | ComputeResult::Removed(_) | ComputeResult::EvalErr(_) => {
+                unreachable!()
+            }
+        }
+    }
+
+    pub(crate) async fn compute_with_hash_and_fun<F, Fut>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        f: F,
+    ) -> (Option<Entry<K, V>>, compute::PerformedOp)
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = compute::Op<V>>,
+    {
+        let type_id = ValueInitializer::<K, V, S>::type_id_for_compute_with();
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_compute_with;
+
+        match self
+            .value_initializer
+            .try_compute(&key, hash, type_id, self, f, post_init)
+            .await
+        {
+            ComputeResult::Nop(maybe_value) => {
+                let maybe_entry =
+                    maybe_value.map(|value| Entry::new(Some(key), value, false, false));
+                (maybe_entry, compute::PerformedOp::Nop)
+            }
+            ComputeResult::Inserted(value) => {
+                crossbeam_epoch::pin().flush();
+                let entry = Entry::new(Some(key), value, true, false);
+                (Some(entry), compute::PerformedOp::Inserted)
+            }
+            ComputeResult::Updated(value) => {
+                crossbeam_epoch::pin().flush();
+                let entry = Entry::new(Some(key), value, true, true);
+                (Some(entry), compute::PerformedOp::Updated)
+            }
+            ComputeResult::Removed(value) => {
+                crossbeam_epoch::pin().flush();
+                let entry = Entry::new(Some(key), value, false, false);
+                (Some(entry), compute::PerformedOp::Removed)
+            }
+            ComputeResult::EvalErr(_) => {
                 unreachable!()
             }
         }
@@ -2007,6 +2051,10 @@ where
 
     async fn insert(&self, key: Arc<K>, hash: u64, value: V) {
         self.insert_with_hash(key.clone(), hash, value).await;
+    }
+
+    async fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V> {
+        self.invalidate_with_hash(key, hash, true).await
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::Entry;
+use crate::{ops::compute, Entry};
 
 use super::Cache;
 
@@ -362,6 +362,17 @@ where
         let key = Arc::new(self.owned_key);
         self.cache.upsert_with_hash_and_fun(key, self.hash, f).await
     }
+
+    pub async fn and_compute_with<F, Fut>(self, f: F) -> (Option<Entry<K, V>>, compute::PerformedOp)
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = compute::Op<V>>,
+    {
+        let key = Arc::new(self.owned_key);
+        self.cache
+            .compute_with_hash_and_fun(key, self.hash, f)
+            .await
+    }
 }
 
 /// Provides advanced methods to select or insert an entry of the cache.
@@ -721,5 +732,16 @@ where
     {
         let key = Arc::new(self.ref_key.to_owned());
         self.cache.upsert_with_hash_and_fun(key, self.hash, f).await
+    }
+
+    pub async fn and_compute_with<F, Fut>(self, f: F) -> (Option<Entry<K, V>>, compute::PerformedOp)
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = compute::Op<V>>,
+    {
+        let key = Arc::new(self.ref_key.to_owned());
+        self.cache
+            .compute_with_hash_and_fun(key, self.hash, f)
+            .await
     }
 }
