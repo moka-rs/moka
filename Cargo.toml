@@ -119,6 +119,10 @@ name = "basics_sync"
 required-features = ["sync"]
 
 [[example]]
+name = "bounded_counter_async"
+required-features = ["future"]
+
+[[example]]
 name = "cascading_drop_async"
 required-features = ["future"]
 
