@@ -1,10 +1,11 @@
+//! This example demonstrates how to append an `i32` value to a cached `Vec<i32>`
+//! value. It uses the `and_upsert_with` method of `Cache`.
+
 use std::sync::Arc;
 
 use moka::{future::Cache, Entry};
 use tokio::sync::RwLock;
 
-/// This example demonstrates how to append an `i32` value to a cached `Vec<i32>`
-/// value. It uses the `and_upsert_with` method of `Cache`.
 #[tokio::main]
 async fn main() {
     // We want to store a raw value `Vec<i32>` for each `String` key. We are going to

@@ -373,6 +373,21 @@ where
             .compute_with_hash_and_fun(key, self.hash, f)
             .await
     }
+
+    pub async fn and_try_compute_with<F, Fut, E>(
+        self,
+        f: F,
+    ) -> Result<(Option<Entry<K, V>>, compute::PerformedOp), E>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = Result<compute::Op<V>, E>>,
+        E: Send + Sync + 'static,
+    {
+        let key = Arc::new(self.owned_key);
+        self.cache
+            .try_compute_with_hash_and_fun(key, self.hash, f)
+            .await
+    }
 }
 
 /// Provides advanced methods to select or insert an entry of the cache.
@@ -742,6 +757,21 @@ where
         let key = Arc::new(self.ref_key.to_owned());
         self.cache
             .compute_with_hash_and_fun(key, self.hash, f)
+            .await
+    }
+
+    pub async fn and_try_compute_with<F, Fut, E>(
+        self,
+        f: F,
+    ) -> Result<(Option<Entry<K, V>>, compute::PerformedOp), E>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = Result<compute::Op<V>, E>>,
+        E: Send + Sync + 'static,
+    {
+        let key = Arc::new(self.ref_key.to_owned());
+        self.cache
+            .try_compute_with_hash_and_fun(key, self.hash, f)
             .await
     }
 }

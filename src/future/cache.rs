@@ -1906,6 +1906,49 @@ where
         }
     }
 
+    pub(crate) async fn try_compute_with_hash_and_fun<F, Fut, E>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        f: F,
+    ) -> Result<(Option<Entry<K, V>>, compute::PerformedOp), E>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = Result<compute::Op<V>, E>>,
+        E: Send + Sync + 'static,
+    {
+        let type_id = ValueInitializer::<K, V, S>::type_id_for_compute_with();
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_try_compute_with;
+
+        match self
+            .value_initializer
+            .try_compute(&key, hash, type_id, self, f, post_init)
+            .await
+        {
+            ComputeResult::Nop(maybe_value) => {
+                let maybe_entry =
+                    maybe_value.map(|value| Entry::new(Some(key), value, false, false));
+                Ok((maybe_entry, compute::PerformedOp::Nop))
+            }
+            ComputeResult::Inserted(value) => {
+                crossbeam_epoch::pin().flush();
+                let entry = Entry::new(Some(key), value, true, false);
+                Ok((Some(entry), compute::PerformedOp::Inserted))
+            }
+            ComputeResult::Updated(value) => {
+                crossbeam_epoch::pin().flush();
+                let entry = Entry::new(Some(key), value, true, true);
+                Ok((Some(entry), compute::PerformedOp::Updated))
+            }
+            ComputeResult::Removed(value) => {
+                crossbeam_epoch::pin().flush();
+                let entry = Entry::new(Some(key), value, false, false);
+                Ok((Some(entry), compute::PerformedOp::Removed))
+            }
+            ComputeResult::EvalErr(e) => Err(e),
+        }
+    }
+
     async fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64, need_value: bool) -> Option<V>
     where
         K: Borrow<Q>,

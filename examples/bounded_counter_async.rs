@@ -1,53 +1,51 @@
+//! This example demonstrates how to increment a cached `u64` counter. It uses the
+//! `and_upsert_with` method of `Cache`.
+
 use moka::{
     future::Cache,
     ops::compute::{self, PerformedOp},
     Entry,
 };
 
-/// This example demonstrates how to increment a cached `u64` counter. It uses the
-/// `and_upsert_with` method of `Cache`.
 #[tokio::main]
 async fn main() {
     let cache: Cache<String, u64> = Cache::new(100);
     let key = "key".to_string();
 
+    // This should insert a now counter value 1 to the cache, and return the value
+    // with the kind of the operation performed.
     let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
+    let entry = maybe_entry.expect("An entry should be returned");
+    assert_eq!(entry.into_value(), 1);
     assert_eq!(performed_op, PerformedOp::Inserted);
 
-    let entry = maybe_entry.expect("An entry should be returned");
-    assert!(entry.is_fresh());
-    assert!(!entry.is_updated());
-    assert_eq!(entry.into_value(), 1);
-
+    // This should increment the cached counter value by 1.
     let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
+    let entry = maybe_entry.expect("An entry should be returned");
+    assert_eq!(entry.into_value(), 2);
     assert_eq!(performed_op, PerformedOp::Updated);
 
-    let entry = maybe_entry.expect("An entry should be returned");
-    assert!(entry.is_fresh());
-    assert!(entry.is_updated());
-    assert_eq!(entry.into_value(), 2);
-
+    // This should remove the cached counter from the cache, and returns the
+    // _removed_ value.
     let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
+    let entry = maybe_entry.expect("An entry should be returned");
+    assert_eq!(entry.into_value(), 2);
     assert_eq!(performed_op, PerformedOp::Removed);
 
-    let entry = maybe_entry.expect("An entry should be returned");
-    assert!(!entry.is_fresh());
-    assert!(!entry.is_updated());
-    assert_eq!(entry.into_value(), 2);
-
+    // The key should no longer exist.
     assert!(!cache.contains_key(&key));
 
+    // This should start over; insert a new counter value 1 to the cache.
     let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
-    assert_eq!(performed_op, PerformedOp::Inserted);
-
     let entry = maybe_entry.expect("An entry should be returned");
-    assert!(entry.is_fresh());
-    assert!(!entry.is_updated());
     assert_eq!(entry.into_value(), 1);
+    assert_eq!(performed_op, PerformedOp::Inserted);
 }
 
 /// Increment a cached `u64` counter. If the counter is greater than or equal to 2,
 /// remove it.
+///
+/// This method uses cache's `and_compute_with` method.
 async fn inclement_or_remove_counter(
     cache: &Cache<String, u64>,
     key: &str,

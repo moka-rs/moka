@@ -427,6 +427,16 @@ where
         Ok(op)
     }
 
+    /// The `post_init` function for the `and_try_compute_with` method of cache.
+    pub(crate) fn post_init_for_try_compute_with<E>(
+        op: Result<compute::Op<V>, E>,
+    ) -> Result<compute::Op<V>, E>
+    where
+        E: Send + Sync + 'static,
+    {
+        op
+    }
+
     /// Returns the `type_id` for `get_with` method of cache.
     pub(crate) fn type_id_for_get_with() -> TypeId {
         // NOTE: We use a regular function here instead of a const fn because TypeId

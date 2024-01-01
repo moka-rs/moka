@@ -81,7 +81,7 @@ getrandom = "0.2"
 paste = "1.0.9"
 reqwest = { version = "0.11.11", default-features = false, features = ["rustls-tls"] }
 skeptic = "0.13"
-tokio = { version = "1.19", features = ["fs", "macros", "rt-multi-thread", "sync", "time" ] }
+tokio = { version = "1.19", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time" ] }
 
 [target.'cfg(trybuild)'.dev-dependencies]
 trybuild = "1.0"
@@ -137,3 +137,7 @@ required-features = ["sync"]
 [[example]]
 name = "size_aware_eviction_sync"
 required-features = ["sync"]
+
+[[example]]
+name = "try_append_value_async"
+required-features = ["future"]
