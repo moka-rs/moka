@@ -290,10 +290,10 @@ where
         &'a self,
         c_key: &Arc<K>,
         c_hash: u64,
-        type_id: TypeId,
         cache: &C, // Future to initialize a new value.
         f: F,
         post_init: fn(O) -> Result<compute::Op<V>, E>,
+        allow_nop: bool,
     ) -> ComputeResult<V, E>
     where
         C: GetOrInsert<K, V> + Send + 'a,
@@ -303,6 +303,8 @@ where
     {
         use std::panic::{resume_unwind, AssertUnwindSafe};
         use ComputeResult::{EvalErr, Inserted, Nop, Removed, Updated};
+
+        let type_id = TypeId::of::<ComputeNone>();
 
         let (w_key, w_hash) = waiter_key_hash(&self.waiters, c_key, type_id);
 
@@ -342,8 +344,11 @@ where
 
         // Get the current value.
         let maybe_entry = cache.get_entry_without_recording(c_key, c_hash).await;
-        // TODO: Avoid cloning if possible.
-        let maybe_value = maybe_entry.as_ref().map(|ent| ent.value().clone());
+        let maybe_value = if allow_nop {
+            maybe_entry.as_ref().map(|ent| ent.value().clone())
+        } else {
+            None
+        };
         let entry_existed = maybe_entry.is_some();
 
         // Let's evaluate the `f` closure and get a future. Catching panic is safe
@@ -452,11 +457,6 @@ where
     /// Returns the `type_id` for `try_get_with` method of cache.
     pub(crate) fn type_id_for_try_get_with<E: 'static>() -> TypeId {
         TypeId::of::<E>()
-    }
-
-    /// Returns the `type_id` for `and_compute_with` method of cache.
-    pub(crate) fn type_id_for_compute_with() -> TypeId {
-        TypeId::of::<ComputeNone>()
     }
 }
 

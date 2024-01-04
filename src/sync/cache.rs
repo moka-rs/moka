@@ -1,5 +1,5 @@
 use super::{
-    value_initializer::{InitResult, ValueInitializer},
+    value_initializer::{ComputeResult, GetOrInsert, InitResult, ValueInitializer},
     CacheBuilder, OwnedKeyEntrySelector, RefKeyEntrySelector,
 };
 use crate::{
@@ -10,6 +10,7 @@ use crate::{
         time::Instant,
     },
     notification::EvictionListener,
+    ops::compute,
     policy::ExpirationPolicy,
     sync::{Iter, PredicateId},
     sync_base::{
@@ -1501,6 +1502,111 @@ where
         .expect("Failed to insert");
     }
 
+    pub(crate) fn compute_with_hash_and_fun<F>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        f: F,
+    ) -> (Option<Entry<K, V>>, compute::PerformedOp)
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> compute::Op<V>,
+    {
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_compute_with;
+
+        match self
+            .value_initializer
+            .try_compute(&key, hash, self, f, post_init, true)
+        {
+            ComputeResult::Nop(maybe_value) => {
+                let maybe_entry =
+                    maybe_value.map(|value| Entry::new(Some(key), value, false, false));
+                (maybe_entry, compute::PerformedOp::Nop)
+            }
+            ComputeResult::Inserted(value) => {
+                crossbeam_epoch::pin().flush();
+                let entry = Entry::new(Some(key), value, true, false);
+                (Some(entry), compute::PerformedOp::Inserted)
+            }
+            ComputeResult::Updated(value) => {
+                crossbeam_epoch::pin().flush();
+                let entry = Entry::new(Some(key), value, true, true);
+                (Some(entry), compute::PerformedOp::Updated)
+            }
+            ComputeResult::Removed(value) => {
+                crossbeam_epoch::pin().flush();
+                let entry = Entry::new(Some(key), value, false, false);
+                (Some(entry), compute::PerformedOp::Removed)
+            }
+            ComputeResult::EvalErr(_) => {
+                unreachable!()
+            }
+        }
+    }
+
+    pub(crate) fn try_compute_with_hash_and_fun<F, E>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        f: F,
+    ) -> Result<(Option<Entry<K, V>>, compute::PerformedOp), E>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Result<compute::Op<V>, E>,
+        E: Send + Sync + 'static,
+    {
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_try_compute_with;
+
+        match self
+            .value_initializer
+            .try_compute(&key, hash, self, f, post_init, true)
+        {
+            ComputeResult::Nop(maybe_value) => {
+                let maybe_entry =
+                    maybe_value.map(|value| Entry::new(Some(key), value, false, false));
+                Ok((maybe_entry, compute::PerformedOp::Nop))
+            }
+            ComputeResult::Inserted(value) => {
+                crossbeam_epoch::pin().flush();
+                let entry = Entry::new(Some(key), value, true, false);
+                Ok((Some(entry), compute::PerformedOp::Inserted))
+            }
+            ComputeResult::Updated(value) => {
+                crossbeam_epoch::pin().flush();
+                let entry = Entry::new(Some(key), value, true, true);
+                Ok((Some(entry), compute::PerformedOp::Updated))
+            }
+            ComputeResult::Removed(value) => {
+                crossbeam_epoch::pin().flush();
+                let entry = Entry::new(Some(key), value, false, false);
+                Ok((Some(entry), compute::PerformedOp::Removed))
+            }
+            ComputeResult::EvalErr(e) => Err(e),
+        }
+    }
+
+    pub(crate) fn upsert_with_hash_and_fun<F>(&self, key: Arc<K>, hash: u64, f: F) -> Entry<K, V>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> V,
+    {
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_upsert_with;
+
+        match self
+            .value_initializer
+            .try_compute(&key, hash, self, f, post_init, false)
+        {
+            ComputeResult::Inserted(value) => {
+                crossbeam_epoch::pin().flush();
+                Entry::new(Some(key), value, true, false)
+            }
+            ComputeResult::Updated(value) => {
+                crossbeam_epoch::pin().flush();
+                Entry::new(Some(key), value, true, true)
+            }
+            ComputeResult::Nop(_) | ComputeResult::Removed(_) | ComputeResult::EvalErr(_) => {
+                unreachable!()
+            }
+        }
+    }
+
     /// Discards any cached value for the key.
     ///
     /// If you need to get a the value that has been discarded, use the
@@ -1789,6 +1895,27 @@ where
             }
         }
         Ok(())
+    }
+}
+
+impl<K, V, S> GetOrInsert<K, V> for Cache<K, V, S>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    fn get_entry_without_recording(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>> {
+        let ignore_if = None as Option<&mut fn(&V) -> bool>;
+        self.base
+            .get_with_hash_and_ignore_if(key, hash, ignore_if, true)
+    }
+
+    fn insert(&self, key: Arc<K>, hash: u64, value: V) {
+        self.insert_with_hash(key.clone(), hash, value);
+    }
+
+    fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V> {
+        self.invalidate_with_hash(key, hash, true)
     }
 }
 
@@ -3894,6 +4021,375 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+    }
+
+    #[test]
+    fn upsert_with() {
+        use std::thread::{sleep, spawn};
+
+        let cache = Cache::new(100);
+        const KEY: u32 = 0;
+
+        // Spawn three threads to call `and_upsert_with` for the same key and each
+        // task increments the current value by 1. Ensure the key-level lock is
+        // working by verifying the value is 3 after all tasks finish.
+        //
+        // |        | thread 1 | thread 2 | thread 3 |
+        // |--------|----------|----------|----------|
+        // |   0 ms | get none |          |          |
+        // | 100 ms |          | blocked  |          |
+        // | 200 ms | insert 1 |          |          |
+        // |        |          | get 1    |          |
+        // | 300 ms |          |          | blocked  |
+        // | 400 ms |          | insert 2 |          |
+        // |        |          |          | get 2    |
+        // | 500 ms |          |          | insert 3 |
+
+        let thread1 = {
+            let cache1 = cache.clone();
+            spawn(move || {
+                cache1.entry(KEY).and_upsert_with(|maybe_entry| {
+                    sleep(Duration::from_millis(200));
+                    assert!(maybe_entry.is_none());
+                    1
+                })
+            })
+        };
+
+        let thread2 = {
+            let cache2 = cache.clone();
+            spawn(move || {
+                sleep(Duration::from_millis(100));
+                cache2.entry_by_ref(&KEY).and_upsert_with(|maybe_entry| {
+                    sleep(Duration::from_millis(200));
+                    let entry = maybe_entry.expect("The entry should exist");
+                    entry.into_value() + 1
+                })
+            })
+        };
+
+        let thread3 = {
+            let cache3 = cache.clone();
+            spawn(move || {
+                sleep(Duration::from_millis(300));
+                cache3.entry_by_ref(&KEY).and_upsert_with(|maybe_entry| {
+                    sleep(Duration::from_millis(100));
+                    let entry = maybe_entry.expect("The entry should exist");
+                    entry.into_value() + 1
+                })
+            })
+        };
+
+        let ent1 = thread1.join().expect("Thread 1 should finish");
+        let ent2 = thread2.join().expect("Thread 2 should finish");
+        let ent3 = thread3.join().expect("Thread 3 should finish");
+        assert_eq!(ent1.into_value(), 1);
+        assert_eq!(ent2.into_value(), 2);
+        assert_eq!(ent3.into_value(), 3);
+
+        assert_eq!(cache.get(&KEY), Some(3));
+    }
+
+    #[test]
+    fn compute_with() {
+        use crate::ops::compute;
+        use std::{
+            sync::RwLock,
+            thread::{sleep, spawn},
+        };
+
+        let cache = Cache::new(100);
+        const KEY: u32 = 0;
+
+        // Spawn six threads to call `and_compute_with` for the same key. Ensure the
+        // key-level lock is working by verifying the value after all tasks finish.
+        //
+        // |         |  thread 1  |   thread 2    |  thread 3  | thread 4 |  thread 5  | thread 6 |
+        // |---------|------------|---------------|------------|----------|------------|----------|
+        // |    0 ms | get none   |               |            |          |            |          |
+        // |  100 ms |            | blocked       |            |          |            |          |
+        // |  200 ms | insert [1] |               |            |          |            |          |
+        // |         |            | get [1]       |            |          |            |          |
+        // |  300 ms |            |               | blocked    |          |            |          |
+        // |  400 ms |            | insert [1, 2] |            |          |            |          |
+        // |         |            |               | get [1, 2] |          |            |          |
+        // |  500 ms |            |               |            | blocked  |            |          |
+        // |  600 ms |            |               | remove     |          |            |          |
+        // |         |            |               |            | get none |            |          |
+        // |  700 ms |            |               |            |          | blocked    |          |
+        // |  800 ms |            |               |            | nop      |            |          |
+        // |         |            |               |            |          | get none   |          |
+        // |  900 ms |            |               |            |          |            | blocked  |
+        // | 1000 ms |            |               |            |          | insert [5] |          |
+        // |         |            |               |            |          |            | get [5]  |
+        // | 1100 ms |            |               |            |          |            | nop      |
+
+        let thread1 = {
+            let cache1 = cache.clone();
+            spawn(move || {
+                cache1.entry(KEY).and_compute_with(|maybe_entry| {
+                    sleep(Duration::from_millis(200));
+                    assert!(maybe_entry.is_none());
+                    compute::Op::Put(Arc::new(RwLock::new(vec![1])))
+                })
+            })
+        };
+
+        let thread2 = {
+            let cache2 = cache.clone();
+            spawn(move || {
+                sleep(Duration::from_millis(100));
+                cache2.entry_by_ref(&KEY).and_compute_with(|maybe_entry| {
+                    let entry = maybe_entry.expect("The entry should exist");
+                    let value = entry.into_value();
+                    assert_eq!(*value.read().unwrap(), vec![1]);
+                    sleep(Duration::from_millis(200));
+                    value.write().unwrap().push(2);
+                    compute::Op::Put(value)
+                })
+            })
+        };
+
+        let thread3 = {
+            let cache3 = cache.clone();
+            spawn(move || {
+                sleep(Duration::from_millis(300));
+                cache3.entry(KEY).and_compute_with(|maybe_entry| {
+                    let entry = maybe_entry.expect("The entry should exist");
+                    let value = entry.into_value();
+                    assert_eq!(*value.read().unwrap(), vec![1, 2]);
+                    sleep(Duration::from_millis(200));
+                    compute::Op::Remove
+                })
+            })
+        };
+
+        let thread4 = {
+            let cache4 = cache.clone();
+            spawn(move || {
+                sleep(Duration::from_millis(500));
+                cache4.entry(KEY).and_compute_with(|maybe_entry| {
+                    assert!(maybe_entry.is_none());
+                    sleep(Duration::from_millis(200));
+                    compute::Op::Nop
+                })
+            })
+        };
+
+        let thread5 = {
+            let cache5 = cache.clone();
+            spawn(move || {
+                sleep(Duration::from_millis(700));
+                cache5.entry_by_ref(&KEY).and_compute_with(|maybe_entry| {
+                    assert!(maybe_entry.is_none());
+                    sleep(Duration::from_millis(200));
+                    compute::Op::Put(Arc::new(RwLock::new(vec![5])))
+                })
+            })
+        };
+
+        let thread6 = {
+            let cache6 = cache.clone();
+            spawn(move || {
+                sleep(Duration::from_millis(900));
+                cache6.entry_by_ref(&KEY).and_compute_with(|maybe_entry| {
+                    let entry = maybe_entry.expect("The entry should exist");
+                    let value = entry.into_value();
+                    assert_eq!(*value.read().unwrap(), vec![5]);
+                    sleep(Duration::from_millis(100));
+                    compute::Op::Nop
+                })
+            })
+        };
+
+        let (ent1, op1) = thread1.join().expect("Thread 1 should finish");
+        let (ent2, op2) = thread2.join().expect("Thread 2 should finish");
+        let (ent3, op3) = thread3.join().expect("Thread 3 should finish");
+        let (ent4, op4) = thread4.join().expect("Thread 4 should finish");
+        let (ent5, op5) = thread5.join().expect("Thread 5 should finish");
+        let (ent6, op6) = thread6.join().expect("Thread 6 should finish");
+        assert_eq!(op1, compute::PerformedOp::Inserted);
+        assert_eq!(op2, compute::PerformedOp::Updated);
+        assert_eq!(op3, compute::PerformedOp::Removed);
+        assert_eq!(op4, compute::PerformedOp::Nop);
+        assert_eq!(op5, compute::PerformedOp::Inserted);
+        assert_eq!(op6, compute::PerformedOp::Nop);
+
+        assert_eq!(
+            *ent1
+                .expect("should have entry")
+                .into_value()
+                .read()
+                .unwrap(),
+            vec![1, 2] // The same Vec was modified by task2.
+        );
+        assert_eq!(
+            *ent2
+                .expect("should have entry")
+                .into_value()
+                .read()
+                .unwrap(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            *ent3
+                .expect("should have entry")
+                .into_value()
+                .read()
+                .unwrap(),
+            vec![1, 2] // Removed value
+        );
+        assert!(ent4.is_none(),);
+        assert_eq!(
+            *ent5
+                .expect("should have entry")
+                .into_value()
+                .read()
+                .unwrap(),
+            vec![5]
+        );
+        assert_eq!(
+            *ent6
+                .expect("should have entry")
+                .into_value()
+                .read()
+                .unwrap(),
+            vec![5]
+        );
+    }
+
+    #[test]
+    fn try_compute_with() {
+        use crate::ops::compute;
+        use std::{
+            sync::RwLock,
+            thread::{sleep, spawn},
+        };
+
+        let cache: Cache<u32, Arc<RwLock<Vec<i32>>>> = Cache::new(100);
+        const KEY: u32 = 0;
+
+        // Spawn four threads to call `and_try_compute_with` for the same key. Ensure
+        // the key-level lock is working by verifying the value after all tasks
+        // finish.
+        //
+        // |         |  thread 1  |   thread 2    |  thread 3  | thread 4   |
+        // |---------|------------|---------------|------------|------------|
+        // |    0 ms | get none   |               |            |            |
+        // |  100 ms |            | blocked       |            |            |
+        // |  200 ms | insert [1] |               |            |            |
+        // |         |            | get [1]       |            |            |
+        // |  300 ms |            |               | blocked    |            |
+        // |  400 ms |            | insert [1, 2] |            |            |
+        // |         |            |               | get [1, 2] |            |
+        // |  500 ms |            |               |            | blocked    |
+        // |  600 ms |            |               | err        |            |
+        // |         |            |               |            | get [1, 2] |
+        // |  700 ms |            |               |            | remove     |
+        //
+        // This test is shorter than `compute_with` test because this one omits `Nop`
+        // cases.
+
+        let thread1 = {
+            let cache1 = cache.clone();
+            spawn(move || {
+                cache1.entry(KEY).and_try_compute_with(|maybe_entry| {
+                    sleep(Duration::from_millis(200));
+                    assert!(maybe_entry.is_none());
+                    Ok(compute::Op::Put(Arc::new(RwLock::new(vec![1])))) as Result<_, ()>
+                })
+            })
+        };
+
+        let thread2 = {
+            let cache2 = cache.clone();
+            spawn(move || {
+                sleep(Duration::from_millis(100));
+                cache2
+                    .entry_by_ref(&KEY)
+                    .and_try_compute_with(|maybe_entry| {
+                        let entry = maybe_entry.expect("The entry should exist");
+                        let value = entry.into_value();
+                        assert_eq!(*value.read().unwrap(), vec![1]);
+                        sleep(Duration::from_millis(200));
+                        value.write().unwrap().push(2);
+                        Ok(compute::Op::Put(value)) as Result<_, ()>
+                    })
+            })
+        };
+
+        let thread3 = {
+            let cache3 = cache.clone();
+            spawn(move || {
+                sleep(Duration::from_millis(300));
+                cache3.entry(KEY).and_try_compute_with(|maybe_entry| {
+                    let entry = maybe_entry.expect("The entry should exist");
+                    let value = entry.into_value();
+                    assert_eq!(*value.read().unwrap(), vec![1, 2]);
+                    sleep(Duration::from_millis(200));
+                    Err(())
+                })
+            })
+        };
+
+        let thread4 = {
+            let cache4 = cache.clone();
+            spawn(move || {
+                sleep(Duration::from_millis(500));
+                cache4.entry(KEY).and_try_compute_with(|maybe_entry| {
+                    let entry = maybe_entry.expect("The entry should exist");
+                    let value = entry.into_value();
+                    assert_eq!(*value.read().unwrap(), vec![1, 2]);
+                    sleep(Duration::from_millis(100));
+                    Ok(compute::Op::Remove) as Result<_, ()>
+                })
+            })
+        };
+
+        let res1 = thread1.join().expect("Thread 1 should finish");
+        let res2 = thread2.join().expect("Thread 2 should finish");
+        let res3 = thread3.join().expect("Thread 3 should finish");
+        let res4 = thread4.join().expect("Thread 4 should finish");
+
+        let Ok((ent1, op1)) = res1 else {
+            panic!("res1 should be an Ok")
+        };
+        let Ok((ent2, op2)) = res2 else {
+            panic!("res2 should be an Ok")
+        };
+        assert!(res3.is_err());
+        let Ok((ent4, op4)) = res4 else {
+            panic!("res4 should be an Ok")
+        };
+
+        assert_eq!(op1, compute::PerformedOp::Inserted);
+        assert_eq!(op2, compute::PerformedOp::Updated);
+        assert_eq!(op4, compute::PerformedOp::Removed);
+
+        assert_eq!(
+            *ent1
+                .expect("should have entry")
+                .into_value()
+                .read()
+                .unwrap(),
+            vec![1, 2] // The same Vec was modified by task2.
+        );
+        assert_eq!(
+            *ent2
+                .expect("should have entry")
+                .into_value()
+                .read()
+                .unwrap(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            *ent4
+                .expect("should have entry")
+                .into_value()
+                .read()
+                .unwrap(),
+            vec![1, 2] // Removed value.
+        );
     }
 
     #[test]

@@ -514,7 +514,7 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
     doc --no-deps --features 'future, sync'
 ```
 
-## Road Map
+## Roadmap
 
 - [x] Size-aware eviction. (`v0.7.0` via [#24][gh-pull-024])
 - [x] API stabilization. (Smaller core API, shorter names for frequently used

@@ -1,4 +1,4 @@
-use crate::Entry;
+use crate::{ops::compute, Entry};
 
 use super::Cache;
 
@@ -36,6 +36,34 @@ where
             hash,
             cache,
         }
+    }
+
+    pub fn and_compute_with<F>(self, f: F) -> (Option<Entry<K, V>>, compute::PerformedOp)
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> compute::Op<V>,
+    {
+        let key = Arc::new(self.owned_key);
+        self.cache.compute_with_hash_and_fun(key, self.hash, f)
+    }
+
+    pub fn and_try_compute_with<F, E>(
+        self,
+        f: F,
+    ) -> Result<(Option<Entry<K, V>>, compute::PerformedOp), E>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Result<compute::Op<V>, E>,
+        E: Send + Sync + 'static,
+    {
+        let key = Arc::new(self.owned_key);
+        self.cache.try_compute_with_hash_and_fun(key, self.hash, f)
+    }
+
+    pub fn and_upsert_with<F>(self, f: F) -> Entry<K, V>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> V,
+    {
+        let key = Arc::new(self.owned_key);
+        self.cache.upsert_with_hash_and_fun(key, self.hash, f)
     }
 
     /// Returns the corresponding [`Entry`] for the key given when this entry
@@ -323,6 +351,34 @@ where
             hash,
             cache,
         }
+    }
+
+    pub fn and_compute_with<F>(self, f: F) -> (Option<Entry<K, V>>, compute::PerformedOp)
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> compute::Op<V>,
+    {
+        let key = Arc::new(self.ref_key.to_owned());
+        self.cache.compute_with_hash_and_fun(key, self.hash, f)
+    }
+
+    pub fn and_try_compute_with<F, E>(
+        self,
+        f: F,
+    ) -> Result<(Option<Entry<K, V>>, compute::PerformedOp), E>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Result<compute::Op<V>, E>,
+        E: Send + Sync + 'static,
+    {
+        let key = Arc::new(self.ref_key.to_owned());
+        self.cache.try_compute_with_hash_and_fun(key, self.hash, f)
+    }
+
+    pub fn and_upsert_with<F>(self, f: F) -> Entry<K, V>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> V,
+    {
+        let key = Arc::new(self.ref_key.to_owned());
+        self.cache.upsert_with_hash_and_fun(key, self.hash, f)
     }
 
     /// Returns the corresponding [`Entry`] for the reference of the key given when

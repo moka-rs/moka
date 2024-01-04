@@ -20,6 +20,8 @@ pub trait ConcurrentCacheExt<K, V> {
     fn sync(&self);
 }
 
-// Empty internal struct to be used in optionally_get_with to represent the None
-// results.
+// Empty struct to be used in `InitResult::InitErr` to represent the Option None.
 pub(crate) struct OptionallyNone;
+
+// Empty struct to be used in `InitResult::InitErr`` to represent the Compute None.
+pub(crate) struct ComputeNone;

@@ -1830,38 +1830,6 @@ where
         cancel_guard.clear();
     }
 
-    pub(crate) async fn upsert_with_hash_and_fun<F, Fut>(
-        &self,
-        key: Arc<K>,
-        hash: u64,
-        f: F,
-    ) -> Entry<K, V>
-    where
-        F: FnOnce(Option<Entry<K, V>>) -> Fut,
-        Fut: Future<Output = V>,
-    {
-        let type_id = ValueInitializer::<K, V, S>::type_id_for_compute_with();
-        let post_init = ValueInitializer::<K, V, S>::post_init_for_upsert_with;
-
-        match self
-            .value_initializer
-            .try_compute(&key, hash, type_id, self, f, post_init)
-            .await
-        {
-            ComputeResult::Inserted(value) => {
-                crossbeam_epoch::pin().flush();
-                Entry::new(Some(key), value, true, false)
-            }
-            ComputeResult::Updated(value) => {
-                crossbeam_epoch::pin().flush();
-                Entry::new(Some(key), value, true, true)
-            }
-            ComputeResult::Nop(_) | ComputeResult::Removed(_) | ComputeResult::EvalErr(_) => {
-                unreachable!()
-            }
-        }
-    }
-
     pub(crate) async fn compute_with_hash_and_fun<F, Fut>(
         &self,
         key: Arc<K>,
@@ -1872,12 +1840,11 @@ where
         F: FnOnce(Option<Entry<K, V>>) -> Fut,
         Fut: Future<Output = compute::Op<V>>,
     {
-        let type_id = ValueInitializer::<K, V, S>::type_id_for_compute_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_compute_with;
 
         match self
             .value_initializer
-            .try_compute(&key, hash, type_id, self, f, post_init)
+            .try_compute(&key, hash, self, f, post_init, true)
             .await
         {
             ComputeResult::Nop(maybe_value) => {
@@ -1917,12 +1884,11 @@ where
         Fut: Future<Output = Result<compute::Op<V>, E>>,
         E: Send + Sync + 'static,
     {
-        let type_id = ValueInitializer::<K, V, S>::type_id_for_compute_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_try_compute_with;
 
         match self
             .value_initializer
-            .try_compute(&key, hash, type_id, self, f, post_init)
+            .try_compute(&key, hash, self, f, post_init, true)
             .await
         {
             ComputeResult::Nop(maybe_value) => {
@@ -1946,6 +1912,37 @@ where
                 Ok((Some(entry), compute::PerformedOp::Removed))
             }
             ComputeResult::EvalErr(e) => Err(e),
+        }
+    }
+
+    pub(crate) async fn upsert_with_hash_and_fun<F, Fut>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        f: F,
+    ) -> Entry<K, V>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = V>,
+    {
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_upsert_with;
+
+        match self
+            .value_initializer
+            .try_compute(&key, hash, self, f, post_init, false)
+            .await
+        {
+            ComputeResult::Inserted(value) => {
+                crossbeam_epoch::pin().flush();
+                Entry::new(Some(key), value, true, false)
+            }
+            ComputeResult::Updated(value) => {
+                crossbeam_epoch::pin().flush();
+                Entry::new(Some(key), value, true, true)
+            }
+            ComputeResult::Nop(_) | ComputeResult::Removed(_) | ComputeResult::EvalErr(_) => {
+                unreachable!()
+            }
         }
     }
 
@@ -4563,7 +4560,7 @@ mod tests {
             }
         };
 
-        let ((ent1, op1), (ent2, op2), (ent3, op3), (ent4, op4), (ent5, op5), (v6, op6)) =
+        let ((ent1, op1), (ent2, op2), (ent3, op3), (ent4, op4), (ent5, op5), (ent6, op6)) =
             futures_util::join!(task1, task2, task3, task4, task5, task6);
         assert_eq!(op1, compute::PerformedOp::Inserted);
         assert_eq!(op2, compute::PerformedOp::Updated);
@@ -4590,7 +4587,7 @@ mod tests {
             vec![5]
         );
         assert_eq!(
-            *v6.expect("should have entry").into_value().read().await,
+            *ent6.expect("should have entry").into_value().read().await,
             vec![5]
         );
     }
