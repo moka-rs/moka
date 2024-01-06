@@ -2083,10 +2083,10 @@ where
             .map(Entry::into_value)
     }
 
-    async fn get_entry_without_recording(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>> {
+    async fn get_entry(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>> {
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
         self.base
-            .get_with_hash(key, hash, ignore_if, true, false)
+            .get_with_hash(key, hash, ignore_if, true, true)
             .await
     }
 

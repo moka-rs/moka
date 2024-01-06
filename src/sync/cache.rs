@@ -1905,7 +1905,7 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    fn get_entry_without_recording(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>> {
+    fn get_entry(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>> {
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
         self.base
             .get_with_hash_and_ignore_if(key, hash, ignore_if, true)
@@ -4033,7 +4033,7 @@ mod tests {
 
         // Spawn three threads to call `and_upsert_with` for the same key and each
         // task increments the current value by 1. Ensure the key-level lock is
-        // working by verifying the value is 3 after all tasks finish.
+        // working by verifying the value is 3 after all threads finish.
         //
         // |        | thread 1 | thread 2 | thread 3 |
         // |--------|----------|----------|----------|
@@ -4103,7 +4103,7 @@ mod tests {
         const KEY: u32 = 0;
 
         // Spawn six threads to call `and_compute_with` for the same key. Ensure the
-        // key-level lock is working by verifying the value after all tasks finish.
+        // key-level lock is working by verifying the value after all threads finish.
         //
         // |         |  thread 1  |   thread 2    |  thread 3  | thread 4 |  thread 5  | thread 6 |
         // |---------|------------|---------------|------------|----------|------------|----------|
@@ -4271,7 +4271,7 @@ mod tests {
         const KEY: u32 = 0;
 
         // Spawn four threads to call `and_try_compute_with` for the same key. Ensure
-        // the key-level lock is working by verifying the value after all tasks
+        // the key-level lock is working by verifying the value after all threads
         // finish.
         //
         // |         |  thread 1  |   thread 2    |  thread 3  | thread 4   |

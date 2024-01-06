@@ -14,12 +14,16 @@ use super::{ComputeNone, OptionallyNone};
 const WAITER_MAP_NUM_SEGMENTS: usize = 64;
 
 pub(crate) trait GetOrInsert<K, V> {
-    fn get_entry_without_recording(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>>
+    /// Gets an entry for the given key _with_ recording the access to the cache
+    /// policies.
+    fn get_entry(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>>
     where
         V: 'static;
 
+    /// Inserts a value for the given key.
     fn insert(&self, key: Arc<K>, hash: u64, value: V);
 
+    /// Removes a value for the given key. Returns the removed value.
     fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V>;
 }
 
@@ -31,7 +35,7 @@ enum WaiterValue<V> {
     Ready(Result<V, ErrorObject>),
     ReadyNone,
     // https://github.com/moka-rs/moka/issues/43
-    InitFuturePanicked,
+    InitClosurePanicked,
 }
 
 impl<V> fmt::Debug for WaiterValue<V> {
@@ -40,7 +44,7 @@ impl<V> fmt::Debug for WaiterValue<V> {
             WaiterValue::Computing => write!(f, "Computing"),
             WaiterValue::Ready(_) => write!(f, "Ready"),
             WaiterValue::ReadyNone => write!(f, "ReadyNone"),
-            WaiterValue::InitFuturePanicked => write!(f, "InitFuturePanicked"),
+            WaiterValue::InitClosurePanicked => write!(f, "InitFuturePanicked"),
         }
     }
 }
@@ -117,6 +121,7 @@ where
         loop {
             let Some(existing_waiter) = self.try_insert_waiter(w_key.clone(), w_hash, &waiter)
             else {
+                // Inserted.
                 break;
             };
 
@@ -126,7 +131,7 @@ where
                 WaiterValue::Ready(Ok(value)) => return ReadExisting(value.clone()),
                 WaiterValue::Ready(Err(e)) => return InitErr(Arc::clone(e).downcast().unwrap()),
                 // Somebody else's init closure has been panicked.
-                WaiterValue::InitFuturePanicked => {
+                WaiterValue::InitClosurePanicked => {
                     retries += 1;
                     assert!(
                         retries < MAX_RETRIES,
@@ -180,7 +185,7 @@ where
             }
             // Panicked.
             Err(payload) => {
-                *lock = WaiterValue::InitFuturePanicked;
+                *lock = WaiterValue::InitClosurePanicked;
                 // Remove the waiter so that others can retry.
                 self.remove_waiter(w_key, w_hash);
                 resume_unwind(payload);
@@ -190,12 +195,12 @@ where
     }
 
     /// # Panics
-    /// Panics if the `init` future has been panicked.
+    /// Panics if the `init` closure has been panicked.
     pub(crate) fn try_compute<'a, C, F, O, E>(
         &'a self,
         c_key: &Arc<K>,
         c_hash: u64,
-        cache: &C, // Future to initialize a new value.
+        cache: &C,
         f: F,
         post_init: fn(O) -> Result<compute::Op<V>, E>,
         allow_nop: bool,
@@ -210,9 +215,7 @@ where
         use ComputeResult::{EvalErr, Inserted, Nop, Removed, Updated};
 
         let type_id = TypeId::of::<ComputeNone>();
-
         let (w_key, w_hash) = self.waiter_key_hash(c_key, type_id);
-
         let waiter = TrioArc::new(RwLock::new(WaiterValue::Computing));
         // NOTE: We have to acquire a write lock before `try_insert_waiter`,
         // so that any concurrent attempt will get our lock and wait on it.
@@ -221,10 +224,12 @@ where
         loop {
             let Some(existing_waiter) = self.try_insert_waiter(w_key.clone(), w_hash, &waiter)
             else {
+                // Inserted.
                 break;
             };
 
-            // Somebody else's waiter already exists, so wait for its result to become available.
+            // Somebody else's waiter already exists, so wait for it to finish
+            // (wait for it to release the write lock).
             let waiter_result = existing_waiter.read();
             match &*waiter_result {
                 // Unexpected state.
@@ -233,7 +238,7 @@ where
                     This might be a bug in Moka"
                 ),
                 _ => {
-                    // Retry from the beginning.
+                    // Try to insert our waiter again.
                     continue;
                 }
             }
@@ -242,7 +247,7 @@ where
         // Our waiter was inserted.
 
         // Get the current value.
-        let maybe_entry = cache.get_entry_without_recording(c_key, c_hash);
+        let maybe_entry = cache.get_entry(c_key, c_hash);
         let maybe_value = if allow_nop {
             maybe_entry.as_ref().map(|ent| ent.value().clone())
         } else {
@@ -250,8 +255,8 @@ where
         };
         let entry_existed = maybe_entry.is_some();
 
-        // Let's evaluate the `f` closure and get a future. Catching panic is safe
-        // here as we will not evaluate the closure again.
+        // Evaluate the `f` closure. Catching panic is safe here as we will not
+        // evaluate the closure again.
         match catch_unwind(AssertUnwindSafe(|| f(maybe_entry))) {
             // Evaluated.
             Ok(op) => {
@@ -283,7 +288,7 @@ where
             }
             // Panicked.
             Err(payload) => {
-                *lock = WaiterValue::InitFuturePanicked;
+                *lock = WaiterValue::InitClosurePanicked;
                 // Remove the waiter so that others can retry.
                 self.remove_waiter(w_key, w_hash);
                 resume_unwind(payload);

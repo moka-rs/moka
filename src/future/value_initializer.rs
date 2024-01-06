@@ -19,6 +19,8 @@ const WAITER_MAP_NUM_SEGMENTS: usize = 64;
 
 #[async_trait]
 pub(crate) trait GetOrInsert<K, V> {
+    /// Gets a value for the given key without recording the access to the cache
+    /// policies.
     async fn get_without_recording<I>(
         &self,
         key: &Arc<K>,
@@ -29,12 +31,16 @@ pub(crate) trait GetOrInsert<K, V> {
         V: 'static,
         I: for<'i> FnMut(&'i V) -> bool + Send;
 
-    async fn get_entry_without_recording(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>>
+    /// Gets an entry for the given key _with_ recording the access to the cache
+    /// policies.
+    async fn get_entry(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>>
     where
         V: 'static;
 
+    /// Inserts a value for the given key.
     async fn insert(&self, key: Arc<K>, hash: u64, value: V);
 
+    /// Removes a value for the given key. Returns the removed value.
     async fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V>;
 }
 
@@ -209,6 +215,7 @@ where
             let Some(existing_waiter) =
                 try_insert_waiter(&self.waiters, w_key.clone(), w_hash, &waiter)
             else {
+                // Inserted.
                 break;
             };
 
@@ -290,7 +297,7 @@ where
         &'a self,
         c_key: &Arc<K>,
         c_hash: u64,
-        cache: &C, // Future to initialize a new value.
+        cache: &C,
         f: F,
         post_init: fn(O) -> Result<compute::Op<V>, E>,
         allow_nop: bool,
@@ -305,9 +312,7 @@ where
         use ComputeResult::{EvalErr, Inserted, Nop, Removed, Updated};
 
         let type_id = TypeId::of::<ComputeNone>();
-
         let (w_key, w_hash) = waiter_key_hash(&self.waiters, c_key, type_id);
-
         let waiter = TrioArc::new(RwLock::new(WaiterValue::Computing));
         // NOTE: We have to acquire a write lock before `try_insert_waiter`,
         // so that any concurrent attempt will get our lock and wait on it.
@@ -317,10 +322,12 @@ where
             let Some(existing_waiter) =
                 try_insert_waiter(&self.waiters, w_key.clone(), w_hash, &waiter)
             else {
+                // Inserted.
                 break;
             };
 
-            // Somebody else's waiter already exists, so wait for its result to become available.
+            // Somebody else's waiter already exists, so wait for it to finish
+            // (wait for it to release the write lock).
             let waiter_result = existing_waiter.read().await;
             match &*waiter_result {
                 // Unexpected state.
@@ -329,7 +336,7 @@ where
                     This might be a bug in Moka"
                 ),
                 _ => {
-                    // Retry from the beginning.
+                    // Try to insert our waiter again.
                     continue;
                 }
             }
@@ -343,7 +350,7 @@ where
         let waiter_guard = WaiterGuard::new(w_key, w_hash, &self.waiters, lock);
 
         // Get the current value.
-        let maybe_entry = cache.get_entry_without_recording(c_key, c_hash).await;
+        let maybe_entry = cache.get_entry(c_key, c_hash).await;
         let maybe_value = if allow_nop {
             maybe_entry.as_ref().map(|ent| ent.value().clone())
         } else {
@@ -351,8 +358,8 @@ where
         };
         let entry_existed = maybe_entry.is_some();
 
-        // Let's evaluate the `f` closure and get a future. Catching panic is safe
-        // here as we will not evaluate the closure again.
+        // Evaluate the `f` closure and get a future. Catching panic is safe here as
+        // we will not evaluate the closure again.
         let fut = match std::panic::catch_unwind(AssertUnwindSafe(|| f(maybe_entry))) {
             // Evaluated.
             Ok(fut) => fut,

@@ -76,7 +76,11 @@ impl<K, V> Entry<K, V> {
         self.is_fresh
     }
 
-    /// Returns `true` if the value in this `Entry` replaced an old cached value.
+    /// Returns `true` if the value in this `Entry` was already cached and replaced
+    /// with a new value.
+    ///
+    /// Note that the new value can be the same as the old value. In that case, this
+    /// method still returns `true`.
     pub fn is_updated(&self) -> bool {
         self.is_updated
     }
