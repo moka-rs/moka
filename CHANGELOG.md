@@ -1,5 +1,19 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.3
+
+### Added
+
+- Added the upsert and compute methods for modifying a cached entry
+  ([#370][gh-pull-0370]):
+    - Now the `entry` or `entry_by_ref` APIs have the following methods:
+        - `and_upsert_with` method to insert or update the entry.
+        - `and_compute_with` method to insert, update, remove or do nothing on the
+          entry.
+        - `and_try_compute_with` method, which is similar to above but returns
+          `Result`.
+
+
 ## Version 0.12.2
 
 ### Fixed
@@ -781,6 +795,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0370]: https://github.com/moka-rs/moka/pull/370/
 [gh-pull-0363]: https://github.com/moka-rs/moka/pull/363/
 [gh-pull-0350]: https://github.com/moka-rs/moka/pull/350/
 [gh-pull-0348]: https://github.com/moka-rs/moka/pull/348/
