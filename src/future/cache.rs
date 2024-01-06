@@ -1063,6 +1063,7 @@ where
             .into_value()
     }
 
+    /// TODO: Remove this in v0.13.0.
     /// Deprecated, replaced with
     /// [`entry()::or_insert_with_if()`](./struct.OwnedKeyEntrySelector.html#method.or_insert_with_if)
     #[deprecated(since = "0.10.0", note = "Replaced with `entry().or_insert_with_if()`")]
@@ -2159,6 +2160,7 @@ mod tests {
         common::time::Clock,
         future::FutureExt,
         notification::{ListenerFuture, RemovalCause},
+        ops::compute,
         policy::test_utils::ExpiryCallCounters,
         Expiry,
     };
@@ -2196,6 +2198,17 @@ mod tests {
         is_send(cache.try_get_with_by_ref(&(), async { Err(()) }));
 
         // entry fns
+        is_send(
+            cache
+                .entry(())
+                .and_compute_with(|_| async { compute::Op::Nop }),
+        );
+        is_send(
+            cache
+                .entry(())
+                .and_try_compute_with(|_| async { Ok(compute::Op::Nop) as Result<_, Infallible> }),
+        );
+        is_send(cache.entry(()).and_upsert_with(|_| async {}));
         is_send(cache.entry(()).or_default());
         is_send(cache.entry(()).or_insert(()));
         is_send(cache.entry(()).or_insert_with(async {}));
@@ -2204,6 +2217,17 @@ mod tests {
         is_send(cache.entry(()).or_try_insert_with(async { Err(()) }));
 
         // entry_by_ref fns
+        is_send(
+            cache
+                .entry_by_ref(&())
+                .and_compute_with(|_| async { compute::Op::Nop }),
+        );
+        is_send(
+            cache
+                .entry_by_ref(&())
+                .and_try_compute_with(|_| async { Ok(compute::Op::Nop) as Result<_, Infallible> }),
+        );
+        is_send(cache.entry_by_ref(&()).and_upsert_with(|_| async {}));
         is_send(cache.entry_by_ref(&()).or_default());
         is_send(cache.entry_by_ref(&()).or_insert(()));
         is_send(cache.entry_by_ref(&()).or_insert_with(async {}));

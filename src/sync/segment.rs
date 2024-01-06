@@ -284,12 +284,14 @@ where
         RefKeyEntrySelector::new(key, hash, cache)
     }
 
+    /// TODO: Remove this in v0.13.0.
     /// Deprecated, replaced with [`get_with`](#method.get_with)
     #[deprecated(since = "0.8.0", note = "Replaced with `get_with`")]
     pub fn get_or_insert_with(&self, key: K, init: impl FnOnce() -> V) -> V {
         self.get_with(key, init)
     }
 
+    /// TODO: Remove this in v0.13.0.
     /// Deprecated, replaced with [`try_get_with`](#method.try_get_with)
     #[deprecated(since = "0.8.0", note = "Replaced with `try_get_with`")]
     pub fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>

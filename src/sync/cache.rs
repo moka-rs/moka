@@ -966,6 +966,7 @@ where
             .into_value()
     }
 
+    /// TODO: Remove this in v0.13.0.
     /// Deprecated, replaced with
     /// [`entry()::or_insert_with_if()`](./struct.OwnedKeyEntrySelector.html#method.or_insert_with_if)
     #[deprecated(since = "0.10.0", note = "Replaced with `entry().or_insert_with_if()`")]

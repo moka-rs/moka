@@ -111,6 +111,10 @@ name = "append_value_async"
 required-features = ["future"]
 
 [[example]]
+name = "append_value_sync"
+required-features = ["sync"]
+
+[[example]]
 name = "basics_async"
 required-features = ["future"]
 
@@ -123,12 +127,20 @@ name = "bounded_counter_async"
 required-features = ["future"]
 
 [[example]]
+name = "bounded_counter_sync"
+required-features = ["sync"]
+
+[[example]]
 name = "cascading_drop_async"
 required-features = ["future"]
 
 [[example]]
 name = "counter_async"
 required-features = ["future"]
+
+[[example]]
+name = "counter_sync"
+required-features = ["sync"]
 
 [[example]]
 name = "eviction_listener_sync"
@@ -141,3 +153,7 @@ required-features = ["sync"]
 [[example]]
 name = "try_append_value_async"
 required-features = ["future"]
+
+[[example]]
+name = "try_append_value_sync"
+required-features = ["sync"]

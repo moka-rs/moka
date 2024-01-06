@@ -38,6 +38,120 @@ where
         }
     }
 
+    /// Performs a compute operation on a cached entry by using the given closure
+    /// `f`. A compute operation is either put, remove or no-operation (nop).
+    ///
+    /// The closure `f` should take the current entry of `Option<Entry<K, V>>` for
+    /// the key, and return an `ops::compute::Op<V>` enum.
+    ///
+    /// This method works as the followings:
+    ///
+    /// 1. Apply the closure `f` to the current cached `Entry`, and get an
+    ///    `ops::compute::Op<V>`.
+    /// 2. Execute the op on the cache:
+    ///    - `Op::Put(V)`: Put the new value `V` to the cache.
+    ///    - `Op::Remove`: Remove the current cached entry.
+    ///    - `Op::Nop`: Do nothing.
+    /// 3. Return an `(Option<Entry>, ops::compute::PerformedOp)` as the followings:
+    ///
+    /// | [`Op<V>`] | `Entry` to return           | [`PerformedOp`]         |
+    /// |:--------- |:--------------------------- |:----------------------- |
+    /// | `Put(V)`  | The inserted/updated entry  | `Inserted` or `Updated` |
+    /// | `Remove`  | The _removed_ entry         | `Removed`               |
+    /// | `Nop`     | The current entry or `None` | `Nop`                   |
+    ///
+    /// **Notes:**
+    ///
+    /// - `Op::Put(V)`: `PerformedOp::Updated` is returned when the key already
+    ///   existed in the cache. It is _not_ related to whether the value was actually
+    ///   updated or not. It can be replaced with the same value.
+    /// - `Op::Remove`: Unlike other ops, the _removed_ entry is returned. If you mix
+    ///   `Remove` with other ops, ensure to check whether the performed op is
+    ///   `Removed` or not.
+    ///
+    /// # Similar Methods
+    ///
+    /// - If you want the `Future` resolve to `Result<Op<V>>` instead of `Op<V>`, and
+    ///   upsert only when resolved to `Ok(V)`, use the [`and_try_compute_with`]
+    ///   method.
+    /// - If you only want to put, use the [`and_upsert_with`] method.
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    /// [`Op<V>`]: ../ops/compute/enum.Op.html
+    /// [`PerformedOp`]: ../ops/compute/enum.PerformedOp.html
+    /// [`and_upsert_with`]: #method.and_upsert_with
+    /// [`and_try_compute_with`]: #method.and_try_compute_with
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use moka::{
+    ///     sync::Cache,
+    ///     ops::compute::{self, PerformedOp},
+    ///     Entry,
+    /// };
+    ///
+    /// let cache: Cache<String, u64> = Cache::new(100);
+    /// let key = "key1".to_string();
+    ///
+    /// /// Increment a cached `u64` counter. If the counter is greater than or
+    /// /// equal to 2, remove it.
+    /// fn inclement_or_remove_counter(
+    ///     cache: &Cache<String, u64>,
+    ///     key: &str,
+    /// ) -> (Option<Entry<String, u64>>, compute::PerformedOp) {
+    ///     cache
+    ///         .entry(key.to_string())
+    ///         .and_compute_with(|maybe_entry| {
+    ///             if let Some(entry) = maybe_entry {
+    ///                 let counter = entry.into_value();
+    ///                 if counter < 2 {
+    ///                     compute::Op::Put(counter.saturating_add(1)) // Update
+    ///                 } else {
+    ///                     compute::Op::Remove // Remove
+    ///                 }
+    ///             } else {
+    ///                   compute::Op::Put(1) // Insert
+    ///             }
+    ///         })
+    /// }
+    ///
+    /// // This should insert a now counter value 1 to the cache, and return the
+    /// // value with the kind of the operation performed.
+    /// let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key);
+    /// let entry = maybe_entry.expect("An entry should be returned");
+    /// assert_eq!(entry.into_value(), 1);
+    /// assert_eq!(performed_op, PerformedOp::Inserted);
+    ///
+    /// // This should increment the cached counter value by 1.
+    /// let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key);
+    /// let entry = maybe_entry.expect("An entry should be returned");
+    /// assert_eq!(entry.into_value(), 2);
+    /// assert_eq!(performed_op, PerformedOp::Updated);
+    ///
+    /// // This should remove the cached counter from the cache, and returns the
+    /// // _removed_ value.
+    /// let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key);
+    /// let entry = maybe_entry.expect("An entry should be returned");
+    /// assert_eq!(entry.into_value(), 2);
+    /// assert_eq!(performed_op, PerformedOp::Removed);
+    ///
+    /// // The key should no longer exist.
+    /// assert!(!cache.contains_key(&key));
+    ///
+    /// // This should start over; insert a new counter value 1 to the cache.
+    /// let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key);
+    /// let entry = maybe_entry.expect("An entry should be returned");
+    /// assert_eq!(entry.into_value(), 1);
+    /// assert_eq!(performed_op, PerformedOp::Inserted);
+    /// ```
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same key are executed
+    /// serially. That is, `and_compute_with` calls on the same key never run
+    /// concurrently. The calls are serialized by the order of their invocation. It
+    /// uses a key-level lock to achieve this.
     pub fn and_compute_with<F>(self, f: F) -> (Option<Entry<K, V>>, compute::PerformedOp)
     where
         F: FnOnce(Option<Entry<K, V>>) -> compute::Op<V>,
@@ -46,6 +160,64 @@ where
         self.cache.compute_with_hash_and_fun(key, self.hash, f)
     }
 
+    /// Performs a compute operation on a cached entry by using the given closure
+    /// `f`. A compute operation is either put, remove or no-operation (nop).
+    ///
+    /// The closure `f` should take the current entry of `Option<Entry<K, V>>` for
+    /// the key, and return a `Result<ops::compute::Op<V>, E>`.
+    ///
+    /// This method works as the followings:
+    ///
+    /// 1. Apply the closure `f` to the current cached `Entry`, and get a
+    ///    `Result<ops::compute::Op<V>, E>`.
+    /// 2. If resolved to `Err(E)`, return it.
+    /// 3. Else, execute the op on the cache:
+    ///    - `Ok(Op::Put(V))`: Put the new value `V` to the cache.
+    ///    - `Ok(Op::Remove)`: Remove the current cached entry.
+    ///    - `Ok(Op::Nop)`: Do nothing.
+    /// 4. Return a `Ok((Option<Entry>, ops::compute::PerformedOp))` as the
+    ///    followings:
+    ///
+    /// | [`Op<V>`] | `Entry` to return           | [`PerformedOp`]         |
+    /// |:--------- |:--------------------------- |:----------------------- |
+    /// | `Put(V)`  | The inserted/updated entry  | `Inserted` or `Updated` |
+    /// | `Remove`  | The _removed_ entry         | `Removed`               |
+    /// | `Nop`     | The current entry or `None` | `Nop`                   |
+    ///
+    /// **Notes:**
+    ///
+    /// - `Ok(Op::Put(V))`: `PerformedOp::Updated` is returned when the key already
+    ///   existed in the cache. It is _not_ related to whether the value was actually
+    ///   updated or not. It can be replaced with the same value.
+    /// - `Ok(Op::Remove)`: Unlike other ops, the _removed_ entry is returned. If you
+    ///   mix `Remove` with other ops, ensure to check whether the performed op is
+    ///   `Removed` or not.
+    ///
+    /// # Similar Methods
+    ///
+    /// - If you want the `Future` resolve to `Op<V>` instead of `Result<Op<V>>`, use
+    ///   the [`and_compute_with`] method.
+    /// - If you only want to put, use the [`and_upsert_with`] method.
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    /// [`Op<V>`]: ../ops/compute/enum.Op.html
+    /// [`PerformedOp`]: ../ops/compute/enum.PerformedOp.html
+    /// [`and_upsert_with`]: #method.and_upsert_with
+    /// [`and_compute_with`]: #method.and_compute_with
+    ///
+    /// # Example
+    ///
+    /// See [`try_append_value_async.rs`] in the `examples` directory.
+    ///
+    /// [`try_append_value_sync.rs`]:
+    ///     https://github.com/moka-rs/moka/tree/main/examples/try_append_value_sync.rs
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same key are executed
+    /// serially. That is, `and_try_compute_with` calls on the same key never run
+    /// concurrently. The calls are serialized by the order of their invocation. It
+    /// uses a key-level lock to achieve this.
     pub fn and_try_compute_with<F, E>(
         self,
         f: F,
@@ -58,6 +230,78 @@ where
         self.cache.try_compute_with_hash_and_fun(key, self.hash, f)
     }
 
+    /// Performs an upsert of an [`Entry`] by using the given closure `f`. The word
+    /// "upsert" here means "update" or "insert".
+    ///
+    /// The closure `f` should take the current entry of `Option<Entry<K, V>>` for
+    /// the key, and return a new value `V`.
+    ///
+    /// This method works as the followings:
+    ///
+    /// 1. Apply the closure `f` to the current cached `Entry`, and get a new value
+    ///    `V`.
+    /// 2. Upsert the new value to the cache.
+    /// 3. Return the `Entry` having the upserted value.
+    ///
+    /// # Similar Methods
+    ///
+    /// - If you want to optionally upsert, that is to upsert only when certain
+    ///   conditions meet, use the [`and_compute_with`] method.
+    /// - If you try to upsert, that is to make the `Future` resolve to `Result<V>`
+    ///   instead of `V`, and upsert only when resolved to `Ok(V)`, use the
+    ///   [`and_try_compute_with`] method.
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    /// [`and_compute_with`]: #method.and_compute_with
+    /// [`and_try_compute_with`]: #method.and_try_compute_with
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use moka::sync::Cache;
+    ///
+    /// let cache: Cache<String, u64> = Cache::new(100);
+    /// let key = "key1".to_string();
+    ///
+    /// let entry = cache
+    ///     .entry(key.clone())
+    ///     .and_upsert_with(|maybe_entry| {
+    ///         if let Some(entry) = maybe_entry {
+    ///             entry.into_value().saturating_add(1) // Update
+    ///         } else {
+    ///             1 // Insert
+    ///         }
+    ///     });
+    /// // It was not an update.
+    /// assert!(!entry.is_updated());
+    /// assert_eq!(entry.key(), &key);
+    /// assert_eq!(entry.into_value(), 1);
+    ///
+    /// let entry = cache
+    ///     .entry(key.clone())
+    ///     .and_upsert_with(|maybe_entry| {
+    ///         if let Some(entry) = maybe_entry {
+    ///             entry.into_value().saturating_add(1)
+    ///         } else {
+    ///             1
+    ///         }
+    ///     });
+    /// // It was an update.
+    /// assert!(entry.is_updated());
+    /// assert_eq!(entry.key(), &key);
+    /// assert_eq!(entry.into_value(), 2);
+    /// ```
+    ///
+    /// Note: The `is_updated` method of the `Entry` returns `true` when the key
+    /// already existed in the cache. It is not related to whether the value was
+    /// actually updated or not. It can be replaced with the same value.
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same key are executed
+    /// serially. That is, `and_upsert_with` calls on the same key never run
+    /// concurrently. The calls are serialized by the order of their invocation. It
+    /// uses a key-level lock to achieve this.
     pub fn and_upsert_with<F>(self, f: F) -> Entry<K, V>
     where
         F: FnOnce(Option<Entry<K, V>>) -> V,
@@ -353,6 +597,120 @@ where
         }
     }
 
+    /// Performs a compute operation on a cached entry by using the given closure
+    /// `f`. A compute operation is either put, remove or no-operation (nop).
+    ///
+    /// The closure `f` should take the current entry of `Option<Entry<K, V>>` for
+    /// the key, and return an `ops::compute::Op<V>` enum.
+    ///
+    /// This method works as the followings:
+    ///
+    /// 1. Apply the closure `f` to the current cached `Entry`, and get an
+    ///    `ops::compute::Op<V>`.
+    /// 2. Execute the op on the cache:
+    ///    - `Op::Put(V)`: Put the new value `V` to the cache.
+    ///    - `Op::Remove`: Remove the current cached entry.
+    ///    - `Op::Nop`: Do nothing.
+    /// 3. Return an `(Option<Entry>, ops::compute::PerformedOp)` as the followings:
+    ///
+    /// | [`Op<V>`] | `Entry` to return           | [`PerformedOp`]         |
+    /// |:--------- |:--------------------------- |:----------------------- |
+    /// | `Put(V)`  | The inserted/updated entry  | `Inserted` or `Updated` |
+    /// | `Remove`  | The _removed_ entry         | `Removed`               |
+    /// | `Nop`     | The current entry or `None` | `Nop`                   |
+    ///
+    /// **Notes:**
+    ///
+    /// - `Op::Put(V)`: `PerformedOp::Updated` is returned when the key already
+    ///   existed in the cache. It is _not_ related to whether the value was actually
+    ///   updated or not. It can be replaced with the same value.
+    /// - `Op::Remove`: Unlike other ops, the _removed_ entry is returned. If you mix
+    ///   `Remove` with other ops, ensure to check whether the performed op is
+    ///   `Removed` or not.
+    ///
+    /// # Similar Methods
+    ///
+    /// - If you want the `Future` resolve to `Result<Op<V>>` instead of `Op<V>`, and
+    ///   upsert only when resolved to `Ok(V)`, use the [`and_try_compute_with`]
+    ///   method.
+    /// - If you only want to put, use the [`and_upsert_with`] method.
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    /// [`Op<V>`]: ../ops/compute/enum.Op.html
+    /// [`PerformedOp`]: ../ops/compute/enum.PerformedOp.html
+    /// [`and_upsert_with`]: #method.and_upsert_with
+    /// [`and_try_compute_with`]: #method.and_try_compute_with
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use moka::{
+    ///     sync::Cache,
+    ///     ops::compute::{self, PerformedOp},
+    ///     Entry,
+    /// };
+    ///
+    /// let cache: Cache<String, u64> = Cache::new(100);
+    /// let key = "key1".to_string();
+    ///
+    /// /// Increment a cached `u64` counter. If the counter is greater than or
+    /// /// equal to 2, remove it.
+    /// fn inclement_or_remove_counter(
+    ///     cache: &Cache<String, u64>,
+    ///     key: &str,
+    /// ) -> (Option<Entry<String, u64>>, compute::PerformedOp) {
+    ///     cache
+    ///         .entry_by_ref(key)
+    ///         .and_compute_with(|maybe_entry| {
+    ///             if let Some(entry) = maybe_entry {
+    ///                 let counter = entry.into_value();
+    ///                 if counter < 2 {
+    ///                     compute::Op::Put(counter.saturating_add(1)) // Update
+    ///                 } else {
+    ///                     compute::Op::Remove // Remove
+    ///                 }
+    ///             } else {
+    ///                   compute::Op::Put(1) // Insert
+    ///             }
+    ///         })
+    /// }
+    ///
+    /// // This should insert a now counter value 1 to the cache, and return the
+    /// // value with the kind of the operation performed.
+    /// let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key);
+    /// let entry = maybe_entry.expect("An entry should be returned");
+    /// assert_eq!(entry.into_value(), 1);
+    /// assert_eq!(performed_op, PerformedOp::Inserted);
+    ///
+    /// // This should increment the cached counter value by 1.
+    /// let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key);
+    /// let entry = maybe_entry.expect("An entry should be returned");
+    /// assert_eq!(entry.into_value(), 2);
+    /// assert_eq!(performed_op, PerformedOp::Updated);
+    ///
+    /// // This should remove the cached counter from the cache, and returns the
+    /// // _removed_ value.
+    /// let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key);
+    /// let entry = maybe_entry.expect("An entry should be returned");
+    /// assert_eq!(entry.into_value(), 2);
+    /// assert_eq!(performed_op, PerformedOp::Removed);
+    ///
+    /// // The key should no longer exist.
+    /// assert!(!cache.contains_key(&key));
+    ///
+    /// // This should start over; insert a new counter value 1 to the cache.
+    /// let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key);
+    /// let entry = maybe_entry.expect("An entry should be returned");
+    /// assert_eq!(entry.into_value(), 1);
+    /// assert_eq!(performed_op, PerformedOp::Inserted);
+    /// ```
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same key are executed
+    /// serially. That is, `and_compute_with` calls on the same key never run
+    /// concurrently. The calls are serialized by the order of their invocation. It
+    /// uses a key-level lock to achieve this.
     pub fn and_compute_with<F>(self, f: F) -> (Option<Entry<K, V>>, compute::PerformedOp)
     where
         F: FnOnce(Option<Entry<K, V>>) -> compute::Op<V>,
@@ -361,6 +719,64 @@ where
         self.cache.compute_with_hash_and_fun(key, self.hash, f)
     }
 
+    /// Performs a compute operation on a cached entry by using the given closure
+    /// `f`. A compute operation is either put, remove or no-operation (nop).
+    ///
+    /// The closure `f` should take the current entry of `Option<Entry<K, V>>` for
+    /// the key, and return a `Result<ops::compute::Op<V>, E>`.
+    ///
+    /// This method works as the followings:
+    ///
+    /// 1. Apply the closure `f` to the current cached `Entry`, and get a
+    ///    `Result<ops::compute::Op<V>, E>`.
+    /// 2. If resolved to `Err(E)`, return it.
+    /// 3. Else, execute the op on the cache:
+    ///    - `Ok(Op::Put(V))`: Put the new value `V` to the cache.
+    ///    - `Ok(Op::Remove)`: Remove the current cached entry.
+    ///    - `Ok(Op::Nop)`: Do nothing.
+    /// 4. Return a `Ok((Option<Entry>, ops::compute::PerformedOp))` as the
+    ///    followings:
+    ///
+    /// | [`Op<V>`] | `Entry` to return           | [`PerformedOp`]         |
+    /// |:--------- |:--------------------------- |:----------------------- |
+    /// | `Put(V)`  | The inserted/updated entry  | `Inserted` or `Updated` |
+    /// | `Remove`  | The _removed_ entry         | `Removed`               |
+    /// | `Nop`     | The current entry or `None` | `Nop`                   |
+    ///
+    /// **Notes:**
+    ///
+    /// - `Ok(Op::Put(V))`: `PerformedOp::Updated` is returned when the key already
+    ///   existed in the cache. It is _not_ related to whether the value was actually
+    ///   updated or not. It can be replaced with the same value.
+    /// - `Ok(Op::Remove)`: Unlike other ops, the _removed_ entry is returned. If you
+    ///   mix `Remove` with other ops, ensure to check whether the performed op is
+    ///   `Removed` or not.
+    ///
+    /// # Similar Methods
+    ///
+    /// - If you want the `Future` resolve to `Op<V>` instead of `Result<Op<V>>`, use
+    ///   the [`and_compute_with`] method.
+    /// - If you only want to put, use the [`and_upsert_with`] method.
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    /// [`Op<V>`]: ../ops/compute/enum.Op.html
+    /// [`PerformedOp`]: ../ops/compute/enum.PerformedOp.html
+    /// [`and_upsert_with`]: #method.and_upsert_with
+    /// [`and_compute_with`]: #method.and_compute_with
+    ///
+    /// # Example
+    ///
+    /// See [`try_append_value_async.rs`] in the `examples` directory.
+    ///
+    /// [`try_append_value_sync.rs`]:
+    ///     https://github.com/moka-rs/moka/tree/main/examples/try_append_value_sync.rs
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same key are executed
+    /// serially. That is, `and_try_compute_with` calls on the same key never run
+    /// concurrently. The calls are serialized by the order of their invocation. It
+    /// uses a key-level lock to achieve this.
     pub fn and_try_compute_with<F, E>(
         self,
         f: F,
@@ -373,6 +789,78 @@ where
         self.cache.try_compute_with_hash_and_fun(key, self.hash, f)
     }
 
+    /// Performs an upsert of an [`Entry`] by using the given closure `f`. The word
+    /// "upsert" here means "update" or "insert".
+    ///
+    /// The closure `f` should take the current entry of `Option<Entry<K, V>>` for
+    /// the key, and return a new value `V`.
+    ///
+    /// This method works as the followings:
+    ///
+    /// 1. Apply the closure `f` to the current cached `Entry`, and get a new value
+    ///    `V`.
+    /// 2. Upsert the new value to the cache.
+    /// 3. Return the `Entry` having the upserted value.
+    ///
+    /// # Similar Methods
+    ///
+    /// - If you want to optionally upsert, that is to upsert only when certain
+    ///   conditions meet, use the [`and_compute_with`] method.
+    /// - If you try to upsert, that is to make the `Future` resolve to `Result<V>`
+    ///   instead of `V`, and upsert only when resolved to `Ok(V)`, use the
+    ///   [`and_try_compute_with`] method.
+    ///
+    /// [`Entry`]: ../struct.Entry.html
+    /// [`and_compute_with`]: #method.and_compute_with
+    /// [`and_try_compute_with`]: #method.and_try_compute_with
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use moka::sync::Cache;
+    ///
+    /// let cache: Cache<String, u64> = Cache::new(100);
+    /// let key = "key1".to_string();
+    ///
+    /// let entry = cache
+    ///     .entry_by_ref(&key)
+    ///     .and_upsert_with(|maybe_entry| {
+    ///         if let Some(entry) = maybe_entry {
+    ///             entry.into_value().saturating_add(1) // Update
+    ///         } else {
+    ///             1 // Insert
+    ///         }
+    ///     });
+    /// // It was not an update.
+    /// assert!(!entry.is_updated());
+    /// assert_eq!(entry.key(), &key);
+    /// assert_eq!(entry.into_value(), 1);
+    ///
+    /// let entry = cache
+    ///     .entry_by_ref(&key)
+    ///     .and_upsert_with(|maybe_entry| {
+    ///         if let Some(entry) = maybe_entry {
+    ///             entry.into_value().saturating_add(1)
+    ///         } else {
+    ///             1
+    ///         }
+    ///     });
+    /// // It was an update.
+    /// assert!(entry.is_updated());
+    /// assert_eq!(entry.key(), &key);
+    /// assert_eq!(entry.into_value(), 2);
+    /// ```
+    ///
+    /// Note: The `is_updated` method of the `Entry` returns `true` when the key
+    /// already existed in the cache. It is not related to whether the value was
+    /// actually updated or not. It can be replaced with the same value.
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same key are executed
+    /// serially. That is, `and_upsert_with` calls on the same key never run
+    /// concurrently. The calls are serialized by the order of their invocation. It
+    /// uses a key-level lock to achieve this.
     pub fn and_upsert_with<F>(self, f: F) -> Entry<K, V>
     where
         F: FnOnce(Option<Entry<K, V>>) -> V,

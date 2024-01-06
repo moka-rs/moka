@@ -1,16 +1,15 @@
 //! This example demonstrates how to append an `i32` value to a cached `Vec<i32>`
 //! value. It uses the `and_upsert_with` method of `Cache`.
 
-use std::{io::Cursor, pin::Pin, sync::Arc};
+use std::{
+    io::{self, Cursor, Read},
+    sync::{Arc, RwLock},
+};
 
 use moka::{
-    future::Cache,
     ops::compute::{self, PerformedOp},
+    sync::Cache,
     Entry,
-};
-use tokio::{
-    io::{AsyncRead, AsyncReadExt},
-    sync::RwLock,
 };
 
 /// The type of the cache key.
@@ -35,39 +34,37 @@ type Key = i32;
 /// threads.
 type Value = Arc<RwLock<String>>;
 
-#[tokio::main]
-async fn main() -> Result<(), tokio::io::Error> {
+fn main() -> Result<(), tokio::io::Error> {
     let cache: Cache<Key, Value> = Cache::new(100);
 
     let key = 0;
 
     // We are going read a byte at a time from a byte string (`[u8; 3]`).
-    let reader = Cursor::new(b"abc");
-    tokio::pin!(reader);
+    let mut reader = Cursor::new(b"abc");
 
     // Read the first char 'a' from the reader, and insert a string "a" to the cache.
-    let (maybe_entry, performed_op) = append_to_cached_string(&cache, key, &mut reader).await?;
+    let (maybe_entry, performed_op) = append_to_cached_string(&cache, key, &mut reader)?;
     let entry = maybe_entry.expect("An entry should be returned");
-    assert_eq!(*entry.into_value().read().await, "a");
+    assert_eq!(*entry.into_value().read().unwrap(), "a");
     assert_eq!(performed_op, PerformedOp::Inserted);
 
     // Read next char 'b' from the reader, and append it the cached string.
-    let (maybe_entry, performed_op) = append_to_cached_string(&cache, key, &mut reader).await?;
+    let (maybe_entry, performed_op) = append_to_cached_string(&cache, key, &mut reader)?;
     let entry = maybe_entry.expect("An entry should be returned");
-    assert_eq!(*entry.into_value().read().await, "ab");
+    assert_eq!(*entry.into_value().read().unwrap(), "ab");
     assert_eq!(performed_op, PerformedOp::Updated);
 
     // Read next char 'c' from the reader, and append it the cached string.
-    let (maybe_entry, performed_op) = append_to_cached_string(&cache, key, &mut reader).await?;
+    let (maybe_entry, performed_op) = append_to_cached_string(&cache, key, &mut reader)?;
     let entry = maybe_entry.expect("An entry should be returned");
-    assert_eq!(*entry.into_value().read().await, "abc");
+    assert_eq!(*entry.into_value().read().unwrap(), "abc");
     assert_eq!(performed_op, PerformedOp::Updated);
 
     // Reading should fail as no more char left.
-    let err = append_to_cached_string(&cache, key, &mut reader).await;
+    let err = append_to_cached_string(&cache, key, &mut reader);
     assert_eq!(
         err.expect_err("An error should be returned").kind(),
-        tokio::io::ErrorKind::UnexpectedEof
+        io::ErrorKind::UnexpectedEof
     );
 
     Ok(())
@@ -79,31 +76,36 @@ async fn main() -> Result<(), tokio::io::Error> {
 /// If reading from the `reader` fails with an IO error, it returns the error.
 ///
 /// This method uses cache's `and_try_compute_with` method.
-async fn append_to_cached_string(
+fn append_to_cached_string(
     cache: &Cache<Key, Value>,
     key: Key,
-    reader: &mut Pin<&mut impl AsyncRead>,
-) -> Result<(Option<Entry<Key, Value>>, PerformedOp), tokio::io::Error> {
-    cache
-        .entry(key)
-        .and_try_compute_with(|maybe_entry| async {
-            // Read a char from the reader.
-            let byte = reader.read_u8().await?;
-            let char =
-                char::from_u32(byte as u32).expect("An ASCII byte should be converted into a char");
+    reader: &mut impl Read,
+) -> io::Result<(Option<Entry<Key, Value>>, PerformedOp)> {
+    cache.entry(key).and_try_compute_with(|maybe_entry| {
+        // Read a char from the reader.
+        let mut buf = [0u8];
+        let len = reader.read(&mut buf)?;
+        if len == 0 {
+            // No more char left.
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "No more char left",
+            ));
+        }
+        let char =
+            char::from_u32(buf[0] as u32).expect("An ASCII byte should be converted into a char");
 
-            // Check if the entry already exists.
-            if let Some(entry) = maybe_entry {
-                // The entry exists, append the char to the Vec.
-                let v = entry.into_value();
-                v.write().await.push(char);
-                Ok(compute::Op::Put(v))
-            } else {
-                // The entry does not exist, insert a new Vec containing
-                // the char.
-                let v = RwLock::new(String::from(char));
-                Ok(compute::Op::Put(Arc::new(v)))
-            }
-        })
-        .await
+        // Check if the entry already exists.
+        if let Some(entry) = maybe_entry {
+            // The entry exists, append the char to the Vec.
+            let v = entry.into_value();
+            v.write().unwrap().push(char);
+            Ok(compute::Op::Put(v))
+        } else {
+            // The entry does not exist, insert a new Vec containing
+            // the char.
+            let v = RwLock::new(String::from(char));
+            Ok(compute::Op::Put(Arc::new(v)))
+        }
+    })
 }
