@@ -54,22 +54,16 @@ where
     ///    - `Op::Put(V)`: Put the new value `V` to the cache.
     ///    - `Op::Remove`: Remove the current cached entry.
     ///    - `Op::Nop`: Do nothing.
-    /// 4. Return an `(Option<Entry>, ops::compute::PerformedOp)` as the followings:
+    /// 4. Return an `ops::compute::CompResult<K, V>` as the followings:
     ///
-    /// | [`Op<V>`] | `Entry` to return           | [`PerformedOp`]         |
-    /// |:--------- |:--------------------------- |:----------------------- |
-    /// | `Put(V)`  | The inserted/updated entry  | `Inserted` or `Updated` |
-    /// | `Remove`  | The _removed_ entry         | `Removed`               |
-    /// | `Nop`     | The current entry or `None` | `Nop`                   |
-    ///
-    /// **Notes:**
-    ///
-    /// - `Op::Put(V)`: `PerformedOp::Updated` is returned when the key already
-    ///   existed in the cache. It is _not_ related to whether the value was actually
-    ///   updated or not. It can be replaced with the same value.
-    /// - `Op::Remove`: Unlike other ops, the _removed_ entry is returned. If you mix
-    ///   `Remove` with other ops, ensure to check whether the performed op is
-    ///   `Removed` or not.
+    /// | [`Op<V>`] | [`Entry<K, V>`] already exists? | [`CompResult<K, V>`] | Notes |
+    /// |:--------- |:--- |:--------------------------- |:------------------------------- |
+    /// | `Put(V)`  | no  | `Inserted(Entry<K, V>)`     | The new entry is returned.      |
+    /// | `Put(V)`  | yes | `ReplacedWith(Entry<K, V>)` | The new entry is returned.      |
+    /// | `Remove`  | no  | `StillNone(Arc<K>)`         |                                 |
+    /// | `Remove`  | yes | `Removed(Entry<K, V>)`      | The removed entry is returned.  |
+    /// | `Nop`     | no  | `StillNone(Arc<K>)`         |                                 |
+    /// | `Nop`     | yes | `Unchanged(Entry<K, V>)`    | The existing entry is returned. |
     ///
     /// # Similar Methods
     ///
@@ -78,9 +72,9 @@ where
     ///   method.
     /// - If you only want to put, use the [`and_upsert_with`] method.
     ///
-    /// [`Entry`]: ../struct.Entry.html
+    /// [`Entry<K, V>`]: ../struct.Entry.html
     /// [`Op<V>`]: ../ops/compute/enum.Op.html
-    /// [`PerformedOp`]: ../ops/compute/enum.PerformedOp.html
+    /// [`CompResult<K, V>`]: ../ops/compute/enum.CompResult.html
     /// [`and_upsert_with`]: #method.and_upsert_with
     /// [`and_try_compute_with`]: #method.and_try_compute_with
     ///
@@ -95,8 +89,7 @@ where
     ///
     /// use moka::{
     ///     future::Cache,
-    ///     ops::compute::{self, PerformedOp},
-    ///     Entry,
+    ///     ops::compute::{CompResult, Op},
     /// };
     ///
     /// #[tokio::main]
@@ -109,19 +102,19 @@ where
     ///     async fn inclement_or_remove_counter(
     ///         cache: &Cache<String, u64>,
     ///         key: &str,
-    ///     ) -> (Option<Entry<String, u64>>, compute::PerformedOp) {
+    ///     ) -> CompResult<String, u64> {
     ///         cache
     ///             .entry(key.to_string())
     ///             .and_compute_with(|maybe_entry| {
     ///                 let op = if let Some(entry) = maybe_entry {
     ///                     let counter = entry.into_value();
     ///                     if counter < 2 {
-    ///                         compute::Op::Put(counter.saturating_add(1)) // Update
+    ///                         Op::Put(counter.saturating_add(1)) // Update
     ///                     } else {
-    ///                         compute::Op::Remove // Remove
+    ///                         Op::Remove
     ///                     }
     ///                 } else {
-    ///                       compute::Op::Put(1) // Insert
+    ///                       Op::Put(1) // Insert
     ///                 };
     ///                 // Return a Future that is resolved to `op` immediately.
     ///                 std::future::ready(op)
@@ -129,34 +122,38 @@ where
     ///             .await
     ///     }
     ///
-    ///     // This should insert a now counter value 1 to the cache, and return the
+    ///     // This should insert a new counter value 1 to the cache, and return the
     ///     // value with the kind of the operation performed.
-    ///     let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
-    ///     let entry = maybe_entry.expect("An entry should be returned");
+    ///     let result = inclement_or_remove_counter(&cache, &key).await;
+    ///     let CompResult::Inserted(entry) = result else {
+    ///         panic!("`Inserted` should be returned: {result:?}");
+    ///     };
     ///     assert_eq!(entry.into_value(), 1);
-    ///     assert_eq!(performed_op, PerformedOp::Inserted);
     ///
     ///     // This should increment the cached counter value by 1.
-    ///     let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
-    ///     let entry = maybe_entry.expect("An entry should be returned");
+    ///     let result = inclement_or_remove_counter(&cache, &key).await;
+    ///     let CompResult::ReplacedWith(entry) = result else {
+    ///         panic!("`ReplacedWith` should be returned: {result:?}");
+    ///     };
     ///     assert_eq!(entry.into_value(), 2);
-    ///     assert_eq!(performed_op, PerformedOp::Updated);
     ///
     ///     // This should remove the cached counter from the cache, and returns the
     ///     // _removed_ value.
-    ///     let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
-    ///     let entry = maybe_entry.expect("An entry should be returned");
+    ///     let result = inclement_or_remove_counter(&cache, &key).await;
+    ///     let CompResult::Removed(entry) = result else {
+    ///         panic!("`Removed` should be returned: {result:?}");
+    ///     };
     ///     assert_eq!(entry.into_value(), 2);
-    ///     assert_eq!(performed_op, PerformedOp::Removed);
     ///
-    ///     // The key should no longer exist.
+    ///     // The key should not exist.
     ///     assert!(!cache.contains_key(&key));
     ///
     ///     // This should start over; insert a new counter value 1 to the cache.
-    ///     let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
-    ///     let entry = maybe_entry.expect("An entry should be returned");
+    ///     let result = inclement_or_remove_counter(&cache, &key).await;
+    ///     let CompResult::Inserted(entry) = result else {
+    ///         panic!("`Inserted` should be returned: {result:?}");
+    ///     };
     ///     assert_eq!(entry.into_value(), 1);
-    ///     assert_eq!(performed_op, PerformedOp::Inserted);
     /// }
     /// ```
     ///
@@ -166,7 +163,7 @@ where
     /// serially. That is, `and_compute_with` calls on the same key never run
     /// concurrently. The calls are serialized by the order of their invocation. It
     /// uses a key-level lock to achieve this.
-    pub async fn and_compute_with<F, Fut>(self, f: F) -> (Option<Entry<K, V>>, compute::PerformedOp)
+    pub async fn and_compute_with<F, Fut>(self, f: F) -> compute::CompResult<K, V>
     where
         F: FnOnce(Option<Entry<K, V>>) -> Fut,
         Fut: Future<Output = compute::Op<V>>,
@@ -193,23 +190,16 @@ where
     ///    - `Ok(Op::Put(V))`: Put the new value `V` to the cache.
     ///    - `Ok(Op::Remove)`: Remove the current cached entry.
     ///    - `Ok(Op::Nop)`: Do nothing.
-    /// 5. Return a `Ok((Option<Entry>, ops::compute::PerformedOp))` as the
-    ///    followings:
+    /// 5. Return an `Ok(ops::compute::CompResult<K, V>)` as the followings:
     ///
-    /// | [`Op<V>`] | `Entry` to return           | [`PerformedOp`]         |
-    /// |:--------- |:--------------------------- |:----------------------- |
-    /// | `Put(V)`  | The inserted/updated entry  | `Inserted` or `Updated` |
-    /// | `Remove`  | The _removed_ entry         | `Removed`               |
-    /// | `Nop`     | The current entry or `None` | `Nop`                   |
-    ///
-    /// **Notes:**
-    ///
-    /// - `Ok(Op::Put(V))`: `PerformedOp::Updated` is returned when the key already
-    ///   existed in the cache. It is _not_ related to whether the value was actually
-    ///   updated or not. It can be replaced with the same value.
-    /// - `Ok(Op::Remove)`: Unlike other ops, the _removed_ entry is returned. If you
-    ///   mix `Remove` with other ops, ensure to check whether the performed op is
-    ///   `Removed` or not.
+    /// | [`Op<V>`] | [`Entry<K, V>`] already exists? | [`CompResult<K, V>`] | Notes |
+    /// |:--------- |:--- |:--------------------------- |:------------------------------- |
+    /// | `Put(V)`  | no  | `Inserted(Entry<K, V>)`     | The new entry is returned.      |
+    /// | `Put(V)`  | yes | `ReplacedWith(Entry<K, V>)` | The new entry is returned.      |
+    /// | `Remove`  | no  | `StillNone(Arc<K>)`         |                                 |
+    /// | `Remove`  | yes | `Removed(Entry<K, V>)`      | The removed entry is returned.  |
+    /// | `Nop`     | no  | `StillNone(Arc<K>)`         |                                 |
+    /// | `Nop`     | yes | `Unchanged(Entry<K, V>)`    | The existing entry is returned. |
     ///
     /// # Similar Methods
     ///
@@ -217,9 +207,9 @@ where
     ///   the [`and_compute_with`] method.
     /// - If you only want to put, use the [`and_upsert_with`] method.
     ///
-    /// [`Entry`]: ../struct.Entry.html
+    /// [`Entry<K, V>`]: ../struct.Entry.html
     /// [`Op<V>`]: ../ops/compute/enum.Op.html
-    /// [`PerformedOp`]: ../ops/compute/enum.PerformedOp.html
+    /// [`CompResult<K, V>`]: ../ops/compute/enum.CompResult.html
     /// [`and_upsert_with`]: #method.and_upsert_with
     /// [`and_compute_with`]: #method.and_compute_with
     ///
@@ -236,10 +226,7 @@ where
     /// serially. That is, `and_try_compute_with` calls on the same key never run
     /// concurrently. The calls are serialized by the order of their invocation. It
     /// uses a key-level lock to achieve this.
-    pub async fn and_try_compute_with<F, Fut, E>(
-        self,
-        f: F,
-    ) -> Result<(Option<Entry<K, V>>, compute::PerformedOp), E>
+    pub async fn and_try_compute_with<F, Fut, E>(self, f: F) -> Result<compute::CompResult<K, V>, E>
     where
         F: FnOnce(Option<Entry<K, V>>) -> Fut,
         Fut: Future<Output = Result<compute::Op<V>, E>>,
@@ -305,7 +292,7 @@ where
     ///         })
     ///         .await;
     ///     // It was not an update.
-    ///     assert!(!entry.is_updated());
+    ///     assert!(!entry.is_old_value_replaced());
     ///     assert_eq!(entry.key(), &key);
     ///     assert_eq!(entry.into_value(), 1);
     ///
@@ -321,15 +308,11 @@ where
     ///         })
     ///         .await;
     ///     // It was an update.
-    ///     assert!(entry.is_updated());
+    ///     assert!(entry.is_old_value_replaced());
     ///     assert_eq!(entry.key(), &key);
     ///     assert_eq!(entry.into_value(), 2);
     /// }
     /// ```
-    ///
-    /// Note: The `is_updated` method of the `Entry` returns `true` when the key
-    /// already existed in the cache. It is not related to whether the value was
-    /// actually updated or not. It can be replaced with the same value.
     ///
     /// # Concurrent calls on the same key
     ///
@@ -711,22 +694,16 @@ where
     ///    - `Op::Put(V)`: Put the new value `V` to the cache.
     ///    - `Op::Remove`: Remove the current cached entry.
     ///    - `Op::Nop`: Do nothing.
-    /// 4. Return an `(Option<Entry>, ops::compute::PerformedOp)` as the followings:
+    /// 4. Return an `ops::compute::CompResult<K, V>` as the followings:
     ///
-    /// | [`Op<V>`] | `Entry` to return           | [`PerformedOp`]         |
-    /// |:--------- |:--------------------------- |:----------------------- |
-    /// | `Put(V)`  | The inserted/updated entry  | `Inserted` or `Updated` |
-    /// | `Remove`  | The _removed_ entry         | `Removed`               |
-    /// | `Nop`     | The current entry or `None` | `Nop`                   |
-    ///
-    /// **Notes:**
-    ///
-    /// - `Op::Put(V)`: `PerformedOp::Updated` is returned when the key already
-    ///   existed in the cache. It is _not_ related to whether the value was actually
-    ///   updated or not. It can be replaced with the same value.
-    /// - `Op::Remove`: Unlike other ops, the _removed_ entry is returned. If you mix
-    ///   `Remove` with other ops, ensure to check whether the performed op is
-    ///   `Removed` or not.
+    /// | [`Op<V>`] | [`Entry<K, V>`] already exists? | [`CompResult<K, V>`] | Notes |
+    /// |:--------- |:--- |:--------------------------- |:------------------------------- |
+    /// | `Put(V)`  | no  | `Inserted(Entry<K, V>)`     | The new entry is returned.      |
+    /// | `Put(V)`  | yes | `ReplacedWith(Entry<K, V>)` | The new entry is returned.      |
+    /// | `Remove`  | no  | `StillNone(Arc<K>)`         |                                 |
+    /// | `Remove`  | yes | `Removed(Entry<K, V>)`      | The removed entry is returned.  |
+    /// | `Nop`     | no  | `StillNone(Arc<K>)`         |                                 |
+    /// | `Nop`     | yes | `Unchanged(Entry<K, V>)`    | The existing entry is returned. |
     ///
     /// # Similar Methods
     ///
@@ -735,9 +712,9 @@ where
     ///   method.
     /// - If you only want to put, use the [`and_upsert_with`] method.
     ///
-    /// [`Entry`]: ../struct.Entry.html
+    /// [`Entry<K, V>`]: ../struct.Entry.html
     /// [`Op<V>`]: ../ops/compute/enum.Op.html
-    /// [`PerformedOp`]: ../ops/compute/enum.PerformedOp.html
+    /// [`CompResult<K, V>`]: ../ops/compute/enum.CompResult.html
     /// [`and_upsert_with`]: #method.and_upsert_with
     /// [`and_try_compute_with`]: #method.and_try_compute_with
     ///
@@ -752,8 +729,7 @@ where
     ///
     /// use moka::{
     ///     future::Cache,
-    ///     ops::compute::{self, PerformedOp},
-    ///     Entry,
+    ///     ops::compute::{CompResult, Op},
     /// };
     ///
     /// #[tokio::main]
@@ -766,19 +742,19 @@ where
     ///     async fn inclement_or_remove_counter(
     ///         cache: &Cache<String, u64>,
     ///         key: &str,
-    ///     ) -> (Option<Entry<String, u64>>, compute::PerformedOp) {
+    ///     ) -> CompResult<String, u64> {
     ///         cache
     ///             .entry_by_ref(key)
     ///             .and_compute_with(|maybe_entry| {
     ///                 let op = if let Some(entry) = maybe_entry {
     ///                     let counter = entry.into_value();
     ///                     if counter < 2 {
-    ///                         compute::Op::Put(counter.saturating_add(1)) // Update
+    ///                         Op::Put(counter.saturating_add(1)) // Update
     ///                     } else {
-    ///                         compute::Op::Remove // Remove
+    ///                         Op::Remove
     ///                     }
     ///                 } else {
-    ///                       compute::Op::Put(1) // Insert
+    ///                       Op::Put(1) // Insert
     ///                 };
     ///                 // Return a Future that is resolved to `op` immediately.
     ///                 std::future::ready(op)
@@ -788,32 +764,36 @@ where
     ///
     ///     // This should insert a now counter value 1 to the cache, and return the
     ///     // value with the kind of the operation performed.
-    ///     let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
-    ///     let entry = maybe_entry.expect("An entry should be returned");
+    ///     let result = inclement_or_remove_counter(&cache, &key).await;
+    ///     let CompResult::Inserted(entry) = result else {
+    ///         panic!("`Inserted` should be returned: {result:?}");
+    ///     };
     ///     assert_eq!(entry.into_value(), 1);
-    ///     assert_eq!(performed_op, PerformedOp::Inserted);
     ///
     ///     // This should increment the cached counter value by 1.
-    ///     let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
-    ///     let entry = maybe_entry.expect("An entry should be returned");
+    ///     let result = inclement_or_remove_counter(&cache, &key).await;
+    ///     let CompResult::ReplacedWith(entry) = result else {
+    ///         panic!("`ReplacedWith` should be returned: {result:?}");
+    ///     };
     ///     assert_eq!(entry.into_value(), 2);
-    ///     assert_eq!(performed_op, PerformedOp::Updated);
     ///
     ///     // This should remove the cached counter from the cache, and returns the
     ///     // _removed_ value.
-    ///     let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
-    ///     let entry = maybe_entry.expect("An entry should be returned");
+    ///     let result = inclement_or_remove_counter(&cache, &key).await;
+    ///     let CompResult::Removed(entry) = result else {
+    ///         panic!("`Removed` should be returned: {result:?}");
+    ///     };
     ///     assert_eq!(entry.into_value(), 2);
-    ///     assert_eq!(performed_op, PerformedOp::Removed);
     ///
     ///     // The key should no longer exist.
     ///     assert!(!cache.contains_key(key));
     ///
     ///     // This should start over; insert a new counter value 1 to the cache.
-    ///     let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
-    ///     let entry = maybe_entry.expect("An entry should be returned");
+    ///     let result = inclement_or_remove_counter(&cache, &key).await;
+    ///     let CompResult::Inserted(entry) = result else {
+    ///         panic!("`Inserted` should be returned: {result:?}");
+    ///     };
     ///     assert_eq!(entry.into_value(), 1);
-    ///     assert_eq!(performed_op, PerformedOp::Inserted);
     /// }
     /// ```
     ///
@@ -823,7 +803,7 @@ where
     /// serially. That is, `and_compute_with` calls on the same key never run
     /// concurrently. The calls are serialized by the order of their invocation. It
     /// uses a key-level lock to achieve this.
-    pub async fn and_compute_with<F, Fut>(self, f: F) -> (Option<Entry<K, V>>, compute::PerformedOp)
+    pub async fn and_compute_with<F, Fut>(self, f: F) -> compute::CompResult<K, V>
     where
         F: FnOnce(Option<Entry<K, V>>) -> Fut,
         Fut: Future<Output = compute::Op<V>>,
@@ -850,23 +830,16 @@ where
     ///    - `Ok(Op::Put(V))`: Put the new value `V` to the cache.
     ///    - `Ok(Op::Remove)`: Remove the current cached entry.
     ///    - `Ok(Op::Nop)`: Do nothing.
-    /// 5. Return a `Ok((Option<Entry>, ops::compute::PerformedOp))` as the
-    ///    followings:
+    /// 5. Return an `Ok(ops::compute::CompResult<K, V>)` as the followings:
     ///
-    /// | [`Op<V>`] | `Entry` to return           | [`PerformedOp`]         |
-    /// |:--------- |:--------------------------- |:----------------------- |
-    /// | `Put(V)`  | The inserted/updated entry  | `Inserted` or `Updated` |
-    /// | `Remove`  | The _removed_ entry         | `Removed`               |
-    /// | `Nop`     | The current entry or `None` | `Nop`                   |
-    ///
-    /// **Notes:**
-    ///
-    /// - `Ok(Op::Put(V))`: `PerformedOp::Updated` is returned when the key already
-    ///   existed in the cache. It is _not_ related to whether the value was actually
-    ///   updated or not. It can be replaced with the same value.
-    /// - `Ok(Op::Remove)`: Unlike other ops, the _removed_ entry is returned. If you
-    ///   mix `Remove` with other ops, ensure to check whether the performed op is
-    ///   `Removed` or not.
+    /// | [`Op<V>`] | [`Entry<K, V>`] already exists? | [`CompResult<K, V>`] | Notes |
+    /// |:--------- |:--- |:--------------------------- |:------------------------------- |
+    /// | `Put(V)`  | no  | `Inserted(Entry<K, V>)`     | The new entry is returned.      |
+    /// | `Put(V)`  | yes | `ReplacedWith(Entry<K, V>)` | The new entry is returned.      |
+    /// | `Remove`  | no  | `StillNone(Arc<K>)`         |                                 |
+    /// | `Remove`  | yes | `Removed(Entry<K, V>)`      | The removed entry is returned.  |
+    /// | `Nop`     | no  | `StillNone(Arc<K>)`         |                                 |
+    /// | `Nop`     | yes | `Unchanged(Entry<K, V>)`    | The existing entry is returned. |
     ///
     /// # Similar Methods
     ///
@@ -874,9 +847,9 @@ where
     ///   the [`and_compute_with`] method.
     /// - If you only want to put, use the [`and_upsert_with`] method.
     ///
-    /// [`Entry`]: ../struct.Entry.html
+    /// [`Entry<K, V>`]: ../struct.Entry.html
     /// [`Op<V>`]: ../ops/compute/enum.Op.html
-    /// [`PerformedOp`]: ../ops/compute/enum.PerformedOp.html
+    /// [`CompResult<K, V>`]: ../ops/compute/enum.CompResult.html
     /// [`and_upsert_with`]: #method.and_upsert_with
     /// [`and_compute_with`]: #method.and_compute_with
     ///
@@ -893,10 +866,7 @@ where
     /// serially. That is, `and_try_compute_with` calls on the same key never run
     /// concurrently. The calls are serialized by the order of their invocation. It
     /// uses a key-level lock to achieve this.
-    pub async fn and_try_compute_with<F, Fut, E>(
-        self,
-        f: F,
-    ) -> Result<(Option<Entry<K, V>>, compute::PerformedOp), E>
+    pub async fn and_try_compute_with<F, Fut, E>(self, f: F) -> Result<compute::CompResult<K, V>, E>
     where
         F: FnOnce(Option<Entry<K, V>>) -> Fut,
         Fut: Future<Output = Result<compute::Op<V>, E>>,
@@ -962,7 +932,7 @@ where
     ///         })
     ///         .await;
     ///     // It was not an update.
-    ///     assert!(!entry.is_updated());
+    ///     assert!(!entry.is_old_value_replaced());
     ///     assert_eq!(entry.key(), &key);
     ///     assert_eq!(entry.into_value(), 1);
     ///
@@ -978,15 +948,11 @@ where
     ///         })
     ///         .await;
     ///     // It was an update.
-    ///     assert!(entry.is_updated());
+    ///     assert!(entry.is_old_value_replaced());
     ///     assert_eq!(entry.key(), &key);
     ///     assert_eq!(entry.into_value(), 2);
     /// }
     /// ```
-    ///
-    /// Note: The `is_updated` method of the `Entry` returns `true` when the key
-    /// already existed in the cache. It is not related to whether the value was
-    /// actually updated or not. It can be replaced with the same value.
     ///
     /// # Concurrent calls on the same key
     ///

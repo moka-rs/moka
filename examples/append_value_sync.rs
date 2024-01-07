@@ -26,17 +26,17 @@ fn main() {
 
     let entry = append_to_cached_vec(&cache, &key, 1);
     assert!(entry.is_fresh());
-    assert!(!entry.is_updated());
+    assert!(!entry.is_old_value_replaced());
     assert_eq!(*entry.into_value().read().unwrap(), &[1]);
 
     let entry = append_to_cached_vec(&cache, &key, 2);
     assert!(entry.is_fresh());
-    assert!(entry.is_updated());
+    assert!(entry.is_old_value_replaced());
     assert_eq!(*entry.into_value().read().unwrap(), &[1, 2]);
 
     let entry = append_to_cached_vec(&cache, &key, 3);
     assert!(entry.is_fresh());
-    assert!(entry.is_updated());
+    assert!(entry.is_old_value_replaced());
     assert_eq!(*entry.into_value().read().unwrap(), &[1, 2, 3]);
 }
 

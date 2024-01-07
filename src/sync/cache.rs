@@ -1,5 +1,5 @@
 use super::{
-    value_initializer::{ComputeResult, GetOrInsert, InitResult, ValueInitializer},
+    value_initializer::{GetOrInsert, InitResult, ValueInitializer},
     CacheBuilder, OwnedKeyEntrySelector, RefKeyEntrySelector,
 };
 use crate::{
@@ -10,7 +10,7 @@ use crate::{
         time::Instant,
     },
     notification::EvictionListener,
-    ops::compute,
+    ops::compute::{self, CompResult},
     policy::ExpirationPolicy,
     sync::{Iter, PredicateId},
     sync_base::{
@@ -1508,39 +1508,17 @@ where
         key: Arc<K>,
         hash: u64,
         f: F,
-    ) -> (Option<Entry<K, V>>, compute::PerformedOp)
+    ) -> compute::CompResult<K, V>
     where
         F: FnOnce(Option<Entry<K, V>>) -> compute::Op<V>,
     {
         let post_init = ValueInitializer::<K, V, S>::post_init_for_compute_with;
-
         match self
             .value_initializer
-            .try_compute(&key, hash, self, f, post_init, true)
+            .try_compute(key, hash, self, f, post_init, true)
         {
-            ComputeResult::Nop(maybe_value) => {
-                let maybe_entry =
-                    maybe_value.map(|value| Entry::new(Some(key), value, false, false));
-                (maybe_entry, compute::PerformedOp::Nop)
-            }
-            ComputeResult::Inserted(value) => {
-                crossbeam_epoch::pin().flush();
-                let entry = Entry::new(Some(key), value, true, false);
-                (Some(entry), compute::PerformedOp::Inserted)
-            }
-            ComputeResult::Updated(value) => {
-                crossbeam_epoch::pin().flush();
-                let entry = Entry::new(Some(key), value, true, true);
-                (Some(entry), compute::PerformedOp::Updated)
-            }
-            ComputeResult::Removed(value) => {
-                crossbeam_epoch::pin().flush();
-                let entry = Entry::new(Some(key), value, false, false);
-                (Some(entry), compute::PerformedOp::Removed)
-            }
-            ComputeResult::EvalErr(_) => {
-                unreachable!()
-            }
+            Ok(result) => result,
+            Err(_) => unreachable!(),
         }
     }
 
@@ -1549,39 +1527,14 @@ where
         key: Arc<K>,
         hash: u64,
         f: F,
-    ) -> Result<(Option<Entry<K, V>>, compute::PerformedOp), E>
+    ) -> Result<compute::CompResult<K, V>, E>
     where
         F: FnOnce(Option<Entry<K, V>>) -> Result<compute::Op<V>, E>,
         E: Send + Sync + 'static,
     {
         let post_init = ValueInitializer::<K, V, S>::post_init_for_try_compute_with;
-
-        match self
-            .value_initializer
-            .try_compute(&key, hash, self, f, post_init, true)
-        {
-            ComputeResult::Nop(maybe_value) => {
-                let maybe_entry =
-                    maybe_value.map(|value| Entry::new(Some(key), value, false, false));
-                Ok((maybe_entry, compute::PerformedOp::Nop))
-            }
-            ComputeResult::Inserted(value) => {
-                crossbeam_epoch::pin().flush();
-                let entry = Entry::new(Some(key), value, true, false);
-                Ok((Some(entry), compute::PerformedOp::Inserted))
-            }
-            ComputeResult::Updated(value) => {
-                crossbeam_epoch::pin().flush();
-                let entry = Entry::new(Some(key), value, true, true);
-                Ok((Some(entry), compute::PerformedOp::Updated))
-            }
-            ComputeResult::Removed(value) => {
-                crossbeam_epoch::pin().flush();
-                let entry = Entry::new(Some(key), value, false, false);
-                Ok((Some(entry), compute::PerformedOp::Removed))
-            }
-            ComputeResult::EvalErr(e) => Err(e),
-        }
+        self.value_initializer
+            .try_compute(key, hash, self, f, post_init, true)
     }
 
     pub(crate) fn upsert_with_hash_and_fun<F>(&self, key: Arc<K>, hash: u64, f: F) -> Entry<K, V>
@@ -1589,22 +1542,12 @@ where
         F: FnOnce(Option<Entry<K, V>>) -> V,
     {
         let post_init = ValueInitializer::<K, V, S>::post_init_for_upsert_with;
-
         match self
             .value_initializer
-            .try_compute(&key, hash, self, f, post_init, false)
+            .try_compute(key, hash, self, f, post_init, false)
         {
-            ComputeResult::Inserted(value) => {
-                crossbeam_epoch::pin().flush();
-                Entry::new(Some(key), value, true, false)
-            }
-            ComputeResult::Updated(value) => {
-                crossbeam_epoch::pin().flush();
-                Entry::new(Some(key), value, true, true)
-            }
-            ComputeResult::Nop(_) | ComputeResult::Removed(_) | ComputeResult::EvalErr(_) => {
-                unreachable!()
-            }
+            Ok(CompResult::Inserted(entry) | CompResult::ReplacedWith(entry)) => entry,
+            _ => unreachable!(),
         }
     }
 
@@ -4203,60 +4146,45 @@ mod tests {
             })
         };
 
-        let (ent1, op1) = thread1.join().expect("Thread 1 should finish");
-        let (ent2, op2) = thread2.join().expect("Thread 2 should finish");
-        let (ent3, op3) = thread3.join().expect("Thread 3 should finish");
-        let (ent4, op4) = thread4.join().expect("Thread 4 should finish");
-        let (ent5, op5) = thread5.join().expect("Thread 5 should finish");
-        let (ent6, op6) = thread6.join().expect("Thread 6 should finish");
-        assert_eq!(op1, compute::PerformedOp::Inserted);
-        assert_eq!(op2, compute::PerformedOp::Updated);
-        assert_eq!(op3, compute::PerformedOp::Removed);
-        assert_eq!(op4, compute::PerformedOp::Nop);
-        assert_eq!(op5, compute::PerformedOp::Inserted);
-        assert_eq!(op6, compute::PerformedOp::Nop);
+        let res1 = thread1.join().expect("Thread 1 should finish");
+        let res2 = thread2.join().expect("Thread 2 should finish");
+        let res3 = thread3.join().expect("Thread 3 should finish");
+        let res4 = thread4.join().expect("Thread 4 should finish");
+        let res5 = thread5.join().expect("Thread 5 should finish");
+        let res6 = thread6.join().expect("Thread 6 should finish");
 
+        let compute::CompResult::Inserted(entry) = res1 else {
+            panic!("Expected `Inserted`. Got {res1:?}")
+        };
         assert_eq!(
-            *ent1
-                .expect("should have entry")
-                .into_value()
-                .read()
-                .unwrap(),
+            *entry.into_value().read().unwrap(),
             vec![1, 2] // The same Vec was modified by task2.
         );
-        assert_eq!(
-            *ent2
-                .expect("should have entry")
-                .into_value()
-                .read()
-                .unwrap(),
-            vec![1, 2]
-        );
-        assert_eq!(
-            *ent3
-                .expect("should have entry")
-                .into_value()
-                .read()
-                .unwrap(),
-            vec![1, 2] // Removed value
-        );
-        assert!(ent4.is_none(),);
-        assert_eq!(
-            *ent5
-                .expect("should have entry")
-                .into_value()
-                .read()
-                .unwrap(),
-            vec![5]
-        );
-        assert_eq!(
-            *ent6
-                .expect("should have entry")
-                .into_value()
-                .read()
-                .unwrap(),
-            vec![5]
-        );
+
+        let compute::CompResult::ReplacedWith(entry) = res2 else {
+            panic!("Expected `ReplacedWith`. Got {res2:?}")
+        };
+        assert_eq!(*entry.into_value().read().unwrap(), vec![1, 2]);
+
+        let compute::CompResult::Removed(entry) = res3 else {
+            panic!("Expected `Removed`. Got {res3:?}")
+        };
+        assert_eq!(*entry.into_value().read().unwrap(), vec![1, 2]);
+
+        let compute::CompResult::StillNone(key) = res4 else {
+            panic!("Expected `StillNone`. Got {res4:?}")
+        };
+        assert_eq!(*key, KEY);
+
+        let compute::CompResult::Inserted(entry) = res5 else {
+            panic!("Expected `Inserted`. Got {res5:?}")
+        };
+        assert_eq!(*entry.into_value().read().unwrap(), vec![5]);
+
+        let compute::CompResult::Unchanged(entry) = res6 else {
+            panic!("Expected `Unchanged`. Got {res6:?}")
+        };
+        assert_eq!(*entry.into_value().read().unwrap(), vec![5]);
     }
 
     #[test]
@@ -4352,43 +4280,26 @@ mod tests {
         let res3 = thread3.join().expect("Thread 3 should finish");
         let res4 = thread4.join().expect("Thread 4 should finish");
 
-        let Ok((ent1, op1)) = res1 else {
-            panic!("res1 should be an Ok")
+        let Ok(compute::CompResult::Inserted(entry)) = res1 else {
+            panic!("Expected `Inserted`. Got {res1:?}")
         };
-        let Ok((ent2, op2)) = res2 else {
-            panic!("res2 should be an Ok")
-        };
-        assert!(res3.is_err());
-        let Ok((ent4, op4)) = res4 else {
-            panic!("res4 should be an Ok")
-        };
-
-        assert_eq!(op1, compute::PerformedOp::Inserted);
-        assert_eq!(op2, compute::PerformedOp::Updated);
-        assert_eq!(op4, compute::PerformedOp::Removed);
-
         assert_eq!(
-            *ent1
-                .expect("should have entry")
-                .into_value()
-                .read()
-                .unwrap(),
+            *entry.into_value().read().unwrap(),
             vec![1, 2] // The same Vec was modified by task2.
         );
+
+        let Ok(compute::CompResult::ReplacedWith(entry)) = res2 else {
+            panic!("Expected `ReplacedWith`. Got {res2:?}")
+        };
+        assert_eq!(*entry.into_value().read().unwrap(), vec![1, 2]);
+
+        assert!(res3.is_err());
+
+        let Ok(compute::CompResult::Removed(entry)) = res4 else {
+            panic!("Expected `Removed`. Got {res4:?}")
+        };
         assert_eq!(
-            *ent2
-                .expect("should have entry")
-                .into_value()
-                .read()
-                .unwrap(),
-            vec![1, 2]
-        );
-        assert_eq!(
-            *ent4
-                .expect("should have entry")
-                .into_value()
-                .read()
-                .unwrap(),
+            *entry.into_value().read().unwrap(),
             vec![1, 2] // Removed value.
         );
     }

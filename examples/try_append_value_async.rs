@@ -5,8 +5,7 @@ use std::{io::Cursor, pin::Pin, sync::Arc};
 
 use moka::{
     future::Cache,
-    ops::compute::{self, PerformedOp},
-    Entry,
+    ops::compute::{CompResult, Op},
 };
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
@@ -46,22 +45,25 @@ async fn main() -> Result<(), tokio::io::Error> {
     tokio::pin!(reader);
 
     // Read the first char 'a' from the reader, and insert a string "a" to the cache.
-    let (maybe_entry, performed_op) = append_to_cached_string(&cache, key, &mut reader).await?;
-    let entry = maybe_entry.expect("An entry should be returned");
+    let result = append_to_cached_string(&cache, key, &mut reader).await?;
+    let CompResult::Inserted(entry) = result else {
+        panic!("`Inserted` should be returned: {result:?}");
+    };
     assert_eq!(*entry.into_value().read().await, "a");
-    assert_eq!(performed_op, PerformedOp::Inserted);
 
     // Read next char 'b' from the reader, and append it the cached string.
-    let (maybe_entry, performed_op) = append_to_cached_string(&cache, key, &mut reader).await?;
-    let entry = maybe_entry.expect("An entry should be returned");
+    let result = append_to_cached_string(&cache, key, &mut reader).await?;
+    let CompResult::ReplacedWith(entry) = result else {
+        panic!("`ReplacedWith` should be returned: {result:?}");
+    };
     assert_eq!(*entry.into_value().read().await, "ab");
-    assert_eq!(performed_op, PerformedOp::Updated);
 
     // Read next char 'c' from the reader, and append it the cached string.
-    let (maybe_entry, performed_op) = append_to_cached_string(&cache, key, &mut reader).await?;
-    let entry = maybe_entry.expect("An entry should be returned");
+    let result = append_to_cached_string(&cache, key, &mut reader).await?;
+    let CompResult::ReplacedWith(entry) = result else {
+        panic!("`ReplacedWith` should be returned: {result:?}");
+    };
     assert_eq!(*entry.into_value().read().await, "abc");
-    assert_eq!(performed_op, PerformedOp::Updated);
 
     // Reading should fail as no more char left.
     let err = append_to_cached_string(&cache, key, &mut reader).await;
@@ -83,7 +85,7 @@ async fn append_to_cached_string(
     cache: &Cache<Key, Value>,
     key: Key,
     reader: &mut Pin<&mut impl AsyncRead>,
-) -> Result<(Option<Entry<Key, Value>>, PerformedOp), tokio::io::Error> {
+) -> Result<CompResult<Key, Value>, tokio::io::Error> {
     cache
         .entry(key)
         .and_try_compute_with(|maybe_entry| async {
@@ -97,12 +99,12 @@ async fn append_to_cached_string(
                 // The entry exists, append the char to the Vec.
                 let v = entry.into_value();
                 v.write().await.push(char);
-                Ok(compute::Op::Put(v))
+                Ok(Op::Put(v))
             } else {
                 // The entry does not exist, insert a new Vec containing
                 // the char.
                 let v = RwLock::new(String::from(char));
-                Ok(compute::Op::Put(Arc::new(v)))
+                Ok(Op::Put(Arc::new(v)))
             }
         })
         .await

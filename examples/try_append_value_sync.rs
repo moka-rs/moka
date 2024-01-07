@@ -7,9 +7,8 @@ use std::{
 };
 
 use moka::{
-    ops::compute::{self, PerformedOp},
+    ops::compute::{CompResult, Op},
     sync::Cache,
-    Entry,
 };
 
 /// The type of the cache key.
@@ -43,22 +42,25 @@ fn main() -> Result<(), tokio::io::Error> {
     let mut reader = Cursor::new(b"abc");
 
     // Read the first char 'a' from the reader, and insert a string "a" to the cache.
-    let (maybe_entry, performed_op) = append_to_cached_string(&cache, key, &mut reader)?;
-    let entry = maybe_entry.expect("An entry should be returned");
+    let result = append_to_cached_string(&cache, key, &mut reader)?;
+    let CompResult::Inserted(entry) = result else {
+        panic!("`Inserted` should be returned: {result:?}");
+    };
     assert_eq!(*entry.into_value().read().unwrap(), "a");
-    assert_eq!(performed_op, PerformedOp::Inserted);
 
     // Read next char 'b' from the reader, and append it the cached string.
-    let (maybe_entry, performed_op) = append_to_cached_string(&cache, key, &mut reader)?;
-    let entry = maybe_entry.expect("An entry should be returned");
+    let result = append_to_cached_string(&cache, key, &mut reader)?;
+    let CompResult::ReplacedWith(entry) = result else {
+        panic!("`ReplacedWith` should be returned: {result:?}");
+    };
     assert_eq!(*entry.into_value().read().unwrap(), "ab");
-    assert_eq!(performed_op, PerformedOp::Updated);
 
     // Read next char 'c' from the reader, and append it the cached string.
-    let (maybe_entry, performed_op) = append_to_cached_string(&cache, key, &mut reader)?;
-    let entry = maybe_entry.expect("An entry should be returned");
+    let result = append_to_cached_string(&cache, key, &mut reader)?;
+    let CompResult::ReplacedWith(entry) = result else {
+        panic!("`ReplacedWith` should be returned: {result:?}");
+    };
     assert_eq!(*entry.into_value().read().unwrap(), "abc");
-    assert_eq!(performed_op, PerformedOp::Updated);
 
     // Reading should fail as no more char left.
     let err = append_to_cached_string(&cache, key, &mut reader);
@@ -80,7 +82,7 @@ fn append_to_cached_string(
     cache: &Cache<Key, Value>,
     key: Key,
     reader: &mut impl Read,
-) -> io::Result<(Option<Entry<Key, Value>>, PerformedOp)> {
+) -> io::Result<CompResult<Key, Value>> {
     cache.entry(key).and_try_compute_with(|maybe_entry| {
         // Read a char from the reader.
         let mut buf = [0u8];
@@ -100,12 +102,12 @@ fn append_to_cached_string(
             // The entry exists, append the char to the Vec.
             let v = entry.into_value();
             v.write().unwrap().push(char);
-            Ok(compute::Op::Put(v))
+            Ok(Op::Put(v))
         } else {
             // The entry does not exist, insert a new Vec containing
             // the char.
             let v = RwLock::new(String::from(char));
-            Ok(compute::Op::Put(Arc::new(v)))
+            Ok(Op::Put(Arc::new(v)))
         }
     })
 }

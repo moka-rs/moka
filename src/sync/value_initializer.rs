@@ -7,7 +7,10 @@ use std::{
 };
 use triomphe::Arc as TrioArc;
 
-use crate::{ops::compute, Entry};
+use crate::{
+    ops::compute::{CompResult, Op},
+    Entry,
+};
 
 use super::{ComputeNone, OptionallyNone};
 
@@ -55,14 +58,6 @@ pub(crate) enum InitResult<V, E> {
     Initialized(V),
     ReadExisting(V),
     InitErr(Arc<E>),
-}
-
-pub(crate) enum ComputeResult<V, E> {
-    Inserted(V),
-    Updated(V),
-    Removed(V),
-    Nop(Option<V>),
-    EvalErr(E),
 }
 
 pub(crate) struct ValueInitializer<K, V, S> {
@@ -198,13 +193,13 @@ where
     /// Panics if the `init` closure has been panicked.
     pub(crate) fn try_compute<'a, C, F, O, E>(
         &'a self,
-        c_key: &Arc<K>,
+        c_key: Arc<K>,
         c_hash: u64,
         cache: &C,
         f: F,
-        post_init: fn(O) -> Result<compute::Op<V>, E>,
+        post_init: fn(O) -> Result<Op<V>, E>,
         allow_nop: bool,
-    ) -> ComputeResult<V, E>
+    ) -> Result<CompResult<K, V>, E>
     where
         V: 'static,
         C: GetOrInsert<K, V> + Send + 'a,
@@ -212,10 +207,9 @@ where
         E: Send + Sync + 'static,
     {
         use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
-        use ComputeResult::{EvalErr, Inserted, Nop, Removed, Updated};
 
         let type_id = TypeId::of::<ComputeNone>();
-        let (w_key, w_hash) = self.waiter_key_hash(c_key, type_id);
+        let (w_key, w_hash) = self.waiter_key_hash(&c_key, type_id);
         let waiter = TrioArc::new(RwLock::new(WaiterValue::Computing));
         // NOTE: We have to acquire a write lock before `try_insert_waiter`,
         // so that any concurrent attempt will get our lock and wait on it.
@@ -247,7 +241,7 @@ where
         // Our waiter was inserted.
 
         // Get the current value.
-        let maybe_entry = cache.get_entry(c_key, c_hash);
+        let maybe_entry = cache.get_entry(&c_key, c_hash);
         let maybe_value = if allow_nop {
             maybe_entry.as_ref().map(|ent| ent.value().clone())
         } else {
@@ -257,34 +251,11 @@ where
 
         // Evaluate the `f` closure. Catching panic is safe here as we will not
         // evaluate the closure again.
-        match catch_unwind(AssertUnwindSafe(|| f(maybe_entry))) {
+        let output = match catch_unwind(AssertUnwindSafe(|| f(maybe_entry))) {
             // Evaluated.
-            Ok(op) => {
-                let init_res = match post_init(op) {
-                    Ok(op) => match op {
-                        compute::Op::Nop => Nop(maybe_value),
-                        compute::Op::Put(value) => {
-                            cache.insert(Arc::clone(c_key), c_hash, value.clone());
-                            if entry_existed {
-                                Updated(value)
-                            } else {
-                                Inserted(value)
-                            }
-                        }
-                        compute::Op::Remove => {
-                            let maybe_prev_v = cache.remove(c_key, c_hash);
-                            if let Some(prev_v) = maybe_prev_v {
-                                Removed(prev_v)
-                            } else {
-                                Nop(None)
-                            }
-                        }
-                    },
-                    Err(e) => EvalErr(e),
-                };
+            Ok(output) => {
                 *lock = WaiterValue::ReadyNone;
-                self.remove_waiter(w_key, w_hash);
-                init_res
+                output
             }
             // Panicked.
             Err(payload) => {
@@ -293,7 +264,54 @@ where
                 self.remove_waiter(w_key, w_hash);
                 resume_unwind(payload);
             }
-        }
+        };
+
+        let op = match post_init(output) {
+            Ok(op) => op,
+            Err(e) => {
+                self.remove_waiter(w_key, w_hash);
+                return Err(e);
+            }
+        };
+
+        let result = match op {
+            Op::Nop => {
+                if let Some(value) = maybe_value {
+                    Ok(CompResult::Unchanged(Entry::new(
+                        Some(c_key),
+                        value,
+                        false,
+                        false,
+                    )))
+                } else {
+                    Ok(CompResult::StillNone(c_key))
+                }
+            }
+            Op::Put(value) => {
+                cache.insert(Arc::clone(&c_key), c_hash, value.clone());
+                if entry_existed {
+                    crossbeam_epoch::pin().flush();
+                    let entry = Entry::new(Some(c_key), value, true, true);
+                    Ok(CompResult::ReplacedWith(entry))
+                } else {
+                    let entry = Entry::new(Some(c_key), value, true, false);
+                    Ok(CompResult::Inserted(entry))
+                }
+            }
+            Op::Remove => {
+                let maybe_prev_v = cache.remove(&c_key, c_hash);
+                if let Some(prev_v) = maybe_prev_v {
+                    let entry = Entry::new(Some(c_key), prev_v, false, false);
+                    crossbeam_epoch::pin().flush();
+                    Ok(CompResult::Removed(entry))
+                } else {
+                    Ok(CompResult::StillNone(c_key))
+                }
+            }
+        };
+        self.remove_waiter(w_key, w_hash);
+        result
+
         // The lock will be unlocked here.
     }
 
@@ -319,19 +337,17 @@ where
     }
 
     /// The `post_init` function for the `and_upsert_with` method of cache.
-    pub(crate) fn post_init_for_upsert_with(value: V) -> Result<compute::Op<V>, ()> {
-        Ok(compute::Op::Put(value))
+    pub(crate) fn post_init_for_upsert_with(value: V) -> Result<Op<V>, ()> {
+        Ok(Op::Put(value))
     }
 
     /// The `post_init` function for the `and_compute_with` method of cache.
-    pub(crate) fn post_init_for_compute_with(op: compute::Op<V>) -> Result<compute::Op<V>, ()> {
+    pub(crate) fn post_init_for_compute_with(op: Op<V>) -> Result<Op<V>, ()> {
         Ok(op)
     }
 
     /// The `post_init` function for the `and_try_compute_with` method of cache.
-    pub(crate) fn post_init_for_try_compute_with<E>(
-        op: Result<compute::Op<V>, E>,
-    ) -> Result<compute::Op<V>, E>
+    pub(crate) fn post_init_for_try_compute_with<E>(op: Result<Op<V>, E>) -> Result<Op<V>, E>
     where
         E: Send + Sync + 'static,
     {

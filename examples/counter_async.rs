@@ -10,17 +10,17 @@ async fn main() {
 
     let entry = increment_counter(&cache, &key).await;
     assert!(entry.is_fresh());
-    assert!(!entry.is_updated());
+    assert!(!entry.is_old_value_replaced());
     assert_eq!(entry.into_value(), 1);
 
     let entry = increment_counter(&cache, &key).await;
     assert!(entry.is_fresh());
-    assert!(entry.is_updated());
+    assert!(entry.is_old_value_replaced());
     assert_eq!(entry.into_value(), 2);
 
     let entry = increment_counter(&cache, &key).await;
     assert!(entry.is_fresh());
-    assert!(entry.is_updated());
+    assert!(entry.is_old_value_replaced());
     assert_eq!(entry.into_value(), 3);
 }
 

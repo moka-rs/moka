@@ -3,8 +3,7 @@
 
 use moka::{
     future::Cache,
-    ops::compute::{self, PerformedOp},
-    Entry,
+    ops::compute::{CompResult, Op},
 };
 
 #[tokio::main]
@@ -12,34 +11,38 @@ async fn main() {
     let cache: Cache<String, u64> = Cache::new(100);
     let key = "key".to_string();
 
-    // This should insert a now counter value 1 to the cache, and return the value
+    // This should insert a new counter value 1 to the cache, and return the value
     // with the kind of the operation performed.
-    let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
-    let entry = maybe_entry.expect("An entry should be returned");
+    let result = inclement_or_remove_counter(&cache, &key).await;
+    let CompResult::Inserted(entry) = result else {
+        panic!("`Inserted` should be returned: {result:?}");
+    };
     assert_eq!(entry.into_value(), 1);
-    assert_eq!(performed_op, PerformedOp::Inserted);
 
     // This should increment the cached counter value by 1.
-    let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
-    let entry = maybe_entry.expect("An entry should be returned");
+    let result = inclement_or_remove_counter(&cache, &key).await;
+    let CompResult::ReplacedWith(entry) = result else {
+        panic!("`ReplacedWith` should be returned: {result:?}");
+    };
     assert_eq!(entry.into_value(), 2);
-    assert_eq!(performed_op, PerformedOp::Updated);
 
     // This should remove the cached counter from the cache, and returns the
     // _removed_ value.
-    let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
-    let entry = maybe_entry.expect("An entry should be returned");
+    let result = inclement_or_remove_counter(&cache, &key).await;
+    let CompResult::Removed(entry) = result else {
+        panic!("`Removed` should be returned: {result:?}");
+    };
     assert_eq!(entry.into_value(), 2);
-    assert_eq!(performed_op, PerformedOp::Removed);
 
-    // The key should no longer exist.
+    // The key should not exist.
     assert!(!cache.contains_key(&key));
 
     // This should start over; insert a new counter value 1 to the cache.
-    let (maybe_entry, performed_op) = inclement_or_remove_counter(&cache, &key).await;
-    let entry = maybe_entry.expect("An entry should be returned");
+    let result = inclement_or_remove_counter(&cache, &key).await;
+    let CompResult::Inserted(entry) = result else {
+        panic!("`Inserted` should be returned: {result:?}");
+    };
     assert_eq!(entry.into_value(), 1);
-    assert_eq!(performed_op, PerformedOp::Inserted);
 }
 
 /// Increment a cached `u64` counter. If the counter is greater than or equal to 2,
@@ -49,7 +52,7 @@ async fn main() {
 async fn inclement_or_remove_counter(
     cache: &Cache<String, u64>,
     key: &str,
-) -> (Option<Entry<String, u64>>, compute::PerformedOp) {
+) -> CompResult<String, u64> {
     // - If the counter does not exist, insert a new value of 1.
     // - If the counter is less than 2, increment it by 1.
     // - If the counter is greater than or equal to 2, remove it.
@@ -61,14 +64,14 @@ async fn inclement_or_remove_counter(
                 let counter = entry.into_value();
                 if counter < 2 {
                     // Increment the counter by 1.
-                    compute::Op::Put(counter.saturating_add(1))
+                    Op::Put(counter.saturating_add(1))
                 } else {
                     // Remove the entry.
-                    compute::Op::Remove
+                    Op::Remove
                 }
             } else {
                 // The entry does not exist, insert a new value of 1.
-                compute::Op::Put(1)
+                Op::Put(1)
             };
             // Return a Future that is resolved to `op` immediately.
             std::future::ready(op)
