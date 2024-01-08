@@ -1,5 +1,5 @@
-//! This example demonstrates how to append an `i32` value to a cached `Vec<i32>`
-//! value. It uses the `and_upsert_with` method of `Cache`.
+//! This example demonstrates how to append a `char` to a cached `Vec<String>` value.
+//! It uses the `and_upsert_with` method of `Cache`.
 
 use std::{io::Cursor, pin::Pin, sync::Arc};
 

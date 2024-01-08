@@ -170,7 +170,6 @@ where
                     }
                     Err(e) => {
                         let err: ErrorObject = Arc::new(e);
-
                         *lock = WaiterValue::Ready(Err(Arc::clone(&err)));
                         InitResult::InitErr(err.downcast().unwrap())
                     }
@@ -301,8 +300,8 @@ where
             Op::Remove => {
                 let maybe_prev_v = cache.remove(&c_key, c_hash);
                 if let Some(prev_v) = maybe_prev_v {
-                    let entry = Entry::new(Some(c_key), prev_v, false, false);
                     crossbeam_epoch::pin().flush();
+                    let entry = Entry::new(Some(c_key), prev_v, false, false);
                     Ok(CompResult::Removed(entry))
                 } else {
                     Ok(CompResult::StillNone(c_key))

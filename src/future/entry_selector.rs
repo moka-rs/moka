@@ -65,12 +65,12 @@ where
     /// | `Nop`     | no  | `StillNone(Arc<K>)`         |                                 |
     /// | `Nop`     | yes | `Unchanged(Entry<K, V>)`    | The existing entry is returned. |
     ///
-    /// # Similar Methods
+    /// # See Also
     ///
     /// - If you want the `Future` resolve to `Result<Op<V>>` instead of `Op<V>`, and
-    ///   upsert only when resolved to `Ok(V)`, use the [`and_try_compute_with`]
-    ///   method.
-    /// - If you only want to put, use the [`and_upsert_with`] method.
+    ///   modify entry only when resolved to `Ok(V)`, use the
+    ///   [`and_try_compute_with`] method.
+    /// - If you only want to update or insert, use the [`and_upsert_with`] method.
     ///
     /// [`Entry<K, V>`]: ../struct.Entry.html
     /// [`Op<V>`]: ../ops/compute/enum.Op.html
@@ -84,7 +84,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.12", features = ["future"] }
+    /// // moka = { version = "0.12.3", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::{
@@ -201,11 +201,11 @@ where
     /// | `Nop`     | no  | `StillNone(Arc<K>)`         |                                 |
     /// | `Nop`     | yes | `Unchanged(Entry<K, V>)`    | The existing entry is returned. |
     ///
-    /// # Similar Methods
+    /// # See Also
     ///
     /// - If you want the `Future` resolve to `Op<V>` instead of `Result<Op<V>>`, use
     ///   the [`and_compute_with`] method.
-    /// - If you only want to put, use the [`and_upsert_with`] method.
+    /// - If you only want to update or insert, use the [`and_upsert_with`] method.
     ///
     /// [`Entry<K, V>`]: ../struct.Entry.html
     /// [`Op<V>`]: ../ops/compute/enum.Op.html
@@ -251,7 +251,7 @@ where
     /// 3. Upsert the new value to the cache.
     /// 4. Return the `Entry` having the upserted value.
     ///
-    /// # Similar Methods
+    /// # See Also
     ///
     /// - If you want to optionally upsert, that is to upsert only when certain
     ///   conditions meet, use the [`and_compute_with`] method.
@@ -269,7 +269,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.12", features = ["future"] }
+    /// // moka = { version = "0.12.3", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -705,12 +705,12 @@ where
     /// | `Nop`     | no  | `StillNone(Arc<K>)`         |                                 |
     /// | `Nop`     | yes | `Unchanged(Entry<K, V>)`    | The existing entry is returned. |
     ///
-    /// # Similar Methods
+    /// # See Also
     ///
     /// - If you want the `Future` resolve to `Result<Op<V>>` instead of `Op<V>`, and
-    ///   upsert only when resolved to `Ok(V)`, use the [`and_try_compute_with`]
-    ///   method.
-    /// - If you only want to put, use the [`and_upsert_with`] method.
+    ///   modify entry only when resolved to `Ok(V)`, use the
+    ///   [`and_try_compute_with`] method.
+    /// - If you only want to update or insert, use the [`and_upsert_with`] method.
     ///
     /// [`Entry<K, V>`]: ../struct.Entry.html
     /// [`Op<V>`]: ../ops/compute/enum.Op.html
@@ -724,7 +724,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.12", features = ["future"] }
+    /// // moka = { version = "0.12.3", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::{
@@ -841,11 +841,11 @@ where
     /// | `Nop`     | no  | `StillNone(Arc<K>)`         |                                 |
     /// | `Nop`     | yes | `Unchanged(Entry<K, V>)`    | The existing entry is returned. |
     ///
-    /// # Similar Methods
+    /// # See Also
     ///
     /// - If you want the `Future` resolve to `Op<V>` instead of `Result<Op<V>>`, use
     ///   the [`and_compute_with`] method.
-    /// - If you only want to put, use the [`and_upsert_with`] method.
+    /// - If you only want to update or insert, use the [`and_upsert_with`] method.
     ///
     /// [`Entry<K, V>`]: ../struct.Entry.html
     /// [`Op<V>`]: ../ops/compute/enum.Op.html
@@ -891,7 +891,7 @@ where
     /// 3. Upsert the new value to the cache.
     /// 4. Return the `Entry` having the upserted value.
     ///
-    /// # Similar Methods
+    /// # See Also
     ///
     /// - If you want to optionally upsert, that is to upsert only when certain
     ///   conditions meet, use the [`and_compute_with`] method.
@@ -909,7 +909,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.12", features = ["future"] }
+    /// // moka = { version = "0.12.3", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
