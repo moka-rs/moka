@@ -35,8 +35,11 @@ pub type PredicateId = String;
 
 pub(crate) type PredicateIdStr<'a> = &'a str;
 
-// Empty struct to be used in InitResult::InitErr to represent the Option None.
+// Empty struct to be used in `InitResult::InitErr` to represent the Option None.
 pub(crate) struct OptionallyNone;
+
+// Empty struct to be used in `InitResult::InitErr` to represent the Compute None.
+pub(crate) struct ComputeNone;
 
 impl<T: ?Sized> FutureExt for T where T: Future {}
 

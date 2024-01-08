@@ -110,6 +110,10 @@ pub(crate) mod cht;
 pub(crate) mod common;
 
 #[cfg(any(feature = "sync", feature = "future"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
+pub mod ops;
+
+#[cfg(any(feature = "sync", feature = "future"))]
 pub(crate) mod policy;
 
 #[cfg(any(feature = "sync", feature = "future"))]

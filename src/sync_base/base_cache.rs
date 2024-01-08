@@ -357,7 +357,7 @@ where
                 is_expiry_modified,
             };
             read_recorder(op, now);
-            Some(Entry::new(maybe_key, v, false))
+            Some(Entry::new(maybe_key, v, false, false))
         } else {
             read_recorder(ReadOp::Miss(hash), now);
             None

@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use futures_util::FutureExt;
 use std::{
     any::{Any, TypeId},
+    fmt,
     future::Future,
     hash::{BuildHasher, Hash},
     pin::Pin,
@@ -10,12 +11,19 @@ use std::{
 };
 use triomphe::Arc as TrioArc;
 
-use super::OptionallyNone;
+use crate::{
+    ops::compute::{CompResult, Op},
+    Entry,
+};
+
+use super::{ComputeNone, OptionallyNone};
 
 const WAITER_MAP_NUM_SEGMENTS: usize = 64;
 
 #[async_trait]
 pub(crate) trait GetOrInsert<K, V> {
+    /// Gets a value for the given key without recording the access to the cache
+    /// policies.
     async fn get_without_recording<I>(
         &self,
         key: &Arc<K>,
@@ -26,7 +34,17 @@ pub(crate) trait GetOrInsert<K, V> {
         V: 'static,
         I: for<'i> FnMut(&'i V) -> bool + Send;
 
+    /// Gets an entry for the given key _with_ recording the access to the cache
+    /// policies.
+    async fn get_entry(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>>
+    where
+        V: 'static;
+
+    /// Inserts a value for the given key.
     async fn insert(&self, key: Arc<K>, hash: u64, value: V);
+
+    /// Removes a value for the given key. Returns the removed value.
+    async fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V>;
 }
 
 type ErrorObject = Arc<dyn Any + Send + Sync + 'static>;
@@ -40,10 +58,23 @@ pub(crate) enum InitResult<V, E> {
 enum WaiterValue<V> {
     Computing,
     Ready(Result<V, ErrorObject>),
+    ReadyNone,
     // https://github.com/moka-rs/moka/issues/43
     InitFuturePanicked,
     // https://github.com/moka-rs/moka/issues/59
     EnclosingFutureAborted,
+}
+
+impl<V> fmt::Debug for WaiterValue<V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            WaiterValue::Computing => write!(f, "Computing"),
+            WaiterValue::Ready(_) => write!(f, "Ready"),
+            WaiterValue::ReadyNone => write!(f, "ReadyNone"),
+            WaiterValue::InitFuturePanicked => write!(f, "InitFuturePanicked"),
+            WaiterValue::EnclosingFutureAborted => write!(f, "EnclosingFutureAborted"),
+        }
+    }
 }
 
 type Waiter<V> = TrioArc<RwLock<WaiterValue<V>>>;
@@ -179,6 +210,7 @@ where
             let Some(existing_waiter) =
                 try_insert_waiter(&self.waiters, w_key.clone(), w_hash, &waiter)
             else {
+                // Inserted.
                 break;
             };
 
@@ -203,8 +235,8 @@ where
                     continue;
                 }
                 // Unexpected state.
-                WaiterValue::Computing => panic!(
-                    "Got unexpected state `Computing` after resolving `init` future. \
+                s @ (WaiterValue::Computing | WaiterValue::ReadyNone) => panic!(
+                    "Got unexpected state `{s:?}` after resolving `init` future. \
                     This might be a bug in Moka"
                 ),
             }
@@ -254,6 +286,140 @@ where
         // The lock will be unlocked here.
     }
 
+    /// # Panics
+    /// Panics if the `init` future has been panicked.
+    pub(crate) async fn try_compute<'a, C, F, Fut, O, E>(
+        &'a self,
+        c_key: Arc<K>,
+        c_hash: u64,
+        cache: &C,
+        f: F,
+        post_init: fn(O) -> Result<Op<V>, E>,
+        allow_nop: bool,
+    ) -> Result<CompResult<K, V>, E>
+    where
+        C: GetOrInsert<K, V> + Send + 'a,
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = O> + 'a,
+        E: Send + Sync + 'static,
+    {
+        use std::panic::{resume_unwind, AssertUnwindSafe};
+
+        let type_id = TypeId::of::<ComputeNone>();
+        let (w_key, w_hash) = waiter_key_hash(&self.waiters, &c_key, type_id);
+        let waiter = TrioArc::new(RwLock::new(WaiterValue::Computing));
+        // NOTE: We have to acquire a write lock before `try_insert_waiter`,
+        // so that any concurrent attempt will get our lock and wait on it.
+        let lock = waiter.write().await;
+
+        loop {
+            let Some(existing_waiter) =
+                try_insert_waiter(&self.waiters, w_key.clone(), w_hash, &waiter)
+            else {
+                // Inserted.
+                break;
+            };
+
+            // Somebody else's waiter already exists, so wait for it to finish
+            // (wait for it to release the write lock).
+            let waiter_result = existing_waiter.read().await;
+            match &*waiter_result {
+                // Unexpected state.
+                WaiterValue::Computing => panic!(
+                    "Got unexpected state `Computing` after resolving `init` future. \
+                    This might be a bug in Moka"
+                ),
+                _ => {
+                    // Try to insert our waiter again.
+                    continue;
+                }
+            }
+        }
+
+        // Our waiter was inserted.
+
+        // Create a guard. This will ensure to remove our waiter when the
+        // enclosing future has been aborted:
+        // https://github.com/moka-rs/moka/issues/59
+        let waiter_guard = WaiterGuard::new(w_key, w_hash, &self.waiters, lock);
+
+        // Get the current value.
+        let maybe_entry = cache.get_entry(&c_key, c_hash).await;
+        let maybe_value = if allow_nop {
+            maybe_entry.as_ref().map(|ent| ent.value().clone())
+        } else {
+            None
+        };
+        let entry_existed = maybe_entry.is_some();
+
+        // Evaluate the `f` closure and get a future. Catching panic is safe here as
+        // we will not evaluate the closure again.
+        let fut = match std::panic::catch_unwind(AssertUnwindSafe(|| f(maybe_entry))) {
+            // Evaluated.
+            Ok(fut) => fut,
+            // Panicked.
+            Err(payload) => {
+                waiter_guard.set_waiter_value(WaiterValue::InitFuturePanicked);
+                resume_unwind(payload);
+            }
+        };
+
+        // Resolve the `fut` future. Catching panic is safe here as we will not
+        // resolve the future again.
+        let output = match AssertUnwindSafe(fut).catch_unwind().await {
+            // Resolved.
+            Ok(output) => {
+                waiter_guard.set_waiter_value(WaiterValue::ReadyNone);
+                output
+            }
+            // Panicked.
+            Err(payload) => {
+                waiter_guard.set_waiter_value(WaiterValue::InitFuturePanicked);
+                resume_unwind(payload);
+            }
+        };
+
+        match post_init(output)? {
+            Op::Nop => {
+                if let Some(value) = maybe_value {
+                    Ok(CompResult::Unchanged(Entry::new(
+                        Some(c_key),
+                        value,
+                        false,
+                        false,
+                    )))
+                } else {
+                    Ok(CompResult::StillNone(c_key))
+                }
+            }
+            Op::Put(value) => {
+                cache
+                    .insert(Arc::clone(&c_key), c_hash, value.clone())
+                    .await;
+                if entry_existed {
+                    crossbeam_epoch::pin().flush();
+                    let entry = Entry::new(Some(c_key), value, true, true);
+                    Ok(CompResult::ReplacedWith(entry))
+                } else {
+                    let entry = Entry::new(Some(c_key), value, true, false);
+                    Ok(CompResult::Inserted(entry))
+                }
+            }
+            Op::Remove => {
+                let maybe_prev_v = cache.remove(&c_key, c_hash).await;
+                if let Some(prev_v) = maybe_prev_v {
+                    crossbeam_epoch::pin().flush();
+                    let entry = Entry::new(Some(c_key), prev_v, false, false);
+                    Ok(CompResult::Removed(entry))
+                } else {
+                    Ok(CompResult::StillNone(c_key))
+                }
+            }
+        }
+
+        // The lock will be unlocked here.
+    }
+
     /// The `post_init` function for the `get_with` method of cache.
     pub(crate) fn post_init_for_get_with(value: V) -> Result<V, ()> {
         Ok(value)
@@ -273,6 +439,24 @@ where
     /// The `post_init` function for `try_get_with` method of cache.
     pub(crate) fn post_init_for_try_get_with<E>(result: Result<V, E>) -> Result<V, E> {
         result
+    }
+
+    /// The `post_init` function for the `and_upsert_with` method of cache.
+    pub(crate) fn post_init_for_upsert_with(value: V) -> Result<Op<V>, ()> {
+        Ok(Op::Put(value))
+    }
+
+    /// The `post_init` function for the `and_compute_with` method of cache.
+    pub(crate) fn post_init_for_compute_with(op: Op<V>) -> Result<Op<V>, ()> {
+        Ok(op)
+    }
+
+    /// The `post_init` function for the `and_try_compute_with` method of cache.
+    pub(crate) fn post_init_for_try_compute_with<E>(op: Result<Op<V>, E>) -> Result<Op<V>, E>
+    where
+        E: Send + Sync + 'static,
+    {
+        op
     }
 
     /// Returns the `type_id` for `get_with` method of cache.

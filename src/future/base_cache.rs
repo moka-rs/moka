@@ -326,7 +326,7 @@ where
                     entry.set_last_accessed(now);
 
                     let maybe_key = if need_key { Some(Arc::clone(k)) } else { None };
-                    let ent = Entry::new(maybe_key, entry.value.clone(), false);
+                    let ent = Entry::new(maybe_key, entry.value.clone(), false, false);
                     let maybe_op = if record_read {
                         Some(ReadOp::Hit {
                             value_entry: TrioArc::clone(entry),

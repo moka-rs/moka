@@ -514,24 +514,23 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
     doc --no-deps --features 'future, sync'
 ```
 
-## Road Map
+## Roadmap
 
 - [x] Size-aware eviction. (`v0.7.0` via [#24][gh-pull-024])
-- [x] API stabilization. (Smaller core cache API, shorter names for frequently
-      used methods) (`v0.8.0` via [#105][gh-pull-105])
+- [x] API stabilization. (Smaller core API, shorter names for frequently used
+       methods) (`v0.8.0` via [#105][gh-pull-105])
     - e.g.
     - `get_or_insert_with(K, F)` → `get_with(K, F)`
     - `get_or_try_insert_with(K, F)` → `try_get_with(K, F)`
-    - `blocking_insert(K, V)` → `blocking().insert(K, V)`
     - `time_to_live()` → `policy().time_to_live()`
 - [x] Notifications on eviction. (`v0.9.0` via [#145][gh-pull-145])
 - [x] Variable (per-entry) expiration, using hierarchical timer wheels.
   (`v0.11.0` via [#248][gh-pull-248])
-- [ ] Cache statistics (Hit rate, etc.). ([details][cache-stats])
 - [x] Remove background threads. (`v0.12.0` via [#294][gh-pull-294] and
   [#316][gh-pull-316])
+- [x] Add upsert and compute methods. (`v0.12.3` via [#370][gh-pull-370])
+- [ ] Cache statistics (Hit rate, etc.). ([details][cache-stats])
 - [ ] Restore cache from a snapshot. ([details][restore])
-- [ ] `and_compute` method. ([details][and-compute])
 - [ ] Upgrade TinyLFU to Window-TinyLFU. ([details][tiny-lfu])
 
 [gh-pull-024]: https://github.com/moka-rs/moka/pull/24
@@ -540,8 +539,8 @@ $ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"
 [gh-pull-248]: https://github.com/moka-rs/moka/pull/248
 [gh-pull-294]: https://github.com/moka-rs/moka/pull/294
 [gh-pull-316]: https://github.com/moka-rs/moka/pull/316
+[gh-pull-370]: https://github.com/moka-rs/moka/pull/370
 
-[and-compute]: https://github.com/moka-rs/moka/issues/227
 [cache-stats]: https://github.com/moka-rs/moka/issues/234
 [restore]: https://github.com/moka-rs/moka/issues/314
 

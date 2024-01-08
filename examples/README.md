@@ -17,29 +17,54 @@ Each example has a suffix `_async` or `_sync`:
 ## Basics of the Cache API
 
 - [basics_async](./basics_async.rs) and [basics_sync](./basics_sync.rs)
-    - Sharing a cache between async tasks or OS threads.
+    - Shares a cache between async tasks or OS threads.
         - Do not wrap a `Cache` with `Arc<Mutex<_>>`! Just clone the `Cache` and you
           are all set.
-    - `insert`, `get` and `invalidate` methods.
+    - Uses `insert`, `get` and `invalidate` methods.
 
 - [size_aware_eviction_sync](./size_aware_eviction_sync.rs)
-    - Configuring the max capacity of the cache based on the total size of the cached
+    - Configures the max capacity of the cache based on the total size of the cached
       entries.
+
+## The `Entry` API
+
+Atomically inserts, updates and removes an entry from the cache depending on the
+existence of the entry.
+
+- [counter_async](./counter_async.rs) and [counter_sync](./counter_sync.rs)
+    - Atomically increments a cached `u64` by 1. If the entry does not exist, inserts
+      a new entry with the value 1.
+    - Uses `and_upsert_with` method.
+- [bounded_counter_async](./bounded_counter_async.rs) and
+  [bounded_counter_sync](./bounded_counter_sync.rs)
+    - Same as above except removing the entry when the value is 2.
+    - `and_compute_with` method.
+- [append_value_async](./append_value_async.rs) and
+  [append_value_sync](./append_value_sync.rs)
+    - Atomically appends an `i32` to a cached `Arc<RwLock<Vec<i32>>>`. If the entry
+      does not exist, inserts a new entry.
+    - Uses `and_upsert_with` method.
+- [try_append_value_async](./try_append_value_async.rs) and
+  [try_append_value_sync](./try_append_value_sync.rs)
+    - Atomically reads an `char` from a reader and appends it to a cached `Arc<RwLock<String>>`,
+      but reading may fail by an early EOF.
+    - Uses `and_try_compute_with` method.
 
 ## Expiration and Eviction Listener
 
 - [eviction_listener_sync](./eviction_listener_sync.rs)
-    - Setting the `time_to_live` expiration policy.
-    - Registering a listener (closure) to be notified when an entry is evicted from
-      the cache.
-    - `insert`, `invalidate` and `invalidate_all` methods.
-    - Demonstrating when the expired entries will be actually evicted from the cache,
+    - Configures the `time_to_live` expiration policy.
+    - Registers a listener (closure) to be notified when an entry is evicted from the
+      cache.
+    - Uses `insert`, `invalidate`, `invalidate_all` and `run_pending_tasks` methods.
+    - Demonstrates when the expired entries will be actually evicted from the cache,
       and why the `run_pending_tasks` method could be important in some cases.
 
 - [cascading_drop_async](./cascading_drop_async.rs)
-    - Controlling the lifetime of the objects in a separate `BTreeMap` collection
-      from the cache using an eviction listener.
-    - `BTreeMap`, `Arc` and mpsc channel (multi-producer, single consumer channel).
+    - Controls the lifetime of the objects in a separate `BTreeMap` collection from
+      the cache using an eviction listener.
+    - Beside the cache APIs, uses `BTreeMap`, `Arc` and mpsc channel (multi-producer,
+      single consumer channel).
 
 ## Check out the API Documentation too!
 

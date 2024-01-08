@@ -5,7 +5,10 @@ use super::{
     WriteOp,
 };
 use crate::{
-    common::concurrent::Weigher, notification::AsyncEvictionListener, policy::ExpirationPolicy,
+    common::concurrent::Weigher,
+    notification::AsyncEvictionListener,
+    ops::compute::{self, CompResult},
+    policy::ExpirationPolicy,
     Entry, Policy, PredicateError,
 };
 
@@ -1063,6 +1066,7 @@ where
             .into_value()
     }
 
+    /// TODO: Remove this in v0.13.0.
     /// Deprecated, replaced with
     /// [`entry()::or_insert_with_if()`](./struct.OwnedKeyEntrySelector.html#method.or_insert_with_if)
     #[deprecated(since = "0.10.0", note = "Replaced with `entry().or_insert_with_if()`")]
@@ -1575,9 +1579,9 @@ where
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
-                Entry::new(k, v, true)
+                Entry::new(k, v, true, false)
             }
-            InitResult::ReadExisting(v) => Entry::new(k, v, false),
+            InitResult::ReadExisting(v) => Entry::new(k, v, false, false),
             InitResult::InitErr(_) => unreachable!(),
         }
     }
@@ -1598,7 +1602,7 @@ where
                 let value = init();
                 self.insert_with_hash(Arc::clone(&key), hash, value.clone())
                     .await;
-                Entry::new(Some(key), value, true)
+                Entry::new(Some(key), value, true, false)
             }
         }
     }
@@ -1624,7 +1628,7 @@ where
                 let value = init();
                 self.insert_with_hash(Arc::clone(&key), hash, value.clone())
                     .await;
-                Entry::new(Some(key), value, true)
+                Entry::new(Some(key), value, true, false)
             }
         }
     }
@@ -1702,9 +1706,9 @@ where
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
-                Some(Entry::new(k, v, true))
+                Some(Entry::new(k, v, true, false))
             }
-            InitResult::ReadExisting(v) => Some(Entry::new(k, v, false)),
+            InitResult::ReadExisting(v) => Some(Entry::new(k, v, false, false)),
             InitResult::InitErr(_) => None,
         }
     }
@@ -1784,9 +1788,9 @@ where
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
-                Ok(Entry::new(k, v, true))
+                Ok(Entry::new(k, v, true, false))
             }
-            InitResult::ReadExisting(v) => Ok(Entry::new(k, v, false)),
+            InitResult::ReadExisting(v) => Ok(Entry::new(k, v, false, false)),
             InitResult::InitErr(e) => {
                 crossbeam_epoch::pin().flush();
                 Err(e)
@@ -1828,6 +1832,65 @@ where
         .await
         .expect("Failed to schedule write op for insert");
         cancel_guard.clear();
+    }
+
+    pub(crate) async fn compute_with_hash_and_fun<F, Fut>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        f: F,
+    ) -> compute::CompResult<K, V>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = compute::Op<V>>,
+    {
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_compute_with;
+        match self
+            .value_initializer
+            .try_compute(key, hash, self, f, post_init, true)
+            .await
+        {
+            Ok(result) => result,
+            Err(_) => unreachable!(),
+        }
+    }
+
+    pub(crate) async fn try_compute_with_hash_and_fun<F, Fut, E>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        f: F,
+    ) -> Result<compute::CompResult<K, V>, E>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = Result<compute::Op<V>, E>>,
+        E: Send + Sync + 'static,
+    {
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_try_compute_with;
+        self.value_initializer
+            .try_compute(key, hash, self, f, post_init, true)
+            .await
+    }
+
+    pub(crate) async fn upsert_with_hash_and_fun<F, Fut>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        f: F,
+    ) -> Entry<K, V>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = V>,
+    {
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_upsert_with;
+        match self
+            .value_initializer
+            .try_compute(key, hash, self, f, post_init, false)
+            .await
+        {
+            Ok(CompResult::Inserted(entry) | CompResult::ReplacedWith(entry)) => entry,
+            _ => unreachable!(),
+        }
     }
 
     async fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64, need_value: bool) -> Option<V>
@@ -1966,8 +2029,19 @@ where
             .map(Entry::into_value)
     }
 
+    async fn get_entry(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>> {
+        let ignore_if = None as Option<&mut fn(&V) -> bool>;
+        self.base
+            .get_with_hash(key, hash, ignore_if, true, true)
+            .await
+    }
+
     async fn insert(&self, key: Arc<K>, hash: u64, value: V) {
         self.insert_with_hash(key.clone(), hash, value).await;
+    }
+
+    async fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V> {
+        self.invalidate_with_hash(key, hash, true).await
     }
 }
 
@@ -2032,6 +2106,7 @@ mod tests {
         common::time::Clock,
         future::FutureExt,
         notification::{ListenerFuture, RemovalCause},
+        ops::compute,
         policy::test_utils::ExpiryCallCounters,
         Expiry,
     };
@@ -2044,6 +2119,7 @@ mod tests {
             Arc,
         },
         time::{Duration, Instant as StdInstant},
+        vec,
     };
     use tokio::time::sleep;
 
@@ -2069,6 +2145,17 @@ mod tests {
         is_send(cache.try_get_with_by_ref(&(), async { Err(()) }));
 
         // entry fns
+        is_send(
+            cache
+                .entry(())
+                .and_compute_with(|_| async { compute::Op::Nop }),
+        );
+        is_send(
+            cache
+                .entry(())
+                .and_try_compute_with(|_| async { Ok(compute::Op::Nop) as Result<_, Infallible> }),
+        );
+        is_send(cache.entry(()).and_upsert_with(|_| async {}));
         is_send(cache.entry(()).or_default());
         is_send(cache.entry(()).or_insert(()));
         is_send(cache.entry(()).or_insert_with(async {}));
@@ -2077,6 +2164,17 @@ mod tests {
         is_send(cache.entry(()).or_try_insert_with(async { Err(()) }));
 
         // entry_by_ref fns
+        is_send(
+            cache
+                .entry_by_ref(&())
+                .and_compute_with(|_| async { compute::Op::Nop }),
+        );
+        is_send(
+            cache
+                .entry_by_ref(&())
+                .and_try_compute_with(|_| async { Ok(compute::Op::Nop) as Result<_, Infallible> }),
+        );
+        is_send(cache.entry_by_ref(&()).and_upsert_with(|_| async {}));
         is_send(cache.entry_by_ref(&()).or_default());
         is_send(cache.entry_by_ref(&()).or_insert(()));
         is_send(cache.entry_by_ref(&()).or_insert_with(async {}));
@@ -4231,6 +4329,364 @@ mod tests {
         };
 
         futures_util::join!(task1, task2, task3, task4, task5, task6, task7, task8);
+    }
+
+    #[tokio::test]
+    async fn upsert_with() {
+        let cache = Cache::new(100);
+        const KEY: u32 = 0;
+
+        // Spawn three async tasks to call `and_upsert_with` for the same key and
+        // each task increments the current value by 1. Ensure the key-level lock is
+        // working by verifying the value is 3 after all tasks finish.
+        //
+        // |        |  task 1  |  task 2  |  task 3  |
+        // |--------|----------|----------|----------|
+        // |   0 ms | get none |          |          |
+        // | 100 ms |          | blocked  |          |
+        // | 200 ms | insert 1 |          |          |
+        // |        |          | get 1    |          |
+        // | 300 ms |          |          | blocked  |
+        // | 400 ms |          | insert 2 |          |
+        // |        |          |          | get 2    |
+        // | 500 ms |          |          | insert 3 |
+
+        let task1 = {
+            let cache1 = cache.clone();
+            async move {
+                cache1
+                    .entry(KEY)
+                    .and_upsert_with(|maybe_entry| async move {
+                        sleep(Duration::from_millis(200)).await;
+                        assert!(maybe_entry.is_none());
+                        1
+                    })
+                    .await
+            }
+        };
+
+        let task2 = {
+            let cache2 = cache.clone();
+            async move {
+                sleep(Duration::from_millis(100)).await;
+                cache2
+                    .entry_by_ref(&KEY)
+                    .and_upsert_with(|maybe_entry| async move {
+                        sleep(Duration::from_millis(200)).await;
+                        let entry = maybe_entry.expect("The entry should exist");
+                        entry.into_value() + 1
+                    })
+                    .await
+            }
+        };
+
+        let task3 = {
+            let cache3 = cache.clone();
+            async move {
+                sleep(Duration::from_millis(300)).await;
+                cache3
+                    .entry_by_ref(&KEY)
+                    .and_upsert_with(|maybe_entry| async move {
+                        sleep(Duration::from_millis(100)).await;
+                        let entry = maybe_entry.expect("The entry should exist");
+                        entry.into_value() + 1
+                    })
+                    .await
+            }
+        };
+
+        let (ent1, ent2, ent3) = futures_util::join!(task1, task2, task3);
+        assert_eq!(ent1.into_value(), 1);
+        assert_eq!(ent2.into_value(), 2);
+        assert_eq!(ent3.into_value(), 3);
+
+        assert_eq!(cache.get(&KEY).await, Some(3));
+    }
+
+    #[tokio::test]
+    async fn compute_with() {
+        use crate::ops::compute;
+        use tokio::sync::RwLock;
+
+        let cache = Cache::new(100);
+        const KEY: u32 = 0;
+
+        // Spawn six async tasks to call `and_compute_with` for the same key. Ensure
+        // the key-level lock is working by verifying the value after all tasks
+        // finish.
+        //
+        // |         |   task 1   |    task 2     |   task 3   |  task 4  |   task 5   | task 6  |
+        // |---------|------------|---------------|------------|----------|------------|---------|
+        // |    0 ms | get none   |               |            |          |            |         |
+        // |  100 ms |            | blocked       |            |          |            |         |
+        // |  200 ms | insert [1] |               |            |          |            |         |
+        // |         |            | get [1]       |            |          |            |         |
+        // |  300 ms |            |               | blocked    |          |            |         |
+        // |  400 ms |            | insert [1, 2] |            |          |            |         |
+        // |         |            |               | get [1, 2] |          |            |         |
+        // |  500 ms |            |               |            | blocked  |            |         |
+        // |  600 ms |            |               | remove     |          |            |         |
+        // |         |            |               |            | get none |            |         |
+        // |  700 ms |            |               |            |          | blocked    |         |
+        // |  800 ms |            |               |            | nop      |            |         |
+        // |         |            |               |            |          | get none   |         |
+        // |  900 ms |            |               |            |          |            | blocked |
+        // | 1000 ms |            |               |            |          | insert [5] |         |
+        // |         |            |               |            |          |            | get [5] |
+        // | 1100 ms |            |               |            |          |            | nop     |
+
+        let task1 = {
+            let cache1 = cache.clone();
+            async move {
+                cache1
+                    .entry(KEY)
+                    .and_compute_with(|maybe_entry| async move {
+                        sleep(Duration::from_millis(200)).await;
+                        assert!(maybe_entry.is_none());
+                        compute::Op::Put(Arc::new(RwLock::new(vec![1])))
+                    })
+                    .await
+            }
+        };
+
+        let task2 = {
+            let cache2 = cache.clone();
+            async move {
+                sleep(Duration::from_millis(100)).await;
+                cache2
+                    .entry_by_ref(&KEY)
+                    .and_compute_with(|maybe_entry| async move {
+                        let entry = maybe_entry.expect("The entry should exist");
+                        let value = entry.into_value();
+                        assert_eq!(*value.read().await, vec![1]);
+                        sleep(Duration::from_millis(200)).await;
+                        value.write().await.push(2);
+                        compute::Op::Put(value)
+                    })
+                    .await
+            }
+        };
+
+        let task3 = {
+            let cache3 = cache.clone();
+            async move {
+                sleep(Duration::from_millis(300)).await;
+                cache3
+                    .entry(KEY)
+                    .and_compute_with(|maybe_entry| async move {
+                        let entry = maybe_entry.expect("The entry should exist");
+                        let value = entry.into_value();
+                        assert_eq!(*value.read().await, vec![1, 2]);
+                        sleep(Duration::from_millis(200)).await;
+                        compute::Op::Remove
+                    })
+                    .await
+            }
+        };
+
+        let task4 = {
+            let cache4 = cache.clone();
+            async move {
+                sleep(Duration::from_millis(500)).await;
+                cache4
+                    .entry(KEY)
+                    .and_compute_with(|maybe_entry| async move {
+                        assert!(maybe_entry.is_none());
+                        sleep(Duration::from_millis(200)).await;
+                        compute::Op::Nop
+                    })
+                    .await
+            }
+        };
+
+        let task5 = {
+            let cache5 = cache.clone();
+            async move {
+                sleep(Duration::from_millis(700)).await;
+                cache5
+                    .entry_by_ref(&KEY)
+                    .and_compute_with(|maybe_entry| async move {
+                        assert!(maybe_entry.is_none());
+                        sleep(Duration::from_millis(200)).await;
+                        compute::Op::Put(Arc::new(RwLock::new(vec![5])))
+                    })
+                    .await
+            }
+        };
+
+        let task6 = {
+            let cache6 = cache.clone();
+            async move {
+                sleep(Duration::from_millis(900)).await;
+                cache6
+                    .entry_by_ref(&KEY)
+                    .and_compute_with(|maybe_entry| async move {
+                        let entry = maybe_entry.expect("The entry should exist");
+                        let value = entry.into_value();
+                        assert_eq!(*value.read().await, vec![5]);
+                        sleep(Duration::from_millis(100)).await;
+                        compute::Op::Nop
+                    })
+                    .await
+            }
+        };
+
+        let (res1, res2, res3, res4, res5, res6) =
+            futures_util::join!(task1, task2, task3, task4, task5, task6);
+
+        let compute::CompResult::Inserted(entry) = res1 else {
+            panic!("Expected `Inserted`. Got {res1:?}")
+        };
+        assert_eq!(
+            *entry.into_value().read().await,
+            vec![1, 2] // The same Vec was modified by task2.
+        );
+
+        let compute::CompResult::ReplacedWith(entry) = res2 else {
+            panic!("Expected `ReplacedWith`. Got {res2:?}")
+        };
+        assert_eq!(*entry.into_value().read().await, vec![1, 2]);
+
+        let compute::CompResult::Removed(entry) = res3 else {
+            panic!("Expected `Removed`. Got {res3:?}")
+        };
+        assert_eq!(*entry.into_value().read().await, vec![1, 2]);
+
+        let compute::CompResult::StillNone(key) = res4 else {
+            panic!("Expected `StillNone`. Got {res4:?}")
+        };
+        assert_eq!(*key, KEY);
+
+        let compute::CompResult::Inserted(entry) = res5 else {
+            panic!("Expected `Inserted`. Got {res5:?}")
+        };
+        assert_eq!(*entry.into_value().read().await, vec![5]);
+
+        let compute::CompResult::Unchanged(entry) = res6 else {
+            panic!("Expected `Unchanged`. Got {res6:?}")
+        };
+        assert_eq!(*entry.into_value().read().await, vec![5]);
+    }
+
+    #[tokio::test]
+    async fn try_compute_with() {
+        use crate::ops::compute;
+        use tokio::sync::RwLock;
+
+        let cache: Cache<u32, Arc<RwLock<Vec<i32>>>> = Cache::new(100);
+        const KEY: u32 = 0;
+
+        // Spawn four async tasks to call `and_try_compute_with` for the same key.
+        // Ensure the key-level lock is working by verifying the value after all
+        // tasks finish.
+        //
+        // |         |   task 1   |    task 2     |   task 3   |  task 4    |
+        // |---------|------------|---------------|------------|------------|
+        // |    0 ms | get none   |               |            |            |
+        // |  100 ms |            | blocked       |            |            |
+        // |  200 ms | insert [1] |               |            |            |
+        // |         |            | get [1]       |            |            |
+        // |  300 ms |            |               | blocked    |            |
+        // |  400 ms |            | insert [1, 2] |            |            |
+        // |         |            |               | get [1, 2] |            |
+        // |  500 ms |            |               |            | blocked    |
+        // |  600 ms |            |               | err        |            |
+        // |         |            |               |            | get [1, 2] |
+        // |  700 ms |            |               |            | remove     |
+        //
+        // This test is shorter than `compute_with` test because this one omits `Nop`
+        // cases.
+
+        let task1 = {
+            let cache1 = cache.clone();
+            async move {
+                cache1
+                    .entry(KEY)
+                    .and_try_compute_with(|maybe_entry| async move {
+                        sleep(Duration::from_millis(200)).await;
+                        assert!(maybe_entry.is_none());
+                        Ok(compute::Op::Put(Arc::new(RwLock::new(vec![1])))) as Result<_, ()>
+                    })
+                    .await
+            }
+        };
+
+        let task2 = {
+            let cache2 = cache.clone();
+            async move {
+                sleep(Duration::from_millis(100)).await;
+                cache2
+                    .entry_by_ref(&KEY)
+                    .and_try_compute_with(|maybe_entry| async move {
+                        let entry = maybe_entry.expect("The entry should exist");
+                        let value = entry.into_value();
+                        assert_eq!(*value.read().await, vec![1]);
+                        sleep(Duration::from_millis(200)).await;
+                        value.write().await.push(2);
+                        Ok(compute::Op::Put(value)) as Result<_, ()>
+                    })
+                    .await
+            }
+        };
+
+        let task3 = {
+            let cache3 = cache.clone();
+            async move {
+                sleep(Duration::from_millis(300)).await;
+                cache3
+                    .entry(KEY)
+                    .and_try_compute_with(|maybe_entry| async move {
+                        let entry = maybe_entry.expect("The entry should exist");
+                        let value = entry.into_value();
+                        assert_eq!(*value.read().await, vec![1, 2]);
+                        sleep(Duration::from_millis(200)).await;
+                        Err(())
+                    })
+                    .await
+            }
+        };
+
+        let task4 = {
+            let cache4 = cache.clone();
+            async move {
+                sleep(Duration::from_millis(500)).await;
+                cache4
+                    .entry(KEY)
+                    .and_try_compute_with(|maybe_entry| async move {
+                        let entry = maybe_entry.expect("The entry should exist");
+                        let value = entry.into_value();
+                        assert_eq!(*value.read().await, vec![1, 2]);
+                        sleep(Duration::from_millis(100)).await;
+                        Ok(compute::Op::Remove) as Result<_, ()>
+                    })
+                    .await
+            }
+        };
+
+        let (res1, res2, res3, res4) = futures_util::join!(task1, task2, task3, task4);
+
+        let Ok(compute::CompResult::Inserted(entry)) = res1 else {
+            panic!("Expected `Inserted`. Got {res1:?}")
+        };
+        assert_eq!(
+            *entry.into_value().read().await,
+            vec![1, 2] // The same Vec was modified by task2.
+        );
+
+        let Ok(compute::CompResult::ReplacedWith(entry)) = res2 else {
+            panic!("Expected `ReplacedWith`. Got {res2:?}")
+        };
+        assert_eq!(*entry.into_value().read().await, vec![1, 2]);
+
+        assert!(res3.is_err());
+
+        let Ok(compute::CompResult::Removed(entry)) = res4 else {
+            panic!("Expected `Removed`. Got {res4:?}")
+        };
+        assert_eq!(
+            *entry.into_value().read().await,
+            vec![1, 2] // Removed value.
+        );
     }
 
     #[tokio::test]
