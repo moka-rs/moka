@@ -1865,16 +1865,23 @@ where
 
 // For unit tests.
 #[cfg(test)]
+impl<K, V, S> Cache<K, V, S> {
+    pub(crate) fn is_table_empty(&self) -> bool {
+        self.entry_count() == 0
+    }
+
+    pub(crate) fn is_waiter_map_empty(&self) -> bool {
+        self.value_initializer.waiter_count() == 0
+    }
+}
+
+#[cfg(test)]
 impl<K, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    pub(crate) fn is_table_empty(&self) -> bool {
-        self.entry_count() == 0
-    }
-
     pub(crate) fn invalidation_predicate_count(&self) -> usize {
         self.base.invalidation_predicate_count()
     }
@@ -3070,6 +3077,8 @@ mod tests {
         for t in [thread1, thread2, thread3, thread4, thread5] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -3153,6 +3162,8 @@ mod tests {
         for t in [thread1, thread2, thread3, thread4, thread5] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -3290,6 +3301,8 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -3429,6 +3442,8 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -3568,6 +3583,8 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -3707,6 +3724,8 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -3836,6 +3855,8 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -3965,6 +3986,8 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -4032,6 +4055,8 @@ mod tests {
         assert_eq!(ent3.into_value(), 3);
 
         assert_eq!(cache.get(&KEY), Some(3));
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -4185,6 +4210,8 @@ mod tests {
             panic!("Expected `Unchanged`. Got {res6:?}")
         };
         assert_eq!(*entry.into_value().read().unwrap(), vec![5]);
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -4302,6 +4329,8 @@ mod tests {
             *entry.into_value().read().unwrap(),
             vec![1, 2] // Removed value.
         );
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -4325,6 +4354,8 @@ mod tests {
 
         barrier.wait();
         assert_eq!(cache.get_with(1, || 5), 5);
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -4351,6 +4382,8 @@ mod tests {
             cache.try_get_with(1, || Ok(5)) as Result<_, Arc<Infallible>>,
             Ok(5)
         );
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]

@@ -639,6 +639,13 @@ where
 
 // For unit tests.
 #[cfg(test)]
+impl<K, V, S> SegmentedCache<K, V, S> {
+    fn is_waiter_map_empty(&self) -> bool {
+        self.inner.segments.iter().all(Cache::is_waiter_map_empty)
+    }
+}
+
+#[cfg(test)]
 impl<K, V, S> SegmentedCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -1419,6 +1426,8 @@ mod tests {
         for t in [thread1, thread2, thread3, thread4, thread5] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -1548,6 +1557,8 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -1686,6 +1697,8 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[test]
@@ -1815,6 +1828,8 @@ mod tests {
         ] {
             t.join().expect("Failed to join");
         }
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     // This test ensures that the `contains_key`, `get` and `invalidate` can use
