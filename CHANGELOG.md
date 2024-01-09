@@ -13,6 +13,14 @@
         - `and_try_compute_with` method, which is similar to above but returns
           `Result`.
 
+### Fixed
+
+- Raised the version requirement of the `quanta` from `>=0.11.0, <0.12.0` to
+  `>=0.12.2, <0.13.0` to avoid under-measuring the elapsed time on Apple silicon
+  Macs ([#376][gh-pull-0376]).
+    - Due to this under-measurement, cached entries expire sightly later than
+      expected on macOS arm64.
+
 
 ## Version 0.12.2
 
@@ -795,6 +803,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0376]: https://github.com/moka-rs/moka/pull/376/
 [gh-pull-0370]: https://github.com/moka-rs/moka/pull/370/
 [gh-pull-0363]: https://github.com/moka-rs/moka/pull/363/
 [gh-pull-0350]: https://github.com/moka-rs/moka/pull/350/
