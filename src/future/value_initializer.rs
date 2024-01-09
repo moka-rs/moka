@@ -477,6 +477,13 @@ where
     }
 }
 
+#[cfg(test)]
+impl<K, V, S> ValueInitializer<K, V, S> {
+    pub(crate) fn waiter_count(&self) -> usize {
+        self.waiters.len()
+    }
+}
+
 #[inline]
 fn remove_waiter<K, V, S>(waiter_map: &WaiterMap<K, V, S>, w_key: (Arc<K>, TypeId), w_hash: u64)
 where

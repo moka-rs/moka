@@ -393,3 +393,10 @@ where
         (w_key, w_hash)
     }
 }
+
+#[cfg(test)]
+impl<K, V, S> ValueInitializer<K, V, S> {
+    pub(crate) fn waiter_count(&self) -> usize {
+        self.waiters.len()
+    }
+}

@@ -2046,6 +2046,18 @@ where
 }
 
 // For unit tests.
+// For unit tests.
+#[cfg(test)]
+impl<K, V, S> Cache<K, V, S> {
+    pub(crate) fn is_table_empty(&self) -> bool {
+        self.entry_count() == 0
+    }
+
+    pub(crate) fn is_waiter_map_empty(&self) -> bool {
+        self.value_initializer.waiter_count() == 0
+    }
+}
+
 #[cfg(test)]
 impl<K, V, S> Cache<K, V, S>
 where
@@ -2053,10 +2065,6 @@ where
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    fn is_table_empty(&self) -> bool {
-        self.entry_count() == 0
-    }
-
     fn invalidation_predicate_count(&self) -> usize {
         self.base.invalidation_predicate_count()
     }
@@ -3439,6 +3447,8 @@ mod tests {
         };
 
         futures_util::join!(task1, task2, task3, task4, task5);
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[tokio::test]
@@ -3519,6 +3529,8 @@ mod tests {
         };
 
         futures_util::join!(task1, task2, task3, task4, task5);
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[tokio::test]
@@ -3653,6 +3665,8 @@ mod tests {
         };
 
         futures_util::join!(task1, task2, task3, task4, task5, task6, task7);
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[tokio::test]
@@ -3787,6 +3801,8 @@ mod tests {
         };
 
         futures_util::join!(task1, task2, task3, task4, task5, task6, task7);
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[tokio::test]
@@ -3922,6 +3938,8 @@ mod tests {
         };
 
         futures_util::join!(task1, task2, task3, task4, task5, task6, task7, task8);
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[tokio::test]
@@ -4063,6 +4081,8 @@ mod tests {
         };
 
         futures_util::join!(task1, task2, task3, task4, task5, task6, task7, task8);
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[tokio::test]
@@ -4329,6 +4349,8 @@ mod tests {
         };
 
         futures_util::join!(task1, task2, task3, task4, task5, task6, task7, task8);
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[tokio::test]
@@ -4401,6 +4423,8 @@ mod tests {
         assert_eq!(ent3.into_value(), 3);
 
         assert_eq!(cache.get(&KEY).await, Some(3));
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[tokio::test]
@@ -4566,6 +4590,8 @@ mod tests {
             panic!("Expected `Unchanged`. Got {res6:?}")
         };
         assert_eq!(*entry.into_value().read().await, vec![5]);
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[tokio::test]
@@ -4687,6 +4713,8 @@ mod tests {
             *entry.into_value().read().await,
             vec![1, 2] // Removed value.
         );
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[tokio::test]
@@ -4738,6 +4766,8 @@ mod tests {
             cache.try_get_with(1, async { Ok(5) }).await as Result<_, Arc<Infallible>>,
             Ok(5)
         );
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[tokio::test]
@@ -4768,6 +4798,8 @@ mod tests {
         handle.abort();
 
         assert_eq!(cache.get_with(1, async { 5 }).await, 5);
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[tokio::test]
@@ -4801,6 +4833,8 @@ mod tests {
             cache.try_get_with(1, async { Ok(5) }).await as Result<_, Arc<Infallible>>,
             Ok(5)
         );
+
+        assert!(cache.is_waiter_map_empty());
     }
 
     #[tokio::test]
