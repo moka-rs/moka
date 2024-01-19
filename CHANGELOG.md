@@ -1,12 +1,19 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.4
+
+### Added
+
+- Added an example for reinserting expired entries. ([#382][gh-pull-0382])
+
+
 ## Version 0.12.3
 
 ### Added
 
 - Added the upsert and compute methods for modifying a cached entry
   ([#370][gh-pull-0370]):
-    - Now the `entry` or `entry_by_ref` APIs have the following methods:
+    - Now the `entry` and `entry_by_ref` APIs have the following methods:
         - `and_upsert_with` method to insert or update the entry.
         - `and_compute_with` method to insert, update, remove or do nothing on the
           entry.
@@ -18,7 +25,7 @@
 - Raised the version requirement of the `quanta` from `>=0.11.0, <0.12.0` to
   `>=0.12.2, <0.13.0` to avoid under-measuring the elapsed time on Apple silicon
   Macs ([#376][gh-pull-0376]).
-    - Due to this under-measurement, cached entries expire sightly later than
+    - Due to this under-measurement, cached entries can expire sightly later than
       expected on macOS arm64.
 
 
@@ -803,6 +810,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0382]: https://github.com/moka-rs/moka/pull/382/
 [gh-pull-0376]: https://github.com/moka-rs/moka/pull/376/
 [gh-pull-0370]: https://github.com/moka-rs/moka/pull/370/
 [gh-pull-0363]: https://github.com/moka-rs/moka/pull/363/
