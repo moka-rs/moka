@@ -66,6 +66,14 @@ existence of the entry.
     - Beside the cache APIs, uses `BTreeMap`, `Arc` and mpsc channel (multi-producer,
       single consumer channel).
 
+- [reinsert_expired_entries_sync](./reinsert_expired_enties_sync.rs)
+    - Reinserts the expired entries into the cache using eviction listener and
+      worker threads.
+    - Spawns two worker threads; one for reinserting entries, and the other for
+      calling `run_pending_tasks`.
+    - Uses a mpsc channel (multi-producer, single consumer channel) to send commands
+      from the eviction listener to the first worker thread.
+
 ## Check out the API Documentation too!
 
 The examples are not meant to be exhaustive. Please check the

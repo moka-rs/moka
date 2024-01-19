@@ -147,6 +147,10 @@ name = "eviction_listener_sync"
 required-features = ["sync"]
 
 [[example]]
+name = "reinsert_expired_entries_sync"
+required-features = ["sync"]
+
+[[example]]
 name = "size_aware_eviction_sync"
 required-features = ["sync"]
 
