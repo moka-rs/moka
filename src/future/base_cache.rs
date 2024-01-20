@@ -89,12 +89,9 @@ impl<K, V, S> Drop for BaseCache<K, V, S> {
 
         // Ensure crossbeam-epoch to collect garbages (`deferred_fn`s) in the
         // global bag so that previously cached values will be dropped.
-
-        // First call should push the `deferred_fn`s in the thread local storage
-        // (TLS) of the current thread to the global bag.
-        crossbeam_epoch::pin().flush();
-        // Second call should collect the `deferred_fn`s in the global bag.
-        crossbeam_epoch::pin().flush();
+        for _ in 0..10 {
+            crossbeam_epoch::pin().flush();
+        }
 
         // NOTE: inner, read_op_ch, and write_op_ch will be dropped after returning
         // from this `drop` method. They use crossbeam-epoch internally, but we do
