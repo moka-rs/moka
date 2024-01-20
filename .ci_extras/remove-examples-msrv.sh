@@ -4,11 +4,12 @@
 
 set -eux
 
-# Replace the source file of example at $1 with the template file $2.
 function disable_example_sync() {
     local example_name="$1"
 
     mv ./examples/${example_name}.rs ./examples/${example_name}.rs.bak
+
+    # Replace the main function of example $1.
     cat << EOF > ./examples/${example_name}.rs
 fn main() {}
 EOF
