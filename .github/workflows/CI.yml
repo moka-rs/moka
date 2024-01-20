@@ -69,6 +69,10 @@ jobs:
         if: ${{ matrix.rust == '1.65.0' }}
         run: ./.ci_extras/pin-crate-vers-msrv.sh
 
+      - name: Remove some examples (MSRV only)
+        if: ${{ matrix.rust == '1.65.0' }}
+        run: ./.ci_extras/remove-examples-msrv.sh
+
       - name: Show cargo tree
         uses: actions-rs/cargo@v1
         with:
