@@ -78,7 +78,7 @@ impl<K, V, S> Drop for BaseCache<K, V, S> {
 
         // Ensure crossbeam-epoch to collect garbages (`deferred_fn`s) in the
         // global bag so that previously cached values will be dropped.
-        for _ in 0..10 {
+        for _ in 0..128 {
             crossbeam_epoch::pin().flush();
         }
 
