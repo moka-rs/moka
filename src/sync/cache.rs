@@ -4831,6 +4831,19 @@ mod tests {
         assert_eq!(counters.value_dropped(), KEYS, "value_dropped");
     }
 
+    // https://github.com/moka-rs/moka/issues/383
+    #[test]
+    fn ensure_gc_runs_when_dropping_cache() {
+        let cache = Cache::builder().build();
+        let val = Arc::new(0);
+        {
+            let val = Arc::clone(&val);
+            cache.get_with(1, move || val);
+        }
+        drop(cache);
+        assert_eq!(Arc::strong_count(&val), 1);
+    }
+
     #[test]
     fn test_debug_format() {
         let cache = Cache::new(10);

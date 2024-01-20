@@ -75,6 +75,20 @@ impl<K, V, S> Drop for BaseCache<K, V, S> {
     fn drop(&mut self) {
         // The housekeeper needs to be dropped before the inner is dropped.
         std::mem::drop(self.housekeeper.take());
+
+        // Ensure crossbeam-epoch to collect garbages (`deferred_fn`s) in the
+        // global bag so that previously cached values will be dropped.
+
+        // First call should push the `deferred_fn`s in the thread local storage
+        // (TLS) of the current thread to the global bag.
+        crossbeam_epoch::pin().flush();
+        // Second call should collect the `deferred_fn`s in the global bag.
+        crossbeam_epoch::pin().flush();
+
+        // NOTE: inner, read_op_ch, and write_op_ch will be dropped after returning
+        // from this `drop` method. They use crossbeam-epoch internally, but we do
+        // not have to call `flush` for them because their `drop` methods do not
+        // create `deferred_fn`s, and drop their values in place.
     }
 }
 
