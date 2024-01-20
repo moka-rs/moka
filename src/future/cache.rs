@@ -5454,6 +5454,18 @@ mod tests {
         assert_eq!(counters.value_dropped(), KEYS, "value_dropped");
     }
 
+    // https://github.com/moka-rs/moka/issues/383
+    #[tokio::test]
+    async fn ensure_gc_runs_when_dropping_cache() {
+        let cache = Cache::builder().build();
+        let val = Arc::new(0);
+        cache
+            .get_with(1, std::future::ready(Arc::clone(&val)))
+            .await;
+        drop(cache);
+        assert_eq!(Arc::strong_count(&val), 1);
+    }
+
     #[tokio::test]
     async fn test_debug_format() {
         let cache = Cache::new(10);
