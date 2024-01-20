@@ -75,19 +75,6 @@ impl<K, V, S> Drop for BaseCache<K, V, S> {
     fn drop(&mut self) {
         // The housekeeper needs to be dropped before the inner is dropped.
         std::mem::drop(self.housekeeper.take());
-
-        if Arc::strong_count(&self.inner) <= 1 {
-            // Ensure crossbeam-epoch to collect garbages (`deferred_fn`s) in the
-            // global bag so that previously cached values will be dropped.
-            for _ in 0..128 {
-                crossbeam_epoch::pin().flush();
-            }
-
-            // NOTE: The `inner` will be dropped after returning from this `drop`
-            // method. It uses crossbeam-epoch internally, but we do not have to call
-            // `flush` for it because its `drop` methods do not create
-            // `deferred_fn`s, and drop its values in place.
-        }
     }
 }
 
@@ -921,6 +908,21 @@ pub(crate) struct Inner<K, V, S> {
     key_locks: Option<KeyLockMap<K, S>>,
     invalidator: Option<Invalidator<K, V, S>>,
     clocks: Clocks,
+}
+
+impl<K, V, S> Drop for Inner<K, V, S> {
+    fn drop(&mut self) {
+        // Ensure crossbeam-epoch to collect garbages (`deferred_fn`s) in the
+        // global bag so that previously cached values will be dropped.
+        for _ in 0..128 {
+            crossbeam_epoch::pin().flush();
+        }
+
+        // NOTE: The `CacheStore` (`cht`) will be dropped after returning from this
+        // `drop` method. It uses crossbeam-epoch internally, but we do not have to
+        // call `flush` for it because its `drop` methods do not create
+        // `deferred_fn`s, and drop its values in place.
+    }
 }
 
 //
