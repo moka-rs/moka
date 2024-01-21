@@ -93,3 +93,11 @@ jobs:
         with:
           command: test
           args: --no-default-features --features 'sync, future, atomic64, logging'
+
+      - name: Run tests (sync feature, but no quanta feature, drop cache)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: |
+            --release --lib --no-default-features --features sync \
+            sync::cache::tests::ensure_gc_runs_when_dropping_cache -- --exact --ignored
