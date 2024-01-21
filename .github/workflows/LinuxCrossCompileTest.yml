@@ -80,3 +80,9 @@ jobs:
         run: |
           cross ${{ matrix.platform.cargo-version }} test --release -F future \
             --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }}
+
+      - name: Run tests (sync feature, drop cache)
+        run: |
+          cross ${{ matrix.platform.cargo-version }} test --release -F sync \
+            --target ${{ matrix.platform.target }} ${{ matrix.platform.cargo-opts }} \
+            --lib sync::cache::tests::ensure_gc_runs_when_dropping_cache -- --exact --ignored

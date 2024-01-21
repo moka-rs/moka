@@ -4831,8 +4831,12 @@ mod tests {
         assert_eq!(counters.value_dropped(), KEYS, "value_dropped");
     }
 
-    // https://github.com/moka-rs/moka/issues/383
+    // For testing the issue reported by: https://github.com/moka-rs/moka/issues/383
+    //
+    // Ignored by default. This test becomes unstable when run in parallel with
+    // other tests.
     #[test]
+    #[ignore]
     fn ensure_gc_runs_when_dropping_cache() {
         let cache = Cache::builder().build();
         let val = Arc::new(0);

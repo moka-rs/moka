@@ -113,6 +113,12 @@ jobs:
           command: test
           args: --release --lib --features sync sync::segment::tests::drop_value_immediately_after_eviction -- --exact --ignored
 
+      - name: Run tests (sync feature, drop cache)
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --release --lib --features sync sync::cache::tests::ensure_gc_runs_when_dropping_cache -- --exact --ignored
+
       - name: Run tests (future feature, but no sync feature)
         uses: actions-rs/cargo@v1
         with:
