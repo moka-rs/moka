@@ -98,6 +98,4 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: |
-            --release --lib --no-default-features --features sync \
-            sync::cache::tests::ensure_gc_runs_when_dropping_cache -- --exact --ignored
+          args: --release --lib --no-default-features --features sync sync::cache::tests::ensure_gc_runs_when_dropping_cache -- --exact --ignored
