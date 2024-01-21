@@ -84,7 +84,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.12.3", features = ["future"] }
+    /// // moka = { version = "0.12.4", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::{
@@ -269,7 +269,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.12.3", features = ["future"] }
+    /// // moka = { version = "0.12.4", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;
@@ -724,7 +724,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.12.3", features = ["future"] }
+    /// // moka = { version = "0.12.4", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::{
@@ -909,7 +909,7 @@ where
     /// // Cargo.toml
     /// //
     /// // [dependencies]
-    /// // moka = { version = "0.12.3", features = ["future"] }
+    /// // moka = { version = "0.12.4", features = ["future"] }
     /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
     ///
     /// use moka::future::Cache;

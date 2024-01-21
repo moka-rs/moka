@@ -2,9 +2,27 @@
 
 ## Version 0.12.4
 
+### Fixed
+
+- Ensure `crossbeam-epoch` to run GC when dropping a cache ([#384][gh-pull-0384]):
+    - `crossbeam-epoch` crate provides an epoch-based memory reclamation scheme for
+      concurrent data structures. It is used by Moka cache to safely drop cached
+      entries while they are still being accessed by other threads.
+    - `crossbeam-epoch` does the best to reclaim memory (drop the entries evicted
+      from the cache) when the epoch is advanced. However, it does not guarantee that
+      memory will be reclaimed immediately after the epoch is advanced. This means
+      that entries can remain in the memory for a while after the cache is dropped.
+    - This fix ensures that, when a cache is dropped, the epoch is advanced and
+      `crossbeam-epoch`'s thread local buffers are flushed, helping to reclaim memory
+      immediately.
+    - Note that there are still chances that some entries remain in the memory for a
+      while after a cache is dropped. We are looking for alternatives to
+      `crossbeam-epoch` to improve this situation (e.g. [#385][gh-issue-0385]).
+
 ### Added
 
-- Added an example for reinserting expired entries. ([#382][gh-pull-0382])
+- Added an example for reinserting expired entries to the cache.
+  ([#382][gh-pull-0382])
 
 
 ## Version 0.12.3
@@ -25,8 +43,8 @@
 - Raised the version requirement of the `quanta` from `>=0.11.0, <0.12.0` to
   `>=0.12.2, <0.13.0` to avoid under-measuring the elapsed time on Apple silicon
   Macs ([#376][gh-pull-0376]).
-    - Due to this under-measurement, cached entries can expire sightly later than
-      expected on macOS arm64.
+    - Due to this under-measurement, cached entries on macOS arm64 can expire sightly
+      later than expected.
 
 
 ## Version 0.12.2
@@ -789,6 +807,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-tinou98]: https://github.com/tinou98
 
+[gh-issue-0385]: https://github.com/moka-rs/moka/issues/385/
 [gh-issue-0329]: https://github.com/moka-rs/moka/issues/329/
 [gh-issue-0322]: https://github.com/moka-rs/moka/issues/322/
 [gh-issue-0255]: https://github.com/moka-rs/moka/issues/255/
@@ -810,6 +829,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0384]: https://github.com/moka-rs/moka/pull/384/
 [gh-pull-0382]: https://github.com/moka-rs/moka/pull/382/
 [gh-pull-0376]: https://github.com/moka-rs/moka/pull/376/
 [gh-pull-0370]: https://github.com/moka-rs/moka/pull/370/
