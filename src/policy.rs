@@ -58,6 +58,18 @@ impl Policy {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EvictionPolicy {
+    TinyLfu,
+    Lru,
+}
+
+impl Default for EvictionPolicy {
+    fn default() -> Self {
+        Self::TinyLfu
+    }
+}
+
 /// Calculates when cache entries expire. A single expiration time is retained on
 /// each entry so that the lifetime of an entry may be extended or reduced by
 /// subsequent evaluations.

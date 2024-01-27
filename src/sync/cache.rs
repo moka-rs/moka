@@ -11,7 +11,7 @@ use crate::{
     },
     notification::EvictionListener,
     ops::compute::{self, CompResult},
-    policy::ExpirationPolicy,
+    policy::{EvictionPolicy, ExpirationPolicy},
     sync::{Iter, PredicateId},
     sync_base::{
         base_cache::{BaseCache, HouseKeeperArc},
@@ -707,6 +707,7 @@ where
             None,
             build_hasher,
             None,
+            EvictionPolicy::default(),
             None,
             ExpirationPolicy::default(),
             false,
@@ -736,6 +737,7 @@ where
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        eviction_policy: EvictionPolicy,
         eviction_listener: Option<EvictionListener<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
@@ -747,6 +749,7 @@ where
                 initial_capacity,
                 build_hasher.clone(),
                 weigher,
+                eviction_policy,
                 eviction_listener,
                 expiration_policy,
                 invalidator_enabled,
@@ -1904,7 +1907,9 @@ where
 mod tests {
     use super::Cache;
     use crate::{
-        common::time::Clock, notification::RemovalCause, policy::test_utils::ExpiryCallCounters,
+        common::time::Clock,
+        notification::RemovalCause,
+        policy::{test_utils::ExpiryCallCounters, EvictionPolicy},
         Expiry,
     };
 
@@ -2014,6 +2019,101 @@ mod tests {
         cache.run_pending_tasks();
         assert_eq!(cache.get(&"d"), None);
         assert!(!cache.contains_key(&"d"));
+
+        verify_notification_vec(&cache, actual, &expected);
+        assert!(cache.key_locks_map_is_empty());
+    }
+
+    #[test]
+    fn basic_lru_single_thread() {
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+
+        // Create a cache with the eviction listener.
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .eviction_policy(EvictionPolicy::Lru)
+            .eviction_listener(listener)
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        cache.run_pending_tasks();
+        // a -> b
+
+        cache.insert("c", "cindy");
+        assert_eq!(cache.get(&"c"), Some("cindy"));
+        assert!(cache.contains_key(&"c"));
+        cache.run_pending_tasks();
+        // a -> b -> c
+
+        assert!(cache.contains_key(&"a"));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert!(cache.contains_key(&"b"));
+        cache.run_pending_tasks();
+        // c -> a -> b
+
+        // "d" should be admitted because the cache uses the LRU strategy.
+        cache.insert("d", "david");
+        // "c" is the LRU and should have be evicted.
+        expected.push((Arc::new("c"), "cindy", RemovalCause::Size));
+        cache.run_pending_tasks();
+
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"c"), None);
+        assert_eq!(cache.get(&"d"), Some("david"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert!(!cache.contains_key(&"c"));
+        assert!(cache.contains_key(&"d"));
+        cache.run_pending_tasks();
+        // a -> b -> d
+
+        cache.invalidate(&"b");
+        expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
+        cache.run_pending_tasks();
+        // a -> d
+        assert_eq!(cache.get(&"b"), None);
+        assert!(!cache.contains_key(&"b"));
+
+        assert!(cache.remove(&"b").is_none());
+        assert_eq!(cache.remove(&"d"), Some("david"));
+        expected.push((Arc::new("d"), "david", RemovalCause::Explicit));
+        cache.run_pending_tasks();
+        // a
+        assert_eq!(cache.get(&"d"), None);
+        assert!(!cache.contains_key(&"d"));
+
+        cache.insert("e", "emily");
+        cache.insert("f", "frank");
+        // "a" should be evicted because it is the LRU.
+        cache.insert("g", "gina");
+        expected.push((Arc::new("a"), "alice", RemovalCause::Size));
+        cache.run_pending_tasks();
+        // e -> f -> g
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"e"), Some("emily"));
+        assert_eq!(cache.get(&"f"), Some("frank"));
+        assert_eq!(cache.get(&"g"), Some("gina"));
+        assert!(!cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"e"));
+        assert!(cache.contains_key(&"f"));
+        assert!(cache.contains_key(&"g"));
 
         verify_notification_vec(&cache, actual, &expected);
         assert!(cache.key_locks_map_is_empty());

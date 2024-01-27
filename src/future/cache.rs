@@ -8,7 +8,7 @@ use crate::{
     common::concurrent::Weigher,
     notification::AsyncEvictionListener,
     ops::compute::{self, CompResult},
-    policy::ExpirationPolicy,
+    policy::{EvictionPolicy, ExpirationPolicy},
     Entry, Policy, PredicateError,
 };
 
@@ -787,6 +787,7 @@ where
             None,
             build_hasher,
             None,
+            EvictionPolicy::default(),
             None,
             ExpirationPolicy::default(),
             false,
@@ -816,6 +817,7 @@ where
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        eviction_policy: EvictionPolicy,
         eviction_listener: Option<AsyncEvictionListener<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
@@ -827,6 +829,7 @@ where
                 initial_capacity,
                 build_hasher.clone(),
                 weigher,
+                eviction_policy,
                 eviction_listener,
                 expiration_policy,
                 invalidator_enabled,
@@ -2115,7 +2118,7 @@ mod tests {
         future::FutureExt,
         notification::{ListenerFuture, RemovalCause},
         ops::compute,
-        policy::test_utils::ExpiryCallCounters,
+        policy::{test_utils::ExpiryCallCounters, EvictionPolicy},
         Expiry,
     };
 
@@ -2308,6 +2311,107 @@ mod tests {
         cache.run_pending_tasks().await;
         assert_eq!(cache.get(&"d").await, None);
         assert!(!cache.contains_key(&"d"));
+
+        verify_notification_vec(&cache, actual, &expected).await;
+        assert!(cache.key_locks_map_is_empty());
+    }
+
+    #[tokio::test]
+    async fn basic_lru_single_thread() {
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| -> ListenerFuture {
+            let a2 = Arc::clone(&a1);
+            async move {
+                a2.lock().await.push((k, v, cause));
+            }
+            .boxed()
+        };
+
+        // Create a cache with the eviction listener.
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .eviction_policy(EvictionPolicy::Lru)
+            .async_eviction_listener(listener)
+            .build();
+        cache.reconfigure_for_testing().await;
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice").await;
+        cache.insert("b", "bob").await;
+        assert_eq!(cache.get(&"a").await, Some("alice"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert_eq!(cache.get(&"b").await, Some("bob"));
+        cache.run_pending_tasks().await;
+        // a -> b
+
+        cache.insert("c", "cindy").await;
+        assert_eq!(cache.get(&"c").await, Some("cindy"));
+        assert!(cache.contains_key(&"c"));
+        cache.run_pending_tasks().await;
+        // a -> b -> c
+
+        assert!(cache.contains_key(&"a"));
+        assert_eq!(cache.get(&"a").await, Some("alice"));
+        assert_eq!(cache.get(&"b").await, Some("bob"));
+        assert!(cache.contains_key(&"b"));
+        cache.run_pending_tasks().await;
+        // c -> a -> b
+
+        // "d" should be admitted because the cache uses the LRU strategy.
+        cache.insert("d", "david").await;
+        // "c" is the LRU and should have be evicted.
+        expected.push((Arc::new("c"), "cindy", RemovalCause::Size));
+        cache.run_pending_tasks().await;
+
+        assert_eq!(cache.get(&"a").await, Some("alice"));
+        assert_eq!(cache.get(&"b").await, Some("bob"));
+        assert_eq!(cache.get(&"c").await, None);
+        assert_eq!(cache.get(&"d").await, Some("david"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert!(!cache.contains_key(&"c"));
+        assert!(cache.contains_key(&"d"));
+        cache.run_pending_tasks().await;
+        // a -> b -> d
+
+        cache.invalidate(&"b").await;
+        expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
+        cache.run_pending_tasks().await;
+        // a -> d
+        assert_eq!(cache.get(&"b").await, None);
+        assert!(!cache.contains_key(&"b"));
+
+        assert!(cache.remove(&"b").await.is_none());
+        assert_eq!(cache.remove(&"d").await, Some("david"));
+        expected.push((Arc::new("d"), "david", RemovalCause::Explicit));
+        cache.run_pending_tasks().await;
+        // a
+        assert_eq!(cache.get(&"d").await, None);
+        assert!(!cache.contains_key(&"d"));
+
+        cache.insert("e", "emily").await;
+        cache.insert("f", "frank").await;
+        // "a" should be evicted because it is the LRU.
+        cache.insert("g", "gina").await;
+        expected.push((Arc::new("a"), "alice", RemovalCause::Size));
+        cache.run_pending_tasks().await;
+        // e -> f -> g
+        assert_eq!(cache.get(&"a").await, None);
+        assert_eq!(cache.get(&"e").await, Some("emily"));
+        assert_eq!(cache.get(&"f").await, Some("frank"));
+        assert_eq!(cache.get(&"g").await, Some("gina"));
+        assert!(!cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"e"));
+        assert!(cache.contains_key(&"f"));
+        assert!(cache.contains_key(&"g"));
 
         verify_notification_vec(&cache, actual, &expected).await;
         assert!(cache.key_locks_map_is_empty());
