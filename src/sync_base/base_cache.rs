@@ -1571,7 +1571,9 @@ where
                 candidate.add_frequency(freq, kh.hash);
                 Self::admit(&candidate, &self.cache, deqs, freq)
             }
-            EvictionPolicy::Lru => AdmissionResult::Admitted { victim_keys: SmallVec::default() },
+            EvictionPolicy::Lru => AdmissionResult::Admitted {
+                victim_keys: SmallVec::default(),
+            },
         };
 
         match admission_result {
