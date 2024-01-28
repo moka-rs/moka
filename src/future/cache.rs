@@ -43,7 +43,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// - [Example: `insert`, `get` and `invalidate`](#example-insert-get-and-invalidate)
 /// - [Avoiding to clone the value at `get`](#avoiding-to-clone-the-value-at-get)
-/// - [Sharing a cache across asynchronous tasks](#sharing-a-cache-across-asynchronous-tasks)
+/// - [Sharing a cache across asynchronous
+///   tasks](#sharing-a-cache-across-asynchronous-tasks)
 ///     - [No lock is needed](#no-lock-is-needed)
 /// - [Hashing Algorithm](#hashing-algorithm)
 /// - [Example: Size-based Eviction](#example-size-based-eviction)
@@ -51,7 +52,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     - [Cache-level TTL and TTI policies](#cache-level-ttl-and-tti-policies)
 ///     - [Per-entry expiration policy](#per-entry-expiration-policy)
 /// - [Example: Eviction Listener](#example-eviction-listener)
-///     - [You should avoid eviction listener to panic](#you-should-avoid-eviction-listener-to-panic)
+///     - [You should avoid eviction listener to
+///       panic](#you-should-avoid-eviction-listener-to-panic)
 ///
 /// # Example: `insert`, `get` and `invalidate`
 ///
@@ -150,9 +152,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// - Create a clone of the cache by calling its `clone` method and pass it to other
 ///   task.
-/// - If you are using a web application framework such as Actix Web or Axum,
-///   you can store a cache in Actix Web's [`web::Data`][actix-web-data] or Axum's
-///   [shared state][axum-state-extractor], and access it from each request handler.
+/// - If you are using a web application framework such as Actix Web or Axum, you can
+///   store a cache in Actix Web's [`web::Data`][actix-web-data] or Axum's [shared
+///   state][axum-state-extractor], and access it from each request handler.
 /// - Wrap the cache by a `sync::OnceCell` or `sync::Lazy` from
 ///   [once_cell][once-cell-crate] create, and set it to a `static` variable.
 ///
@@ -161,7 +163,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// [once-cell-crate]: https://crates.io/crates/once_cell
 /// [actix-web-data]: https://docs.rs/actix-web/4.3.1/actix_web/web/struct.Data.html
-/// [axum-state-extractor]: https://docs.rs/axum/latest/axum/#sharing-state-with-handlers
+/// [axum-state-extractor]:
+///    https://docs.rs/axum/latest/axum/#sharing-state-with-handlers
 ///
 /// ## No lock is needed
 ///
@@ -302,8 +305,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// updated, one of these methods is called. These methods return an
 /// `Option<Duration>`, which is used as the expiration duration of the entry.
 ///
-/// `Expiry` trait provides the default implementations of these methods, so you
-/// will implement only the methods you want to customize.
+/// `Expiry` trait provides the default implementations of these methods, so you will
+/// implement only the methods you want to customize.
 ///
 /// [exp-create]: ../trait.Expiry.html#method.expire_after_create
 /// [exp-read]: ../trait.Expiry.html#method.expire_after_read
@@ -446,7 +449,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The following example demonstrates how to use an eviction listener with
 /// time-to-live expiration to manage the lifecycle of temporary files on a
 /// filesystem. The cache stores the paths of the files, and when one of them has
-/// expired, the eviction lister will be called with the path, so it can remove the
+/// expired, the eviction listener will be called with the path, so it can remove the
 /// file from the filesystem.
 ///
 /// ```rust
@@ -537,7 +540,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     let file_mgr1 = Arc::clone(&file_mgr);
 ///     let rt = tokio::runtime::Handle::current();
 ///
-///     // Create an eviction lister closure.
+///     // Create an eviction listener closure.
 ///     let eviction_listener = move |k, v: PathBuf, cause| -> ListenerFuture {
 ///         println!("\n== An entry has been evicted. k: {k:?}, v: {v:?}, cause: {cause:?}");
 ///         let file_mgr2 = Arc::clone(&file_mgr1);
@@ -594,7 +597,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     }
 ///
 ///     // Sleep for five seconds. While sleeping, the cache entry for key "user1"
-///     // will be expired and evicted, so the eviction lister will be called to
+///     // will be expired and evicted, so the eviction listener will be called to
 ///     // remove the file.
 ///     tokio::time::sleep(Duration::from_secs(5)).await;
 ///
@@ -609,7 +612,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// It is very important to make an eviction listener closure not to panic.
 /// Otherwise, the cache will stop calling the listener after a panic. This is an
 /// intended behavior because the cache cannot know whether it is memory safe or not
-/// to call the panicked lister again.
+/// to call the panicked listener again.
 ///
 /// When a listener panics, the cache will swallow the panic and disable the
 /// listener. If you want to know when a listener panics and the reason of the panic,

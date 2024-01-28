@@ -266,8 +266,8 @@ use std::{
 /// updated, one of these methods is called. These methods return an
 /// `Option<Duration>`, which is used as the expiration duration of the entry.
 ///
-/// `Expiry` trait provides the default implementations of these methods, so you
-/// will implement only the methods you want to customize.
+/// `Expiry` trait provides the default implementations of these methods, so you will
+/// implement only the methods you want to customize.
 ///
 /// [exp-create]: ../trait.Expiry.html#method.expire_after_create
 /// [exp-read]: ../trait.Expiry.html#method.expire_after_read
@@ -393,7 +393,7 @@ use std::{
 /// The following example demonstrates how to use an eviction listener with
 /// time-to-live expiration to manage the lifecycle of temporary files on a
 /// filesystem. The cache stores the paths of the files, and when one of them has
-/// expired, the eviction lister will be called with the path, so it can remove the
+/// expired, the eviction listener will be called with the path, so it can remove the
 /// file from the filesystem.
 ///
 /// ```rust
@@ -478,7 +478,7 @@ use std::{
 ///
 ///     let file_mgr1 = Arc::clone(&file_mgr);
 ///
-///     // Create an eviction lister closure.
+///     // Create an eviction listener closure.
 ///     let eviction_listener = move |k, v: PathBuf, cause| {
 ///         // Try to remove the data file at the path `v`.
 ///         println!("\n== An entry has been evicted. k: {k:?}, v: {v:?}, cause: {cause:?}");
@@ -536,7 +536,7 @@ use std::{
 ///     }
 ///
 ///     // Sleep for five seconds. While sleeping, the cache entry for key "user1"
-///     // will be expired and evicted, so the eviction lister will be called to
+///     // will be expired and evicted, so the eviction listener will be called to
 ///     // remove the file.
 ///     std::thread::sleep(Duration::from_secs(5));
 ///
@@ -551,7 +551,7 @@ use std::{
 /// It is very important to make an eviction listener closure not to panic.
 /// Otherwise, the cache will stop calling the listener after a panic. This is an
 /// intended behavior because the cache cannot know whether it is memory safe or not
-/// to call the panicked lister again.
+/// to call the panicked listener again.
 ///
 /// When a listener panics, the cache will swallow the panic and disable the
 /// listener. If you want to know when a listener panics and the reason of the panic,

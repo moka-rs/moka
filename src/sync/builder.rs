@@ -417,8 +417,8 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     ///
     /// It is very important to make the listener closure not to panic. Otherwise,
     /// the cache will stop calling the listener after a panic. This is an intended
-    /// behavior because the cache cannot know whether is is memory safe or not to
-    /// call the panicked lister again.
+    /// behavior because the cache cannot know whether it is memory safe or not to
+    /// call the panicked listener again.
     ///
     /// [removal-cause]: ../notification/enum.RemovalCause.html
     pub fn eviction_listener(
