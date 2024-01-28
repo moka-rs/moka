@@ -1,5 +1,26 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.5
+
+### Added
+
+- Added support for a plain LRU (Least Recently Used) eviction policy
+    ([#390][gh-pull-0390]):
+    - The LRU policy is enabled by calling the `eviction_policy` method of the cache
+      builder with a policy obtained by `EvictionPolicy::lru` function.
+    - The default eviction policy remains the TinyLFU (Least Frequently Used) as it
+      maintains better hit rate than LRU for most use cases. TinyLFU is a combination
+      of a LRU eviction policy and popularity-based admission policy. A probabilistic
+      data structure is used to estimate historical popularity of both hit and missed
+      keys. (not only the keys currently in the cache)
+    - However, some use cases may prefer the LRU policy over TinyLFU. An example is
+      recency biased workload such as streaming data processing. The LRU policy can
+      be used for them to achieve better hit rate.
+    - Note that we are planning to add an adaptive eviction/admission policy called
+      Window-TinyLFU in the future. It will adjust the balance between recency and
+      frequency based on the current workload.
+
+
 ## Version 0.12.4
 
 ### Fixed
@@ -829,6 +850,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0390]: https://github.com/moka-rs/moka/pull/390/
 [gh-pull-0384]: https://github.com/moka-rs/moka/pull/384/
 [gh-pull-0382]: https://github.com/moka-rs/moka/pull/382/
 [gh-pull-0376]: https://github.com/moka-rs/moka/pull/376/
