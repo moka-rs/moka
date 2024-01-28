@@ -384,6 +384,12 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
+    /// Sets the eviction (and admission) policy of the cache.
+    ///
+    /// The default policy is TinyLFU. See [`EvictionPolicy`][eviction-policy] for
+    /// more details.
+    ///
+    /// [eviction-policy]: ../policy/struct.EvictionPolicy.html
     pub fn eviction_policy(self, policy: EvictionPolicy) -> Self {
         Self {
             eviction_policy: policy,

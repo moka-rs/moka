@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -58,13 +59,79 @@ impl Policy {
     }
 }
 
+/// The eviction (and admission) policy of a cache.
+///
+/// When the cache is full, the eviction/admission policy is used to determine which
+/// items should be admitted to the cache and which cached items should be evicted.
+/// The choice of a policy will directly affect the performance (hit rate) of the
+/// cache.
+///
+/// The following policies are available:
+///
+/// - **TinyLFU** (default):
+///   - Suitable for most workloads.
+///   - TinyLFU combines the LRU eviction policy and an admission policy based on the
+///     historical popularity of keys.
+///   - Note that it tracks not only the keys currently in the cache, but all hit and
+///     missed keys. The data structure used to _estimate_ the popularity of keys is
+///     a modified Count-Min Sketch, which has a very low memory footprint (thus the
+///     name "tiny").
+/// - **LRU**:
+///   - Suitable for some workloads with strong recency bias, such as streaming data
+///     processing.
+///
+/// LFU stands for Least Frequently Used. LRU stands for Least Recently Used.
+///
+/// Use associate function [`EvictionPolicy::tiny_lfu`](#method.tiny_lfu) or
+/// [`EvictionPolicy::lru`](#method.lru) to obtain an instance of `EvictionPolicy`.
+#[derive(Clone, Default)]
+pub struct EvictionPolicy {
+    pub(crate) config: EvictionPolicyConfig,
+}
+
+impl EvictionPolicy {
+    /// Returns the TinyLFU policy, which is suitable for most workloads.
+    ///
+    /// TinyLFU is a combination of the LRU eviction policy and the admission policy
+    /// based on the historical popularity of keys.
+    ///
+    /// Note that it tracks not only the keys currently in the cache, but all hit and
+    /// missed keys. The data structure used to _estimate_ the popularity of keys is
+    /// a modified Count-Min Sketch, which has a very low memory footprint (thus the
+    /// name "tiny").
+    pub fn tiny_lfu() -> Self {
+        Self {
+            config: EvictionPolicyConfig::TinyLfu,
+        }
+    }
+
+    /// Returns the LRU policy.
+    ///
+    /// Suitable for some workloads with strong recency bias, such as streaming data
+    /// processing.
+    pub fn lru() -> Self {
+        Self {
+            config: EvictionPolicyConfig::Lru,
+        }
+    }
+}
+
+impl fmt::Debug for EvictionPolicy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.config {
+            EvictionPolicyConfig::TinyLfu => write!(f, "EvictionPolicy::TinyLfu"),
+            EvictionPolicyConfig::Lru => write!(f, "EvictionPolicy::Lru"),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum EvictionPolicy {
+pub(crate) enum EvictionPolicyConfig {
     TinyLfu,
     Lru,
 }
 
-impl Default for EvictionPolicy {
+impl Default for EvictionPolicyConfig {
     fn default() -> Self {
         Self::TinyLfu
     }

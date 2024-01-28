@@ -2335,7 +2335,7 @@ mod tests {
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(3)
-            .eviction_policy(EvictionPolicy::Lru)
+            .eviction_policy(EvictionPolicy::lru())
             .async_eviction_listener(listener)
             .build();
         cache.reconfigure_for_testing().await;

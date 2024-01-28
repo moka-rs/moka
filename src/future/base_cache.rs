@@ -27,7 +27,7 @@ use crate::{
     },
     future::CancelGuard,
     notification::{AsyncEvictionListener, RemovalCause},
-    policy::{EvictionPolicy, ExpirationPolicy},
+    policy::{EvictionPolicy, EvictionPolicyConfig, ExpirationPolicy},
     sync_base::iter::ScanningGet,
     Entry, Expiry, Policy, PredicateError,
 };
@@ -1043,7 +1043,7 @@ pub(crate) struct Inner<K, V, S> {
     read_op_ch: Receiver<ReadOp<K, V>>,
     write_op_ch: Receiver<WriteOp<K, V>>,
     maintenance_task_lock: RwLock<()>,
-    eviction_policy: EvictionPolicy,
+    eviction_policy: EvictionPolicyConfig,
     expiration_policy: ExpirationPolicy<K, V>,
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
@@ -1251,7 +1251,7 @@ where
             read_op_ch,
             write_op_ch,
             maintenance_task_lock: RwLock::default(),
-            eviction_policy,
+            eviction_policy: eviction_policy.config,
             expiration_policy,
             valid_after: AtomicInstant::default(),
             weigher,
@@ -1456,7 +1456,7 @@ where
                     .await;
             }
 
-            if self.eviction_policy == EvictionPolicy::TinyLfu
+            if self.eviction_policy == EvictionPolicyConfig::TinyLfu
                 && self.should_enable_frequency_sketch(&eviction_state.counters)
             {
                 self.enable_frequency_sketch(&eviction_state.counters).await;
@@ -1754,12 +1754,12 @@ where
 
         // Try to admit the candidate.
         let admission_result = match &self.eviction_policy {
-            EvictionPolicy::TinyLfu => {
+            EvictionPolicyConfig::TinyLfu => {
                 let mut candidate = EntrySizeAndFrequency::new(new_weight);
                 candidate.add_frequency(freq, kh.hash);
                 Self::admit(&candidate, &self.cache, deqs, freq)
             }
-            EvictionPolicy::Lru => AdmissionResult::Admitted {
+            EvictionPolicyConfig::Lru => AdmissionResult::Admitted {
                 victim_keys: SmallVec::default(),
             },
         };
