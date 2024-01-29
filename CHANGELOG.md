@@ -8,14 +8,14 @@
     ([#390][gh-pull-0390]):
     - The LRU policy is enabled by calling the `eviction_policy` method of the cache
       builder with a policy obtained by `EvictionPolicy::lru` function.
-    - The default eviction policy remains the TinyLFU (Least Frequently Used) as it
-      maintains better hit rate than LRU for most use cases. TinyLFU is a combination
-      of a LRU eviction policy and popularity-based admission policy. A probabilistic
-      data structure is used to estimate historical popularity of both hit and missed
-      keys. (not only the keys currently in the cache)
-    - However, some use cases may prefer the LRU policy over TinyLFU. An example is
-      recency biased workload such as streaming data processing. The LRU policy can
-      be used for them to achieve better hit rate.
+    - The default eviction policy remains the TinyLFU (Tiny, Least Frequently Used)
+      as it maintains better hit rate than LRU for most use cases. TinyLFU combines
+      LRU eviction policy and popularity-based admission policy. A probabilistic data
+      structure is used to estimate historical popularity of both hit and missed
+      keys. (not only the keys currently in the cache.)
+    - However, some use cases may prefer LRU policy over TinyLFU. An example is
+      recency biased workload such as streaming data processing. LRU policy can be
+      used for them to achieve better hit rate.
     - Note that we are planning to add an adaptive eviction/admission policy called
       Window-TinyLFU in the future. It will adjust the balance between recency and
       frequency based on the current workload.
@@ -29,7 +29,7 @@
     - `crossbeam-epoch` crate provides an epoch-based memory reclamation scheme for
       concurrent data structures. It is used by Moka cache to safely drop cached
       entries while they are still being accessed by other threads.
-    - `crossbeam-epoch` does the best to reclaim memory (drop the entries evicted
+    - `crossbeam-epoch` does its best to reclaim memory (drop the entries evicted
       from the cache) when the epoch is advanced. However, it does not guarantee that
       memory will be reclaimed immediately after the epoch is advanced. This means
       that entries can remain in the memory for a while after the cache is dropped.
