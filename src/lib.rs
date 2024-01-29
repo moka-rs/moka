@@ -114,7 +114,7 @@ pub(crate) mod common;
 pub mod ops;
 
 #[cfg(any(feature = "sync", feature = "future"))]
-pub(crate) mod policy;
+pub mod policy;
 
 #[cfg(any(feature = "sync", feature = "future"))]
 pub(crate) mod sync_base;

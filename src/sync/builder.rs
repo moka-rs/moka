@@ -2,7 +2,7 @@ use super::{Cache, SegmentedCache};
 use crate::{
     common::{builder_utils, concurrent::Weigher},
     notification::{EvictionListener, RemovalCause},
-    policy::ExpirationPolicy,
+    policy::{EvictionPolicy, ExpirationPolicy},
     Expiry,
 };
 
@@ -53,6 +53,7 @@ pub struct CacheBuilder<K, V, C> {
     initial_capacity: Option<usize>,
     num_segments: Option<usize>,
     weigher: Option<Weigher<K, V>>,
+    eviction_policy: EvictionPolicy,
     eviction_listener: Option<EvictionListener<K, V>>,
     expiration_policy: ExpirationPolicy<K, V>,
     invalidator_enabled: bool,
@@ -72,6 +73,7 @@ where
             num_segments: None,
             weigher: None,
             eviction_listener: None,
+            eviction_policy: EvictionPolicy::default(),
             expiration_policy: ExpirationPolicy::default(),
             invalidator_enabled: false,
             cache_type: PhantomData,
@@ -110,6 +112,7 @@ where
             initial_capacity: self.initial_capacity,
             num_segments: Some(num_segments),
             weigher: self.weigher,
+            eviction_policy: self.eviction_policy,
             eviction_listener: self.eviction_listener,
             expiration_policy: self.expiration_policy,
             invalidator_enabled: self.invalidator_enabled,
@@ -137,6 +140,7 @@ where
             self.initial_capacity,
             build_hasher,
             self.weigher,
+            self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
             self.invalidator_enabled,
@@ -223,6 +227,7 @@ where
             self.initial_capacity,
             hasher,
             self.weigher,
+            self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
             self.invalidator_enabled,
@@ -256,6 +261,7 @@ where
             self.num_segments.unwrap(),
             build_hasher,
             self.weigher,
+            self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
             self.invalidator_enabled,
@@ -344,6 +350,7 @@ where
             self.num_segments.unwrap(),
             hasher,
             self.weigher,
+            self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
             self.invalidator_enabled,
@@ -377,6 +384,19 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
+    /// Sets the eviction (and admission) policy of the cache.
+    ///
+    /// The default policy is TinyLFU. See [`EvictionPolicy`][eviction-policy] for
+    /// more details.
+    ///
+    /// [eviction-policy]: ../policy/struct.EvictionPolicy.html
+    pub fn eviction_policy(self, policy: EvictionPolicy) -> Self {
+        Self {
+            eviction_policy: policy,
+            ..self
+        }
+    }
+
     /// Sets the weigher closure to the cache.
     ///
     /// The closure should take `&K` and `&V` as the arguments and returns a `u32`
@@ -397,8 +417,8 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     ///
     /// It is very important to make the listener closure not to panic. Otherwise,
     /// the cache will stop calling the listener after a panic. This is an intended
-    /// behavior because the cache cannot know whether is is memory safe or not to
-    /// call the panicked lister again.
+    /// behavior because the cache cannot know whether it is memory safe or not to
+    /// call the panicked listener again.
     ///
     /// [removal-cause]: ../notification/enum.RemovalCause.html
     pub fn eviction_listener(

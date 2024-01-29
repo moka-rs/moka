@@ -2,7 +2,7 @@ use super::{Cache, FutureExt};
 use crate::{
     common::{builder_utils, concurrent::Weigher},
     notification::{AsyncEvictionListener, ListenerFuture, RemovalCause},
-    policy::ExpirationPolicy,
+    policy::{EvictionPolicy, ExpirationPolicy},
     Expiry,
 };
 
@@ -60,6 +60,7 @@ pub struct CacheBuilder<K, V, C> {
     max_capacity: Option<u64>,
     initial_capacity: Option<usize>,
     weigher: Option<Weigher<K, V>>,
+    eviction_policy: EvictionPolicy,
     eviction_listener: Option<AsyncEvictionListener<K, V>>,
     expiration_policy: ExpirationPolicy<K, V>,
     invalidator_enabled: bool,
@@ -77,6 +78,7 @@ where
             max_capacity: None,
             initial_capacity: None,
             weigher: None,
+            eviction_policy: EvictionPolicy::default(),
             eviction_listener: None,
             expiration_policy: ExpirationPolicy::default(),
             invalidator_enabled: false,
@@ -116,6 +118,7 @@ where
             self.initial_capacity,
             build_hasher,
             self.weigher,
+            self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
             self.invalidator_enabled,
@@ -212,6 +215,7 @@ where
             self.initial_capacity,
             hasher,
             self.weigher,
+            self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
             self.invalidator_enabled,
@@ -241,6 +245,19 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     pub fn initial_capacity(self, number_of_entries: usize) -> Self {
         Self {
             initial_capacity: Some(number_of_entries),
+            ..self
+        }
+    }
+
+    /// Sets the eviction (and admission) policy of the cache.
+    ///
+    /// The default policy is TinyLFU. See [`EvictionPolicy`][eviction-policy] for
+    /// more details.
+    ///
+    /// [eviction-policy]: ../policy/struct.EvictionPolicy.html
+    pub fn eviction_policy(self, policy: EvictionPolicy) -> Self {
+        Self {
+            eviction_policy: policy,
             ..self
         }
     }
@@ -276,8 +293,8 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     ///
     /// It is very important to make the listener closure not to panic. Otherwise,
     /// the cache will stop calling the listener after a panic. This is an intended
-    /// behavior because the cache cannot know whether is is memory safe or not to
-    /// call the panicked lister again.
+    /// behavior because the cache cannot know whether it is memory safe or not to
+    /// call the panicked listener again.
     ///
     /// [removal-cause]: ../notification/enum.RemovalCause.html
     /// [example]: ./struct.Cache.html#per-entry-expiration-policy
@@ -316,8 +333,8 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     ///
     /// It is very important to make the listener closure not to panic. Otherwise,
     /// the cache will stop calling the listener after a panic. This is an intended
-    /// behavior because the cache cannot know whether is is memory safe or not to
-    /// call the panicked lister again.
+    /// behavior because the cache cannot know whether it is memory safe or not to
+    /// call the panicked listener again.
     ///
     /// [removal-cause]: ../notification/enum.RemovalCause.html
     /// [listener-future]: ../notification/type.ListenerFuture.html

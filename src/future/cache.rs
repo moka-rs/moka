@@ -8,7 +8,7 @@ use crate::{
     common::concurrent::Weigher,
     notification::AsyncEvictionListener,
     ops::compute::{self, CompResult},
-    policy::ExpirationPolicy,
+    policy::{EvictionPolicy, ExpirationPolicy},
     Entry, Policy, PredicateError,
 };
 
@@ -150,8 +150,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// - Create a clone of the cache by calling its `clone` method and pass it to other
 ///   task.
-/// - If you are using a web application framework such as Actix Web or Axum,
-///   you can store a cache in Actix Web's [`web::Data`][actix-web-data] or Axum's
+/// - If you are using a web application framework such as Actix Web or Axum, you can
+///   store a cache in Actix Web's [`web::Data`][actix-web-data] or Axum's
 ///   [shared state][axum-state-extractor], and access it from each request handler.
 /// - Wrap the cache by a `sync::OnceCell` or `sync::Lazy` from
 ///   [once_cell][once-cell-crate] create, and set it to a `static` variable.
@@ -302,8 +302,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// updated, one of these methods is called. These methods return an
 /// `Option<Duration>`, which is used as the expiration duration of the entry.
 ///
-/// `Expiry` trait provides the default implementations of these methods, so you
-/// will implement only the methods you want to customize.
+/// `Expiry` trait provides the default implementations of these methods, so you will
+/// implement only the methods you want to customize.
 ///
 /// [exp-create]: ../trait.Expiry.html#method.expire_after_create
 /// [exp-read]: ../trait.Expiry.html#method.expire_after_read
@@ -446,7 +446,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The following example demonstrates how to use an eviction listener with
 /// time-to-live expiration to manage the lifecycle of temporary files on a
 /// filesystem. The cache stores the paths of the files, and when one of them has
-/// expired, the eviction lister will be called with the path, so it can remove the
+/// expired, the eviction listener will be called with the path, so it can remove the
 /// file from the filesystem.
 ///
 /// ```rust
@@ -537,7 +537,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     let file_mgr1 = Arc::clone(&file_mgr);
 ///     let rt = tokio::runtime::Handle::current();
 ///
-///     // Create an eviction lister closure.
+///     // Create an eviction listener closure.
 ///     let eviction_listener = move |k, v: PathBuf, cause| -> ListenerFuture {
 ///         println!("\n== An entry has been evicted. k: {k:?}, v: {v:?}, cause: {cause:?}");
 ///         let file_mgr2 = Arc::clone(&file_mgr1);
@@ -594,7 +594,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     }
 ///
 ///     // Sleep for five seconds. While sleeping, the cache entry for key "user1"
-///     // will be expired and evicted, so the eviction lister will be called to
+///     // will be expired and evicted, so the eviction listener will be called to
 ///     // remove the file.
 ///     tokio::time::sleep(Duration::from_secs(5)).await;
 ///
@@ -609,7 +609,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// It is very important to make an eviction listener closure not to panic.
 /// Otherwise, the cache will stop calling the listener after a panic. This is an
 /// intended behavior because the cache cannot know whether it is memory safe or not
-/// to call the panicked lister again.
+/// to call the panicked listener again.
 ///
 /// When a listener panics, the cache will swallow the panic and disable the
 /// listener. If you want to know when a listener panics and the reason of the panic,
@@ -787,6 +787,7 @@ where
             None,
             build_hasher,
             None,
+            EvictionPolicy::default(),
             None,
             ExpirationPolicy::default(),
             false,
@@ -816,6 +817,7 @@ where
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        eviction_policy: EvictionPolicy,
         eviction_listener: Option<AsyncEvictionListener<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
@@ -827,6 +829,7 @@ where
                 initial_capacity,
                 build_hasher.clone(),
                 weigher,
+                eviction_policy,
                 eviction_listener,
                 expiration_policy,
                 invalidator_enabled,
@@ -2115,7 +2118,7 @@ mod tests {
         future::FutureExt,
         notification::{ListenerFuture, RemovalCause},
         ops::compute,
-        policy::test_utils::ExpiryCallCounters,
+        policy::{test_utils::ExpiryCallCounters, EvictionPolicy},
         Expiry,
     };
 
@@ -2308,6 +2311,107 @@ mod tests {
         cache.run_pending_tasks().await;
         assert_eq!(cache.get(&"d").await, None);
         assert!(!cache.contains_key(&"d"));
+
+        verify_notification_vec(&cache, actual, &expected).await;
+        assert!(cache.key_locks_map_is_empty());
+    }
+
+    #[tokio::test]
+    async fn basic_lru_single_thread() {
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| -> ListenerFuture {
+            let a2 = Arc::clone(&a1);
+            async move {
+                a2.lock().await.push((k, v, cause));
+            }
+            .boxed()
+        };
+
+        // Create a cache with the eviction listener.
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .eviction_policy(EvictionPolicy::lru())
+            .async_eviction_listener(listener)
+            .build();
+        cache.reconfigure_for_testing().await;
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice").await;
+        cache.insert("b", "bob").await;
+        assert_eq!(cache.get(&"a").await, Some("alice"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert_eq!(cache.get(&"b").await, Some("bob"));
+        cache.run_pending_tasks().await;
+        // a -> b
+
+        cache.insert("c", "cindy").await;
+        assert_eq!(cache.get(&"c").await, Some("cindy"));
+        assert!(cache.contains_key(&"c"));
+        cache.run_pending_tasks().await;
+        // a -> b -> c
+
+        assert!(cache.contains_key(&"a"));
+        assert_eq!(cache.get(&"a").await, Some("alice"));
+        assert_eq!(cache.get(&"b").await, Some("bob"));
+        assert!(cache.contains_key(&"b"));
+        cache.run_pending_tasks().await;
+        // c -> a -> b
+
+        // "d" should be admitted because the cache uses the LRU strategy.
+        cache.insert("d", "david").await;
+        // "c" is the LRU and should have be evicted.
+        expected.push((Arc::new("c"), "cindy", RemovalCause::Size));
+        cache.run_pending_tasks().await;
+
+        assert_eq!(cache.get(&"a").await, Some("alice"));
+        assert_eq!(cache.get(&"b").await, Some("bob"));
+        assert_eq!(cache.get(&"c").await, None);
+        assert_eq!(cache.get(&"d").await, Some("david"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert!(!cache.contains_key(&"c"));
+        assert!(cache.contains_key(&"d"));
+        cache.run_pending_tasks().await;
+        // a -> b -> d
+
+        cache.invalidate(&"b").await;
+        expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
+        cache.run_pending_tasks().await;
+        // a -> d
+        assert_eq!(cache.get(&"b").await, None);
+        assert!(!cache.contains_key(&"b"));
+
+        assert!(cache.remove(&"b").await.is_none());
+        assert_eq!(cache.remove(&"d").await, Some("david"));
+        expected.push((Arc::new("d"), "david", RemovalCause::Explicit));
+        cache.run_pending_tasks().await;
+        // a
+        assert_eq!(cache.get(&"d").await, None);
+        assert!(!cache.contains_key(&"d"));
+
+        cache.insert("e", "emily").await;
+        cache.insert("f", "frank").await;
+        // "a" should be evicted because it is the LRU.
+        cache.insert("g", "gina").await;
+        expected.push((Arc::new("a"), "alice", RemovalCause::Size));
+        cache.run_pending_tasks().await;
+        // e -> f -> g
+        assert_eq!(cache.get(&"a").await, None);
+        assert_eq!(cache.get(&"e").await, Some("emily"));
+        assert_eq!(cache.get(&"f").await, Some("frank"));
+        assert_eq!(cache.get(&"g").await, Some("gina"));
+        assert!(!cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"e"));
+        assert!(cache.contains_key(&"f"));
+        assert!(cache.contains_key(&"g"));
 
         verify_notification_vec(&cache, actual, &expected).await;
         assert!(cache.key_locks_map_is_empty());

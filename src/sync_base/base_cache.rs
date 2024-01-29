@@ -26,7 +26,7 @@ use crate::{
         CacheRegion,
     },
     notification::{notifier::RemovalNotifier, EvictionListener, RemovalCause},
-    policy::ExpirationPolicy,
+    policy::{EvictionPolicy, EvictionPolicyConfig, ExpirationPolicy},
     Entry, Expiry, Policy, PredicateError,
 };
 
@@ -142,6 +142,7 @@ where
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        eviction_policy: EvictionPolicy,
         eviction_listener: Option<EvictionListener<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
         invalidator_enabled: bool,
@@ -161,6 +162,7 @@ where
             initial_capacity,
             build_hasher,
             weigher,
+            eviction_policy,
             eviction_listener,
             r_rcv,
             w_rcv,
@@ -901,6 +903,7 @@ pub(crate) struct Inner<K, V, S> {
     frequency_sketch_enabled: AtomicBool,
     read_op_ch: Receiver<ReadOp<K, V>>,
     write_op_ch: Receiver<WriteOp<K, V>>,
+    eviction_policy: EvictionPolicyConfig,
     expiration_policy: ExpirationPolicy<K, V>,
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
@@ -1038,6 +1041,7 @@ where
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        eviction_policy: EvictionPolicy,
         eviction_listener: Option<EvictionListener<K, V>>,
         read_op_ch: Receiver<ReadOp<K, V>>,
         write_op_ch: Receiver<WriteOp<K, V>>,
@@ -1094,6 +1098,7 @@ where
             frequency_sketch_enabled: AtomicBool::default(),
             read_op_ch,
             write_op_ch,
+            eviction_policy: eviction_policy.config,
             expiration_policy,
             valid_after: AtomicInstant::default(),
             weigher,
@@ -1285,7 +1290,9 @@ where
                 self.apply_writes(&mut deqs, &mut timer_wheel, w_len, &mut eviction_state);
             }
 
-            if self.should_enable_frequency_sketch(&eviction_state.counters) {
+            if self.eviction_policy == EvictionPolicyConfig::TinyLfu
+                && self.should_enable_frequency_sketch(&eviction_state.counters)
+            {
                 self.enable_frequency_sketch(&eviction_state.counters);
             }
 
@@ -1554,11 +1561,22 @@ where
             }
         }
 
-        let mut candidate = EntrySizeAndFrequency::new(new_weight);
-        candidate.add_frequency(freq, kh.hash);
+        // TODO: Refactoring the policy implementations.
+        // https://github.com/moka-rs/moka/issues/389
 
         // Try to admit the candidate.
-        match Self::admit(&candidate, &self.cache, deqs, freq) {
+        let admission_result = match &self.eviction_policy {
+            EvictionPolicyConfig::TinyLfu => {
+                let mut candidate = EntrySizeAndFrequency::new(new_weight);
+                candidate.add_frequency(freq, kh.hash);
+                Self::admit(&candidate, &self.cache, deqs, freq)
+            }
+            EvictionPolicyConfig::Lru => AdmissionResult::Admitted {
+                victim_keys: SmallVec::default(),
+            },
+        };
+
+        match admission_result {
             AdmissionResult::Admitted { victim_keys } => {
                 // Try to remove the victims from the hash map.
                 for (vic_kh, vic_la) in victim_keys {
@@ -2497,7 +2515,7 @@ fn is_expired_by_ttl(
 
 #[cfg(test)]
 mod tests {
-    use crate::policy::ExpirationPolicy;
+    use crate::policy::{EvictionPolicy, ExpirationPolicy};
 
     use super::BaseCache;
 
@@ -2516,8 +2534,9 @@ mod tests {
                 None,
                 RandomState::default(),
                 None,
+                EvictionPolicy::default(),
                 None,
-                Default::default(),
+                ExpirationPolicy::default(),
                 false,
             );
             cache.inner.enable_frequency_sketch_for_testing();
@@ -2861,6 +2880,7 @@ mod tests {
             None,
             RandomState::default(),
             None,
+            EvictionPolicy::default(),
             None,
             ExpirationPolicy::new(
                 Some(Duration::from_secs(TTL)),
