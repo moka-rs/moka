@@ -43,8 +43,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// - [Example: `insert`, `get` and `invalidate`](#example-insert-get-and-invalidate)
 /// - [Avoiding to clone the value at `get`](#avoiding-to-clone-the-value-at-get)
-/// - [Sharing a cache across asynchronous
-///   tasks](#sharing-a-cache-across-asynchronous-tasks)
+/// - [Sharing a cache across asynchronous tasks](#sharing-a-cache-across-asynchronous-tasks)
 ///     - [No lock is needed](#no-lock-is-needed)
 /// - [Hashing Algorithm](#hashing-algorithm)
 /// - [Example: Size-based Eviction](#example-size-based-eviction)
@@ -52,8 +51,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     - [Cache-level TTL and TTI policies](#cache-level-ttl-and-tti-policies)
 ///     - [Per-entry expiration policy](#per-entry-expiration-policy)
 /// - [Example: Eviction Listener](#example-eviction-listener)
-///     - [You should avoid eviction listener to
-///       panic](#you-should-avoid-eviction-listener-to-panic)
+///     - [You should avoid eviction listener to panic](#you-should-avoid-eviction-listener-to-panic)
 ///
 /// # Example: `insert`, `get` and `invalidate`
 ///
@@ -153,8 +151,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// - Create a clone of the cache by calling its `clone` method and pass it to other
 ///   task.
 /// - If you are using a web application framework such as Actix Web or Axum, you can
-///   store a cache in Actix Web's [`web::Data`][actix-web-data] or Axum's [shared
-///   state][axum-state-extractor], and access it from each request handler.
+///   store a cache in Actix Web's [`web::Data`][actix-web-data] or Axum's
+///   [shared state][axum-state-extractor], and access it from each request handler.
 /// - Wrap the cache by a `sync::OnceCell` or `sync::Lazy` from
 ///   [once_cell][once-cell-crate] create, and set it to a `static` variable.
 ///
@@ -163,8 +161,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// [once-cell-crate]: https://crates.io/crates/once_cell
 /// [actix-web-data]: https://docs.rs/actix-web/4.3.1/actix_web/web/struct.Data.html
-/// [axum-state-extractor]:
-///    https://docs.rs/axum/latest/axum/#sharing-state-with-handlers
+/// [axum-state-extractor]: https://docs.rs/axum/latest/axum/#sharing-state-with-handlers
 ///
 /// ## No lock is needed
 ///
