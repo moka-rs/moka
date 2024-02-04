@@ -33,6 +33,8 @@ jobs:
     if: needs.pre_job.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     strategy:
+      # Continue running other jobs in the matrix even if one fails.
+      fail-fast: false
       matrix:
         rust:
           - stable
