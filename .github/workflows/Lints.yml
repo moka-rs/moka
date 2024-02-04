@@ -41,7 +41,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ matrix.rust }}
+          toolchain: ${{ matrix.rust.toolchain }}
           components: rustfmt, clippy
 
       - name: Run Clippy
