@@ -35,52 +35,30 @@ jobs:
 
     steps:
       - name: Checkout Moka
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: ${{ matrix.rust }}
-          override: true
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v1
-
-      - name: cargo clean
-        uses: actions-rs/cargo@v1
-        with:
-          command: clean
 
       - name: Run tests (no features)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release
+        run: cargo test --release
         env:
           RUSTFLAGS: '--cfg skeptic'
 
       - name: Run tests (release, sync and future)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --features 'sync, future'
+        run: cargo test --release --features 'sync, future'
         env:
           RUSTFLAGS: '--cfg skeptic'
 
       - name: Run tests (sync and future, without atomic64 and quanta)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --no-default-features --features 'sync, future'
+        run: cargo test --release --no-default-features --features 'sync, future'
         env:
           RUSTFLAGS: '--cfg skeptic'
 
       - name: Run compile error tests (sync and future features, trybuild)
-        uses: actions-rs/cargo@v1
         if: ${{ matrix.rust == 'stable' }}
-        with:
-          command: test
-          args: ui_trybuild --release --features 'sync, future'
+        run: cargo test ui_trybuild --release --features 'sync, future'
         env:
           RUSTFLAGS: '--cfg trybuild'
