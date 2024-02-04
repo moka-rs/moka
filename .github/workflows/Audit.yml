@@ -28,34 +28,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Moka
-        uses: actions/checkout@v2
-
-      - name: Install Rust toolchain (Nightly)
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: nightly
-          override: true
-
-      - uses: Swatinem/rust-cache@v1
-
-      - name: cargo clean
-        uses: actions-rs/cargo@v1
-        with:
-          command: clean
+        uses: actions/checkout@v4
 
       - name: Check for known security vulnerabilities (Latest versions)
-        uses: actions-rs/audit-check@v1
+        uses: rustsec/audit-check@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Downgrade dependencies to minimal versions
-        uses: actions-rs/cargo@v1
+      - name: Install Rust toolchain (Nightly)
+        uses: dtolnay/rust-toolchain@master
         with:
-          command: update
-          args: -Z minimal-versions
+          toolchain: nightly
+
+      - name: Downgrade dependencies to minimal versions
+        run: cargo update -Z minimal-versions
 
       - name: Check for known security vulnerabilities (Minimal versions)
-        uses: actions-rs/audit-check@v1
+        uses: rustsec/audit-check@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
