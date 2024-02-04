@@ -44,7 +44,7 @@ jobs:
 
     steps:
       - name: Checkout Moka
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners#supported-runners-and-hardware-resources
       # 2-core CPU (x86_64), 7 GB of RAM
@@ -54,26 +54,13 @@ jobs:
           lscpu
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: ${{ matrix.rust }}
-          override: true
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v1
-
-      - name: cargo clean
-        uses: actions-rs/cargo@v1
-        with:
-          command: clean
 
       - name: Downgrade dependencies to minimal versions (Nightly only)
-        uses: actions-rs/cargo@v1
         if: ${{ matrix.rust == 'nightly' }}
-        with:
-          command: update
-          args: -Z minimal-versions
+        run: cargo update -Z minimal-versions
 
       - name: Pin some dependencies to specific versions (Nightly only)
         if: ${{ matrix.rust == 'nightly' }}
@@ -84,65 +71,35 @@ jobs:
         run: ./.ci_extras/pin-crate-vers-msrv.sh
 
       - name: Show cargo tree
-        uses: actions-rs/cargo@v1
-        with:
-          command: tree
-          args: --features 'future, dash'
+        run: cargo tree --features 'future, dash'
 
       - name: Run tests (debug, sync feature)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --features sync
+        run: cargo test --features sync
         env:
           RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (release, sync feature)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --features sync
+        run: cargo test --release --features sync
         env:
           RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (sync feature, thread-pool test for sync::Cache)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --lib --features sync sync::cache::tests::enabling_and_disabling_thread_pools -- --exact --ignored
+        run: cargo test --release --lib --features sync sync::cache::tests::enabling_and_disabling_thread_pools -- --exact --ignored
 
       - name: Run tests (sync feature, thread-pool test for sync::SegmentedCache)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --lib --features sync sync::segment::tests::enabling_and_disabling_thread_pools -- --exact --ignored
+        run: cargo test --release --lib --features sync sync::segment::tests::enabling_and_disabling_thread_pools -- --exact --ignored
 
       - name: Run tests (sync feature, key lock test for notification)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --lib --features sync sync::cache::tests::test_key_lock_used_by_immediate_removal_notifications -- --exact --ignored
+        run: cargo test --release --lib --features sync sync::cache::tests::test_key_lock_used_by_immediate_removal_notifications -- --exact --ignored
 
       - name: Run tests (sync feature, drop value after eviction for sync::Cache)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --lib --features sync sync::cache::tests::drop_value_immediately_after_eviction -- --exact --ignored
+        run: cargo test --release --lib --features sync sync::cache::tests::drop_value_immediately_after_eviction -- --exact --ignored
 
       - name: Run tests (sync feature, drop value after eviction for sync::SegmentedCache)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --lib --features sync sync::segment::tests::drop_value_immediately_after_eviction -- --exact --ignored
+        run: cargo test --release --lib --features sync sync::segment::tests::drop_value_immediately_after_eviction -- --exact --ignored
 
       - name: Run tests (future feature, but no sync feature)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --no-default-features --features 'future, atomic64, quanta'
+        run: cargo test --no-default-features --features 'future, atomic64, quanta'
 
       - name: Run tests (future, sync and logging features)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --features 'future, sync, logging'
+        run: cargo test --features 'future, sync, logging'

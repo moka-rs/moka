@@ -36,22 +36,13 @@ jobs:
 
     steps:
       - name: Checkout Moka
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: ${{ matrix.rust.toolchain }}
-          override: true
           components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v1
-
-      - name: cargo clean
-        uses: actions-rs/cargo@v1
-        with:
-          command: clean
 
       - name: Run Clippy
         uses: actions-rs/clippy-check@v1
@@ -64,8 +55,5 @@ jobs:
           RUSTFLAGS: ${{ matrix.rust.rustflags }}
 
       - name: Run Rustfmt
-        uses: actions-rs/cargo@v1
         if: ${{ matrix.rust.toolchain == 'stable' }}
-        with:
-          command: fmt
-          args: --all -- --check
+        run: cargo fmt --all -- --check
