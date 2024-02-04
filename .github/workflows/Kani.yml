@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-20.04
     steps:
       - name: Checkout Moka
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Show CPU into
         run: |
@@ -44,6 +44,6 @@ jobs:
           free -m
 
       - name: Run Kani
-        uses: model-checking/kani-github-action@v0.28
+        uses: model-checking/kani-github-action@v1.0
         with:
           args: --features 'sync, future'
