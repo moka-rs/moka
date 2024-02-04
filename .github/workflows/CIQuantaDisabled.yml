@@ -44,29 +44,16 @@ jobs:
 
     steps:
       - name: Checkout Moka
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@master
         with:
-          profile: minimal
           toolchain: ${{ matrix.rust }}
-          override: true
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v1
-
-      - name: cargo clean
-        uses: actions-rs/cargo@v1
-        with:
-          command: clean
 
       - name: Downgrade dependencies to minimal versions (Nightly only)
-        uses: actions-rs/cargo@v1
         if: ${{ matrix.rust == 'nightly' }}
-        with:
-          command: update
-          args: -Z minimal-versions
+        run: cargo update -Z minimal-versions
 
       - name: Pin some dependencies to specific versions (Nightly only)
         if: ${{ matrix.rust == 'nightly' }}
@@ -81,35 +68,20 @@ jobs:
         run: ./.ci_extras/remove-examples-msrv.sh
 
       - name: Run tests (debug, but no quanta feature)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --no-default-features --features 'sync, atomic64'
+        run: cargo test --no-default-features --features 'sync, atomic64'
         env:
           RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (release, but no quanta feature)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --no-default-features --features 'sync, atomic64'
+        run: cargo test --release --no-default-features --features 'sync, atomic64'
         env:
           RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (future feature, but no quanta and sync features)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --no-default-features --features 'future, atomic64'
+        run: cargo test --no-default-features --features 'future, atomic64'
 
       - name: Run tests (future, sync and logging features, but no quanta feature)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --no-default-features --features 'sync, future, atomic64, logging'
+        run: cargo test --no-default-features --features 'sync, future, atomic64, logging'
 
       - name: Run tests (sync feature, but no quanta feature, drop cache)
-        uses: actions-rs/cargo@v1
-        with:
-          command: test
-          args: --release --lib --no-default-features --features sync sync::cache::tests::ensure_gc_runs_when_dropping_cache -- --exact --ignored
+        run: cargo test --release --lib --no-default-features --features sync sync::cache::tests::ensure_gc_runs_when_dropping_cache -- --exact --ignored
