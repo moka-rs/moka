@@ -35,7 +35,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Rust nightly toolchain with Miri
+      - name: Install Rust nightly toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
