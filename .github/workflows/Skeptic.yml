@@ -28,6 +28,8 @@ jobs:
     if: needs.pre_job.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     strategy:
+      # Continue running other jobs in the matrix even if one fails.
+      fail-fast: false
       matrix:
         rust:
           - stable
@@ -41,7 +43,6 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
-          components: rustfmt, clippy
 
       - name: Run tests (sync feature)
         run: cargo test --release --features sync
