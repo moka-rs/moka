@@ -221,7 +221,7 @@ mod tests {
     }
 }
 
-#[cfg(all(doctest, sync))]
+#[cfg(all(doctest, feature = "sync"))]
 mod doctests {
     // https://doc.rust-lang.org/rustdoc/write-documentation/documentation-tests.html#include-items-only-when-collecting-doctests
     #[doc = include_str!("../README.md")]
