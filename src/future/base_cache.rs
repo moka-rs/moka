@@ -77,7 +77,7 @@ impl<K, V, S> Clone for BaseCache<K, V, S> {
             write_op_ch: self.write_op_ch.clone(),
             interrupted_op_ch_snd: self.interrupted_op_ch_snd.clone(),
             interrupted_op_ch_rcv: self.interrupted_op_ch_rcv.clone(),
-            housekeeper: self.housekeeper.as_ref().map(Arc::clone),
+            housekeeper: self.housekeeper.clone(),
         }
     }
 }
