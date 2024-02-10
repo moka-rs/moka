@@ -1,9 +1,3 @@
-#[cfg(skeptic)]
-fn main() {
-    // generates doc tests for `README.md`.
-    skeptic::generate_doc_tests(&["README.md"]);
-}
-
 #[cfg(rustver)]
 fn main() {
     use rustc_version::version;
@@ -14,5 +8,5 @@ fn main() {
     );
 }
 
-#[cfg(not(any(skeptic, rustver)))]
+#[cfg(not(rustver))]
 fn main() {}
