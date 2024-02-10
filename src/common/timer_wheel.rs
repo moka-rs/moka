@@ -396,10 +396,13 @@ pub(crate) enum TimerEvent<K> {
     // This cache entry has been rescheduled. Rescheduling includes moving a timer
     // from one wheel to another in a lower level of the hierarchy. (This variant
     // is mainly used for testing)
+    #[cfg(test)]
     Rescheduled(TrioArc<EntryInfo<K>>),
+    #[cfg(not(test))]
+    Rescheduled(()),
     /// This timer node (containing a cache entry) has been removed from the timer.
     /// (This variant is mainly used for testing)
-    Descheduled(Box<DeqNode<TimerNode<K>>>),
+    Descheduled,
 }
 
 /// An iterator over expired cache entries.
@@ -509,15 +512,20 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
                     // The cache entry has not expired. Reschedule it.
                     let node_p = NonNull::new(Box::into_raw(node)).expect("Got a null ptr");
                     match self.timer_wheel.schedule_existing_node(node_p) {
+                        #[cfg(test)]
                         ReschedulingResult::Rescheduled => {
                             let entry_info = unsafe { node_p.as_ref() }.element.entry_info();
                             return Some(TimerEvent::Rescheduled(TrioArc::clone(entry_info)));
+                        }
+                        #[cfg(not(test))]
+                        ReschedulingResult::Rescheduled => {
+                            return Some(TimerEvent::Rescheduled(()));
                         }
                         ReschedulingResult::Removed(node) => {
                             // The timer event has been removed from the timer
                             // wheel. Unset the timer node from the ValueEntry.
                             node.as_ref().element.unset_timer_node_in_deq_nodes();
-                            return Some(TimerEvent::Descheduled(node));
+                            return Some(TimerEvent::Descheduled);
                         }
                     }
                 }

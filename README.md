@@ -497,13 +497,13 @@ To run all tests including `future` feature and doc tests on the README, use the
 following command:
 
 ```console
-$ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test --all-features
+$ RUSTFLAGS='--cfg trybuild' cargo test --all-features
 ```
 
 **Running All Tests without Default Features**
 
 ```console
-$ RUSTFLAGS='--cfg skeptic --cfg trybuild' cargo test \
+$ RUSTFLAGS='--cfg trybuild' cargo test \
     --no-default-features --features 'future, sync'
 ```
 

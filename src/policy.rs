@@ -299,7 +299,7 @@ impl<K, V> Clone for ExpirationPolicy<K, V> {
         Self {
             time_to_live: self.time_to_live,
             time_to_idle: self.time_to_idle,
-            expiry: self.expiry.as_ref().map(Arc::clone),
+            expiry: self.expiry.clone(),
         }
     }
 }
@@ -337,7 +337,7 @@ impl<K, V> ExpirationPolicy<K, V> {
     }
 
     pub(crate) fn expiry(&self) -> Option<Arc<dyn Expiry<K, V> + Send + Sync + 'static>> {
-        self.expiry.as_ref().map(Arc::clone)
+        self.expiry.clone()
     }
 
     pub(crate) fn set_expiry(&mut self, expiry: Arc<dyn Expiry<K, V> + Send + Sync + 'static>) {

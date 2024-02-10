@@ -754,9 +754,9 @@ where
                     seg_max_capacity,
                     seg_init_capacity,
                     build_hasher.clone(),
-                    weigher.as_ref().map(Arc::clone),
+                    weigher.clone(),
                     eviction_policy.clone(),
-                    eviction_listener.as_ref().map(Arc::clone),
+                    eviction_listener.clone(),
                     expiration_policy.clone(),
                     invalidator_enabled,
                 )
