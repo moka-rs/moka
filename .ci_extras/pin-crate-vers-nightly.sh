@@ -6,3 +6,5 @@ set -eux
 cargo update -p openssl --precise 0.10.39
 cargo update -p cc --precise 1.0.61
 cargo update -p proc-macro2 --precise 1.0.63
+# https://github.com/tkaitchuck/aHash/issues/200
+cargo update -p ahash --precise 0.8.7
