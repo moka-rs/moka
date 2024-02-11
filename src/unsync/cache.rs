@@ -956,6 +956,9 @@ where
                     break;
                 }
 
+                // clippy::map_clone will give us a false positive warning here.
+                // Version: clippy 0.1.77 (f2048098a1c 2024-02-09) in Rust 1.77.0-beta.2
+                #[allow(clippy::map_clone)]
                 let key = probation
                     .peek_front()
                     .map(|node| Rc::clone(&node.element.key));
