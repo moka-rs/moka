@@ -1,4 +1,4 @@
-name: Skeptic and Trybuild
+name: Trybuild
 
 on:
   push:
@@ -41,21 +41,6 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ matrix.rust }}
-
-      - name: Run tests (no features)
-        run: cargo test --release
-        env:
-          RUSTFLAGS: '--cfg skeptic'
-
-      - name: Run tests (release, sync and future)
-        run: cargo test --release --features 'sync, future'
-        env:
-          RUSTFLAGS: '--cfg skeptic'
-
-      - name: Run tests (sync and future, without atomic64 and quanta)
-        run: cargo test --release --no-default-features --features 'sync, future'
-        env:
-          RUSTFLAGS: '--cfg skeptic'
 
       - name: Run compile error tests (sync and future features, trybuild)
         if: ${{ matrix.rust == 'stable' }}

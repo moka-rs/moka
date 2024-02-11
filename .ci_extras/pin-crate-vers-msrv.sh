@@ -13,7 +13,6 @@ cargo update -p regex --precise 1.9.6
 cargo update -p memchr --precise 2.6.2
 cargo update -p h2 --precise 0.3.20
 cargo update -p actix-rt --precise 2.8.0
-cargo update -p cargo-platform --precise 0.1.5
 cargo update -p crossbeam-epoch --precise 0.9.15
 
 # To use memchr 2.5.0, we need to use regex 1.9.4 and regex-automata 0.3.7.
@@ -23,6 +22,5 @@ cargo update -p regex-automata --precise 0.3.7
 # The following crates require rustc to support target feature "neon",
 # which is unstable in Rust 1.60.0.
 cargo update -p aho-corasick --precise 1.0.5
-cargo update -p bytecount --precise 0.6.3
 cargo update -p memchr --precise 2.5.0
 cargo update -p value-bag --precise 1.4.1
