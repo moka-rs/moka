@@ -4,6 +4,7 @@ set -eux
 
 # Pin some dependencies to specific versions for the MSRV.
 cargo update -p dashmap --precise 5.4.0
+cargo update -p ahash --precise 0.8.7
 cargo update -p tempfile --precise 3.6.0
 cargo update -p tokio --precise 1.29.1
 cargo update -p async-global-executor --precise 2.3.1
