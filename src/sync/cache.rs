@@ -3086,7 +3086,7 @@ mod tests {
         // Note that MyError does not implement std::error::Error trait like
         // anyhow::Error.
         #[derive(Debug)]
-        pub struct MyError(String);
+        pub struct MyError(#[allow(dead_code)] String);
 
         type MyResult<T> = Result<T, Arc<MyError>>;
 
@@ -3225,7 +3225,7 @@ mod tests {
         // Note that MyError does not implement std::error::Error trait like
         // anyhow::Error.
         #[derive(Debug)]
-        pub struct MyError(String);
+        pub struct MyError(#[allow(dead_code)] String);
 
         type MyResult<T> = Result<T, Arc<MyError>>;
 

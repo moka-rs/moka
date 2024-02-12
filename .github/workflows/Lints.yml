@@ -28,6 +28,8 @@ jobs:
     if: needs.pre_job.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
     strategy:
+      # Continue running other jobs in the matrix even if one fails.
+      fail-fast: false
       matrix:
         rust:
           - toolchain: stable
@@ -45,12 +47,11 @@ jobs:
           components: rustfmt, clippy
 
       - name: Run Clippy
-        uses: actions-rs/clippy-check@v1
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          # Specify individual features until we remove `dash` feature.
-          # args: --lib --tests --all-features --all-targets -- -D warnings
-          args: --lib --tests --features 'future, logging, unstable-debug-counters' --all-targets -- -D warnings
+        # Specify individual features until we remove `dash` feature.
+        run: |
+          cargo clippy --lib --tests \
+            --features 'future, logging, unstable-debug-counters' \
+            --all-targets -- -D warnings
         env:
           RUSTFLAGS: ${{ matrix.rust.rustflags }}
 

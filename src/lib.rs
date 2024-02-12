@@ -218,3 +218,10 @@ mod tests {
         t.compile_fail("tests/compile_tests/future/clone/*.rs");
     }
 }
+
+#[cfg(all(doctest, feature = "sync"))]
+mod doctests {
+    // https://doc.rust-lang.org/rustdoc/write-documentation/documentation-tests.html#include-items-only-when-collecting-doctests
+    #[doc = include_str!("../README.md")]
+    struct ReadMeDoctests;
+}
