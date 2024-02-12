@@ -59,7 +59,7 @@ impl<K, V, S> Clone for BaseCache<K, V, S> {
             inner: Arc::clone(&self.inner),
             read_op_ch: self.read_op_ch.clone(),
             write_op_ch: self.write_op_ch.clone(),
-            housekeeper: self.housekeeper.as_ref().map(Arc::clone),
+            housekeeper: self.housekeeper.clone(),
         }
     }
 }
