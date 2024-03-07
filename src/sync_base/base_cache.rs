@@ -475,9 +475,10 @@ where
             // on_modify
             |_k, old_entry| {
                 // NOTES on `new_value_entry_from` method:
-                // 1. The internal EntryInfo will be shared between the old and new ValueEntries.
-                // 2. This method will set the last_accessed and last_modified to the max value to
-                //    prevent this new ValueEntry from being evicted by an expiration policy.
+                // 1. The internal EntryInfo will be shared between the old and new
+                //    ValueEntries.
+                // 2. This method will set the dirty flag to prevent this new
+                //    ValueEntry from being evicted by an expiration policy.
                 // 3. This method will update the policy_weight with the new weight.
                 let old_weight = old_entry.policy_weight();
                 let old_timestamps = (old_entry.last_accessed(), old_entry.last_modified());
@@ -501,7 +502,6 @@ where
         match (op1, op2) {
             (Some((_cnt, ins_op)), None) => (ins_op, ts),
             (None, Some((_cnt, old_entry, (old_last_accessed, old_last_modified), upd_op))) => {
-                old_entry.unset_q_nodes();
                 if self.is_removal_notifier_enabled() {
                     self.inner
                         .notify_upsert(key, &old_entry, old_last_accessed, old_last_modified);
@@ -516,7 +516,6 @@ where
                 if cnt1 > cnt2 {
                     (ins_op, ts)
                 } else {
-                    old_entry.unset_q_nodes();
                     if self.is_removal_notifier_enabled() {
                         self.inner.notify_upsert(
                             key,
@@ -559,7 +558,7 @@ where
         info.set_last_accessed(timestamp);
         info.set_last_modified(timestamp);
         info.set_policy_weight(policy_weight);
-        TrioArc::new(ValueEntry::new_from(value, info, other))
+        TrioArc::new(ValueEntry::new(value, info))
     }
 
     #[inline]
@@ -1733,7 +1732,7 @@ where
                 }
                 Self::handle_remove(deqs, entry, &mut eviction_state.counters);
             } else if let Some(entry) = self.cache.get(hash, |k| k == key) {
-                if entry.last_modified().is_none() {
+                if entry.is_dirty() {
                     deqs.move_to_back_ao(&entry);
                     deqs.move_to_back_wo(&entry);
                 } else {
