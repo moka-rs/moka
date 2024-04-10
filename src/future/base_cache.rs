@@ -677,8 +677,8 @@ where
                 //
                 // - The `Inner::do_run_pending_tasks` method has removed some ops
                 //   from the write op channel.
-                // - THe `Housekeeper`'s `run_pending_tasks` or `
-                //   try_,run_pending_tasks` methods has freed the lock on the
+                // - The `Housekeeper`'s `run_pending_tasks` or `
+                //   try_run_pending_tasks` methods has freed the lock on the
                 //   `current_task`.
                 //
                 ch_ready_event.listen().await;
