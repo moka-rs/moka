@@ -200,7 +200,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
 /// // futures-util = "0.3"
 ///
-/// use std::convert::TryInto;
 /// use moka::future::Cache;
 ///
 /// #[tokio::main]

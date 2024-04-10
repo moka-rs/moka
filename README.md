@@ -382,7 +382,6 @@ in `u32`, and the cache will evict entries when the total weighted size exceeds 
 `max_capacity`.
 
 ```rust
-use std::convert::TryInto;
 use moka::sync::Cache;
 
 fn main() {
