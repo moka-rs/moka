@@ -177,7 +177,6 @@ use std::{
 /// # Example: Size-based Eviction
 ///
 /// ```rust
-/// use std::convert::TryInto;
 /// use moka::sync::Cache;
 ///
 /// // Evict based on the number of entries in the cache.

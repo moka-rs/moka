@@ -1,5 +1,4 @@
 use moka::sync::Cache;
-use std::convert::TryInto;
 
 fn main() {
     let cache = Cache::builder()
