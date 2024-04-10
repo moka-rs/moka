@@ -45,7 +45,8 @@ fn main() {
     // We are going to solve this by making the Sender globally accessible via the
     // static OnceLock, and make the eviction listener to clone it per thread.
     static SND: OnceLock<Mutex<Sender<Command>>> = OnceLock::new();
-    #[allow(clippy::incompatible_msrv)] // `set` is stable since 1.70.0.
+    #[cfg_attr(beta_clippy, allow(clippy::incompatible_msrv))]
+    // `set` is stable since 1.70.0.
     SND.set(Mutex::new(snd.clone())).unwrap();
 
     // Create the eviction listener.
@@ -53,7 +54,8 @@ fn main() {
         // Keep a clone of the Sender in our thread-local variable, so that we can
         // send a command without locking the Mutex every time.
         thread_local! {
-            #[allow(clippy::incompatible_msrv)] // `get` is stable since 1.70.0.
+            #[cfg_attr(beta_clippy, allow(clippy::incompatible_msrv))]
+            // `get` is stable since 1.70.0.
             static THREAD_SND: Sender<Command> = SND.get().unwrap().lock().unwrap().clone();
         }
 
