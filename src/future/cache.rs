@@ -1820,12 +1820,12 @@ where
         }
 
         let hk = self.base.housekeeper.as_ref();
-        let lock = self.base.maintenance_task_lock();
+        let event = self.base.write_op_ch_ready_event();
 
         BaseCache::<K, V, S>::schedule_write_op(
             &self.base.inner,
             &self.base.write_op_ch,
-            lock,
+            event,
             op,
             ts,
             hk,
@@ -1986,13 +1986,13 @@ where
                     should_block = self.schedule_write_op_should_block.load(Ordering::Acquire);
                 }
 
-                let lock = self.base.maintenance_task_lock();
+                let event = self.base.write_op_ch_ready_event();
                 let hk = self.base.housekeeper.as_ref();
 
                 BaseCache::<K, V, S>::schedule_write_op(
                     &self.base.inner,
                     &self.base.write_op_ch,
-                    lock,
+                    event,
                     op,
                     now,
                     hk,
