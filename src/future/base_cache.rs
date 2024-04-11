@@ -1415,10 +1415,7 @@ where
     /// Notifies all the async tasks waiting in `BaseCache::schedule_write_op` method
     /// for the write op channel to have enough room.
     fn notify_write_op_ch_is_ready(&self) {
-        let listeners = self.write_op_ch_ready_event.total_listeners();
-        // NOTE: The `notify` method accepts 0, so no need to check if `listeners` is
-        // greater than 0.
-        self.write_op_ch_ready_event.notify(listeners);
+        self.write_op_ch_ready_event.notify(usize::MAX);
     }
 
     fn now(&self) -> Instant {
