@@ -1,5 +1,26 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.6
+
+### Fixed
+
+- Fixed a bug in `future::Cache` that pending `run_pending_tasks` calls may cause
+  infinite busy loop in an internal `schedule_write_op` method
+  ([#412][gh-issue-0412]):
+    - This bug was introduced in `v0.12.0` when the background threads were removed
+      from `future::Cache`.
+    - This bug can occur when `run_pending_task` method is called by user code while
+      cache is receiving a very high number of concurrent cache write operations.
+      (e.g. `insert`, `get_with`, `invalidate` etc.)
+    - When it occurs, the `schedule_write_op` method will be spinning in a busy loop
+      forever, causing high CPU usage and all other async tasks to be starved.
+
+### Changed
+
+- Upgraded `async-lock` crate used by `future::Cache` from `v2.4` to the latest
+  `v3.3`.
+
+
 ## Version 0.12.5
 
 ### Added
@@ -828,6 +849,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-tinou98]: https://github.com/tinou98
 
+[gh-issue-0412]: https://github.com/moka-rs/moka/issues/412/
 [gh-issue-0385]: https://github.com/moka-rs/moka/issues/385/
 [gh-issue-0329]: https://github.com/moka-rs/moka/issues/329/
 [gh-issue-0322]: https://github.com/moka-rs/moka/issues/322/
