@@ -27,6 +27,11 @@ use futures_util::future::{BoxFuture, Shared};
 #[async_trait]
 pub(crate) trait InnerSync {
     async fn run_pending_tasks(&self, max_sync_repeats: usize);
+
+    /// Notifies all the async tasks waiting in `BaseCache::schedule_write_op` method
+    /// for the write op channel to have enough room.
+    fn notify_write_op_ch_is_ready(&self);
+
     fn now(&self) -> Instant;
 }
 
@@ -75,7 +80,14 @@ impl Housekeeper {
         T: InnerSync + Send + Sync + 'static,
     {
         let mut current_task = self.current_task.lock().await;
-        self.do_run_pending_tasks(cache, &mut current_task).await;
+        self.do_run_pending_tasks(Arc::clone(&cache), &mut current_task)
+            .await;
+
+        drop(current_task);
+
+        // If there are any async tasks waiting in `BaseCache::schedule_write_op`
+        // method for the write op channel, notify them.
+        cache.notify_write_op_ch_is_ready();
     }
 
     pub(crate) async fn try_run_pending_tasks<T>(&self, cache: Arc<T>) -> bool
@@ -83,11 +95,18 @@ impl Housekeeper {
         T: InnerSync + Send + Sync + 'static,
     {
         if let Some(mut current_task) = self.current_task.try_lock() {
-            self.do_run_pending_tasks(cache, &mut current_task).await;
-            true
+            self.do_run_pending_tasks(Arc::clone(&cache), &mut current_task)
+                .await;
         } else {
-            false
+            return false;
         }
+
+        // The `current_task` lock should be free now.
+
+        // If there are any async tasks waiting in `BaseCache::schedule_write_op`
+        // method for the write op channel, notify them.
+        cache.notify_write_op_ch_is_ready();
+        true
     }
 
     async fn do_run_pending_tasks<T>(

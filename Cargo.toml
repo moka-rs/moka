@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.12.5"
+version = "0.12.6"
 edition = "2021"
 # Rust 1.65 was released on Nov 3, 2022.
 rust-version = "1.65"
@@ -22,7 +22,7 @@ default = ["atomic64", "quanta"]
 sync = []
 
 # Enable this feature to use `moka::future::Cache`.
-future = ["async-lock", "async-trait", "futures-util"]
+future = ["async-lock", "async-trait", "event-listener", "futures-util"]
 
 # Enable this feature to activate optional logging from caches.
 # Currently cache will emit log only when it encounters a panic in user provided
@@ -64,8 +64,9 @@ triomphe = { version = "0.1.3", default-features = false }
 quanta = { version = "0.12.2", optional = true }
 
 # Optional dependencies (future)
-async-lock = { version = "2.4", optional = true }
+async-lock = { version = "3.3", optional = true }
 async-trait = { version = "0.1.58", optional = true }
+event-listener = { version = "5.3", optional = true }
 futures-util = { version = "0.3.17", optional = true }
 
 # Optional dependencies (logging)
