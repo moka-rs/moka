@@ -509,16 +509,21 @@ impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
                         node.as_ref().element.unset_timer_node_in_deq_nodes();
                         return Some(TimerEvent::Expired(node));
                     }
+
                     // The cache entry has not expired. Reschedule it.
                     let node_p = NonNull::new(Box::into_raw(node)).expect("Got a null ptr");
+
+                    #[cfg(test)]
+                    // Get the entry info before rescheduling (mutating) the node to
+                    // avoid Stacked Borrows/Tree Borrows violations on `node_p`.
+                    let entry_info =
+                        TrioArc::clone(unsafe { node_p.as_ref() }.element.entry_info());
+
                     match self.timer_wheel.schedule_existing_node(node_p) {
-                        #[cfg(test)]
                         ReschedulingResult::Rescheduled => {
-                            let entry_info = unsafe { node_p.as_ref() }.element.entry_info();
-                            return Some(TimerEvent::Rescheduled(TrioArc::clone(entry_info)));
-                        }
-                        #[cfg(not(test))]
-                        ReschedulingResult::Rescheduled => {
+                            #[cfg(test)]
+                            return Some(TimerEvent::Rescheduled(entry_info));
+                            #[cfg(not(test))]
                             return Some(TimerEvent::Rescheduled(()));
                         }
                         ReschedulingResult::Removed(node) => {
