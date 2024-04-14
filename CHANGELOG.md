@@ -5,7 +5,7 @@
 ### Changed
 
 - Ensure a single call to `run_pending_tasks` to evict as many entries as possible
-  from the cache ([#417](gh-pull-0417).
+  from the cache ([#417][gh-pull-0417]).
 
 
 ## Version 0.12.6
@@ -880,6 +880,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0417]: https://github.com/moka-rs/moka/pull/417/
 [gh-pull-0390]: https://github.com/moka-rs/moka/pull/390/
 [gh-pull-0384]: https://github.com/moka-rs/moka/pull/384/
 [gh-pull-0382]: https://github.com/moka-rs/moka/pull/382/
