@@ -36,11 +36,11 @@ impl Default for Housekeeper {
 
 impl Housekeeper {
     pub(crate) fn should_apply_reads(&self, ch_len: usize, now: Instant) -> bool {
-        self.should_apply(ch_len, READ_LOG_FLUSH_POINT / 8, now)
+        self.should_apply(ch_len, READ_LOG_FLUSH_POINT, now)
     }
 
     pub(crate) fn should_apply_writes(&self, ch_len: usize, now: Instant) -> bool {
-        self.should_apply(ch_len, WRITE_LOG_FLUSH_POINT / 8, now)
+        self.should_apply(ch_len, WRITE_LOG_FLUSH_POINT, now)
     }
 
     #[inline]

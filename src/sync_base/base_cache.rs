@@ -11,7 +11,8 @@ use crate::{
         concurrent::{
             atomic_time::AtomicInstant,
             constants::{
-                READ_LOG_FLUSH_POINT, READ_LOG_SIZE, WRITE_LOG_FLUSH_POINT, WRITE_LOG_SIZE,
+                EVICTION_BATCH_SIZE, INVALIDATION_BATCH_SIZE, READ_LOG_FLUSH_POINT, READ_LOG_SIZE,
+                WRITE_LOG_FLUSH_POINT, WRITE_LOG_SIZE,
             },
             deques::Deques,
             entry_info::EntryInfo,
@@ -763,7 +764,7 @@ impl<'a, K, V> EvictionState<'a, K, V> {
         self.notifier.is_some()
     }
 
-    fn add_removed_entry(
+    fn notify_entry_removal(
         &mut self,
         key: Arc<K>,
         entry: &TrioArc<ValueEntry<K, V>>,
@@ -772,10 +773,10 @@ impl<'a, K, V> EvictionState<'a, K, V> {
         K: Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
     {
-        debug_assert!(self.is_notifier_enabled());
-
         if let Some(notifier) = self.notifier {
             notifier.notify(key, entry.value.clone(), cause);
+        } else {
+            panic!("notify_entry_removal is called when the notification is disabled");
         }
     }
 }
@@ -1226,21 +1227,6 @@ where
     }
 }
 
-// TODO: Calculate the batch size based on the number of entries in the cache (or an
-// estimated number of entries to evict)
-
-#[cfg(feature = "unstable-debug-counters")]
-mod batch_size {
-    pub(crate) const EVICTION_BATCH_SIZE: usize = 10_000;
-    pub(crate) const INVALIDATION_BATCH_SIZE: usize = 10_000;
-}
-
-#[cfg(not(feature = "unstable-debug-counters"))]
-mod batch_size {
-    pub(crate) const EVICTION_BATCH_SIZE: usize = 500;
-    pub(crate) const INVALIDATION_BATCH_SIZE: usize = 500;
-}
-
 impl<K, V, S> InnerSync for Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -1315,7 +1301,7 @@ where
             self.evict_expired_entries_using_deqs(
                 &mut deqs,
                 &mut timer_wheel,
-                batch_size::EVICTION_BATCH_SIZE,
+                EVICTION_BATCH_SIZE,
                 &mut eviction_state,
             );
         }
@@ -1328,7 +1314,7 @@ where
                     invalidator,
                     &mut deqs,
                     &mut timer_wheel,
-                    batch_size::INVALIDATION_BATCH_SIZE,
+                    INVALIDATION_BATCH_SIZE,
                     &mut eviction_state,
                 );
             }
@@ -1343,7 +1329,7 @@ where
             self.evict_lru_entries(
                 &mut deqs,
                 &mut timer_wheel,
-                batch_size::EVICTION_BATCH_SIZE,
+                EVICTION_BATCH_SIZE,
                 weights_to_evict,
                 &mut eviction_state,
             );
@@ -1553,7 +1539,7 @@ where
                 if let Some(entry) = removed {
                     if eviction_state.is_notifier_enabled() {
                         let key = Arc::clone(&kh.key);
-                        eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
+                        eviction_state.notify_entry_removal(key, &entry, RemovalCause::Size);
                     }
                 }
                 entry.entry_info().set_policy_gen(gen);
@@ -1594,7 +1580,7 @@ where
                         |k, v| (k.clone(), v.clone()),
                     ) {
                         if eviction_state.is_notifier_enabled() {
-                            eviction_state.add_removed_entry(
+                            eviction_state.notify_entry_removal(
                                 vic_key,
                                 &vic_entry,
                                 RemovalCause::Size,
@@ -1649,7 +1635,7 @@ where
                 if let Some(entry) = removed {
                     entry.entry_info().set_policy_gen(gen);
                     if eviction_state.is_notifier_enabled() {
-                        eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
+                        eviction_state.notify_entry_removal(key, &entry, RemovalCause::Size);
                     }
                 }
             }
@@ -1886,7 +1872,7 @@ where
         //    timer node pointer in the `ValueEntry`, so we do not have to do it
         //    here.
         // 2. If an entry is dirty or `cache.remove_if` returns `None`, we will skip
-        //    it as it has been read, updated or invalidated by other thread.
+        //    it as it may have been read, updated or invalidated by other thread.
         //    - The timer node should have been unset in the current `ValueEntry` as
         //      described above.
         //    - When necessary, a new timer node will be recreated for the current or
@@ -1922,7 +1908,7 @@ where
                 if let Some(entry) = maybe_entry {
                     if eviction_state.is_notifier_enabled() {
                         let key = Arc::clone(key);
-                        eviction_state.add_removed_entry(key, &entry, RemovalCause::Expired);
+                        eviction_state.notify_entry_removal(key, &entry, RemovalCause::Expired);
                     }
                     Self::handle_remove_without_timer_wheel(
                         deqs,
@@ -1931,7 +1917,7 @@ where
                         &mut eviction_state.counters,
                     );
                 } else {
-                    // Skip this entry as the key might have been read, updated or
+                    // Skip this entry as the key may have been read, updated or
                     // invalidated by other thread.
                 }
             }
@@ -2026,7 +2012,7 @@ where
 
             if let Some(entry) = maybe_entry {
                 if eviction_state.is_notifier_enabled() {
-                    eviction_state.add_removed_entry(key, &entry, cause);
+                    eviction_state.notify_entry_removal(key, &entry, cause);
                 }
                 Self::handle_remove_with_deques(
                     deq_name,
@@ -2139,7 +2125,7 @@ where
 
             if let Some(entry) = maybe_entry {
                 if eviction_state.is_notifier_enabled() {
-                    eviction_state.add_removed_entry(key, &entry, cause);
+                    eviction_state.notify_entry_removal(key, &entry, cause);
                 }
                 Self::handle_remove(deqs, timer_wheel, entry, None, &mut eviction_state.counters);
             } else {
@@ -2267,7 +2253,7 @@ where
 
             if let Some(entry) = maybe_entry {
                 if eviction_state.is_notifier_enabled() {
-                    eviction_state.add_removed_entry(key, &entry, RemovalCause::Size);
+                    eviction_state.notify_entry_removal(key, &entry, RemovalCause::Size);
                 }
                 let weight = entry.policy_weight();
                 Self::handle_remove_with_deques(

@@ -2,8 +2,8 @@ use crate::common::{
     concurrent::{
         atomic_time::AtomicInstant,
         constants::{
-            MAX_SYNC_REPEATS, PERIODICAL_SYNC_INITIAL_DELAY_MILLIS, READ_LOG_FLUSH_POINT,
-            WRITE_LOG_FLUSH_POINT,
+            DEFAULT_RUN_PENDING_TASKS_TIMEOUT_MILLIS, MAX_SYNC_REPEATS,
+            PERIODICAL_SYNC_INITIAL_DELAY_MILLIS, READ_LOG_FLUSH_POINT, WRITE_LOG_FLUSH_POINT,
         },
     },
     time::{CheckedTimeOps, Instant},
@@ -26,7 +26,8 @@ use futures_util::future::{BoxFuture, Shared};
 
 #[async_trait]
 pub(crate) trait InnerSync {
-    async fn run_pending_tasks(&self, max_sync_repeats: usize);
+    /// Runs the pending tasks. Returns `true` if there are more entries to evict.
+    async fn run_pending_tasks(&self, max_sync_repeats: usize, timeout: Option<Duration>) -> bool;
 
     /// Notifies all the async tasks waiting in `BaseCache::schedule_write_op` method
     /// for the write op channel to have enough room.
@@ -37,8 +38,21 @@ pub(crate) trait InnerSync {
 
 pub(crate) struct Housekeeper {
     /// A shared `Future` of the maintenance task that is currently being resolved.
-    current_task: Mutex<Option<Shared<BoxFuture<'static, ()>>>>,
+    current_task: Mutex<Option<Shared<BoxFuture<'static, bool>>>>,
     run_after: AtomicInstant,
+    /// A flag to indicate if the last `run_pending_tasks` call left more entries to
+    /// evict.
+    ///
+    /// Used only when the eviction listener closure is set for this cache instance
+    /// because, if not, `run_pending_tasks` will never leave more entries to evict.
+    more_entries_to_evict: Option<AtomicBool>,
+    /// The timeout duration for the `run_pending_tasks` method. This is a safe-guard
+    /// to prevent cache read/write operations (that may call `run_pending_tasks`
+    /// internally) from being blocked for a long time when the user wrote a slow
+    /// eviction listener closure.
+    ///
+    /// Used only when the eviction listener closure is set for this cache instance.
+    maintenance_task_timeout: Option<Duration>,
     auto_run_enabled: AtomicBool,
     #[cfg(test)]
     pub(crate) start_count: AtomicUsize,
@@ -46,11 +60,24 @@ pub(crate) struct Housekeeper {
     pub(crate) complete_count: AtomicUsize,
 }
 
-impl Default for Housekeeper {
-    fn default() -> Self {
+impl Housekeeper {
+    pub(crate) fn new(is_eviction_listener_enabled: bool) -> Self {
+        let (more_entries_to_evict, maintenance_task_timeout) = if is_eviction_listener_enabled {
+            (
+                Some(AtomicBool::new(false)),
+                Some(Duration::from_millis(
+                    DEFAULT_RUN_PENDING_TASKS_TIMEOUT_MILLIS,
+                )),
+            )
+        } else {
+            (None, None)
+        };
+
         Self {
             current_task: Mutex::default(),
             run_after: AtomicInstant::new(Self::sync_after(Instant::now())),
+            more_entries_to_evict,
+            maintenance_task_timeout,
             auto_run_enabled: AtomicBool::new(true),
             #[cfg(test)]
             start_count: Default::default(),
@@ -58,15 +85,29 @@ impl Default for Housekeeper {
             complete_count: Default::default(),
         }
     }
-}
 
-impl Housekeeper {
     pub(crate) fn should_apply_reads(&self, ch_len: usize, now: Instant) -> bool {
-        self.should_apply(ch_len, READ_LOG_FLUSH_POINT / 8, now)
+        self.more_entries_to_evict() || self.should_apply(ch_len, READ_LOG_FLUSH_POINT, now)
+        // self.should_apply(ch_len, READ_LOG_FLUSH_POINT, now)
     }
 
     pub(crate) fn should_apply_writes(&self, ch_len: usize, now: Instant) -> bool {
-        self.should_apply(ch_len, WRITE_LOG_FLUSH_POINT / 8, now)
+        self.more_entries_to_evict() || self.should_apply(ch_len, WRITE_LOG_FLUSH_POINT, now)
+        // self.should_apply(ch_len, WRITE_LOG_FLUSH_POINT, now)
+    }
+
+    #[inline]
+    fn more_entries_to_evict(&self) -> bool {
+        self.more_entries_to_evict
+            .as_ref()
+            .map(|v| v.load(Ordering::Acquire))
+            .unwrap_or(false)
+    }
+
+    fn set_more_entries_to_evict(&self, v: bool) {
+        if let Some(flag) = &self.more_entries_to_evict {
+            flag.store(v, Ordering::Release);
+        }
     }
 
     #[inline]
@@ -112,24 +153,25 @@ impl Housekeeper {
     async fn do_run_pending_tasks<T>(
         &self,
         cache: Arc<T>,
-        current_task: &mut Option<Shared<BoxFuture<'static, ()>>>,
+        current_task: &mut Option<Shared<BoxFuture<'static, bool>>>,
     ) where
         T: InnerSync + Send + Sync + 'static,
     {
         use futures_util::FutureExt;
 
         let now = cache.now();
-
+        let more_to_evict;
         // Async Cancellation Safety: Our maintenance task is cancellable as we save
         // it in the lock. If it is canceled, we will resume it in the next run.
 
         if let Some(task) = &*current_task {
             // This task was cancelled in the previous run due to the enclosing
             // Future was dropped. Resume the task now by awaiting.
-            task.clone().await;
+            more_to_evict = task.clone().await;
         } else {
+            let timeout = self.maintenance_task_timeout;
             // Create a new maintenance task and await it.
-            let task = async move { cache.run_pending_tasks(MAX_SYNC_REPEATS).await }
+            let task = async move { cache.run_pending_tasks(MAX_SYNC_REPEATS, timeout).await }
                 .boxed()
                 .shared();
             *current_task = Some(task.clone());
@@ -137,13 +179,14 @@ impl Housekeeper {
             #[cfg(test)]
             self.start_count.fetch_add(1, Ordering::AcqRel);
 
-            task.await;
+            more_to_evict = task.await;
         }
 
         // If we are here, it means that the maintenance task has been completed.
         // We can remove it from the lock.
         *current_task = None;
         self.run_after.set_instant(Self::sync_after(now));
+        self.set_more_entries_to_evict(more_to_evict);
 
         #[cfg(test)]
         self.complete_count.fetch_add(1, Ordering::AcqRel);
