@@ -1,5 +1,13 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.7
+
+### Changed
+
+- Ensure a single call to `run_pending_tasks` to evict as many entries as possible
+  from the cache ([#417](gh-pull-0417).
+
+
 ## Version 0.12.6
 
 ### Fixed
