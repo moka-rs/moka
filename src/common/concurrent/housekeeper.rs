@@ -1,4 +1,7 @@
-use super::constants::{MAX_SYNC_REPEATS, PERIODICAL_SYNC_INITIAL_DELAY_MILLIS};
+use super::constants::{
+    DEFAULT_RUN_PENDING_TASKS_TIMEOUT_MILLIS, MAX_SYNC_REPEATS,
+    PERIODICAL_SYNC_INITIAL_DELAY_MILLIS,
+};
 
 use super::{
     atomic_time::AtomicInstant,
@@ -13,7 +16,8 @@ use std::{
 };
 
 pub(crate) trait InnerSync {
-    fn run_pending_tasks(&self, max_sync_repeats: usize);
+    /// Runs the pending tasks. Returns `true` if there are more entries to evict.
+    fn run_pending_tasks(&self, max_sync_repeats: usize, timeout: Option<Duration>) -> bool;
 
     fn now(&self) -> Instant;
 }
@@ -21,26 +25,64 @@ pub(crate) trait InnerSync {
 pub(crate) struct Housekeeper {
     run_lock: Mutex<()>,
     run_after: AtomicInstant,
+    /// A flag to indicate if the last `run_pending_tasks` call left more entries to
+    /// evict.
+    ///
+    /// Used only when the eviction listener closure is set for this cache instance
+    /// because, if not, `run_pending_tasks` will never leave more entries to evict.
+    more_entries_to_evict: Option<AtomicBool>,
+    /// The timeout duration for the `run_pending_tasks` method. This is a safe-guard
+    /// to prevent cache read/write operations (that may call `run_pending_tasks`
+    /// internally) from being blocked for a long time when the user wrote a slow
+    /// eviction listener closure.
+    ///
+    /// Used only when the eviction listener closure is set for this cache instance.
+    maintenance_task_timeout: Option<Duration>,
     auto_run_enabled: AtomicBool,
 }
 
-impl Default for Housekeeper {
-    fn default() -> Self {
+impl Housekeeper {
+    pub(crate) fn new(is_eviction_listener_enabled: bool) -> Self {
+        let (more_entries_to_evict, maintenance_task_timeout) = if is_eviction_listener_enabled {
+            (
+                Some(AtomicBool::new(false)),
+                Some(Duration::from_millis(
+                    DEFAULT_RUN_PENDING_TASKS_TIMEOUT_MILLIS,
+                )),
+            )
+        } else {
+            (None, None)
+        };
+
         Self {
             run_lock: Mutex::default(),
             run_after: AtomicInstant::new(Self::sync_after(Instant::now())),
+            more_entries_to_evict,
+            maintenance_task_timeout,
             auto_run_enabled: AtomicBool::new(true),
         }
     }
-}
 
-impl Housekeeper {
     pub(crate) fn should_apply_reads(&self, ch_len: usize, now: Instant) -> bool {
-        self.should_apply(ch_len, READ_LOG_FLUSH_POINT, now)
+        self.more_entries_to_evict() || self.should_apply(ch_len, READ_LOG_FLUSH_POINT, now)
     }
 
     pub(crate) fn should_apply_writes(&self, ch_len: usize, now: Instant) -> bool {
-        self.should_apply(ch_len, WRITE_LOG_FLUSH_POINT, now)
+        self.more_entries_to_evict() || self.should_apply(ch_len, WRITE_LOG_FLUSH_POINT, now)
+    }
+
+    #[inline]
+    fn more_entries_to_evict(&self) -> bool {
+        self.more_entries_to_evict
+            .as_ref()
+            .map(|v| v.load(Ordering::Acquire))
+            .unwrap_or(false)
+    }
+
+    fn set_more_entries_to_evict(&self, v: bool) {
+        if let Some(flag) = &self.more_entries_to_evict {
+            flag.store(v, Ordering::Release);
+        }
     }
 
     #[inline]
@@ -66,7 +108,9 @@ impl Housekeeper {
     fn do_run_pending_tasks<T: InnerSync>(&self, cache: &T, _lock: MutexGuard<'_, ()>) {
         let now = cache.now();
         self.run_after.set_instant(Self::sync_after(now));
-        cache.run_pending_tasks(MAX_SYNC_REPEATS);
+        let timeout = self.maintenance_task_timeout;
+        let more_to_evict = cache.run_pending_tasks(MAX_SYNC_REPEATS, timeout);
+        self.set_more_entries_to_evict(more_to_evict);
     }
 
     fn sync_after(now: Instant) -> Instant {
