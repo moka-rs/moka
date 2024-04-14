@@ -1,6 +1,6 @@
 use super::{Cache, SegmentedCache};
 use crate::{
-    common::{builder_utils, concurrent::Weigher},
+    common::{builder_utils, concurrent::Weigher, HousekeeperConfig},
     notification::{EvictionListener, RemovalCause},
     policy::{EvictionPolicy, ExpirationPolicy},
     Expiry,
@@ -56,6 +56,7 @@ pub struct CacheBuilder<K, V, C> {
     eviction_policy: EvictionPolicy,
     eviction_listener: Option<EvictionListener<K, V>>,
     expiration_policy: ExpirationPolicy<K, V>,
+    housekeeper_config: HousekeeperConfig,
     invalidator_enabled: bool,
     cache_type: PhantomData<C>,
 }
@@ -75,6 +76,7 @@ where
             eviction_listener: None,
             eviction_policy: EvictionPolicy::default(),
             expiration_policy: ExpirationPolicy::default(),
+            housekeeper_config: HousekeeperConfig::default(),
             invalidator_enabled: false,
             cache_type: PhantomData,
         }
@@ -115,6 +117,7 @@ where
             eviction_policy: self.eviction_policy,
             eviction_listener: self.eviction_listener,
             expiration_policy: self.expiration_policy,
+            housekeeper_config: self.housekeeper_config,
             invalidator_enabled: self.invalidator_enabled,
             cache_type: PhantomData,
         }
@@ -143,6 +146,7 @@ where
             self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
+            self.housekeeper_config,
             self.invalidator_enabled,
         )
     }
@@ -230,6 +234,7 @@ where
             self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
+            self.housekeeper_config,
             self.invalidator_enabled,
         )
     }
@@ -264,6 +269,7 @@ where
             self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
+            self.housekeeper_config,
             self.invalidator_enabled,
         )
     }
@@ -353,6 +359,7 @@ where
             self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
+            self.housekeeper_config,
             self.invalidator_enabled,
         )
     }
@@ -474,6 +481,14 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         let mut builder = self;
         builder.expiration_policy.set_expiry(Arc::new(expiry));
         builder
+    }
+
+    #[cfg(test)]
+    pub(crate) fn housekeeper_config(self, conf: HousekeeperConfig) -> Self {
+        Self {
+            housekeeper_config: conf,
+            ..self
+        }
     }
 
     /// Enables support for [`Cache::invalidate_entries_if`][cache-invalidate-if]

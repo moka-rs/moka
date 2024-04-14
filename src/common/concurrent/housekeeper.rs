@@ -1,13 +1,11 @@
-use super::constants::{
-    DEFAULT_RUN_PENDING_TASKS_TIMEOUT_MILLIS, MAX_SYNC_REPEATS,
-    PERIODICAL_SYNC_INITIAL_DELAY_MILLIS,
-};
+use super::constants::LOG_SYNC_INTERVAL_MILLIS;
 
 use super::{
     atomic_time::AtomicInstant,
     constants::{READ_LOG_FLUSH_POINT, WRITE_LOG_FLUSH_POINT},
 };
 use crate::common::time::{CheckedTimeOps, Instant};
+use crate::common::HousekeeperConfig;
 
 use parking_lot::{Mutex, MutexGuard};
 use std::{
@@ -17,7 +15,12 @@ use std::{
 
 pub(crate) trait InnerSync {
     /// Runs the pending tasks. Returns `true` if there are more entries to evict.
-    fn run_pending_tasks(&self, max_sync_repeats: usize, timeout: Option<Duration>) -> bool;
+    fn run_pending_tasks(
+        &self,
+        timeout: Option<Duration>,
+        max_log_sync_repeats: usize,
+        eviction_batch_size: usize,
+    ) -> bool;
 
     fn now(&self) -> Instant;
 }
@@ -25,11 +28,11 @@ pub(crate) trait InnerSync {
 pub(crate) struct Housekeeper {
     run_lock: Mutex<()>,
     run_after: AtomicInstant,
-    /// A flag to indicate if the last `run_pending_tasks` call left more entries to
-    /// evict.
+    /// A flag to indicate if the last call on `run_pending_tasks` method left some
+    /// entries to evict.
     ///
     /// Used only when the eviction listener closure is set for this cache instance
-    /// because, if not, `run_pending_tasks` will never leave more entries to evict.
+    /// because, if not, `run_pending_tasks` will never leave entries to evict.
     more_entries_to_evict: Option<AtomicBool>,
     /// The timeout duration for the `run_pending_tasks` method. This is a safe-guard
     /// to prevent cache read/write operations (that may call `run_pending_tasks`
@@ -38,17 +41,21 @@ pub(crate) struct Housekeeper {
     ///
     /// Used only when the eviction listener closure is set for this cache instance.
     maintenance_task_timeout: Option<Duration>,
+    /// The maximum repeat count for receiving operation logs from the read and write
+    /// log channels. Default: `MAX_LOG_SYNC_REPEATS`.
+    max_log_sync_repeats: usize,
+    /// The batch size of entries to be processed by each internal eviction method.
+    /// Default: `EVICTION_BATCH_SIZE`.
+    eviction_batch_size: usize,
     auto_run_enabled: AtomicBool,
 }
 
 impl Housekeeper {
-    pub(crate) fn new(is_eviction_listener_enabled: bool) -> Self {
+    pub(crate) fn new(is_eviction_listener_enabled: bool, config: HousekeeperConfig) -> Self {
         let (more_entries_to_evict, maintenance_task_timeout) = if is_eviction_listener_enabled {
             (
                 Some(AtomicBool::new(false)),
-                Some(Duration::from_millis(
-                    DEFAULT_RUN_PENDING_TASKS_TIMEOUT_MILLIS,
-                )),
+                Some(config.maintenance_task_timeout),
             )
         } else {
             (None, None)
@@ -59,6 +66,8 @@ impl Housekeeper {
             run_after: AtomicInstant::new(Self::sync_after(Instant::now())),
             more_entries_to_evict,
             maintenance_task_timeout,
+            max_log_sync_repeats: config.max_log_sync_repeats,
+            eviction_batch_size: config.eviction_batch_size,
             auto_run_enabled: AtomicBool::new(true),
         }
     }
@@ -109,12 +118,14 @@ impl Housekeeper {
         let now = cache.now();
         self.run_after.set_instant(Self::sync_after(now));
         let timeout = self.maintenance_task_timeout;
-        let more_to_evict = cache.run_pending_tasks(MAX_SYNC_REPEATS, timeout);
+        let repeats = self.max_log_sync_repeats;
+        let batch_size = self.eviction_batch_size;
+        let more_to_evict = cache.run_pending_tasks(timeout, repeats, batch_size);
         self.set_more_entries_to_evict(more_to_evict);
     }
 
     fn sync_after(now: Instant) -> Instant {
-        let dur = Duration::from_millis(PERIODICAL_SYNC_INITIAL_DELAY_MILLIS);
+        let dur = Duration::from_millis(LOG_SYNC_INTERVAL_MILLIS);
         let ts = now.checked_add(dur);
         // Assuming that `now` is current wall clock time, this should never fail at
         // least next millions of years.
