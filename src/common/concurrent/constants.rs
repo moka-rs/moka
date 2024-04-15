@@ -14,7 +14,7 @@ pub(crate) const WRITE_LOG_CH_SIZE: usize =
 
 // TODO: Calculate the batch size based on the number of entries in the cache (or an
 // estimated number of entries to evict)
-pub(crate) const DEFAULT_EVICTION_BATCH_SIZE: usize = WRITE_LOG_CH_SIZE;
+pub(crate) const DEFAULT_EVICTION_BATCH_SIZE: u32 = WRITE_LOG_CH_SIZE as u32;
 
 /// The default timeout duration for the `run_pending_tasks` method.
 pub(crate) const DEFAULT_MAINTENANCE_TASK_TIMEOUT_MILLIS: u64 = 100;

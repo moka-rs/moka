@@ -14,12 +14,13 @@ use std::{
 };
 
 pub(crate) trait InnerSync {
-    /// Runs the pending tasks. Returns `true` if there are more entries to evict.
+    /// Runs the pending tasks. Returns `true` if there are more entries to evict in
+    /// next run.
     fn run_pending_tasks(
         &self,
         timeout: Option<Duration>,
-        max_log_sync_repeats: usize,
-        eviction_batch_size: usize,
+        max_log_sync_repeats: u32,
+        eviction_batch_size: u32,
     ) -> bool;
 
     fn now(&self) -> Instant;
@@ -43,10 +44,10 @@ pub(crate) struct Housekeeper {
     maintenance_task_timeout: Option<Duration>,
     /// The maximum repeat count for receiving operation logs from the read and write
     /// log channels. Default: `MAX_LOG_SYNC_REPEATS`.
-    max_log_sync_repeats: usize,
+    max_log_sync_repeats: u32,
     /// The batch size of entries to be processed by each internal eviction method.
     /// Default: `EVICTION_BATCH_SIZE`.
-    eviction_batch_size: usize,
+    eviction_batch_size: u32,
     auto_run_enabled: AtomicBool,
 }
 

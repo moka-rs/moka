@@ -24,12 +24,13 @@ use futures_util::future::{BoxFuture, Shared};
 
 #[async_trait]
 pub(crate) trait InnerSync {
-    /// Runs the pending tasks. Returns `true` if there are more entries to evict.
+    /// Runs the pending tasks. Returns `true` if there are more entries to evict in
+    /// next run.
     async fn run_pending_tasks(
         &self,
         timeout: Option<Duration>,
-        max_log_sync_repeats: usize,
-        eviction_batch_size: usize,
+        max_log_sync_repeats: u32,
+        eviction_batch_size: u32,
     ) -> bool;
 
     /// Notifies all the async tasks waiting in `BaseCache::schedule_write_op` method
@@ -58,10 +59,10 @@ pub(crate) struct Housekeeper {
     maintenance_task_timeout: Option<Duration>,
     /// The maximum repeat count for receiving operation logs from the read and write
     /// log channels. Default: `MAX_LOG_SYNC_REPEATS`.
-    max_log_sync_repeats: usize,
+    max_log_sync_repeats: u32,
     /// The batch size of entries to be processed by each internal eviction method.
     /// Default: `EVICTION_BATCH_SIZE`.
-    eviction_batch_size: usize,
+    eviction_batch_size: u32,
     auto_run_enabled: AtomicBool,
     #[cfg(test)]
     pub(crate) start_count: AtomicUsize,
@@ -138,12 +139,14 @@ impl Housekeeper {
         cache.notify_write_op_ch_is_ready();
     }
 
-    pub(crate) async fn try_run_pending_tasks<T>(&self, cache: Arc<T>) -> bool
+    /// Tries to run the pending tasks if the lock is free. Returns `true` if there
+    /// are more entries to evict in next run.
+    pub(crate) async fn try_run_pending_tasks<T>(&self, cache: &Arc<T>) -> bool
     where
         T: InnerSync + Send + Sync + 'static,
     {
         if let Some(mut current_task) = self.current_task.try_lock() {
-            self.do_run_pending_tasks(Arc::clone(&cache), &mut current_task)
+            self.do_run_pending_tasks(Arc::clone(cache), &mut current_task)
                 .await;
         } else {
             return false;

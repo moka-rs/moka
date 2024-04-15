@@ -790,6 +790,7 @@ impl<'a, K, V> EvictionState<'a, K, V> {
 struct EvictionCounters {
     entry_count: u64,
     weighted_size: u64,
+    eviction_count: u64,
 }
 
 impl EvictionCounters {
@@ -798,6 +799,7 @@ impl EvictionCounters {
         Self {
             entry_count,
             weighted_size,
+            eviction_count: 0,
         }
     }
 
@@ -813,6 +815,12 @@ impl EvictionCounters {
         self.entry_count -= entry_count;
         let total = &mut self.weighted_size;
         *total = total.saturating_sub(weight as u64);
+    }
+
+    #[inline]
+    fn incr_eviction_count(&mut self) {
+        let count = &mut self.eviction_count;
+        *count = count.saturating_add(1);
     }
 }
 
@@ -1242,8 +1250,8 @@ where
     fn run_pending_tasks(
         &self,
         timeout: Option<Duration>,
-        max_log_sync_repeats: usize,
-        eviction_batch_size: usize,
+        max_log_sync_repeats: u32,
+        eviction_batch_size: u32,
     ) -> bool {
         self.do_run_pending_tasks(timeout, max_log_sync_repeats, eviction_batch_size)
     }
@@ -1262,8 +1270,8 @@ where
     fn do_run_pending_tasks(
         &self,
         timeout: Option<Duration>,
-        max_log_sync_repeats: usize,
-        eviction_batch_size: usize,
+        max_log_sync_repeats: u32,
+        eviction_batch_size: u32,
     ) -> bool {
         if self.max_capacity == Some(0) {
             return false;
@@ -1278,35 +1286,39 @@ where
         } else {
             None
         };
-        let mut calls = 0;
+        let mut should_process_logs = true;
+        let mut calls = 0u32;
         let current_ec = self.entry_count.load();
         let current_ws = self.weighted_size.load();
         let mut eviction_state =
             EvictionState::new(current_ec, current_ws, self.removal_notifier.as_ref());
 
         loop {
-            calls += 1;
+            if should_process_logs {
+                let r_len = self.read_op_ch.len();
+                if r_len > 0 {
+                    self.apply_reads(&mut deqs, &mut timer_wheel, r_len);
+                }
 
-            let r_len = self.read_op_ch.len();
-            if r_len > 0 {
-                self.apply_reads(&mut deqs, &mut timer_wheel, r_len);
-            }
+                let w_len = self.write_op_ch.len();
+                if w_len > 0 {
+                    self.apply_writes(&mut deqs, &mut timer_wheel, w_len, &mut eviction_state);
+                }
 
-            let w_len = self.write_op_ch.len();
-            if w_len > 0 {
-                self.apply_writes(&mut deqs, &mut timer_wheel, w_len, &mut eviction_state);
-            }
+                if self.eviction_policy == EvictionPolicyConfig::TinyLfu
+                    && self.should_enable_frequency_sketch(&eviction_state.counters)
+                {
+                    self.enable_frequency_sketch(&eviction_state.counters);
+                }
 
-            if self.eviction_policy == EvictionPolicyConfig::TinyLfu
-                && self.should_enable_frequency_sketch(&eviction_state.counters)
-            {
-                self.enable_frequency_sketch(&eviction_state.counters);
+                calls += 1;
             }
 
             // Set this flag to `false`. The `evict_*` and `invalidate_*` methods
             // below may set it to `true` if there are more entries to evict in next
             // loop.
             eviction_state.more_entries_to_evict = false;
+            let last_eviction_count = eviction_state.counters.eviction_count;
 
             // Evict entries if there are any expired entries in the hierarchical
             // timer wheels.
@@ -1357,14 +1369,21 @@ where
 
             // Check whether to continue this loop or not.
 
-            let should_process_logs = calls <= max_log_sync_repeats
+            should_process_logs = calls <= max_log_sync_repeats
                 && (self.read_op_ch.len() >= READ_LOG_FLUSH_POINT
                     || self.write_op_ch.len() >= WRITE_LOG_FLUSH_POINT);
 
-            if !should_process_logs && !eviction_state.more_entries_to_evict {
+            let should_evict_more_entries = eviction_state.more_entries_to_evict
+                // Check if there were any entries evicted in this loop.
+                && (eviction_state.counters.eviction_count - last_eviction_count) > 0;
+
+            // Break the loop if there will be nothing to do in next loop.
+            if !should_process_logs && !should_evict_more_entries {
                 break;
             }
 
+            // Break the loop if the eviction listener is set and timeout has been
+            // reached.
             if let (Some(to), Some(started)) = (timeout, started_at) {
                 let elapsed = self
                     .current_time_from_expiration_clock()
@@ -1584,6 +1603,7 @@ where
                         let key = Arc::clone(&kh.key);
                         eviction_state.notify_entry_removal(key, &entry, RemovalCause::Size);
                     }
+                    eviction_state.counters.incr_eviction_count();
                 }
                 entry.entry_info().set_policy_gen(gen);
                 return;
@@ -1629,6 +1649,7 @@ where
                                 RemovalCause::Size,
                             );
                         }
+                        eviction_state.counters.incr_eviction_count();
                         // And then remove the victim from the deques.
                         Self::handle_remove(
                             deqs,
@@ -1680,6 +1701,7 @@ where
                     if eviction_state.is_notifier_enabled() {
                         eviction_state.notify_entry_removal(key, &entry, RemovalCause::Size);
                     }
+                    eviction_state.counters.incr_eviction_count();
                 }
             }
         };
@@ -1953,6 +1975,7 @@ where
                         let key = Arc::clone(key);
                         eviction_state.notify_entry_removal(key, &entry, RemovalCause::Expired);
                     }
+                    eviction_state.counters.incr_eviction_count();
                     Self::handle_remove_without_timer_wheel(
                         deqs,
                         entry,
@@ -1971,7 +1994,7 @@ where
         &self,
         deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
-        batch_size: usize,
+        batch_size: u32,
         state: &mut EvictionState<'_, K, V>,
     ) where
         V: Clone,
@@ -1998,7 +2021,7 @@ where
         cache_region: CacheRegion,
         deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
-        batch_size: usize,
+        batch_size: u32,
         now: Instant,
         eviction_state: &mut EvictionState<'_, K, V>,
     ) where
@@ -2037,7 +2060,14 @@ where
                 // we change `last_modified` and `last_accessed` in `EntryInfo` from
                 // `Option<Instant>` to `Instant`.
                 Some((key, hash, true, _) | (key, hash, false, None)) => {
+                    // `is_dirty` is true or `last_modified` is None. Skip this entry
+                    // as it may have been updated by this or other async task but
+                    // its `WriteOp` is not processed yet.
                     self.skip_updated_entry_ao(&key, hash, deq_name, ao_deq, wo_deq);
+                    // Set `more_to_evict` to `false` to make `run_pending_tasks` to
+                    // return early. This will help that `schedule_write_op` to send
+                    // the `WriteOp` to the write op channel.
+                    more_to_evict = false;
                     continue;
                 }
                 None => {
@@ -2064,6 +2094,7 @@ where
                 if eviction_state.is_notifier_enabled() {
                     eviction_state.notify_entry_removal(key, &entry, cause);
                 }
+                eviction_state.counters.incr_eviction_count();
                 Self::handle_remove_with_deques(
                     deq_name,
                     ao_deq,
@@ -2074,6 +2105,7 @@ where
                 );
             } else {
                 self.skip_updated_entry_ao(&key, hash, deq_name, ao_deq, wo_deq);
+                more_to_evict = false;
             }
         }
 
@@ -2128,7 +2160,7 @@ where
         &self,
         deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
-        batch_size: usize,
+        batch_size: u32,
         now: Instant,
         eviction_state: &mut EvictionState<'_, K, V>,
     ) where
@@ -2166,6 +2198,11 @@ where
                 // `Option<Instant>` to `Instant`.
                 Some((key, hash, true, _) | (key, hash, false, None)) => {
                     self.skip_updated_entry_wo(&key, hash, deqs);
+                    // If the key is the caller key, set `more_to_evict` to `false`
+                    // to make `run_pending_tasks` to return early. This will help
+                    // that `schedule_write_op`, a caller in the call tree, to send
+                    // the `WriteOp` to the write op channel.
+                    more_to_evict = false;
                     continue;
                 }
                 None => {
@@ -2188,9 +2225,13 @@ where
                 if eviction_state.is_notifier_enabled() {
                     eviction_state.notify_entry_removal(key, &entry, cause);
                 }
+                eviction_state.counters.incr_eviction_count();
                 Self::handle_remove(deqs, timer_wheel, entry, None, &mut eviction_state.counters);
             } else {
                 self.skip_updated_entry_wo(&key, hash, deqs);
+                // if caller_key.map(|ck| ck == &key).unwrap_or_default() {
+                more_to_evict = false;
+                // }
             }
         }
 
@@ -2204,7 +2245,7 @@ where
         invalidator: &Invalidator<K, V, S>,
         deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
-        batch_size: usize,
+        batch_size: u32,
         eviction_state: &mut EvictionState<'_, K, V>,
     ) where
         V: Clone,
@@ -2265,7 +2306,7 @@ where
         &self,
         deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
-        batch_size: usize,
+        batch_size: u32,
         weights_to_evict: u64,
         eviction_state: &mut EvictionState<'_, K, V>,
     ) where
@@ -2299,7 +2340,14 @@ where
                 // `last_modified` and `last_accessed` in `EntryInfo` from `Option<Instant>` to
                 // `Instant`.
                 Some((key, hash, true, _) | (key, hash, false, None)) => {
+                    // `is_dirty` is true or `last_modified` is None. Skip this entry
+                    // as it may have been updated by this or other async task but
+                    // its `WriteOp` is not processed yet.
                     self.skip_updated_entry_ao(&key, hash, deq_name, ao_deq, wo_deq);
+                    // Set `more_to_evict` to `false` to make `run_pending_tasks` to
+                    // return early. This will help that `schedule_write_op` to send
+                    // the `WriteOp` to the write op channel.
+                    more_to_evict = false;
                     continue;
                 }
                 None => {
@@ -2328,6 +2376,7 @@ where
                 if eviction_state.is_notifier_enabled() {
                     eviction_state.notify_entry_removal(key, &entry, RemovalCause::Size);
                 }
+                eviction_state.counters.incr_eviction_count();
                 let weight = entry.policy_weight();
                 Self::handle_remove_with_deques(
                     deq_name,
@@ -2340,6 +2389,9 @@ where
                 evicted = evicted.saturating_add(weight as u64);
             } else {
                 self.skip_updated_entry_ao(&key, hash, deq_name, ao_deq, wo_deq);
+                // if caller_key.map(|ck| ck == &key).unwrap_or_default() {
+                more_to_evict = false;
+                // }
             }
         }
 

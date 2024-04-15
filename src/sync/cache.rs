@@ -4803,8 +4803,8 @@ mod tests {
         const MAX_CAPACITY: u64 = 20;
 
         const EVICTION_TIMEOUT: Duration = Duration::from_millis(30);
-        const MAX_LOG_SYNC_REPEATS: usize = 1;
-        const EVICTION_BATCH_SIZE: usize = 1;
+        const MAX_LOG_SYNC_REPEATS: u32 = 1;
+        const EVICTION_BATCH_SIZE: u32 = 1;
 
         let hk_conf = HousekeeperConfig::new(
             Some(EVICTION_TIMEOUT),
@@ -4866,8 +4866,8 @@ mod tests {
 
         const EVICTION_TIMEOUT: Duration = Duration::from_millis(30);
         const LISTENER_DELAY: Duration = Duration::from_millis(11);
-        const MAX_LOG_SYNC_REPEATS: usize = 1;
-        const EVICTION_BATCH_SIZE: usize = 1;
+        const MAX_LOG_SYNC_REPEATS: u32 = 1;
+        const EVICTION_BATCH_SIZE: u32 = 1;
 
         let hk_conf = HousekeeperConfig::new(
             Some(EVICTION_TIMEOUT),
