@@ -1,6 +1,6 @@
 use super::{Cache, FutureExt};
 use crate::{
-    common::{builder_utils, concurrent::Weigher},
+    common::{builder_utils, concurrent::Weigher, HousekeeperConfig},
     notification::{AsyncEvictionListener, ListenerFuture, RemovalCause},
     policy::{EvictionPolicy, ExpirationPolicy},
     Expiry,
@@ -63,6 +63,7 @@ pub struct CacheBuilder<K, V, C> {
     eviction_policy: EvictionPolicy,
     eviction_listener: Option<AsyncEvictionListener<K, V>>,
     expiration_policy: ExpirationPolicy<K, V>,
+    housekeeper_config: HousekeeperConfig,
     invalidator_enabled: bool,
     cache_type: PhantomData<C>,
 }
@@ -81,6 +82,7 @@ where
             eviction_policy: EvictionPolicy::default(),
             eviction_listener: None,
             expiration_policy: ExpirationPolicy::default(),
+            housekeeper_config: HousekeeperConfig::default(),
             invalidator_enabled: false,
             cache_type: PhantomData,
         }
@@ -97,7 +99,7 @@ where
     pub fn new(max_capacity: u64) -> Self {
         Self {
             max_capacity: Some(max_capacity),
-            ..Default::default()
+            ..Self::default()
         }
     }
 
@@ -121,6 +123,7 @@ where
             self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
+            self.housekeeper_config,
             self.invalidator_enabled,
         )
     }
@@ -218,6 +221,7 @@ where
             self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
+            self.housekeeper_config,
             self.invalidator_enabled,
         )
     }
@@ -392,6 +396,14 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         let mut builder = self;
         builder.expiration_policy.set_expiry(Arc::new(expiry));
         builder
+    }
+
+    #[cfg(test)]
+    pub(crate) fn housekeeper_config(self, conf: HousekeeperConfig) -> Self {
+        Self {
+            housekeeper_config: conf,
+            ..self
+        }
     }
 
     /// Enables support for [`Cache::invalidate_entries_if`][cache-invalidate-if]

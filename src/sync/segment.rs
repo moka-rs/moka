@@ -1,6 +1,7 @@
 use super::{cache::Cache, CacheBuilder, OwnedKeyEntrySelector, RefKeyEntrySelector};
+use crate::common::concurrent::Weigher;
 use crate::{
-    common::concurrent::Weigher,
+    common::HousekeeperConfig,
     notification::EvictionListener,
     policy::{EvictionPolicy, ExpirationPolicy},
     sync_base::iter::{Iter, ScanningGet},
@@ -105,6 +106,7 @@ where
             EvictionPolicy::default(),
             None,
             ExpirationPolicy::default(),
+            HousekeeperConfig::default(),
             false,
         )
     }
@@ -211,6 +213,7 @@ where
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<EvictionListener<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
+        housekeeper_config: HousekeeperConfig,
         invalidator_enabled: bool,
     ) -> Self {
         Self {
@@ -224,6 +227,7 @@ where
                 eviction_policy,
                 eviction_listener,
                 expiration_policy,
+                housekeeper_config,
                 invalidator_enabled,
             )),
         }
@@ -735,6 +739,7 @@ where
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<EvictionListener<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
+        housekeeper_config: HousekeeperConfig,
         invalidator_enabled: bool,
     ) -> Self {
         assert!(num_segments > 0);
@@ -758,6 +763,7 @@ where
                     eviction_policy.clone(),
                     eviction_listener.clone(),
                     expiration_policy.clone(),
+                    housekeeper_config.clone(),
                     invalidator_enabled,
                 )
             })
