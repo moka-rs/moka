@@ -2198,10 +2198,6 @@ where
                 // `Option<Instant>` to `Instant`.
                 Some((key, hash, true, _) | (key, hash, false, None)) => {
                     self.skip_updated_entry_wo(&key, hash, deqs);
-                    // If the key is the caller key, set `more_to_evict` to `false`
-                    // to make `run_pending_tasks` to return early. This will help
-                    // that `schedule_write_op`, a caller in the call tree, to send
-                    // the `WriteOp` to the write op channel.
                     more_to_evict = false;
                     continue;
                 }
@@ -2229,9 +2225,7 @@ where
                 Self::handle_remove(deqs, timer_wheel, entry, None, &mut eviction_state.counters);
             } else {
                 self.skip_updated_entry_wo(&key, hash, deqs);
-                // if caller_key.map(|ck| ck == &key).unwrap_or_default() {
                 more_to_evict = false;
-                // }
             }
         }
 
@@ -2389,9 +2383,7 @@ where
                 evicted = evicted.saturating_add(weight as u64);
             } else {
                 self.skip_updated_entry_ao(&key, hash, deq_name, ao_deq, wo_deq);
-                // if caller_key.map(|ck| ck == &key).unwrap_or_default() {
                 more_to_evict = false;
-                // }
             }
         }
 
