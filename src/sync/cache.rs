@@ -4802,11 +4802,12 @@ mod tests {
     fn no_batch_size_limit_on_eviction() {
         const MAX_CAPACITY: u64 = 20;
 
-        const EVICTION_TIMEOUT: Duration = Duration::from_millis(30);
+        const EVICTION_TIMEOUT: Duration = Duration::from_nanos(0);
         const MAX_LOG_SYNC_REPEATS: u32 = 1;
         const EVICTION_BATCH_SIZE: u32 = 1;
 
         let hk_conf = HousekeeperConfig::new(
+            // Timeout should be ignored when the eviction listener is not provided.
             Some(EVICTION_TIMEOUT),
             Some(MAX_LOG_SYNC_REPEATS),
             Some(EVICTION_BATCH_SIZE),
@@ -4835,7 +4836,7 @@ mod tests {
         cache.run_pending_tasks();
         assert_eq!(cache.entry_count(), MAX_CAPACITY);
 
-        // Insert more items the cache.
+        // Insert more items to the cache.
         for i in MAX_CAPACITY..(MAX_CAPACITY * 2) {
             let v = format!("v{i}");
             cache.insert(i, v)
@@ -4853,7 +4854,7 @@ mod tests {
         cache.run_pending_tasks();
         assert_eq!(cache.entry_count(), MAX_CAPACITY);
 
-        // Now the old keys should be gone.
+        // Now all the old keys should be gone.
         assert!(!cache.contains_key(&0));
         assert!(!cache.contains_key(&(MAX_CAPACITY - 1)));
         // And the new keys should exist.
@@ -4912,7 +4913,7 @@ mod tests {
         assert_eq!(listener_call_count.load(Ordering::Acquire), 0);
         assert_eq!(cache.entry_count(), MAX_CAPACITY);
 
-        // Insert more items the cache.
+        // Insert more items to the cache.
         for i in MAX_CAPACITY..(MAX_CAPACITY * 2) {
             let v = format!("v{i}");
             cache.insert(i, v);
