@@ -43,6 +43,12 @@ jobs:
           lscpu
           free -m
 
+      - name: Pin some dependencies to specific versions
+        run: ./.ci_extras/pin-crate-vers-kani.sh
+
+      - name: Show cargo tree
+        run: cargo tree
+
       - name: Run Kani
         uses: model-checking/kani-github-action@v1.0
         with:
