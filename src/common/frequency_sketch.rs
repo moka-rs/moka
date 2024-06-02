@@ -117,7 +117,7 @@ impl FrequencySketch {
         }
 
         let start = ((hash & 3) << 2) as u8;
-        let mut frequency = std::u8::MAX;
+        let mut frequency = u8::MAX;
         for i in 0..4 {
             let index = self.index_of(hash, i);
             let count = (self.table[index] >> ((start + i) << 2) & 0xF) as u8;
@@ -257,7 +257,7 @@ mod tests {
         let mut sketch = FrequencySketch::default();
         sketch.ensure_capacity(512);
         let mut indexes = std::collections::HashSet::new();
-        let hashes = [std::u64::MAX, 0, 1];
+        let hashes = [u64::MAX, 0, 1];
         for hash in hashes.iter() {
             for depth in 0..4 {
                 indexes.insert(sketch.index_of(*hash, depth));

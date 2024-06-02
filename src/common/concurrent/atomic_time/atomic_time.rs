@@ -13,7 +13,7 @@ pub(crate) struct AtomicInstant {
 impl Default for AtomicInstant {
     fn default() -> Self {
         Self {
-            instant: AtomicU64::new(std::u64::MAX),
+            instant: AtomicU64::new(u64::MAX),
         }
     }
 }
@@ -45,7 +45,9 @@ impl AtomicInstant {
                 TypeId::of::<ClockInstant>(),
                 TypeId::of::<quanta::Instant>()
             );
-            Some(Instant::new(unsafe { std::mem::transmute(ts) }))
+            Some(Instant::new(unsafe {
+                std::mem::transmute::<u64, quanta::Instant>(ts)
+            }))
         }
     }
 
@@ -54,7 +56,7 @@ impl AtomicInstant {
             TypeId::of::<ClockInstant>(),
             TypeId::of::<quanta::Instant>()
         );
-        let ts = unsafe { std::mem::transmute(instant.inner_clock()) };
+        let ts = unsafe { std::mem::transmute::<quanta::Instant, u64>(instant.inner_clock()) };
         self.instant.store(ts, Ordering::Release);
     }
 }
