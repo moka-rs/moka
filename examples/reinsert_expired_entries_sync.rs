@@ -1,3 +1,6 @@
+// This example requires Rust 1.70.0 or newer.
+#![allow(clippy::incompatible_msrv)]
+
 //! This example demonstrates how to write an eviction listener that will reinsert
 //! the expired entries.
 //!
