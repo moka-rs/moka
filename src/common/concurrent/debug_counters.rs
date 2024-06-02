@@ -1,5 +1,3 @@
-#![cfg(feature = "unstable-debug-counters")]
-
 use crossbeam_utils::atomic::AtomicCell;
 use once_cell::sync::Lazy;
 
