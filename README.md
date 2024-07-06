@@ -4,7 +4,7 @@
 [![crates.io release][release-badge]][crate]
 [![docs][docs-badge]][docs]
 [![dependency status][deps-rs-badge]][deps-rs]
-<!-- [![coverage status][coveralls-badge]][coveralls] -->
+[![codecov][codecov-badge]][codecov]
 [![license][license-badge]](#license)
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_shield)
 
@@ -27,7 +27,7 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 [release-badge]: https://img.shields.io/crates/v/moka.svg
 [docs-badge]: https://docs.rs/moka/badge.svg
 [deps-rs-badge]: https://deps.rs/repo/github/moka-rs/moka/status.svg
-[coveralls-badge]: https://coveralls.io/repos/github/moka-rs/moka/badge.svg?branch=main
+[codecov-badge]: https://codecov.io/gh/moka-rs/moka/graph/badge.svg?token=7GYZNS7O67
 [license-badge]: https://img.shields.io/crates/l/moka.svg
 [fossa-badge]: https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=shield
 
@@ -35,7 +35,7 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 [crate]: https://crates.io/crates/moka
 [docs]: https://docs.rs/moka
 [deps-rs]: https://deps.rs/repo/github/moka-rs/moka
-[coveralls]: https://coveralls.io/github/moka-rs/moka?branch=main
+[codecov]: https://codecov.io/gh/moka-rs/moka
 [fossa]: https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_shield
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
@@ -589,4 +589,6 @@ at your option.
 
 See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.
 
+<!--
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_large)
+-->

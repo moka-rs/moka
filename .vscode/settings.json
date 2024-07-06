@@ -15,6 +15,7 @@
         "circleci",
         "CLFU",
         "clippy",
+        "Codecov",
         "compat",
         "cpus",
         "dashmap",
