@@ -4,6 +4,12 @@ env:
   NUM_CPUS: "2"
 
 linux_arm64_task:
+  # Run only when triggered manually or by cron.
+  #
+  # Note that the cron schedule is set from Cirrus CI web console (not in this file):
+  # See: https://cirrus-ci.org/guide/writing-tasks/#cron-builds
+  trigger_type: manual
+
   # Skip the whole task when this is a temporary branch for GitHub merge queue.
   skip: $CIRRUS_BRANCH =~ 'gh-readonly-queue/.*'
 
