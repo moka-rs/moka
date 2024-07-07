@@ -1,5 +1,18 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.8
+
+### Fixed
+
+- Avoid to use recent versions (`v0.1.12` or newer) of `triomphe` crate to keep our
+  MSRV (Minimum Supported Rust Version) at Rust 1.65
+  ([#426][gh-pull-0426], by [@eaufavor][gh-eaufavor]).
+    - `triomphe@v0.1.12` requires Rust 1.76 or newer, so it will not compile with our
+      MSRV.
+- docs: Fix per-entry expiration policy documentation ([#421][gh-pull-0421], by
+  [@arcstur][gh-arcstur]).
+
+
 ## Version 0.12.7
 
 ### Changed
@@ -844,12 +857,14 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [RUSTSEC-2020-0168]: https://rustsec.org/advisories/RUSTSEC-2020-0168.html
 
 [gh-06chaynes]: https://github.com/06chaynes
+[gh-arcstur]: https://github.com/arcstur
 [gh-aspect]: https://github.com/aspect
 [gh-barkanido]: https://github.com/barkanido
 [gh-ClSlaid]: https://github.com/ClSlaid
+[gh-eaufavor]: https://github.com/eaufavor
 [gh-LMJW]: https://github.com/LMJW
-[gh-Milo123459]: https://github.com/Milo123459
 [gh-messense]: https://github.com/messense
+[gh-Milo123459]: https://github.com/Milo123459
 [gh-nyurik]: https://github.com/nyurik
 [gh-paolobarbolini]: https://github.com/paolobarbolini
 [gh-peter-scholtens]: https://github.com/peter-scholtens
@@ -880,6 +895,8 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0426]: https://github.com/moka-rs/moka/pull/426/
+[gh-pull-0421]: https://github.com/moka-rs/moka/pull/421/
 [gh-pull-0417]: https://github.com/moka-rs/moka/pull/417/
 [gh-pull-0390]: https://github.com/moka-rs/moka/pull/390/
 [gh-pull-0384]: https://github.com/moka-rs/moka/pull/384/
