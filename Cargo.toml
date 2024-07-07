@@ -35,11 +35,6 @@ logging = ["log"]
 # https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
 atomic64 = []
 
-# This is an **experimental** feature to make `sync` caches to compile for
-# `wasm32-unknown-unknown` target. Note that we have not tested if these caches work
-# correctly in wasm32 environment.
-js = ["uuid/js"]
-
 # This unstable feature adds `GlobalDebugCounters::current` function, which returns
 # counters of internal object construction and destruction. It will have some
 # performance impacts and is intended for debugging.
