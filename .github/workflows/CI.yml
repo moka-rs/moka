@@ -46,8 +46,8 @@ jobs:
       - name: Checkout Moka
         uses: actions/checkout@v4
 
-      # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners#supported-runners-and-hardware-resources
-      # 2-core CPU (x86_64), 7 GB of RAM
+      # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#standard-github-hosted-runners-for-public-repositories
+      # x86_64, 4 vCPUs, 16 GB RAM
       - name: Show CPU into
         run: |
           echo "nproc: $(nproc)"
