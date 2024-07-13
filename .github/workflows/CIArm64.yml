@@ -1,0 +1,85 @@
+name: CI (Linux Arm64)
+
+on:
+  push:
+    paths-ignore:
+    - '.devcontainer/**'
+    - '.gitpod.yml'
+    - '.vscode/**'
+  pull_request:
+    paths-ignore:
+    - '.devcontainer/**'
+    - '.gitpod.yml'
+    - '.vscode/**'
+  schedule:
+    # Run against the last commit on the default branch on Friday at 8pm (UTC?)
+    - cron: '0 20 * * 5'
+
+jobs:
+  pre_job:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.skip_check.outputs.should_skip }}
+    steps:
+      - id: skip_check
+        # https://github.com/marketplace/actions/skip-duplicate-actions
+        uses: fkirc/skip-duplicate-actions@v5
+        with:
+          concurrent_skipping: 'same_content'
+          do_not_skip: '["pull_request", "workflow_dispatch", "schedule"]'
+
+  test:
+    needs: pre_job
+    if: needs.pre_job.outputs.should_skip != 'true'
+
+    # Runs on AWS Graviton (arm64) runner at AWS CodeBuild.
+    # https://docs.aws.amazon.com/codebuild/latest/userguide/action-runner.html
+    # https://docs.aws.amazon.com/codebuild/latest/userguide/build-env-ref-compute-types.html
+    runs-on: codebuild-moka-arm64-runner-${{ github.run_id }}-${{ github.run_attempt }}-arm-3.0-medium
+
+    steps:
+      - name: Checkout Moka
+        uses: actions/checkout@v4
+
+      # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners#supported-runners-and-hardware-resources
+      # 2-core CPU (x86_64), 7 GB of RAM
+      - name: Show CPU into
+        run: |
+          nproc
+          lscpu
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Show cargo tree
+        run: cargo tree --features 'sync, future'
+
+      - name: Run tests (debug, sync feature)
+        run: cargo test --features sync
+        env:
+          RUSTFLAGS: '--cfg rustver'
+
+      - name: Run tests (release, sync feature)
+        run: cargo test --release --features sync
+        env:
+          RUSTFLAGS: '--cfg rustver'
+
+      - name: Run tests (sync feature, key lock test for notification)
+        run: cargo test --release --lib --features sync sync::cache::tests::test_key_lock_used_by_immediate_removal_notifications -- --exact --ignored
+
+      - name: Run tests (sync feature, drop value after eviction for sync::Cache)
+        run: cargo test --release --lib --features sync sync::cache::tests::drop_value_immediately_after_eviction -- --exact --ignored
+
+      - name: Run tests (sync feature, drop value after eviction for sync::SegmentedCache)
+        run: cargo test --release --lib --features sync sync::segment::tests::drop_value_immediately_after_eviction -- --exact --ignored
+
+      - name: Run tests (sync feature, drop cache)
+        run: cargo test --release --lib --features sync sync::cache::tests::ensure_gc_runs_when_dropping_cache -- --exact --ignored
+
+      - name: Run tests (future feature, but no sync feature)
+        run: cargo test --no-default-features --features 'future, atomic64, quanta'
+
+      - name: Run tests (future, sync and logging features)
+        run: cargo test --features 'future, sync, logging'
