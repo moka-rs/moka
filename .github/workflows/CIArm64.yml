@@ -35,14 +35,12 @@ jobs:
     # Runs on AWS Graviton (arm64) runner at AWS CodeBuild.
     # https://docs.aws.amazon.com/codebuild/latest/userguide/action-runner.html
     # https://docs.aws.amazon.com/codebuild/latest/userguide/build-env-ref-compute-types.html
-    runs-on: codebuild-moka-arm64-runner-${{ github.run_id }}-${{ github.run_attempt }}-arm-3.0-medium
+    runs-on: codebuild-moka-arm64-runner-${{ github.run_id }}-${{ github.run_attempt }}-arm-3.0-small
 
     steps:
       - name: Checkout Moka
         uses: actions/checkout@v4
 
-      # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners#supported-runners-and-hardware-resources
-      # 2-core CPU (x86_64), 7 GB of RAM
       - name: Show CPU into
         run: |
           echo "nproc: $(nproc)"
