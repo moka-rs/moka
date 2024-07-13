@@ -3,10 +3,10 @@
 const ALLOWED_CFG_NAMES: &[&str] = &[
     "armv5te",
     "beta_clippy",
-    "circleci",
     "kani",
     "mips",
     "rustver",
+    "skip_large_mem_tests",
     "trybuild",
 ];
 

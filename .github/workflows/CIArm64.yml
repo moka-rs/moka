@@ -1,4 +1,4 @@
-name: CI
+name: CI (Linux Arm64)
 
 on:
   push:
@@ -31,23 +31,17 @@ jobs:
   test:
     needs: pre_job
     if: needs.pre_job.outputs.should_skip != 'true'
-    runs-on: ubuntu-latest
-    strategy:
-      # Continue running other jobs in the matrix even if one fails.
-      fail-fast: false
-      matrix:
-        rust:
-          - stable
-          - beta
-          - 1.65.0  # MSRV
-          - nightly # For checking minimum version dependencies.
+
+    # Runs on AWS Graviton (arm64) runner at AWS CodeBuild.
+    # https://docs.aws.amazon.com/codebuild/latest/userguide/action-runner.html
+    # https://docs.aws.amazon.com/codebuild/latest/userguide/build-env-ref-compute-types.html
+    # arm64, 4 vCPUs, 8 GB RAM
+    runs-on: codebuild-moka-arm64-runner-${{ github.run_id }}-${{ github.run_attempt }}-arm-3.0-medium
 
     steps:
       - name: Checkout Moka
         uses: actions/checkout@v4
 
-      # https://docs.github.com/en/actions/using-github-hosted-runners/about-github-hosted-runners/about-github-hosted-runners#standard-github-hosted-runners-for-public-repositories
-      # x86_64, 4 vCPUs, 16 GB RAM
       - name: Show CPU into
         run: |
           echo "nproc: $(nproc)"
@@ -57,23 +51,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: ${{ matrix.rust }}
-
-      - name: Downgrade dependencies to minimal versions (Nightly only)
-        if: ${{ matrix.rust == 'nightly' }}
-        run: cargo update -Z minimal-versions
-
-      - name: Pin some dependencies to specific versions (Nightly only)
-        if: ${{ matrix.rust == 'nightly' }}
-        run: ./.ci_extras/pin-crate-vers-nightly.sh
-
-      - name: Pin some dependencies to specific versions (MSRV only)
-        if: ${{ matrix.rust == '1.65.0' }}
-        run: ./.ci_extras/pin-crate-vers-msrv.sh
-
-      - name: Remove some examples (MSRV only)
-        if: ${{ matrix.rust == '1.65.0' }}
-        run: ./.ci_extras/remove-examples-msrv.sh
+          toolchain: stable
 
       - name: Show cargo tree
         run: cargo tree --features 'sync, future'
@@ -81,12 +59,12 @@ jobs:
       - name: Run tests (debug, sync feature)
         run: cargo test --features sync
         env:
-          RUSTFLAGS: '--cfg rustver'
+          RUSTFLAGS: '--cfg rustver --cfg skip_large_mem_tests'
 
       - name: Run tests (release, sync feature)
         run: cargo test --release --features sync
         env:
-          RUSTFLAGS: '--cfg rustver'
+          RUSTFLAGS: '--cfg rustver --cfg skip_large_mem_tests'
 
       - name: Run tests (sync feature, key lock test for notification)
         run: cargo test --release --lib --features sync sync::cache::tests::test_key_lock_used_by_immediate_removal_notifications -- --exact --ignored
@@ -102,6 +80,10 @@ jobs:
 
       - name: Run tests (future feature, but no sync feature)
         run: cargo test --no-default-features --features 'future, atomic64, quanta'
+        env:
+          RUSTFLAGS: '--cfg skip_large_mem_tests'
 
       - name: Run tests (future, sync and logging features)
         run: cargo test --features 'future, sync, logging'
+        env:
+          RUSTFLAGS: '--cfg skip_large_mem_tests'

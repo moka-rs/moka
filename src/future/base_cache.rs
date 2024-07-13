@@ -2954,8 +2954,7 @@ mod tests {
             ensure_sketch_len(pot16 + 1, pot(17), "pot16 + 1").await;
 
             // The following tests will allocate large memory (~8GiB).
-            // Skip when running on Circle CI.
-            if !cfg!(circleci) {
+            if !cfg!(skip_large_mem_tests) {
                 // due to ceiling to next_power_of_two
                 ensure_sketch_len(pot30 - 1, pot30, "pot30- 1").await;
                 ensure_sketch_len(pot30, pot30, "pot30").await;
