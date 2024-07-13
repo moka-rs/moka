@@ -45,7 +45,8 @@ jobs:
       # 2-core CPU (x86_64), 7 GB of RAM
       - name: Show CPU into
         run: |
-          nproc
+          echo "nproc: $(nproc)"
+          free -m
           lscpu
 
       - name: Install Rust toolchain
@@ -59,12 +60,12 @@ jobs:
       - name: Run tests (debug, sync feature)
         run: cargo test --features sync
         env:
-          RUSTFLAGS: '--cfg rustver'
+          RUSTFLAGS: '--cfg rustver --cfg skip_large_mem_tests'
 
       - name: Run tests (release, sync feature)
         run: cargo test --release --features sync
         env:
-          RUSTFLAGS: '--cfg rustver'
+          RUSTFLAGS: '--cfg rustver --cfg skip_large_mem_tests'
 
       - name: Run tests (sync feature, key lock test for notification)
         run: cargo test --release --lib --features sync sync::cache::tests::test_key_lock_used_by_immediate_removal_notifications -- --exact --ignored
@@ -80,6 +81,10 @@ jobs:
 
       - name: Run tests (future feature, but no sync feature)
         run: cargo test --no-default-features --features 'future, atomic64, quanta'
+        env:
+          RUSTFLAGS: '--cfg skip_large_mem_tests'
 
       - name: Run tests (future, sync and logging features)
         run: cargo test --features 'future, sync, logging'
+        env:
+          RUSTFLAGS: '--cfg skip_large_mem_tests'

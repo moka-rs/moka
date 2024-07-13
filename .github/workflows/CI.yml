@@ -50,7 +50,8 @@ jobs:
       # 2-core CPU (x86_64), 7 GB of RAM
       - name: Show CPU into
         run: |
-          nproc
+          echo "nproc: $(nproc)"
+          free -m
           lscpu
 
       - name: Install Rust toolchain

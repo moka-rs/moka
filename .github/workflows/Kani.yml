@@ -39,9 +39,9 @@ jobs:
 
       - name: Show CPU into
         run: |
-          nproc
-          lscpu
+          echo "nproc: $(nproc)"
           free -m
+          lscpu
 
       - name: Pin some dependencies to specific versions
         run: ./.ci_extras/pin-crate-vers-kani.sh
