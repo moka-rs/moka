@@ -1,42 +1,19 @@
 name: CI (Linux Arm64)
 
 on:
-  push:
-    paths-ignore:
-    - '.devcontainer/**'
-    - '.gitpod.yml'
-    - '.vscode/**'
-  pull_request:
-    paths-ignore:
-    - '.devcontainer/**'
-    - '.gitpod.yml'
-    - '.vscode/**'
+  workflow_dispatch:
   schedule:
     # Run against the last commit on the default branch on Friday at 8pm (UTC?)
     - cron: '0 20 * * 5'
 
 jobs:
-  pre_job:
-    runs-on: ubuntu-latest
-    outputs:
-      should_skip: ${{ steps.skip_check.outputs.should_skip }}
-    steps:
-      - id: skip_check
-        # https://github.com/marketplace/actions/skip-duplicate-actions
-        uses: fkirc/skip-duplicate-actions@v5
-        with:
-          concurrent_skipping: 'same_content'
-          do_not_skip: '["pull_request", "workflow_dispatch", "schedule"]'
-
   test:
-    needs: pre_job
-    if: needs.pre_job.outputs.should_skip != 'true'
-
     # Runs on AWS Graviton (arm64) runner at AWS CodeBuild.
     # https://docs.aws.amazon.com/codebuild/latest/userguide/action-runner.html
     # https://docs.aws.amazon.com/codebuild/latest/userguide/build-env-ref-compute-types.html
-    # arm64, 4 vCPUs, 8 GB RAM
-    runs-on: codebuild-moka-arm64-runner-${{ github.run_id }}-${{ github.run_attempt }}-arm-3.0-medium
+    # arm64, 2 vCPUs, 3 GB RAM
+    # 100 build minutes free per month per AWS account
+    runs-on: codebuild-moka-arm64-runner-${{ github.run_id }}-${{ github.run_attempt }}-arm-3.0-small
 
     steps:
       - name: Checkout Moka
