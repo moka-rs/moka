@@ -1,9 +1,10 @@
-use super::{PredicateId, PredicateIdStr};
+use super::{base_cache::Inner, PredicateId, PredicateIdStr};
 use crate::{
     common::{
         concurrent::{AccessTime, KvEntry, ValueEntry},
         time::Instant,
     },
+    notification::RemovalCause,
     PredicateError,
 };
 
@@ -21,20 +22,6 @@ use uuid::Uuid;
 pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 'static>;
 
 const PREDICATE_MAP_NUM_SEGMENTS: usize = 16;
-
-pub(crate) trait GetOrRemoveEntry<K, V> {
-    fn get_value_entry(&self, key: &Arc<K>, hash: u64) -> Option<TrioArc<ValueEntry<K, V>>>;
-
-    fn remove_key_value_if(
-        &self,
-        key: &Arc<K>,
-        hash: u64,
-        condition: impl FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool,
-    ) -> Option<TrioArc<ValueEntry<K, V>>>
-    where
-        K: Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static;
-}
 
 pub(crate) struct KeyDateLite<K> {
     key: Arc<K>,
@@ -174,14 +161,13 @@ impl<K, V, S> Invalidator<K, V, S> {
         }
     }
 
-    pub(crate) fn scan_and_invalidate<C>(
+    pub(crate) fn scan_and_invalidate(
         &self,
-        cache: &C,
+        cache: &Inner<K, V, S>,
         candidates: Vec<KeyDateLite<K>>,
         is_truncated: bool,
     ) -> (Vec<KvEntry<K, V>>, bool)
     where
-        C: GetOrRemoveEntry<K, V>,
         K: Hash + Eq + Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
         S: BuildHasher,
@@ -218,7 +204,11 @@ impl<K, V, S> Invalidator<K, V, S> {
 //
 // Private methods.
 //
-impl<K, V, S> Invalidator<K, V, S> {
+impl<K, V, S> Invalidator<K, V, S>
+where
+    K: Hash + Eq,
+    S: BuildHasher,
+{
     #[inline]
     fn do_apply_predicates<I>(predicates: I, key: &K, value: &V, ts: Instant) -> bool
     where
@@ -277,18 +267,15 @@ impl<K, V, S> Invalidator<K, V, S> {
         }
     }
 
-    fn apply<C>(
+    fn apply(
         &self,
         predicates: &[Predicate<K, V>],
-        cache: &C,
+        cache: &Inner<K, V, S>,
         key: &Arc<K>,
         hash: u64,
         ts: Instant,
-    ) -> bool
-    where
-        C: GetOrRemoveEntry<K, V>,
-    {
-        if let Some(entry) = cache.get_value_entry(key, hash) {
+    ) -> bool {
+        if let Some(entry) = cache.cache.get(hash, |k| k == key) {
             if let Some(lm) = entry.last_modified() {
                 if lm == ts {
                     return Invalidator::<_, _, S>::do_apply_predicates(
@@ -304,24 +291,37 @@ impl<K, V, S> Invalidator<K, V, S> {
         false
     }
 
-    fn invalidate<C>(
-        cache: &C,
+    fn invalidate(
+        cache: &Inner<K, V, S>,
         key: &Arc<K>,
         hash: u64,
         ts: Instant,
     ) -> Option<TrioArc<ValueEntry<K, V>>>
     where
-        C: GetOrRemoveEntry<K, V>,
         K: Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
     {
-        cache.remove_key_value_if(key, hash, |_, v| {
-            if let Some(lm) = v.last_modified() {
-                lm == ts
-            } else {
-                false
+        // Lock the key for removal if blocking removal notification is enabled.
+        let kl = cache.maybe_key_lock(key);
+        let _klg = &kl.as_ref().map(|kl| kl.lock());
+
+        let maybe_entry = cache.cache.remove_if(
+            hash,
+            |k| k == key,
+            |_, v| {
+                if let Some(lm) = v.last_modified() {
+                    lm == ts
+                } else {
+                    false
+                }
+            },
+        );
+        if let Some(entry) = &maybe_entry {
+            if cache.is_removal_notifier_enabled() {
+                cache.notify_single_removal(Arc::clone(key), entry, RemovalCause::Explicit);
             }
-        })
+        }
+        maybe_entry
     }
 }
 

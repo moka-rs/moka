@@ -1,6 +1,6 @@
 use super::{
-    housekeeper::{Housekeeper, InnerSync},
-    invalidator::{GetOrRemoveEntry, Invalidator, KeyDateLite, PredicateFun},
+    housekeeper::Housekeeper,
+    invalidator::{Invalidator, KeyDateLite, PredicateFun},
     key_lock::{KeyLock, KeyLockMap},
     notifier::RemovalNotifier,
     InterruptedOp, PredicateId,
@@ -36,7 +36,6 @@ use crate::{
 use common::concurrent::debug_counters::CacheDebugStats;
 
 use async_lock::{Mutex, MutexGuard, RwLock};
-use async_trait::async_trait;
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use crossbeam_utils::atomic::AtomicCell;
 use futures_util::future::BoxFuture;
@@ -384,7 +383,7 @@ where
 
     #[inline]
     pub(crate) async fn apply_reads_writes_if_needed(
-        inner: &Arc<impl InnerSync + Send + Sync + 'static>,
+        inner: &Arc<Inner<K, V, S>>,
         ch: &Sender<WriteOp<K, V>>,
         now: Instant,
         housekeeper: Option<&HouseKeeperArc>,
@@ -620,7 +619,7 @@ where
 
     #[inline]
     pub(crate) async fn schedule_write_op(
-        inner: &Arc<impl InnerSync + Send + Sync + 'static>,
+        inner: &Arc<Inner<K, V, S>>,
         ch: &Sender<WriteOp<K, V>>,
         ch_ready_event: &event_listener::Event<()>,
         op: WriteOp<K, V>,
@@ -1042,7 +1041,7 @@ pub(crate) struct Inner<K, V, S> {
     max_capacity: Option<u64>,
     entry_count: AtomicCell<u64>,
     weighted_size: AtomicCell<u64>,
-    cache: CacheStore<K, V, S>,
+    pub(crate) cache: CacheStore<K, V, S>,
     build_hasher: S,
     deques: Mutex<Deques<K>>,
     timer_wheel: Mutex<TimerWheel<K>>,
@@ -1050,7 +1049,7 @@ pub(crate) struct Inner<K, V, S> {
     frequency_sketch_enabled: AtomicBool,
     read_op_ch: Receiver<ReadOp<K, V>>,
     write_op_ch: Receiver<WriteOp<K, V>>,
-    write_op_ch_ready_event: event_listener::Event,
+    pub(crate) write_op_ch_ready_event: event_listener::Event,
     eviction_policy: EvictionPolicyConfig,
     expiration_policy: ExpirationPolicy<K, V>,
     valid_after: AtomicInstant,
@@ -1101,7 +1100,7 @@ impl<K, V, S> Inner<K, V, S> {
     }
 
     #[inline]
-    fn is_removal_notifier_enabled(&self) -> bool {
+    pub(crate) fn is_removal_notifier_enabled(&self) -> bool {
         self.removal_notifier.is_some()
     }
 
@@ -1118,7 +1117,7 @@ impl<K, V, S> Inner<K, V, S> {
         )
     }
 
-    fn maybe_key_lock(&self, key: &Arc<K>) -> Option<KeyLock<'_, K, S>>
+    pub(crate) fn maybe_key_lock(&self, key: &Arc<K>) -> Option<KeyLock<'_, K, S>>
     where
         K: Hash + Eq,
         S: BuildHasher,
@@ -1127,7 +1126,7 @@ impl<K, V, S> Inner<K, V, S> {
     }
 
     #[inline]
-    fn current_time_from_expiration_clock(&self) -> Instant {
+    pub(crate) fn current_time_from_expiration_clock(&self) -> Instant {
         if self.clocks.has_expiration_clock.load(Ordering::Relaxed) {
             Instant::new(
                 self.clocks
@@ -1191,7 +1190,7 @@ impl<K, V, S> Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Send + Sync + 'static,
-    S: BuildHasher + Clone,
+    S: BuildHasher + Send + Sync + Clone + 'static,
 {
     // Disable a Clippy warning for having more than seven arguments.
     // https://rust-lang.github.io/rust-clippy/master/index.html#too_many_arguments
@@ -1354,75 +1353,6 @@ where
     }
 }
 
-#[async_trait]
-impl<K, V, S> GetOrRemoveEntry<K, V> for Inner<K, V, S>
-where
-    K: Hash + Eq,
-    S: BuildHasher + Send + Sync + 'static,
-{
-    fn get_value_entry(&self, key: &Arc<K>, hash: u64) -> Option<TrioArc<ValueEntry<K, V>>> {
-        self.cache.get(hash, |k| k == key)
-    }
-
-    async fn remove_key_value_if<F>(
-        &self,
-        key: &Arc<K>,
-        hash: u64,
-        condition: F,
-    ) -> Option<TrioArc<ValueEntry<K, V>>>
-    where
-        K: Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static,
-        F: for<'a, 'b> FnMut(&'a Arc<K>, &'b TrioArc<ValueEntry<K, V>>) -> bool + Send,
-    {
-        // Lock the key for removal if blocking removal notification is enabled.
-        let kl = self.maybe_key_lock(key);
-        let _klg = if let Some(lock) = &kl {
-            Some(lock.lock().await)
-        } else {
-            None
-        };
-
-        let maybe_entry = self.cache.remove_if(hash, |k| k == key, condition);
-        if let Some(entry) = &maybe_entry {
-            if self.is_removal_notifier_enabled() {
-                self.notify_single_removal(Arc::clone(key), entry, RemovalCause::Explicit)
-                    .await;
-            }
-        }
-        maybe_entry
-    }
-}
-
-#[async_trait]
-impl<K, V, S> InnerSync for Inner<K, V, S>
-where
-    K: Hash + Eq + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + Sync + 'static,
-{
-    /// Runs the pending tasks. Returns `true` if there are more entries to evict.
-    async fn run_pending_tasks(
-        &self,
-        timeout: Option<Duration>,
-        max_log_sync_repeats: u32,
-        eviction_batch_size: u32,
-    ) -> bool {
-        self.do_run_pending_tasks(timeout, max_log_sync_repeats, eviction_batch_size)
-            .await
-    }
-
-    /// Notifies all the async tasks waiting in `BaseCache::schedule_write_op` method
-    /// for the write op channel to have enough room.
-    fn notify_write_op_ch_is_ready(&self) {
-        self.write_op_ch_ready_event.notify(usize::MAX);
-    }
-
-    fn now(&self) -> Instant {
-        self.current_time_from_expiration_clock()
-    }
-}
-
 impl<K, V, S> Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -1430,7 +1360,7 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     /// Runs the pending tasks. Returns `true` if there are more entries to evict.
-    async fn do_run_pending_tasks(
+    pub(crate) async fn do_run_pending_tasks(
         &self,
         timeout: Option<Duration>,
         max_log_sync_repeats: u32,
@@ -2643,7 +2573,7 @@ where
     K: Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    async fn notify_single_removal(
+    pub(crate) async fn notify_single_removal(
         &self,
         key: Arc<K>,
         entry: &TrioArc<ValueEntry<K, V>>,

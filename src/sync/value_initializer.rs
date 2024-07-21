@@ -12,23 +12,9 @@ use crate::{
     Entry,
 };
 
-use super::{ComputeNone, OptionallyNone};
+use super::{Cache, ComputeNone, OptionallyNone};
 
 const WAITER_MAP_NUM_SEGMENTS: usize = 64;
-
-pub(crate) trait GetOrInsert<K, V> {
-    /// Gets an entry for the given key _with_ recording the access to the cache
-    /// policies.
-    fn get_entry(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>>
-    where
-        V: 'static;
-
-    /// Inserts a value for the given key.
-    fn insert(&self, key: Arc<K>, hash: u64, value: V);
-
-    /// Removes a value for the given key. Returns the removed value.
-    fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V>;
-}
 
 type ErrorObject = Arc<dyn Any + Send + Sync + 'static>;
 
@@ -70,9 +56,9 @@ pub(crate) struct ValueInitializer<K, V, S> {
 
 impl<K, V, S> ValueInitializer<K, V, S>
 where
-    K: Eq + Hash,
-    V: Clone,
-    S: BuildHasher,
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn with_hasher(hasher: S) -> Self {
         Self {
@@ -190,18 +176,17 @@ where
 
     /// # Panics
     /// Panics if the `init` closure has been panicked.
-    pub(crate) fn try_compute<'a, C, F, O, E>(
-        &'a self,
+    pub(crate) fn try_compute<F, O, E>(
+        &self,
         c_key: Arc<K>,
         c_hash: u64,
-        cache: &C,
+        cache: &Cache<K, V, S>,
         f: F,
         post_init: fn(O) -> Result<Op<V>, E>,
         allow_nop: bool,
     ) -> Result<CompResult<K, V>, E>
     where
         V: 'static,
-        C: GetOrInsert<K, V> + Send + 'a,
         F: FnOnce(Option<Entry<K, V>>) -> O,
         E: Send + Sync + 'static,
     {
@@ -240,7 +225,10 @@ where
         // Our waiter was inserted.
 
         // Get the current value.
-        let maybe_entry = cache.get_entry(&c_key, c_hash);
+        let ignore_if = None as Option<&mut fn(&V) -> bool>;
+        let maybe_entry = cache
+            .base
+            .get_with_hash_and_ignore_if(&c_key, c_hash, ignore_if, true);
         let maybe_value = if allow_nop {
             maybe_entry.as_ref().map(|ent| ent.value().clone())
         } else {
@@ -287,7 +275,7 @@ where
                 }
             }
             Op::Put(value) => {
-                cache.insert(Arc::clone(&c_key), c_hash, value.clone());
+                cache.insert_with_hash(Arc::clone(&c_key), c_hash, value.clone());
                 if entry_existed {
                     crossbeam_epoch::pin().flush();
                     let entry = Entry::new(Some(c_key), value, true, true);
@@ -298,7 +286,7 @@ where
                 }
             }
             Op::Remove => {
-                let maybe_prev_v = cache.remove(&c_key, c_hash);
+                let maybe_prev_v = cache.invalidate_with_hash(&c_key, c_hash, true);
                 if let Some(prev_v) = maybe_prev_v {
                     crossbeam_epoch::pin().flush();
                     let entry = Entry::new(Some(c_key), prev_v, false, false);

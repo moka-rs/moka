@@ -1,5 +1,4 @@
 use async_lock::{RwLock, RwLockWriteGuard};
-use async_trait::async_trait;
 use futures_util::FutureExt;
 use std::{
     any::{Any, TypeId},
@@ -16,36 +15,9 @@ use crate::{
     Entry,
 };
 
-use super::{ComputeNone, OptionallyNone};
+use super::{Cache, ComputeNone, OptionallyNone};
 
 const WAITER_MAP_NUM_SEGMENTS: usize = 64;
-
-#[async_trait]
-pub(crate) trait GetOrInsert<K, V> {
-    /// Gets a value for the given key without recording the access to the cache
-    /// policies.
-    async fn get_without_recording<I>(
-        &self,
-        key: &Arc<K>,
-        hash: u64,
-        replace_if: Option<&mut I>,
-    ) -> Option<V>
-    where
-        V: 'static,
-        I: for<'i> FnMut(&'i V) -> bool + Send;
-
-    /// Gets an entry for the given key _with_ recording the access to the cache
-    /// policies.
-    async fn get_entry(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>>
-    where
-        V: 'static;
-
-    /// Inserts a value for the given key.
-    async fn insert(&self, key: Arc<K>, hash: u64, value: V);
-
-    /// Removes a value for the given key. Returns the removed value.
-    async fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V>;
-}
 
 type ErrorObject = Arc<dyn Any + Send + Sync + 'static>;
 
@@ -151,7 +123,7 @@ impl<K, V, S> ValueInitializer<K, V, S>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
-    S: BuildHasher + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
 {
     pub(crate) fn with_hasher(hasher: S) -> Self {
         Self {
@@ -175,12 +147,12 @@ where
     /// # Panics
     /// Panics if the `init` future has been panicked.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn try_init_or_read<'a, C, I, O, E>(
-        &'a self,
+    pub(crate) async fn try_init_or_read<I, O, E>(
+        &self,
         c_key: &Arc<K>,
         c_hash: u64,
         type_id: TypeId,
-        cache: &C,
+        cache: &Cache<K, V, S>,
         mut ignore_if: Option<I>,
         // Future to initialize a new value.
         init: Pin<&mut impl Future<Output = O>>,
@@ -189,7 +161,6 @@ where
         post_init: fn(O) -> Result<V, E>,
     ) -> InitResult<V, E>
     where
-        C: GetOrInsert<K, V> + Send + 'a,
         I: FnMut(&V) -> bool + Send,
         E: Send + Sync + 'static,
     {
@@ -251,8 +222,10 @@ where
 
         // Check if the value has already been inserted by other thread.
         if let Some(value) = cache
-            .get_without_recording(c_key, c_hash, ignore_if.as_mut())
+            .base
+            .get_with_hash(c_key, c_hash, ignore_if.as_mut(), false, false)
             .await
+            .map(Entry::into_value)
         {
             // Yes. Set the waiter value, remove our waiter, and return
             // the existing value.
@@ -267,7 +240,9 @@ where
             // Resolved.
             Ok(value) => match post_init(value) {
                 Ok(value) => {
-                    cache.insert(Arc::clone(c_key), c_hash, value.clone()).await;
+                    cache
+                        .insert_with_hash(Arc::clone(c_key), c_hash, value.clone())
+                        .await;
                     waiter_guard.set_waiter_value(WaiterValue::Ready(Ok(value.clone())));
                     Initialized(value)
                 }
@@ -288,17 +263,16 @@ where
 
     /// # Panics
     /// Panics if the `init` future has been panicked.
-    pub(crate) async fn try_compute<'a, C, F, Fut, O, E>(
+    pub(crate) async fn try_compute<'a, F, Fut, O, E>(
         &'a self,
         c_key: Arc<K>,
         c_hash: u64,
-        cache: &C,
+        cache: &Cache<K, V, S>,
         f: F,
         post_init: fn(O) -> Result<Op<V>, E>,
         allow_nop: bool,
     ) -> Result<CompResult<K, V>, E>
     where
-        C: GetOrInsert<K, V> + Send + 'a,
         F: FnOnce(Option<Entry<K, V>>) -> Fut,
         Fut: Future<Output = O> + 'a,
         E: Send + Sync + 'static,
@@ -344,7 +318,11 @@ where
         let waiter_guard = WaiterGuard::new(w_key, w_hash, &self.waiters, lock);
 
         // Get the current value.
-        let maybe_entry = cache.get_entry(&c_key, c_hash).await;
+        let ignore_if = None as Option<&mut fn(&V) -> bool>;
+        let maybe_entry = cache
+            .base
+            .get_with_hash(&c_key, c_hash, ignore_if, true, true)
+            .await;
         let maybe_value = if allow_nop {
             maybe_entry.as_ref().map(|ent| ent.value().clone())
         } else {
@@ -394,7 +372,7 @@ where
             }
             Op::Put(value) => {
                 cache
-                    .insert(Arc::clone(&c_key), c_hash, value.clone())
+                    .insert_with_hash(Arc::clone(&c_key), c_hash, value.clone())
                     .await;
                 if entry_existed {
                     crossbeam_epoch::pin().flush();
@@ -406,7 +384,7 @@ where
                 }
             }
             Op::Remove => {
-                let maybe_prev_v = cache.remove(&c_key, c_hash).await;
+                let maybe_prev_v = cache.invalidate_with_hash(&c_key, c_hash, true).await;
                 if let Some(prev_v) = maybe_prev_v {
                     crossbeam_epoch::pin().flush();
                     let entry = Entry::new(Some(c_key), prev_v, false, false);

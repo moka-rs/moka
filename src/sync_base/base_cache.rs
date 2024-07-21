@@ -1,5 +1,5 @@
 use super::{
-    invalidator::{GetOrRemoveEntry, Invalidator, KeyDateLite, PredicateFun},
+    invalidator::{Invalidator, KeyDateLite, PredicateFun},
     iter::ScanningGet,
     key_lock::{KeyLock, KeyLockMap},
     PredicateId,
@@ -910,7 +910,7 @@ pub(crate) struct Inner<K, V, S> {
     max_capacity: Option<u64>,
     entry_count: AtomicCell<u64>,
     weighted_size: AtomicCell<u64>,
-    cache: CacheStore<K, V, S>,
+    pub(crate) cache: CacheStore<K, V, S>,
     build_hasher: S,
     deques: Mutex<Deques<K>>,
     timer_wheel: Mutex<TimerWheel<K>>,
@@ -968,11 +968,11 @@ impl<K, V, S> Inner<K, V, S> {
     }
 
     #[inline]
-    fn is_removal_notifier_enabled(&self) -> bool {
+    pub(crate) fn is_removal_notifier_enabled(&self) -> bool {
         self.removal_notifier.is_some()
     }
 
-    fn maybe_key_lock(&self, key: &Arc<K>) -> Option<KeyLock<'_, K, S>>
+    pub(crate) fn maybe_key_lock(&self, key: &Arc<K>) -> Option<KeyLock<'_, K, S>>
     where
         K: Hash + Eq,
         S: BuildHasher,
@@ -1205,39 +1205,6 @@ where
     #[inline]
     fn weigh(&self, key: &K, value: &V) -> u32 {
         self.weigher.as_ref().map_or(1, |w| w(key, value))
-    }
-}
-
-impl<K, V, S> GetOrRemoveEntry<K, V> for Inner<K, V, S>
-where
-    K: Hash + Eq,
-    S: BuildHasher,
-{
-    fn get_value_entry(&self, key: &Arc<K>, hash: u64) -> Option<TrioArc<ValueEntry<K, V>>> {
-        self.cache.get(hash, |k| k == key)
-    }
-
-    fn remove_key_value_if(
-        &self,
-        key: &Arc<K>,
-        hash: u64,
-        condition: impl FnMut(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> bool,
-    ) -> Option<TrioArc<ValueEntry<K, V>>>
-    where
-        K: Send + Sync + 'static,
-        V: Clone + Send + Sync + 'static,
-    {
-        // Lock the key for removal if blocking removal notification is enabled.
-        let kl = self.maybe_key_lock(key);
-        let _klg = &kl.as_ref().map(|kl| kl.lock());
-
-        let maybe_entry = self.cache.remove_if(hash, |k| k == key, condition);
-        if let Some(entry) = &maybe_entry {
-            if self.is_removal_notifier_enabled() {
-                self.notify_single_removal(Arc::clone(key), entry, RemovalCause::Explicit);
-            }
-        }
-        maybe_entry
     }
 }
 
@@ -2398,7 +2365,7 @@ where
     K: Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
-    fn notify_single_removal(
+    pub(crate) fn notify_single_removal(
         &self,
         key: Arc<K>,
         entry: &TrioArc<ValueEntry<K, V>>,
