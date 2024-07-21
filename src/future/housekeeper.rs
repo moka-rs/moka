@@ -8,6 +8,7 @@ use crate::common::{
 };
 
 use std::{
+    hash::{BuildHasher, Hash},
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -19,26 +20,9 @@ use std::{
 use std::sync::atomic::AtomicUsize;
 
 use async_lock::Mutex;
-use async_trait::async_trait;
 use futures_util::future::{BoxFuture, Shared};
 
-#[async_trait]
-pub(crate) trait InnerSync {
-    /// Runs the pending tasks. Returns `true` if there are more entries to evict in
-    /// next run.
-    async fn run_pending_tasks(
-        &self,
-        timeout: Option<Duration>,
-        max_log_sync_repeats: u32,
-        eviction_batch_size: u32,
-    ) -> bool;
-
-    /// Notifies all the async tasks waiting in `BaseCache::schedule_write_op` method
-    /// for the write op channel to have enough room.
-    fn notify_write_op_ch_is_ready(&self);
-
-    fn now(&self) -> Instant;
-}
+use super::base_cache::Inner;
 
 pub(crate) struct Housekeeper {
     /// A shared `Future` of the maintenance task that is currently being resolved.
@@ -124,9 +108,11 @@ impl Housekeeper {
             && (ch_len >= ch_flush_point || now >= self.run_after.instant().unwrap())
     }
 
-    pub(crate) async fn run_pending_tasks<T>(&self, cache: Arc<T>)
+    pub(crate) async fn run_pending_tasks<K, V, S>(&self, cache: Arc<Inner<K, V, S>>)
     where
-        T: InnerSync + Send + Sync + 'static,
+        K: Hash + Eq + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        S: BuildHasher + Clone + Send + Sync + 'static,
     {
         let mut current_task = self.current_task.lock().await;
         self.do_run_pending_tasks(Arc::clone(&cache), &mut current_task)
@@ -136,14 +122,16 @@ impl Housekeeper {
 
         // If there are any async tasks waiting in `BaseCache::schedule_write_op`
         // method for the write op channel, notify them.
-        cache.notify_write_op_ch_is_ready();
+        cache.write_op_ch_ready_event.notify(usize::MAX);
     }
 
     /// Tries to run the pending tasks if the lock is free. Returns `true` if there
     /// are more entries to evict in next run.
-    pub(crate) async fn try_run_pending_tasks<T>(&self, cache: &Arc<T>) -> bool
+    pub(crate) async fn try_run_pending_tasks<K, V, S>(&self, cache: &Arc<Inner<K, V, S>>) -> bool
     where
-        T: InnerSync + Send + Sync + 'static,
+        K: Hash + Eq + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        S: BuildHasher + Clone + Send + Sync + 'static,
     {
         if let Some(mut current_task) = self.current_task.try_lock() {
             self.do_run_pending_tasks(Arc::clone(cache), &mut current_task)
@@ -156,20 +144,22 @@ impl Housekeeper {
 
         // If there are any async tasks waiting in `BaseCache::schedule_write_op`
         // method for the write op channel, notify them.
-        cache.notify_write_op_ch_is_ready();
+        cache.write_op_ch_ready_event.notify(usize::MAX);
         true
     }
 
-    async fn do_run_pending_tasks<T>(
+    async fn do_run_pending_tasks<K, V, S>(
         &self,
-        cache: Arc<T>,
+        cache: Arc<Inner<K, V, S>>,
         current_task: &mut Option<Shared<BoxFuture<'static, bool>>>,
     ) where
-        T: InnerSync + Send + Sync + 'static,
+        K: Hash + Eq + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+        S: BuildHasher + Clone + Send + Sync + 'static,
     {
         use futures_util::FutureExt;
 
-        let now = cache.now();
+        let now = cache.current_time_from_expiration_clock();
         let more_to_evict;
         // Async Cancellation Safety: Our maintenance task is cancellable as we save
         // it in the lock. If it is canceled, we will resume it in the next run.
@@ -183,9 +173,13 @@ impl Housekeeper {
             let repeats = self.max_log_sync_repeats;
             let batch_size = self.eviction_batch_size;
             // Create a new maintenance task and await it.
-            let task = async move { cache.run_pending_tasks(timeout, repeats, batch_size).await }
-                .boxed()
-                .shared();
+            let task = async move {
+                cache
+                    .do_run_pending_tasks(timeout, repeats, batch_size)
+                    .await
+            }
+            .boxed()
+            .shared();
             *current_task = Some(task.clone());
 
             #[cfg(test)]

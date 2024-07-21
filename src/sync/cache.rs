@@ -1,5 +1,5 @@
 use super::{
-    value_initializer::{GetOrInsert, InitResult, ValueInitializer},
+    value_initializer::{InitResult, ValueInitializer},
     CacheBuilder, OwnedKeyEntrySelector, RefKeyEntrySelector,
 };
 use crate::{
@@ -572,7 +572,7 @@ use std::{
 ///
 
 pub struct Cache<K, V, S = RandomState> {
-    base: BaseCache<K, V, S>,
+    pub(crate) base: BaseCache<K, V, S>,
     value_initializer: Arc<ValueInitializer<K, V, S>>,
 }
 
@@ -1845,27 +1845,6 @@ where
             }
         }
         Ok(())
-    }
-}
-
-impl<K, V, S> GetOrInsert<K, V> for Cache<K, V, S>
-where
-    K: Hash + Eq + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + Sync + 'static,
-{
-    fn get_entry(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>> {
-        let ignore_if = None as Option<&mut fn(&V) -> bool>;
-        self.base
-            .get_with_hash_and_ignore_if(key, hash, ignore_if, true)
-    }
-
-    fn insert(&self, key: Arc<K>, hash: u64, value: V) {
-        self.insert_with_hash(key.clone(), hash, value);
-    }
-
-    fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V> {
-        self.invalidate_with_hash(key, hash, true)
     }
 }
 
