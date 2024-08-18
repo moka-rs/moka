@@ -6,3 +6,4 @@ set -eux
 # cargo update -p <crate> --precise <version>
 cargo update -p actix-rt --precise 2.9.0
 cargo update -p cc --precise 1.0.105
+cargo update -p tokio --precise 1.38.1
