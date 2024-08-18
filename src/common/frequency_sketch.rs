@@ -101,7 +101,7 @@ impl FrequencySketch {
         }
 
         self.table = vec![0; table_size as usize].into_boxed_slice();
-        self.table_mask = 0.max(table_size - 1) as u64;
+        self.table_mask = table_size.saturating_sub(1) as u64;
         self.sample_size = if cap == 0 {
             10
         } else {
