@@ -373,7 +373,7 @@ mod tests {
         assert!(deque.contains(head_b));
         assert!(deque.is_head(head_b));
         assert!(deque.is_tail(head_b));
-        assert!(std::ptr::eq(head_b, unsafe { node1_ptr.as_ref() }));
+        assert!(std::ptr::eq(head_b, node1_ptr.as_ptr()));
         assert!(head_b.prev.is_none());
         assert!(head_b.next.is_none());
 
@@ -382,7 +382,7 @@ mod tests {
         assert!(deque.contains(tail_a));
         assert!(deque.is_head(tail_a));
         assert!(deque.is_tail(tail_a));
-        assert!(std::ptr::eq(tail_a, unsafe { node1_ptr.as_ref() }));
+        assert!(std::ptr::eq(tail_a, node1_ptr.as_ptr()));
         assert!(tail_a.prev.is_none());
         assert!(tail_a.next.is_none());
 
@@ -397,11 +397,11 @@ mod tests {
         assert!(deque.contains(head_c));
         assert!(deque.is_head(head_c));
         assert!(!deque.is_tail(head_c));
-        assert!(std::ptr::eq(head_c, unsafe { node1_ptr.as_ref() }));
+        assert!(std::ptr::eq(head_c, node1_ptr.as_ptr()));
         assert!(head_c.prev.is_none());
         assert!(std::ptr::eq(
-            unsafe { head_c.next.unwrap().as_ref() },
-            unsafe { node2_ptr.as_ref() }
+            head_c.next.unwrap().as_ptr(),
+            node2_ptr.as_ptr()
         ));
 
         // move_to_back(node2)
@@ -413,11 +413,11 @@ mod tests {
         assert!(deque.contains(head_d));
         assert!(deque.is_head(head_d));
         assert!(!deque.is_tail(head_d));
-        assert!(std::ptr::eq(head_d, unsafe { node1_ptr.as_ref() }));
+        assert!(std::ptr::eq(head_d, node1_ptr.as_ptr()));
         assert!(head_d.prev.is_none());
         assert!(std::ptr::eq(
-            unsafe { head_d.next.unwrap().as_ref() },
-            unsafe { node2_ptr.as_ref() }
+            head_d.next.unwrap().as_ptr(),
+            node2_ptr.as_ptr()
         ));
 
         // peek_back() -> node2
@@ -425,10 +425,10 @@ mod tests {
         assert!(deque.contains(tail_b));
         assert!(!deque.is_head(tail_b));
         assert!(deque.is_tail(tail_b));
-        assert!(std::ptr::eq(tail_b, unsafe { node2_ptr.as_ref() }));
+        assert!(std::ptr::eq(tail_b, node2_ptr.as_ptr()));
         assert!(std::ptr::eq(
-            unsafe { tail_b.prev.unwrap().as_ref() },
-            unsafe { node1_ptr.as_ref() }
+            tail_b.prev.unwrap().as_ptr(),
+            node1_ptr.as_ptr()
         ));
         assert_eq!(tail_b.element, "b".to_string());
         assert!(tail_b.next.is_none());
@@ -442,11 +442,11 @@ mod tests {
         assert!(deque.contains(head_e));
         assert!(deque.is_head(head_e));
         assert!(!deque.is_tail(head_e));
-        assert!(std::ptr::eq(head_e, unsafe { node2_ptr.as_ref() }));
+        assert!(std::ptr::eq(head_e, node2_ptr.as_ptr()));
         assert!(head_e.prev.is_none());
         assert!(std::ptr::eq(
-            unsafe { head_e.next.unwrap().as_ref() },
-            unsafe { node1_ptr.as_ref() }
+            head_e.next.unwrap().as_ptr(),
+            node1_ptr.as_ptr()
         ));
 
         // peek_back() -> node1
@@ -454,10 +454,10 @@ mod tests {
         assert!(deque.contains(tail_c));
         assert!(!deque.is_head(tail_c));
         assert!(deque.is_tail(tail_c));
-        assert!(std::ptr::eq(tail_c, unsafe { node1_ptr.as_ref() }));
+        assert!(std::ptr::eq(tail_c, node1_ptr.as_ptr()));
         assert!(std::ptr::eq(
-            unsafe { tail_c.prev.unwrap().as_ref() },
-            unsafe { node2_ptr.as_ref() }
+            tail_c.prev.unwrap().as_ptr(),
+            node2_ptr.as_ptr()
         ));
         assert!(tail_c.next.is_none());
 
@@ -472,24 +472,24 @@ mod tests {
         assert!(deque.contains(head_f));
         assert!(deque.is_head(head_f));
         assert!(!deque.is_tail(head_f));
-        assert!(std::ptr::eq(head_f, unsafe { node2_ptr.as_ref() }));
+        assert!(std::ptr::eq(head_f, node2_ptr.as_ptr()));
         assert!(head_f.prev.is_none());
         assert!(std::ptr::eq(
-            unsafe { head_f.next.unwrap().as_ref() },
-            unsafe { node1_ptr.as_ref() }
+            head_f.next.unwrap().as_ptr(),
+            node1_ptr.as_ptr()
         ));
 
         // peek_back() -> node3
         let tail_d = deque.peek_back().unwrap();
-        assert!(std::ptr::eq(tail_d, unsafe { node3_ptr.as_ref() }));
+        assert!(std::ptr::eq(tail_d, node3_ptr.as_ptr()));
         assert_eq!(tail_d.element, "c".to_string());
         assert!(deque.contains(tail_d));
         assert!(!deque.is_head(tail_d));
         assert!(deque.is_tail(tail_d));
-        assert!(std::ptr::eq(tail_d, unsafe { node3_ptr.as_ref() }));
+        assert!(std::ptr::eq(tail_d, node3_ptr.as_ptr()));
         assert!(std::ptr::eq(
-            unsafe { tail_d.prev.unwrap().as_ref() },
-            unsafe { node1_ptr.as_ref() }
+            tail_d.prev.unwrap().as_ptr(),
+            node1_ptr.as_ptr()
         ));
         assert!(tail_d.next.is_none());
 
@@ -502,11 +502,11 @@ mod tests {
         assert!(deque.contains(head_g));
         assert!(deque.is_head(head_g));
         assert!(!deque.is_tail(head_g));
-        assert!(std::ptr::eq(head_g, unsafe { node2_ptr.as_ref() }));
+        assert!(std::ptr::eq(head_g, node2_ptr.as_ptr()));
         assert!(head_g.prev.is_none());
         assert!(std::ptr::eq(
-            unsafe { head_g.next.unwrap().as_ref() },
-            unsafe { node3_ptr.as_ref() }
+            head_g.next.unwrap().as_ptr(),
+            node3_ptr.as_ptr()
         ));
 
         // peek_back() -> node1
@@ -514,10 +514,10 @@ mod tests {
         assert!(deque.contains(tail_e));
         assert!(!deque.is_head(tail_e));
         assert!(deque.is_tail(tail_e));
-        assert!(std::ptr::eq(tail_e, unsafe { node1_ptr.as_ref() }));
+        assert!(std::ptr::eq(tail_e, node1_ptr.as_ptr()));
         assert!(std::ptr::eq(
-            unsafe { tail_e.prev.unwrap().as_ref() },
-            unsafe { node3_ptr.as_ref() }
+            tail_e.prev.unwrap().as_ptr(),
+            node3_ptr.as_ptr()
         ));
         assert!(tail_e.next.is_none());
 
@@ -535,11 +535,11 @@ mod tests {
         assert!(deque.contains(head_h));
         assert!(deque.is_head(head_h));
         assert!(!deque.is_tail(head_h));
-        assert!(std::ptr::eq(head_h, unsafe { node2_ptr.as_ref() }));
+        assert!(std::ptr::eq(head_h, node2_ptr.as_ptr()));
         assert!(head_h.prev.is_none());
         assert!(std::ptr::eq(
-            unsafe { head_h.next.unwrap().as_ref() },
-            unsafe { node1_ptr.as_ref() }
+            head_h.next.unwrap().as_ptr(),
+            node1_ptr.as_ptr()
         ));
 
         // peek_back() -> node1
@@ -547,10 +547,10 @@ mod tests {
         assert!(deque.contains(tail_f));
         assert!(!deque.is_head(tail_f));
         assert!(deque.is_tail(tail_f));
-        assert!(std::ptr::eq(tail_f, unsafe { node1_ptr.as_ref() }));
+        assert!(std::ptr::eq(tail_f, node1_ptr.as_ptr()));
         assert!(std::ptr::eq(
-            unsafe { tail_f.prev.unwrap().as_ref() },
-            unsafe { node2_ptr.as_ref() }
+            tail_f.prev.unwrap().as_ptr(),
+            node2_ptr.as_ptr()
         ));
         assert!(tail_f.next.is_none());
 
@@ -568,7 +568,7 @@ mod tests {
         assert!(deque.contains(head_g));
         assert!(deque.is_head(head_g));
         assert!(deque.is_tail(head_g));
-        assert!(std::ptr::eq(head_g, unsafe { node1_ptr.as_ref() }));
+        assert!(std::ptr::eq(head_g, node1_ptr.as_ptr()));
         assert!(head_g.prev.is_none());
         assert!(head_g.next.is_none());
 
@@ -577,7 +577,7 @@ mod tests {
         assert!(deque.contains(tail_g));
         assert!(deque.is_head(tail_g));
         assert!(deque.is_tail(tail_g));
-        assert!(std::ptr::eq(tail_g, unsafe { node1_ptr.as_ref() }));
+        assert!(std::ptr::eq(tail_g, node1_ptr.as_ptr()));
         assert!(tail_g.next.is_none());
         assert!(tail_g.next.is_none());
 
