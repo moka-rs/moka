@@ -47,8 +47,18 @@ jobs:
 
       - run: cargo miri setup
 
-      - name: Run Miri test (deque)
+      - name: Run Miri test on deque module using tree borrows
+        run: cargo miri test deque --features 'sync, future'
+        env:
+          MIRIFLAGS: '-Zmiri-tree-borrows'
+
+      - name: Run Miri test on timer_wheel module using tree borrows
+        run: cargo miri test timer_wheel --features 'sync, future'
+        env:
+          MIRIFLAGS: '-Zmiri-tree-borrows'
+
+      - name: Run Miri test on deque module using stacked borrows
         run: cargo miri test deque --features 'sync, future'
 
-      - name: Run Miri test (timer_wheel)
+      - name: Run Miri test on timer_wheel module using stacked borrows
         run: cargo miri test timer_wheel --features 'sync, future'
