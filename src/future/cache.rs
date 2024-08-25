@@ -1,6 +1,6 @@
 use super::{
     base_cache::BaseCache,
-    value_initializer::{GetOrInsert, InitResult, ValueInitializer},
+    value_initializer::{InitResult, ValueInitializer},
     CacheBuilder, CancelGuard, Iter, OwnedKeyEntrySelector, PredicateId, RefKeyEntrySelector,
     WriteOp,
 };
@@ -15,7 +15,6 @@ use crate::{
 #[cfg(feature = "unstable-debug-counters")]
 use crate::common::concurrent::debug_counters::CacheDebugStats;
 
-use async_trait::async_trait;
 use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
@@ -631,7 +630,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// [builder-name-method]: ./struct.CacheBuilder.html#method.name
 ///
 pub struct Cache<K, V, S = RandomState> {
-    base: BaseCache<K, V, S>,
+    pub(crate) base: BaseCache<K, V, S>,
     value_initializer: Arc<ValueInitializer<K, V, S>>,
 
     #[cfg(test)]
@@ -1806,7 +1805,7 @@ where
         }
     }
 
-    async fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
+    pub(crate) async fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
         if self.base.is_map_disabled() {
             return;
         }
@@ -1901,7 +1900,12 @@ where
         }
     }
 
-    async fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64, need_value: bool) -> Option<V>
+    pub(crate) async fn invalidate_with_hash<Q>(
+        &self,
+        key: &Q,
+        hash: u64,
+        need_value: bool,
+    ) -> Option<V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
@@ -2012,44 +2016,6 @@ where
                 maybe_v
             }
         }
-    }
-}
-
-#[async_trait]
-impl<K, V, S> GetOrInsert<K, V> for Cache<K, V, S>
-where
-    K: Hash + Eq + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
-    S: BuildHasher + Clone + Send + Sync + 'static,
-{
-    async fn get_without_recording<I>(
-        &self,
-        key: &Arc<K>,
-        hash: u64,
-        replace_if: Option<&mut I>,
-    ) -> Option<V>
-    where
-        I: for<'i> FnMut(&'i V) -> bool + Send,
-    {
-        self.base
-            .get_with_hash(key, hash, replace_if, false, false)
-            .await
-            .map(Entry::into_value)
-    }
-
-    async fn get_entry(&self, key: &Arc<K>, hash: u64) -> Option<Entry<K, V>> {
-        let ignore_if = None as Option<&mut fn(&V) -> bool>;
-        self.base
-            .get_with_hash(key, hash, ignore_if, true, true)
-            .await
-    }
-
-    async fn insert(&self, key: Arc<K>, hash: u64, value: V) {
-        self.insert_with_hash(key.clone(), hash, value).await;
-    }
-
-    async fn remove(&self, key: &Arc<K>, hash: u64) -> Option<V> {
-        self.invalidate_with_hash(key, hash, true).await
     }
 }
 

@@ -22,7 +22,7 @@ default = ["atomic64", "quanta"]
 sync = []
 
 # Enable this feature to use `moka::future::Cache`.
-future = ["async-lock", "async-trait", "event-listener", "futures-util"]
+future = ["async-lock", "event-listener", "futures-util"]
 
 # Enable this feature to activate optional logging from caches.
 # Currently cache will emit log only when it encounters a panic in user provided
@@ -60,7 +60,6 @@ quanta = { version = "0.12.2", optional = true }
 
 # Optional dependencies (future)
 async-lock = { version = "3.3", optional = true }
-async-trait = { version = "0.1.58", optional = true }
 event-listener = { version = "5.3", optional = true }
 futures-util = { version = "0.3.17", optional = true }
 
