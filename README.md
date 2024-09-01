@@ -72,22 +72,22 @@ and can be overkill for your use case. Sometimes simpler caches like
 
 The following table shows the trade-offs between the different cache implementations:
 
-| Feature | Moka v0.12 | Mini Moka v0.10 | Quick Cache v0.3 |
+| Feature | Moka v0.12 | Mini Moka v0.10 | Quick Cache v0.6 |
 |:------- |:---- |:--------- |:----------- |
 | Thread-safe, sync cache | ✅ | ✅ | ✅ |
 | Thread-safe, async cache | ✅ | ❌ | ✅ |
 | Non-concurrent cache | ❌ | ✅ | ✅ |
 | Bounded by the maximum number of entries | ✅ | ✅ | ✅ |
 | Bounded by the total weighted size of entries | ✅ | ✅ | ✅ |
-| Near optimal hit ratio | ✅ TinyLFU | ✅ TinyLFU | ✅ CLOCK-Pro |
+| Near optimal hit ratio | ✅ TinyLFU | ✅ TinyLFU | ✅ S3-FIFO |
 | Per-key, atomic insertion. (e.g. `get_with` method) | ✅ | ❌ | ✅ |
 | Cache-level expiration policies (time-to-live and time-to-idle) | ✅ | ✅ | ❌ |
 | Per-entry variable expiration | ✅ | ❌ | ❌ |
-| Eviction listener | ✅ | ❌ | ❌ |
+| Eviction listener | ✅ | ❌ | ✅ (via lifecycle hook) |
 | Lock-free, concurrent iterator | ✅ | ❌ | ❌ |
 | Lock-per-shard, concurrent iterator | ❌ | ✅ | ❌ |
 
-| Performance, etc. | Moka v0.12 | Mini Moka v0.10 | Quick Cache v0.3 |
+| Performance, etc. | Moka v0.12 | Mini Moka v0.10 | Quick Cache v0.6 |
 |:------- |:---- |:--------- |:----------- |
 | Small overhead compared to a concurrent hash table | ❌ | ❌ | ✅ |
 | Does not use background threads | ❌ → ✅ Removed from v0.12 | ✅ | ✅ |
