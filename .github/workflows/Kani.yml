@@ -53,3 +53,5 @@ jobs:
         uses: model-checking/kani-github-action@v1.0
         with:
           args: --features 'sync, future'
+          # Workaround for https://github.com/moka-rs/moka/issues/457
+          kani-version: '0.54.0'

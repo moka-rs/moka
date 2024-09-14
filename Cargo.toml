@@ -87,6 +87,17 @@ trybuild = "1.0"
 [target.'cfg(rustver)'.build-dependencies]
 rustc_version = "0.4.0"
 
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+    "cfg(armv5te)",
+    "cfg(beta_clippy)",
+    "cfg(kani)",
+    "cfg(mips)",
+    "cfg(rustver)",
+    "cfg(skip_large_mem_tests)",
+    "cfg(trybuild)",
+] }
+
 # https://docs.rs/about/metadata
 [package.metadata.docs.rs]
 # Build the doc at docs.rs with some features enabled.
