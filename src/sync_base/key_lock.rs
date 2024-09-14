@@ -5,8 +5,8 @@ use std::{
 
 use crate::cht::SegmentedHashMap;
 
-use parking_lot::{Mutex, MutexGuard};
 use moka_arc::MiniArc;
+use parking_lot::{Mutex, MutexGuard};
 
 const LOCK_MAP_NUM_SEGMENTS: usize = 64;
 

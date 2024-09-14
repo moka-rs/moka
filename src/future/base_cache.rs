@@ -39,6 +39,7 @@ use async_lock::{Mutex, MutexGuard, RwLock};
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use crossbeam_utils::atomic::AtomicCell;
 use futures_util::future::BoxFuture;
+use moka_arc::MiniArc;
 use parking_lot::RwLock as SyncRwLock;
 use smallvec::SmallVec;
 use std::{
@@ -51,7 +52,6 @@ use std::{
     },
     time::{Duration, Instant as StdInstant},
 };
-use moka_arc::MiniArc;
 
 pub(crate) type HouseKeeperArc = Arc<Housekeeper>;
 

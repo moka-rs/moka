@@ -8,6 +8,7 @@ use crate::{
     PredicateError,
 };
 
+use moka_arc::MiniArc;
 use parking_lot::{Mutex, MutexGuard};
 use std::{
     hash::{BuildHasher, Hash},
@@ -16,7 +17,6 @@ use std::{
         Arc,
     },
 };
-use moka_arc::MiniArc;
 use uuid::Uuid;
 
 pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 'static>;

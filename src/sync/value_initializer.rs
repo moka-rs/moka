@@ -1,3 +1,4 @@
+use moka_arc::MiniArc;
 use parking_lot::RwLock;
 use std::{
     any::{Any, TypeId},
@@ -5,7 +6,6 @@ use std::{
     hash::{BuildHasher, Hash},
     sync::Arc,
 };
-use moka_arc::MiniArc;
 
 use crate::{
     ops::compute::{CompResult, Op},

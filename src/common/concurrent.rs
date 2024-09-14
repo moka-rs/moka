@@ -1,9 +1,9 @@
 use crate::common::{deque::DeqNode, time::Instant};
 
+use moka_arc::MiniArc;
 use parking_lot::Mutex;
 use std::{fmt, ptr::NonNull, sync::Arc};
 use tagptr::TagNonNull;
-use moka_arc::MiniArc;
 
 pub(crate) mod constants;
 pub(crate) mod deques;

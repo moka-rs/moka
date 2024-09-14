@@ -19,8 +19,8 @@ use super::{
     time::{CheckedTimeOps, Instant},
 };
 
-use parking_lot::Mutex;
 use moka_arc::MiniArc;
+use parking_lot::Mutex;
 
 const BUCKET_COUNTS: &[u64] = &[
     64, // roughly seconds

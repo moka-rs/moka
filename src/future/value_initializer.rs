@@ -1,5 +1,6 @@
 use async_lock::{RwLock, RwLockWriteGuard};
 use futures_util::FutureExt;
+use moka_arc::MiniArc;
 use std::{
     any::{Any, TypeId},
     fmt,
@@ -8,7 +9,6 @@ use std::{
     pin::Pin,
     sync::Arc,
 };
-use moka_arc::MiniArc;
 
 use crate::{
     ops::compute::{CompResult, Op},

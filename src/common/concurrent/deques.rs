@@ -4,9 +4,9 @@ use crate::common::{
     CacheRegion,
 };
 
+use moka_arc::MiniArc;
 use std::ptr::NonNull;
 use tagptr::TagNonNull;
-use moka_arc::MiniArc;
 
 pub(crate) struct Deques<K> {
     pub(crate) window: Deque<KeyHashDate<K>>, //    Not used yet.

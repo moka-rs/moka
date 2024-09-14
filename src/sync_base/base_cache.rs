@@ -32,6 +32,7 @@ use crate::{
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use crossbeam_utils::atomic::AtomicCell;
+use moka_arc::MiniArc;
 use parking_lot::{Mutex, RwLock};
 use smallvec::SmallVec;
 use std::{
@@ -45,7 +46,6 @@ use std::{
     },
     time::{Duration, Instant as StdInstant},
 };
-use moka_arc::MiniArc;
 
 pub(crate) type HouseKeeperArc = Arc<Housekeeper>;
 
