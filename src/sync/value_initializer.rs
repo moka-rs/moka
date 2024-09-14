@@ -5,7 +5,7 @@ use std::{
     hash::{BuildHasher, Hash},
     sync::Arc,
 };
-use triomphe::Arc as TrioArc;
+use moka_arc::MiniArc;
 
 use crate::{
     ops::compute::{CompResult, Op},
@@ -38,7 +38,7 @@ impl<V> fmt::Debug for WaiterValue<V> {
     }
 }
 
-type Waiter<V> = TrioArc<RwLock<WaiterValue<V>>>;
+type Waiter<V> = MiniArc<RwLock<WaiterValue<V>>>;
 
 pub(crate) enum InitResult<V, E> {
     Initialized(V),
@@ -96,7 +96,7 @@ where
 
         let (w_key, w_hash) = self.waiter_key_hash(key, type_id);
 
-        let waiter = TrioArc::new(RwLock::new(WaiterValue::Computing));
+        let waiter = MiniArc::new(RwLock::new(WaiterValue::Computing));
         let mut lock = waiter.write();
 
         loop {
@@ -194,7 +194,7 @@ where
 
         let type_id = TypeId::of::<ComputeNone>();
         let (w_key, w_hash) = self.waiter_key_hash(&c_key, type_id);
-        let waiter = TrioArc::new(RwLock::new(WaiterValue::Computing));
+        let waiter = MiniArc::new(RwLock::new(WaiterValue::Computing));
         // NOTE: We have to acquire a write lock before `try_insert_waiter`,
         // so that any concurrent attempt will get our lock and wait on it.
         let mut lock = waiter.write();
@@ -370,7 +370,7 @@ where
         w_hash: u64,
         waiter: &Waiter<V>,
     ) -> Option<Waiter<V>> {
-        let waiter = TrioArc::clone(waiter);
+        let waiter = MiniArc::clone(waiter);
         self.waiters.insert_if_not_present(w_key, w_hash, waiter)
     }
 

@@ -8,7 +8,7 @@ use std::{
     pin::Pin,
     sync::Arc,
 };
-use triomphe::Arc as TrioArc;
+use moka_arc::MiniArc;
 
 use crate::{
     ops::compute::{CompResult, Op},
@@ -49,7 +49,7 @@ impl<V> fmt::Debug for WaiterValue<V> {
     }
 }
 
-type Waiter<V> = TrioArc<RwLock<WaiterValue<V>>>;
+type Waiter<V> = MiniArc<RwLock<WaiterValue<V>>>;
 type WaiterMap<K, V, S> = crate::cht::SegmentedHashMap<(Arc<K>, TypeId), Waiter<V>, S>;
 
 struct WaiterGuard<'a, K, V, S>
@@ -116,7 +116,7 @@ pub(crate) struct ValueInitializer<K, V, S> {
     // try_get_with method. We use the type ID as a part of the key to ensure that we
     // can always downcast the trait object ErrorObject (in Waiter<V>) into its
     // concrete type.
-    waiters: TrioArc<WaiterMap<K, V, S>>,
+    waiters: MiniArc<WaiterMap<K, V, S>>,
 }
 
 impl<K, V, S> ValueInitializer<K, V, S>
@@ -127,7 +127,7 @@ where
 {
     pub(crate) fn with_hasher(hasher: S) -> Self {
         Self {
-            waiters: TrioArc::new(crate::cht::SegmentedHashMap::with_num_segments_and_hasher(
+            waiters: MiniArc::new(crate::cht::SegmentedHashMap::with_num_segments_and_hasher(
                 WAITER_MAP_NUM_SEGMENTS,
                 hasher,
             )),
@@ -172,7 +172,7 @@ where
 
         let (w_key, w_hash) = waiter_key_hash(&self.waiters, c_key, type_id);
 
-        let waiter = TrioArc::new(RwLock::new(WaiterValue::Computing));
+        let waiter = MiniArc::new(RwLock::new(WaiterValue::Computing));
         // NOTE: We have to acquire a write lock before `try_insert_waiter`,
         // so that any concurrent attempt will get our lock and wait on it.
         let lock = waiter.write().await;
@@ -281,7 +281,7 @@ where
 
         let type_id = TypeId::of::<ComputeNone>();
         let (w_key, w_hash) = waiter_key_hash(&self.waiters, &c_key, type_id);
-        let waiter = TrioArc::new(RwLock::new(WaiterValue::Computing));
+        let waiter = MiniArc::new(RwLock::new(WaiterValue::Computing));
         // NOTE: We have to acquire a write lock before `try_insert_waiter`,
         // so that any concurrent attempt will get our lock and wait on it.
         let lock = waiter.write().await;
@@ -482,7 +482,7 @@ where
     (Arc<K>, TypeId): Eq + Hash,
     S: BuildHasher,
 {
-    let waiter = TrioArc::clone(waiter);
+    let waiter = MiniArc::clone(waiter);
     waiter_map.insert_if_not_present(w_key, w_hash, waiter)
 }
 

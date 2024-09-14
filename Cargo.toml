@@ -44,16 +44,12 @@ unstable-debug-counters = ["future", "once_cell"]
 crossbeam-channel = "0.5.5"
 crossbeam-epoch = "0.9.9"
 crossbeam-utils = "0.8"
+moka-arc = { git = "https://gitlab.com/moka-labs/moka-gh440-remove-triomphe/moka-arc.git" }
 parking_lot = "0.12"
 smallvec = "1.8"
 tagptr = "0.2"
 thiserror = "1.0"
 uuid = { version = "1.1", features = ["v4"] }
-
-# Opt-out serde and stable_deref_trait features
-# https://github.com/Manishearth/triomphe/pull/5
-# 0.1.12 requires Rust 1.76
-triomphe = { version = ">=0.1.3, <0.1.12", default-features = false }
 
 # Optional dependencies (enabled by default)
 quanta = { version = "0.12.2", optional = true }

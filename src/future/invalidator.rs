@@ -16,7 +16,7 @@ use std::{
         Arc,
     },
 };
-use triomphe::Arc as TrioArc;
+use moka_arc::MiniArc;
 use uuid::Uuid;
 
 pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 'static>;
@@ -141,7 +141,7 @@ impl<K, V, S> Invalidator<K, V, S> {
 
     // This method will be called by the get method of Cache.
     #[inline]
-    pub(crate) fn apply_predicates(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>) -> bool
+    pub(crate) fn apply_predicates(&self, key: &Arc<K>, entry: &MiniArc<ValueEntry<K, V>>) -> bool
     where
         K: Hash + Eq + Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
@@ -296,7 +296,7 @@ where
         key: &Arc<K>,
         hash: u64,
         ts: Instant,
-    ) -> Option<TrioArc<ValueEntry<K, V>>>
+    ) -> Option<MiniArc<ValueEntry<K, V>>>
     where
         K: Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
