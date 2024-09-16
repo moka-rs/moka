@@ -1,14 +1,13 @@
 use super::{base_cache::Inner, PredicateId, PredicateIdStr};
 use crate::{
     common::{
-        concurrent::{AccessTime, KvEntry, ValueEntry},
+        concurrent::{arc::MiniArc, AccessTime, KvEntry, ValueEntry},
         time::Instant,
     },
     notification::RemovalCause,
     PredicateError,
 };
 
-use moka_arc::MiniArc;
 use parking_lot::{Mutex, MutexGuard};
 use std::{
     hash::{BuildHasher, Hash},

@@ -44,7 +44,6 @@ unstable-debug-counters = ["future", "once_cell"]
 crossbeam-channel = "0.5.5"
 crossbeam-epoch = "0.9.9"
 crossbeam-utils = "0.8"
-moka-arc = { git = "https://gitlab.com/moka-labs/moka-gh440-remove-triomphe/moka-arc.git" }
 parking_lot = "0.12"
 smallvec = "1.8"
 tagptr = "0.2"
@@ -77,6 +76,11 @@ paste = "1.0.9"
 reqwest = { version = "0.11.11", default-features = false, features = ["rustls-tls"] }
 tokio = { version = "1.19", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time" ] }
 
+# We cannot use `cfg(loom)` here because an indirect dependency `concurrent-queue`
+# uses it.
+[target.'cfg(moka_loom)'.dependencies]
+loom = "0.7"
+
 [target.'cfg(trybuild)'.dev-dependencies]
 trybuild = "1.0"
 
@@ -88,6 +92,7 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     "cfg(armv5te)",
     "cfg(beta_clippy)",
     "cfg(kani)",
+    "cfg(moka_loom)",
     "cfg(mips)",
     "cfg(rustver)",
     "cfg(skip_large_mem_tests)",

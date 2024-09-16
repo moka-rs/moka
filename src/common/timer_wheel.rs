@@ -14,12 +14,11 @@
 use std::{ptr::NonNull, time::Duration};
 
 use super::{
-    concurrent::{entry_info::EntryInfo, DeqNodes},
+    concurrent::{arc::MiniArc, entry_info::EntryInfo, DeqNodes},
     deque::{DeqNode, Deque},
     time::{CheckedTimeOps, Instant},
 };
 
-use moka_arc::MiniArc;
 use parking_lot::Mutex;
 
 const BUCKET_COUNTS: &[u64] = &[
@@ -560,11 +559,9 @@ mod tests {
 
     use super::{TimerEvent, TimerWheel, SPANS};
     use crate::common::{
-        concurrent::{entry_info::EntryInfo, KeyHash},
+        concurrent::{arc::MiniArc, entry_info::EntryInfo, KeyHash},
         time::{CheckedTimeOps, Clock, Instant, Mock},
     };
-
-    use moka_arc::MiniArc;
 
     #[test]
     fn test_bucket_indices() {

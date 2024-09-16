@@ -3,9 +3,8 @@ use std::{
     sync::Arc,
 };
 
-use crate::cht::SegmentedHashMap;
+use crate::{cht::SegmentedHashMap, common::concurrent::arc::MiniArc};
 
-use moka_arc::MiniArc;
 use parking_lot::{Mutex, MutexGuard};
 
 const LOCK_MAP_NUM_SEGMENTS: usize = 64;

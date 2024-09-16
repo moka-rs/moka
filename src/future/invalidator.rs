@@ -1,7 +1,7 @@
 use super::{base_cache::Inner, PredicateId, PredicateIdStr};
 use crate::{
     common::{
-        concurrent::{AccessTime, KvEntry, ValueEntry},
+        concurrent::{arc::MiniArc, AccessTime, KvEntry, ValueEntry},
         time::Instant,
     },
     notification::RemovalCause,
@@ -9,7 +9,6 @@ use crate::{
 };
 
 use async_lock::{Mutex, MutexGuard};
-use moka_arc::MiniArc;
 use std::{
     hash::{BuildHasher, Hash},
     sync::{

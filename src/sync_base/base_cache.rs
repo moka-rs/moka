@@ -9,6 +9,7 @@ use crate::{
     common::{
         self,
         concurrent::{
+            arc::MiniArc,
             atomic_time::AtomicInstant,
             constants::{
                 READ_LOG_CH_SIZE, READ_LOG_FLUSH_POINT, WRITE_LOG_CH_SIZE, WRITE_LOG_FLUSH_POINT,
@@ -32,7 +33,6 @@ use crate::{
 
 use crossbeam_channel::{Receiver, Sender, TrySendError};
 use crossbeam_utils::atomic::AtomicCell;
-use moka_arc::MiniArc;
 use parking_lot::{Mutex, RwLock};
 use smallvec::SmallVec;
 use std::{

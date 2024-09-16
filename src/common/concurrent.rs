@@ -1,10 +1,10 @@
-use crate::common::{deque::DeqNode, time::Instant};
+use crate::common::{concurrent::arc::MiniArc, deque::DeqNode, time::Instant};
 
-use moka_arc::MiniArc;
 use parking_lot::Mutex;
 use std::{fmt, ptr::NonNull, sync::Arc};
 use tagptr::TagNonNull;
 
+pub(crate) mod arc;
 pub(crate) mod constants;
 pub(crate) mod deques;
 pub(crate) mod entry_info;

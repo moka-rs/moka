@@ -1,4 +1,3 @@
-use moka_arc::MiniArc;
 use parking_lot::RwLock;
 use std::{
     any::{Any, TypeId},
@@ -8,6 +7,7 @@ use std::{
 };
 
 use crate::{
+    common::concurrent::arc::MiniArc,
     ops::compute::{CompResult, Op},
     Entry,
 };

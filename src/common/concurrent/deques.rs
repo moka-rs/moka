@@ -1,10 +1,9 @@
-use super::{KeyHashDate, ValueEntry};
+use super::{arc::MiniArc, KeyHashDate, ValueEntry};
 use crate::common::{
     deque::{DeqNode, Deque},
     CacheRegion,
 };
 
-use moka_arc::MiniArc;
 use std::ptr::NonNull;
 use tagptr::TagNonNull;
 
