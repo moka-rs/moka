@@ -1879,6 +1879,23 @@ where
             .await
     }
 
+    pub(crate) async fn try_compute_if_nobody_else_with_hash_and_fun<F, Fut, E>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        f: F,
+    ) -> Result<compute::CompResult<K, V>, E>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = Result<compute::Op<V>, E>>,
+        E: Send + Sync + 'static,
+    {
+        let post_init = ValueInitializer::<K, V, S>::post_init_for_try_compute_with_if_nobody_else;
+        self.value_initializer
+            .try_compute_if_nobody_else(key, hash, self, f, post_init, true)
+            .await
+    }
+
     pub(crate) async fn upsert_with_hash_and_fun<F, Fut>(
         &self,
         key: Arc<K>,

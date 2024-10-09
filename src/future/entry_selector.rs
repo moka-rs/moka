@@ -878,6 +878,21 @@ where
             .await
     }
 
+    pub async fn and_try_compute_if_nobody_else<F, Fut, E>(
+        self,
+        f: F,
+    ) -> Result<compute::CompResult<K, V>, E>
+    where
+        F: FnOnce(Option<Entry<K, V>>) -> Fut,
+        Fut: Future<Output = Result<compute::Op<V>, E>>,
+        E: Send + Sync + 'static,
+    {
+        let key = Arc::new(self.ref_key.to_owned());
+        self.cache
+            .try_compute_if_nobody_else_with_hash_and_fun(key, self.hash, f)
+            .await
+    }
+
     /// Performs an upsert of an [`Entry`] by using the given closure `f`. The word
     /// "upsert" here means "update" or "insert".
     ///
