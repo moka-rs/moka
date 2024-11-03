@@ -24,7 +24,7 @@ where
     lock: TrioArc<Mutex<()>>,
 }
 
-impl<'a, K, S> Drop for KeyLock<'a, K, S>
+impl<K, S> Drop for KeyLock<'_, K, S>
 where
     K: Eq + Hash,
     S: BuildHasher,

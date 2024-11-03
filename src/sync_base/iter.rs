@@ -59,7 +59,7 @@ impl<'i, K, V> Iter<'i, K, V> {
     }
 }
 
-impl<'i, K, V> Iterator for Iter<'i, K, V>
+impl<K, V> Iterator for Iter<'_, K, V>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -124,14 +124,24 @@ where
     }
 }
 
-unsafe impl<'a, 'i, K, V> Send for Iter<'i, K, V>
+// Clippy beta 0.1.83 (f41c7ed9889 2024-10-31) warns about unused lifetimes on 'a.
+// This seems a false positive. The lifetimes are used in the Send and Sync impls.
+// Let's suppress the warning.
+// https://rust-lang.github.io/rust-clippy/master/index.html#extra_unused_lifetimes
+#[allow(clippy::extra_unused_lifetimes)]
+unsafe impl<'a, K, V> Send for Iter<'_, K, V>
 where
     K: 'a + Eq + Hash + Send,
     V: 'a + Send,
 {
 }
 
-unsafe impl<'a, 'i, K, V> Sync for Iter<'i, K, V>
+// Clippy beta 0.1.83 (f41c7ed9889 2024-10-31) warns about unused lifetimes on 'a.
+// This seems a false positive. The lifetimes are used in the Send and Sync impls.
+// Let's suppress the warning.
+// https://rust-lang.github.io/rust-clippy/master/index.html#extra_unused_lifetimes
+#[allow(clippy::extra_unused_lifetimes)]
+unsafe impl<'a, K, V> Sync for Iter<'_, K, V>
 where
     K: 'a + Eq + Hash + Sync,
     V: 'a + Sync,

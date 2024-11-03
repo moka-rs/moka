@@ -94,7 +94,7 @@ where
     }
 }
 
-impl<'a, K, V, S> Drop for WaiterGuard<'a, K, V, S>
+impl<K, V, S> Drop for WaiterGuard<'_, K, V, S>
 where
     K: Eq + Hash,
     V: Clone,

@@ -440,7 +440,7 @@ impl<'iter, K> TimerEventsIter<'iter, K> {
     }
 }
 
-impl<'iter, K> Drop for TimerEventsIter<'iter, K> {
+impl<K> Drop for TimerEventsIter<'_, K> {
     fn drop(&mut self) {
         if !self.is_done {
             // This iterator was dropped before consuming all events. Reset the
@@ -451,7 +451,7 @@ impl<'iter, K> Drop for TimerEventsIter<'iter, K> {
     }
 }
 
-impl<'iter, K> Iterator for TimerEventsIter<'iter, K> {
+impl<K> Iterator for TimerEventsIter<'_, K> {
     type Item = TimerEvent<K>;
 
     /// NOTE: When necessary, this iterator will unset the timer node pointer in the

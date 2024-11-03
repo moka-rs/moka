@@ -13,7 +13,7 @@ pub(crate) struct BucketArrayRef<'a, K, V, S> {
     pub(crate) len: &'a AtomicUsize,
 }
 
-impl<'a, K, V, S> BucketArrayRef<'a, K, V, S>
+impl<K, V, S> BucketArrayRef<'_, K, V, S>
 where
     K: Hash + Eq,
     S: BuildHasher,
@@ -293,7 +293,7 @@ where
     }
 }
 
-impl<'a, 'g, K, V, S> BucketArrayRef<'a, K, V, S> {
+impl<'g, K, V, S> BucketArrayRef<'_, K, V, S> {
     fn get(&self, guard: &'g Guard) -> &'g BucketArray<K, V> {
         let mut maybe_new_bucket_array = None;
 

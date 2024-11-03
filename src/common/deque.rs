@@ -83,7 +83,7 @@ impl<T> Drop for Deque<T> {
     fn drop(&mut self) {
         struct DropGuard<'a, T>(&'a mut Deque<T>);
 
-        impl<'a, T> Drop for DropGuard<'a, T> {
+        impl<T> Drop for DropGuard<'_, T> {
             fn drop(&mut self) {
                 // Continue the same loop we do below. This only runs when a destructor has
                 // panicked. If another one panics this will abort.

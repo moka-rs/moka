@@ -570,7 +570,6 @@ use std::{
 ///
 /// [builder-name-method]: ./struct.CacheBuilder.html#method.name
 ///
-
 pub struct Cache<K, V, S = RandomState> {
     pub(crate) base: BaseCache<K, V, S>,
     value_initializer: Arc<ValueInitializer<K, V, S>>,
