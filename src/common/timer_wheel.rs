@@ -14,13 +14,12 @@
 use std::{ptr::NonNull, time::Duration};
 
 use super::{
-    concurrent::{entry_info::EntryInfo, DeqNodes},
+    concurrent::{arc::MiniArc, entry_info::EntryInfo, DeqNodes},
     deque::{DeqNode, Deque},
     time::{CheckedTimeOps, Instant},
 };
 
 use parking_lot::Mutex;
-use triomphe::Arc as TrioArc;
 
 const BUCKET_COUNTS: &[u64] = &[
     64, // roughly seconds
@@ -69,16 +68,16 @@ pub(crate) enum TimerNode<K> {
         /// The position (level and index) of the timer wheel bucket.
         pos: Option<(u8, u8)>,
         /// An Arc pointer to the `EntryInfo` of the cache entry (`ValueEntry`).
-        entry_info: TrioArc<EntryInfo<K>>,
+        entry_info: MiniArc<EntryInfo<K>>,
         /// An Arc pointer to the `DeqNodes` of the cache entry (`ValueEntry`).
-        deq_nodes: TrioArc<Mutex<DeqNodes<K>>>,
+        deq_nodes: MiniArc<Mutex<DeqNodes<K>>>,
     },
 }
 
 impl<K> TimerNode<K> {
     fn new(
-        entry_info: TrioArc<EntryInfo<K>>,
-        deq_nodes: TrioArc<Mutex<DeqNodes<K>>>,
+        entry_info: MiniArc<EntryInfo<K>>,
+        deq_nodes: MiniArc<Mutex<DeqNodes<K>>>,
         level: usize,
         index: usize,
     ) -> Self {
@@ -118,7 +117,7 @@ impl<K> TimerNode<K> {
         matches!(self, Self::Sentinel)
     }
 
-    pub(crate) fn entry_info(&self) -> &TrioArc<EntryInfo<K>> {
+    pub(crate) fn entry_info(&self) -> &MiniArc<EntryInfo<K>> {
         if let Self::Entry { entry_info, .. } = &self {
             entry_info
         } else {
@@ -209,8 +208,8 @@ impl<K> TimerWheel<K> {
     /// Schedules a timer event for the node.
     pub(crate) fn schedule(
         &mut self,
-        entry_info: TrioArc<EntryInfo<K>>,
-        deq_nodes: TrioArc<Mutex<DeqNodes<K>>>,
+        entry_info: MiniArc<EntryInfo<K>>,
+        deq_nodes: MiniArc<Mutex<DeqNodes<K>>>,
     ) -> Option<NonNull<DeqNode<TimerNode<K>>>> {
         debug_assert!(self.is_enabled());
 
@@ -397,7 +396,7 @@ pub(crate) enum TimerEvent<K> {
     // from one wheel to another in a lower level of the hierarchy. (This variant
     // is mainly used for testing)
     #[cfg(test)]
-    Rescheduled(TrioArc<EntryInfo<K>>),
+    Rescheduled(MiniArc<EntryInfo<K>>),
     #[cfg(not(test))]
     Rescheduled(()),
     /// This timer node (containing a cache entry) has been removed from the timer.
@@ -517,7 +516,7 @@ impl<K> Iterator for TimerEventsIter<'_, K> {
                     // Get the entry info before rescheduling (mutating) the node to
                     // avoid Stacked Borrows/Tree Borrows violations on `node_p`.
                     let entry_info =
-                        TrioArc::clone(unsafe { node_p.as_ref() }.element.entry_info());
+                        MiniArc::clone(unsafe { node_p.as_ref() }.element.entry_info());
 
                     match self.timer_wheel.schedule_existing_node(node_p) {
                         ReschedulingResult::Rescheduled => {
@@ -560,11 +559,9 @@ mod tests {
 
     use super::{TimerEvent, TimerWheel, SPANS};
     use crate::common::{
-        concurrent::{entry_info::EntryInfo, KeyHash},
+        concurrent::{arc::MiniArc, entry_info::EntryInfo, KeyHash},
         time::{CheckedTimeOps, Clock, Instant, Mock},
     };
-
-    use triomphe::Arc as TrioArc;
 
     #[test]
     fn test_bucket_indices() {
@@ -654,10 +651,10 @@ mod tests {
             let hash = key as u64;
             let key_hash = KeyHash::new(Arc::new(key), hash);
             let policy_weight = 0;
-            let entry_info = TrioArc::new(EntryInfo::new(key_hash, now, policy_weight));
+            let entry_info = MiniArc::new(EntryInfo::new(key_hash, now, policy_weight));
             entry_info.set_expiration_time(Some(now.checked_add(ttl).unwrap()));
             let deq_nodes = Default::default();
-            let timer_node = timer.schedule(entry_info, TrioArc::clone(&deq_nodes));
+            let timer_node = timer.schedule(entry_info, MiniArc::clone(&deq_nodes));
             deq_nodes.lock().set_timer_node(timer_node);
         }
 
