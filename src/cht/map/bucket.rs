@@ -369,7 +369,7 @@ struct Probe<'b, 'g, K: 'g, V: 'g> {
     reload: bool,
 }
 
-impl<'b, 'g, K: 'g, V: 'g> Probe<'b, 'g, K, V> {
+impl<'g, K: 'g, V: 'g> Probe<'_, 'g, K, V> {
     fn reload(&mut self) {
         self.reload = true;
     }

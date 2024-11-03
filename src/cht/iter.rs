@@ -35,7 +35,7 @@ impl<'i, K, V> Iter<'i, K, V> {
     }
 }
 
-impl<'i, K, V> Iterator for Iter<'i, K, V>
+impl<K, V> Iterator for Iter<'_, K, V>
 where
     K: Eq + Hash + Clone + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -58,7 +58,7 @@ where
     }
 }
 
-impl<'i, K, V> Iter<'i, K, V>
+impl<K, V> Iter<'_, K, V>
 where
     K: Eq + Hash + Clone + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,

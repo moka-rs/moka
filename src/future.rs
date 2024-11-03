@@ -63,7 +63,7 @@ impl<'i, K, V> Iter<'i, K, V> {
     }
 }
 
-impl<'i, K, V> Iterator for Iter<'i, K, V>
+impl<K, V> Iterator for Iter<'_, K, V>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -131,7 +131,7 @@ impl<'a, K, V> CancelGuard<'a, K, V> {
     }
 }
 
-impl<'a, K, V> Drop for CancelGuard<'a, K, V> {
+impl<K, V> Drop for CancelGuard<'_, K, V> {
     fn drop(&mut self) {
         let interrupted_op = match (self.future.take(), self.op.take()) {
             (Some(future), Some(op)) => InterruptedOp::CallEvictionListener {
