@@ -565,13 +565,13 @@ where
         (ins_op, ts)
     }
 
-    async fn do_post_update_steps<'a>(
+    async fn do_post_update_steps(
         &self,
         ts: Instant,
         key: Arc<K>,
         old_info: OldEntryInfo<K, V>,
         upd_op: WriteOp<K, V>,
-        interrupted_op_ch: &'a Sender<InterruptedOp<K, V>>,
+        interrupted_op_ch: &Sender<InterruptedOp<K, V>>,
     ) -> (WriteOp<K, V>, Instant) {
         use futures_util::FutureExt;
 
