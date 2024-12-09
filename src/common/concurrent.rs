@@ -12,12 +12,8 @@ pub(crate) mod entry_info;
 #[cfg(feature = "sync")]
 pub(crate) mod housekeeper;
 
-// target_has_atomic is more convenient but yet unstable (Rust 1.55)
-// https://github.com/rust-lang/rust/issues/32976
-// #[cfg_attr(target_has_atomic = "64", path = "common/time_atomic64.rs")]
-
 #[cfg_attr(
-    all(feature = "atomic64", feature = "quanta"),
+    all(feature = "atomic64", feature = "quanta", target_has_atomic = "64"),
     path = "concurrent/atomic_time/atomic_time.rs"
 )]
 #[cfg_attr(
