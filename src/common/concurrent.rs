@@ -1,10 +1,10 @@
-use crate::common::{deque::DeqNode, time::Instant};
+use crate::common::{concurrent::arc::MiniArc, deque::DeqNode, time::Instant};
 
 use parking_lot::Mutex;
 use std::{fmt, ptr::NonNull, sync::Arc};
 use tagptr::TagNonNull;
-use triomphe::Arc as TrioArc;
 
+pub(crate) mod arc;
 pub(crate) mod constants;
 pub(crate) mod deques;
 pub(crate) mod entry_info;
@@ -60,13 +60,13 @@ impl<K> Clone for KeyHash<K> {
 }
 
 pub(crate) struct KeyHashDate<K> {
-    entry_info: TrioArc<EntryInfo<K>>,
+    entry_info: MiniArc<EntryInfo<K>>,
 }
 
 impl<K> KeyHashDate<K> {
-    pub(crate) fn new(entry_info: &TrioArc<EntryInfo<K>>) -> Self {
+    pub(crate) fn new(entry_info: &MiniArc<EntryInfo<K>>) -> Self {
         Self {
-            entry_info: TrioArc::clone(entry_info),
+            entry_info: MiniArc::clone(entry_info),
         }
     }
 
@@ -97,11 +97,11 @@ impl<K> KeyHashDate<K> {
 
 pub(crate) struct KvEntry<K, V> {
     pub(crate) key: Arc<K>,
-    pub(crate) entry: TrioArc<ValueEntry<K, V>>,
+    pub(crate) entry: MiniArc<ValueEntry<K, V>>,
 }
 
 impl<K, V> KvEntry<K, V> {
-    pub(crate) fn new(key: Arc<K>, entry: TrioArc<ValueEntry<K, V>>) -> Self {
+    pub(crate) fn new(key: Arc<K>, entry: MiniArc<ValueEntry<K, V>>) -> Self {
         Self { key, entry }
     }
 }
@@ -110,7 +110,7 @@ impl<K, V> Clone for KvEntry<K, V> {
     fn clone(&self) -> Self {
         Self {
             key: Arc::clone(&self.key),
-            entry: TrioArc::clone(&self.entry),
+            entry: MiniArc::clone(&self.entry),
         }
     }
 }
@@ -173,33 +173,33 @@ impl<K> DeqNodes<K> {
 
 pub(crate) struct ValueEntry<K, V> {
     pub(crate) value: V,
-    info: TrioArc<EntryInfo<K>>,
-    nodes: TrioArc<Mutex<DeqNodes<K>>>,
+    info: MiniArc<EntryInfo<K>>,
+    nodes: MiniArc<Mutex<DeqNodes<K>>>,
 }
 
 impl<K, V> ValueEntry<K, V> {
-    pub(crate) fn new(value: V, entry_info: TrioArc<EntryInfo<K>>) -> Self {
+    pub(crate) fn new(value: V, entry_info: MiniArc<EntryInfo<K>>) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
         self::debug_counters::InternalGlobalDebugCounters::value_entry_created();
 
         Self {
             value,
             info: entry_info,
-            nodes: TrioArc::new(Mutex::new(DeqNodes::default())),
+            nodes: MiniArc::new(Mutex::new(DeqNodes::default())),
         }
     }
 
-    pub(crate) fn new_from(value: V, entry_info: TrioArc<EntryInfo<K>>, other: &Self) -> Self {
+    pub(crate) fn new_from(value: V, entry_info: MiniArc<EntryInfo<K>>, other: &Self) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
         self::debug_counters::InternalGlobalDebugCounters::value_entry_created();
         Self {
             value,
             info: entry_info,
-            nodes: TrioArc::clone(&other.nodes),
+            nodes: MiniArc::clone(&other.nodes),
         }
     }
 
-    pub(crate) fn entry_info(&self) -> &TrioArc<EntryInfo<K>> {
+    pub(crate) fn entry_info(&self) -> &MiniArc<EntryInfo<K>> {
         &self.info
     }
 
@@ -220,7 +220,7 @@ impl<K, V> ValueEntry<K, V> {
         self.info.policy_weight()
     }
 
-    pub(crate) fn deq_nodes(&self) -> &TrioArc<Mutex<DeqNodes<K>>> {
+    pub(crate) fn deq_nodes(&self) -> &MiniArc<Mutex<DeqNodes<K>>> {
         &self.nodes
     }
 
@@ -274,7 +274,7 @@ impl<K, V> Drop for ValueEntry<K, V> {
     }
 }
 
-impl<K, V> AccessTime for TrioArc<ValueEntry<K, V>> {
+impl<K, V> AccessTime for MiniArc<ValueEntry<K, V>> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
         self.info.last_accessed()
@@ -298,7 +298,7 @@ impl<K, V> AccessTime for TrioArc<ValueEntry<K, V>> {
 
 pub(crate) enum ReadOp<K, V> {
     Hit {
-        value_entry: TrioArc<ValueEntry<K, V>>,
+        value_entry: MiniArc<ValueEntry<K, V>>,
         is_expiry_modified: bool,
     },
     // u64 is the hash of the key.
@@ -308,7 +308,7 @@ pub(crate) enum ReadOp<K, V> {
 pub(crate) enum WriteOp<K, V> {
     Upsert {
         key_hash: KeyHash<K>,
-        value_entry: TrioArc<ValueEntry<K, V>>,
+        value_entry: MiniArc<ValueEntry<K, V>>,
         /// Entry generation after the operation.
         entry_gen: u16,
         old_weight: u32,
@@ -320,7 +320,7 @@ pub(crate) enum WriteOp<K, V> {
     },
 }
 
-/// Cloning a `WriteOp` is safe and cheap because it uses `Arc` and `TrioArc` pointers to
+/// Cloning a `WriteOp` is safe and cheap because it uses `Arc` and `MiniArc` pointers to
 /// the actual data.
 impl<K, V> Clone for WriteOp<K, V> {
     fn clone(&self) -> Self {
@@ -333,7 +333,7 @@ impl<K, V> Clone for WriteOp<K, V> {
                 new_weight,
             } => Self::Upsert {
                 key_hash: key_hash.clone(),
-                value_entry: TrioArc::clone(value_entry),
+                value_entry: MiniArc::clone(value_entry),
                 entry_gen: *entry_gen,
                 old_weight: *old_weight,
                 new_weight: *new_weight,
@@ -362,13 +362,13 @@ impl<K, V> WriteOp<K, V> {
     pub(crate) fn new_upsert(
         key: &Arc<K>,
         hash: u64,
-        value_entry: &TrioArc<ValueEntry<K, V>>,
+        value_entry: &MiniArc<ValueEntry<K, V>>,
         entry_generation: u16,
         old_weight: u32,
         new_weight: u32,
     ) -> Self {
         let key_hash = KeyHash::new(Arc::clone(key), hash);
-        let value_entry = TrioArc::clone(value_entry);
+        let value_entry = MiniArc::clone(value_entry);
         Self::Upsert {
             key_hash,
             value_entry,
@@ -380,15 +380,15 @@ impl<K, V> WriteOp<K, V> {
 }
 
 pub(crate) struct OldEntryInfo<K, V> {
-    pub(crate) entry: TrioArc<ValueEntry<K, V>>,
+    pub(crate) entry: MiniArc<ValueEntry<K, V>>,
     pub(crate) last_accessed: Option<Instant>,
     pub(crate) last_modified: Option<Instant>,
 }
 
 impl<K, V> OldEntryInfo<K, V> {
-    pub(crate) fn new(entry: &TrioArc<ValueEntry<K, V>>) -> Self {
+    pub(crate) fn new(entry: &MiniArc<ValueEntry<K, V>>) -> Self {
         Self {
-            entry: TrioArc::clone(entry),
+            entry: MiniArc::clone(entry),
             last_accessed: entry.last_accessed(),
             last_modified: entry.last_modified(),
         }
