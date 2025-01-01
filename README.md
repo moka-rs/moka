@@ -467,18 +467,20 @@ section ([`sync::Cache`][doc-sync-cache-expiration],
 
 Moka's minimum supported Rust versions (MSRV) are the followings:
 
-| Feature          | MSRV                      |
-|:-----------------|:-------------------------:|
-| default features | Rust 1.65.0 (Nov 3, 2022) |
-| `future`         | Rust 1.65.0 (Nov 3, 2022) |
+| Feature  | MSRV                       |
+|:---------|:--------------------------:|
+| `future` | Rust 1.70.0 (June 3, 2022) |
+| `sync`   | Rust 1.70.0 (June 3, 2022) |
 
-It will keep a rolling MSRV policy of at least 6 months. If only the default features
-are enabled, MSRV will be updated conservatively. When using other features, like
-`future`, MSRV might be updated more frequently, up to the latest stable. In both
-cases, increasing MSRV is _not_ considered a semver-breaking change.
+It will keep a rolling MSRV policy of at least 6 months. If the default features with
+a mondatory features (`future` or `sync`) are enabled, MSRV will be updated
+conservatively. When using other features, MSRV might be updated more frequently, up
+to the latest stable.
+
+In both cases, increasing MSRV is _not_ considered a semver-breaking change.
 
 <!--
-- quanta v0.11.0 requires 1.60.
+- quanta v0.12.4 requires 1.70.0.
 -->
 
 

@@ -39,7 +39,7 @@ jobs:
         rust:
           - stable
           - beta
-          - 1.65.0  # MSRV
+          - 1.70.0  # MSRV
           - nightly # For checking minimum version dependencies.
 
     steps:
@@ -60,11 +60,11 @@ jobs:
         run: ./.ci_extras/pin-crate-vers-nightly.sh
 
       - name: Pin some dependencies to specific versions (MSRV only)
-        if: ${{ matrix.rust == '1.65.0' }}
+        if: ${{ matrix.rust == '1.70.0' }}
         run: ./.ci_extras/pin-crate-vers-msrv.sh
 
       - name: Remove some examples (MSRV only)
-        if: ${{ matrix.rust == '1.65.0' }}
+        if: ${{ matrix.rust == '1.70.0' }}
         run: ./.ci_extras/remove-examples-msrv.sh
 
       - name: Run tests (debug, but no quanta feature)
