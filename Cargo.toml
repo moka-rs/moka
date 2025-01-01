@@ -2,8 +2,8 @@
 name = "moka"
 version = "0.12.9"
 edition = "2021"
-# Rust 1.65 was released on Nov 3, 2022.
-rust-version = "1.65"
+# Rust 1.70 was released on June 1, 2023.
+rust-version = "1.70"
 description = "A fast and concurrent cache library inspired by Java Caffeine"
 license = "MIT OR Apache-2.0"
 # homepage = "https://"
@@ -29,10 +29,9 @@ future = ["async-lock", "event-listener", "futures-util"]
 # callback closure.
 logging = ["log"]
 
-# This feature is enabled by default. Disable it when the target platform does not
-# support `std::sync::atomic::AtomicU64`. (e.g. `armv5te-unknown-linux-musleabi`
-# or `mips-unknown-linux-musl`)
-# https://github.com/moka-rs/moka#resolving-compile-errors-on-some-32-bit-platforms
+# This feature is enabled by default, but will be automatically disabled if the
+# target platform does not support `std::sync::atomic::AtomicU64`.
+# (e.g. `armv5te-unknown-linux-musleabi` or `mips-unknown-linux-musl`)
 atomic64 = []
 
 # This unstable feature adds `GlobalDebugCounters::current` function, which returns

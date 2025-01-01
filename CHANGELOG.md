@@ -1,5 +1,29 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.9
+
+Bumped the minimum supported Rust version (MSRV) to 1.70 (June 1, 2023)
+([#474][gh-pull-0474]).
+
+### Added
+
+- Added `and_try_compute_if_nobody_else` method to `future::Cache`'s `entry` API.
+  ([#460][gh-pull-0460], by [@xuehaonan27][gh-xuehaonan27])
+
+### Removed
+
+- Removed needless traits along with `async-trait` usage. ([#445][gh-pull-0445], by
+  [@Swatinem][gh-Swatinem])
+
+### Changed
+
+- Enable `atomic64` feature only when target supports `AtomicU64`.
+  ([#466][gh-pull-0466], by [@zonyitoo][gh-zonyitoo])
+- Made `once_cell` dependency optional ([#444][gh-pull-0444]).
+- Stopped creating references unnecessarily to compare pointers by-address.
+  ([#452][gh-pull-0452], by [@JoJoDeveloping][gh-JoJoDeveloping])
+
+
 ## Version 0.12.8
 
 ### Fixed
@@ -862,6 +886,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-barkanido]: https://github.com/barkanido
 [gh-ClSlaid]: https://github.com/ClSlaid
 [gh-eaufavor]: https://github.com/eaufavor
+[gh-JoJoDeveloping]: https://github.com/JoJoDeveloping
 [gh-LMJW]: https://github.com/LMJW
 [gh-messense]: https://github.com/messense
 [gh-Milo123459]: https://github.com/Milo123459
@@ -871,6 +896,8 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-saethlin]: https://github.com/saethlin
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-tinou98]: https://github.com/tinou98
+[gh-xuehaonan27]: https://github.com/xuehaonan27
+[gh-zonyitoo]: https://github.com/zonyitoo
 
 [gh-issue-0412]: https://github.com/moka-rs/moka/issues/412/
 [gh-issue-0385]: https://github.com/moka-rs/moka/issues/385/
@@ -895,6 +922,12 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0474]: https://github.com/moka-rs/moka/pull/474/
+[gh-pull-0466]: https://github.com/moka-rs/moka/pull/466/
+[gh-pull-0460]: https://github.com/moka-rs/moka/pull/460/
+[gh-pull-0452]: https://github.com/moka-rs/moka/pull/452/
+[gh-pull-0445]: https://github.com/moka-rs/moka/pull/445/
+[gh-pull-0444]: https://github.com/moka-rs/moka/pull/444/
 [gh-pull-0426]: https://github.com/moka-rs/moka/pull/426/
 [gh-pull-0421]: https://github.com/moka-rs/moka/pull/421/
 [gh-pull-0417]: https://github.com/moka-rs/moka/pull/417/
