@@ -69,6 +69,7 @@
         "triomphe",
         "trybuild",
         "Uninit",
+        "unsize",
         "unsync",
         "Upsert",
         "upserted",

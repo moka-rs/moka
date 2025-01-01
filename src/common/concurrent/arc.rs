@@ -6,7 +6,7 @@
 //       ISBN: 978-1-098-11944-7
 //     - https://marabos.nl/atomics/
 // - The `triomphe` crate v0.1.13 and v0.1.11 by Manish Goregaokar (Manishearth)
-//     -  MIT or Apache-2.0 License
+//     - MIT or Apache-2.0 License
 //     - https://github.com/Manishearth/triomphe
 // - `std::sync::Arc` in the Rust Standard Library (1.81.0).
 //     -  MIT or Apache-2.0 License
