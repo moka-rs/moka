@@ -5,6 +5,11 @@
 Bumped the minimum supported Rust version (MSRV) to 1.70 (June 1, 2023)
 ([#474][gh-pull-0474]).
 
+### Fixed
+
+- Fixed an occasional panic in an internal `to_std_instant` method when per-entry
+  expiration policy is used. ([#472][gh-issue-0472])
+
 ### Added
 
 - Added `and_try_compute_if_nobody_else` method to `future::Cache`'s `entry` API.
@@ -903,6 +908,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-xuehaonan27]: https://github.com/xuehaonan27
 [gh-zonyitoo]: https://github.com/zonyitoo
 
+[gh-issue-0472]: https://github.com/moka-rs/moka/issues/472/
 [gh-issue-0412]: https://github.com/moka-rs/moka/issues/412/
 [gh-issue-0385]: https://github.com/moka-rs/moka/issues/385/
 [gh-issue-0329]: https://github.com/moka-rs/moka/issues/329/

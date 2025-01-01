@@ -896,7 +896,20 @@ impl Clocks {
         } else {
             (self.origin, self.origin_std)
         };
-        origin_std + (time.checked_duration_since(origin).unwrap())
+
+        // `checked_duration_since` should always succeed here because the `origin`
+        // is set when this `Cache` is created, and the `time` is either the last
+        // modified or last accessed time of a cached entry. So `time` should always
+        // be greater than or equal to `origin`.
+        //
+        // However, this is not always true when `quanta::Instant` is used as the
+        // time source? https://github.com/moka-rs/moka/issues/472
+        //
+        // (Or do we set zero Instant to last modified/accessed time somewhere?)
+        //
+        // As a workaround, let's use zero duration when `checked_duration_since`
+        // fails.
+        origin_std + (time.checked_duration_since(origin).unwrap_or_default())
     }
 
     #[cfg(test)]
