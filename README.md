@@ -486,10 +486,10 @@ In both cases, increasing MSRV is _not_ considered a semver-breaking change.
 
 ## Troubleshooting
 
-### Compile Errors on Some 32-bit Platforms
+### Compile Errors on Some 32-bit Platforms (Moka v0.12.8 or earlier)
 
 On some 32-bit target platforms including the followings, you may encounter compile
-errors:
+errors if you use Moka v0.12.8 or earlier:
 
 - `armv5te-unknown-linux-musleabi`
 - `mips-unknown-linux-musl`
@@ -508,19 +508,10 @@ error[E0432]: unresolved import `std::sync::atomic::AtomicU64`
 Such errors can occur because `std::sync::atomic::AtomicU64` is not provided on these
 platforms but Moka uses it.
 
-You can resolve the errors by disabling `atomic64` feature, which is one of the
-default features of Moka. Edit your Cargo.toml to add `default-features = false`
-to the dependency declaration.
-
-```toml:Cargo.toml
-[dependencies]
-moka = { version = "0.12", default-features = false, features = ["sync"] }
-# Or
-moka = { version = "0.12", default-features = false, features = ["future"] }
-```
-
-This will make Moka to switch to a fall-back implementation, so it will compile.
-
+You can avoid the errors by upgrading Moka to v0.12.9 or later. These versions should
+automatically disable the `atomic64` feature, which is one of the default features of
+Moka. Disabling the feature will cause Moka to switch to a fall-back implementation,
+so that it will compile.
 
 ## Developing Moka
 
