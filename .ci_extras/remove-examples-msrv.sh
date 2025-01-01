@@ -18,4 +18,4 @@ EOF
 }
 
 # `OnceLock` was introduced in 1.70.0.
-disable_example_sync reinsert_expired_entries_sync
+# disable_example_sync reinsert_expired_entries_sync
