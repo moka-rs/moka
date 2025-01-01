@@ -17,6 +17,10 @@ Bumped the minimum supported Rust version (MSRV) to 1.70 (June 1, 2023)
 
 ### Removed
 
+- Removed `triomphe` crate from the dependency by adding our own internal `Arc` type.
+  ([#456][gh-pull-0456])
+    - Our `Arc` is more memory efficient than `std::sync::Arc` or `triomphe::Arc` on
+      64-bit platforms as it uses a single `AtomicU32` counter.
 - Removed needless traits along with `async-trait` usage. ([#445][gh-pull-0445], by
   [@Swatinem][gh-Swatinem])
 
@@ -931,6 +935,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-pull-0474]: https://github.com/moka-rs/moka/pull/474/
 [gh-pull-0466]: https://github.com/moka-rs/moka/pull/466/
 [gh-pull-0460]: https://github.com/moka-rs/moka/pull/460/
+[gh-pull-0456]: https://github.com/moka-rs/moka/pull/456/
 [gh-pull-0452]: https://github.com/moka-rs/moka/pull/452/
 [gh-pull-0445]: https://github.com/moka-rs/moka/pull/445/
 [gh-pull-0444]: https://github.com/moka-rs/moka/pull/444/

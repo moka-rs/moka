@@ -10,6 +10,7 @@ use crate::{
     common::{
         self,
         concurrent::{
+            arc::MiniArc,
             atomic_time::AtomicInstant,
             constants::{
                 READ_LOG_CH_SIZE, READ_LOG_FLUSH_POINT, WRITE_LOG_CH_SIZE, WRITE_LOG_FLUSH_POINT,
@@ -51,7 +52,6 @@ use std::{
     },
     time::{Duration, Instant as StdInstant},
 };
-use triomphe::Arc as TrioArc;
 
 pub(crate) type HouseKeeperArc = Arc<Housekeeper>;
 
@@ -127,7 +127,7 @@ impl<K, V, S> BaseCache<K, V, S> {
     pub(crate) fn notify_invalidate(
         &self,
         key: &Arc<K>,
-        entry: &TrioArc<ValueEntry<K, V>>,
+        entry: &MiniArc<ValueEntry<K, V>>,
     ) -> BoxFuture<'static, ()>
     where
         K: Send + Sync + 'static,
@@ -335,7 +335,7 @@ where
                     let ent = Entry::new(maybe_key, entry.value.clone(), false, false);
                     let maybe_op = if record_read {
                         Some(ReadOp::Hit {
-                            value_entry: TrioArc::clone(entry),
+                            value_entry: MiniArc::clone(entry),
                             is_expiry_modified,
                         })
                     } else {
@@ -758,11 +758,11 @@ impl<K, V, S> BaseCache<K, V, S> {
         value: V,
         timestamp: Instant,
         policy_weight: u32,
-    ) -> (TrioArc<ValueEntry<K, V>>, u16) {
+    ) -> (MiniArc<ValueEntry<K, V>>, u16) {
         let key_hash = KeyHash::new(Arc::clone(key), hash);
-        let info = TrioArc::new(EntryInfo::new(key_hash, timestamp, policy_weight));
+        let info = MiniArc::new(EntryInfo::new(key_hash, timestamp, policy_weight));
         let gen: u16 = info.entry_gen();
-        (TrioArc::new(ValueEntry::new(value, info)), gen)
+        (MiniArc::new(ValueEntry::new(value, info)), gen)
     }
 
     #[inline]
@@ -772,15 +772,15 @@ impl<K, V, S> BaseCache<K, V, S> {
         timestamp: Instant,
         policy_weight: u32,
         other: &ValueEntry<K, V>,
-    ) -> (TrioArc<ValueEntry<K, V>>, u16) {
-        let info = TrioArc::clone(other.entry_info());
+    ) -> (MiniArc<ValueEntry<K, V>>, u16) {
+        let info = MiniArc::clone(other.entry_info());
         // To prevent this updated ValueEntry from being evicted by an expiration
         // policy, increment the entry generation.
         let gen = info.incr_entry_gen();
         info.set_last_accessed(timestamp);
         info.set_last_modified(timestamp);
         info.set_policy_weight(policy_weight);
-        (TrioArc::new(ValueEntry::new_from(value, info, other)), gen)
+        (MiniArc::new(ValueEntry::new_from(value, info, other)), gen)
     }
 
     fn expire_after_create(
@@ -901,7 +901,7 @@ impl<'a, K, V> EvictionState<'a, K, V> {
     async fn notify_entry_removal(
         &mut self,
         key: Arc<K>,
-        entry: &TrioArc<ValueEntry<K, V>>,
+        entry: &MiniArc<ValueEntry<K, V>>,
         cause: RemovalCause,
     ) where
         K: Send + Sync + 'static,
@@ -991,7 +991,7 @@ enum AdmissionResult<K> {
     Rejected,
 }
 
-type CacheStore<K, V, S> = crate::cht::SegmentedHashMap<Arc<K>, TrioArc<ValueEntry<K, V>>, S>;
+type CacheStore<K, V, S> = crate::cht::SegmentedHashMap<Arc<K>, MiniArc<ValueEntry<K, V>>, S>;
 
 struct Clocks {
     // Lock for this Clocks instance. Used when the `expiration_clock` is set.
@@ -1298,7 +1298,7 @@ where
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
-        F: FnOnce(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> T,
+        F: FnOnce(&Arc<K>, &MiniArc<ValueEntry<K, V>>) -> T,
     {
         self.cache
             .get_key_value_and(hash, |k| (k as &K).borrow() == key, with_entry)
@@ -1309,7 +1309,7 @@ where
     where
         K: Borrow<Q>,
         Q: Hash + Eq + ?Sized,
-        F: FnOnce(&Arc<K>, &TrioArc<ValueEntry<K, V>>) -> Option<T>,
+        F: FnOnce(&Arc<K>, &MiniArc<ValueEntry<K, V>>) -> Option<T>,
     {
         self.cache
             .get_key_value_and_then(hash, |k| (k as &K).borrow() == key, with_entry)
@@ -1350,7 +1350,7 @@ where
 
     /// Returns `true` if the entry is invalidated by `invalidate_entries_if` method.
     #[inline]
-    fn is_invalidated_entry(&self, key: &Arc<K>, entry: &TrioArc<ValueEntry<K, V>>) -> bool
+    fn is_invalidated_entry(&self, key: &Arc<K>, entry: &MiniArc<ValueEntry<K, V>>) -> bool
     where
         V: Clone,
     {
@@ -1680,7 +1680,7 @@ where
     async fn handle_upsert(
         &self,
         kh: KeyHash<K>,
-        entry: TrioArc<ValueEntry<K, V>>,
+        entry: MiniArc<ValueEntry<K, V>>,
         gen: u16,
         old_weight: u32,
         new_weight: u32,
@@ -1730,7 +1730,7 @@ where
                     kh.hash,
                     |k| k == &kh.key,
                     |_, current_entry| {
-                        TrioArc::ptr_eq(entry.entry_info(), current_entry.entry_info())
+                        MiniArc::ptr_eq(entry.entry_info(), current_entry.entry_info())
                             && current_entry.entry_info().entry_gen() == gen
                     },
                 );
@@ -1835,7 +1835,7 @@ where
                     kh.hash,
                     |k| k == &key,
                     |_, current_entry| {
-                        TrioArc::ptr_eq(entry.entry_info(), current_entry.entry_info())
+                        MiniArc::ptr_eq(entry.entry_info(), current_entry.entry_info())
                             && current_entry.entry_info().entry_gen() == gen
                     },
                 );
@@ -1939,7 +1939,7 @@ where
 
     fn handle_admit(
         &self,
-        entry: &TrioArc<ValueEntry<K, V>>,
+        entry: &MiniArc<ValueEntry<K, V>>,
         policy_weight: u32,
         deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
@@ -1964,7 +1964,7 @@ where
     /// NOTE: This method may enable the timer wheel.
     fn update_timer_wheel(
         &self,
-        entry: &TrioArc<ValueEntry<K, V>>,
+        entry: &MiniArc<ValueEntry<K, V>>,
         timer_wheel: &mut TimerWheel<K>,
     ) {
         // Enable the timer wheel if needed.
@@ -1984,8 +1984,8 @@ where
             // expiration time and not registered to the timer wheel.
             (true, None) => {
                 let timer = timer_wheel.schedule(
-                    TrioArc::clone(entry.entry_info()),
-                    TrioArc::clone(entry.deq_nodes()),
+                    MiniArc::clone(entry.entry_info()),
+                    MiniArc::clone(entry.deq_nodes()),
                 );
                 entry.set_timer_node(timer);
             }
@@ -2013,7 +2013,7 @@ where
     fn handle_remove(
         deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
-        entry: TrioArc<ValueEntry<K, V>>,
+        entry: MiniArc<ValueEntry<K, V>>,
         gen: Option<u16>,
         counters: &mut EvictionCounters,
     ) {
@@ -2025,7 +2025,7 @@ where
 
     fn handle_remove_without_timer_wheel(
         deqs: &mut Deques<K>,
-        entry: TrioArc<ValueEntry<K, V>>,
+        entry: MiniArc<ValueEntry<K, V>>,
         gen: Option<u16>,
         counters: &mut EvictionCounters,
     ) {
@@ -2048,7 +2048,7 @@ where
         ao_deq: &mut Deque<KeyHashDate<K>>,
         wo_deq: &mut Deque<KeyHashDate<K>>,
         timer_wheel: &mut TimerWheel<K>,
-        entry: TrioArc<ValueEntry<K, V>>,
+        entry: MiniArc<ValueEntry<K, V>>,
         counters: &mut EvictionCounters,
     ) {
         if let Some(timer) = entry.take_timer_node() {
@@ -2589,7 +2589,7 @@ where
     pub(crate) async fn notify_single_removal(
         &self,
         key: Arc<K>,
-        entry: &TrioArc<ValueEntry<K, V>>,
+        entry: &MiniArc<ValueEntry<K, V>>,
         cause: RemovalCause,
     ) {
         if let Some(notifier) = &self.removal_notifier {
@@ -2601,7 +2601,7 @@ where
     fn notify_upsert(
         &self,
         key: Arc<K>,
-        entry: &TrioArc<ValueEntry<K, V>>,
+        entry: &MiniArc<ValueEntry<K, V>>,
         last_accessed: Option<Instant>,
         last_modified: Option<Instant>,
     ) -> BoxFuture<'static, ()> {
@@ -2642,7 +2642,7 @@ where
     fn notify_invalidate(
         &self,
         key: &Arc<K>,
-        entry: &TrioArc<ValueEntry<K, V>>,
+        entry: &MiniArc<ValueEntry<K, V>>,
     ) -> BoxFuture<'static, ()> {
         use futures_util::future::FutureExt;
 
@@ -2728,7 +2728,7 @@ where
 
 /// Returns `true` if this entry is expired by its per-entry TTL.
 #[inline]
-fn is_expired_by_per_entry_ttl<K>(entry_info: &TrioArc<EntryInfo<K>>, now: Instant) -> bool {
+fn is_expired_by_per_entry_ttl<K>(entry_info: &MiniArc<EntryInfo<K>>, now: Instant) -> bool {
     if let Some(ts) = entry_info.expiration_time() {
         ts <= now
     } else {

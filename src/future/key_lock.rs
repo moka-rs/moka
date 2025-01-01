@@ -3,14 +3,13 @@ use std::{
     sync::Arc,
 };
 
-use crate::cht::SegmentedHashMap;
+use crate::{cht::SegmentedHashMap, common::concurrent::arc::MiniArc};
 
 use async_lock::{Mutex, MutexGuard};
-use triomphe::Arc as TrioArc;
 
 const LOCK_MAP_NUM_SEGMENTS: usize = 64;
 
-type LockMap<K, S> = SegmentedHashMap<Arc<K>, TrioArc<Mutex<()>>, S>;
+type LockMap<K, S> = SegmentedHashMap<Arc<K>, MiniArc<Mutex<()>>, S>;
 
 // We need the `where` clause here because of the Drop impl.
 pub(crate) struct KeyLock<'a, K, S>
@@ -21,7 +20,7 @@ where
     map: &'a LockMap<K, S>,
     key: Arc<K>,
     hash: u64,
-    lock: TrioArc<Mutex<()>>,
+    lock: MiniArc<Mutex<()>>,
 }
 
 impl<K, S> Drop for KeyLock<'_, K, S>
@@ -30,11 +29,11 @@ where
     S: BuildHasher,
 {
     fn drop(&mut self) {
-        if TrioArc::count(&self.lock) <= 2 {
+        if MiniArc::count(&self.lock) <= 2 {
             self.map.remove_if(
                 self.hash,
                 |k| k == &self.key,
-                |_k, v| TrioArc::count(v) <= 2,
+                |_k, v| MiniArc::count(v) <= 2,
             );
         }
     }
@@ -45,7 +44,7 @@ where
     K: Eq + Hash,
     S: BuildHasher,
 {
-    fn new(map: &'a LockMap<K, S>, key: &Arc<K>, hash: u64, lock: TrioArc<Mutex<()>>) -> Self {
+    fn new(map: &'a LockMap<K, S>, key: &Arc<K>, hash: u64, lock: MiniArc<Mutex<()>>) -> Self {
         Self {
             map,
             key: Arc::clone(key),
@@ -76,7 +75,7 @@ where
 
     pub(crate) fn key_lock(&self, key: &Arc<K>) -> KeyLock<'_, K, S> {
         let hash = self.locks.hash(key);
-        let kl = TrioArc::new(Mutex::new(()));
+        let kl = MiniArc::new(Mutex::new(()));
         match self
             .locks
             .insert_if_not_present(Arc::clone(key), hash, kl.clone())

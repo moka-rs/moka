@@ -1,4 +1,4 @@
-use super::{KeyHashDate, ValueEntry};
+use super::{arc::MiniArc, KeyHashDate, ValueEntry};
 use crate::common::{
     deque::{DeqNode, Deque},
     CacheRegion,
@@ -6,7 +6,7 @@ use crate::common::{
 
 use std::ptr::NonNull;
 use tagptr::TagNonNull;
-use triomphe::Arc as TrioArc;
+
 pub(crate) struct Deques<K> {
     pub(crate) window: Deque<KeyHashDate<K>>, //    Not used yet.
     pub(crate) probation: Deque<KeyHashDate<K>>,
@@ -50,7 +50,7 @@ impl<K> Deques<K> {
         &mut self,
         region: CacheRegion,
         khd: KeyHashDate<K>,
-        entry: &TrioArc<ValueEntry<K, V>>,
+        entry: &MiniArc<ValueEntry<K, V>>,
     ) {
         let node = Box::new(DeqNode::new(khd));
         let node = match region {
@@ -66,14 +66,14 @@ impl<K> Deques<K> {
     pub(crate) fn push_back_wo<V>(
         &mut self,
         kd: KeyHashDate<K>,
-        entry: &TrioArc<ValueEntry<K, V>>,
+        entry: &MiniArc<ValueEntry<K, V>>,
     ) {
         let node = Box::new(DeqNode::new(kd));
         let node = self.write_order.push_back(node);
         entry.set_write_order_q_node(Some(node));
     }
 
-    pub(crate) fn move_to_back_ao<V>(&mut self, entry: &TrioArc<ValueEntry<K, V>>) {
+    pub(crate) fn move_to_back_ao<V>(&mut self, entry: &MiniArc<ValueEntry<K, V>>) {
         if let Some(tagged_node) = entry.access_order_q_node() {
             let (node, tag) = tagged_node.decompose();
             let p = unsafe { node.as_ref() };
@@ -95,7 +95,7 @@ impl<K> Deques<K> {
     pub(crate) fn move_to_back_ao_in_deque<V>(
         deq_name: &str,
         deq: &mut Deque<KeyHashDate<K>>,
-        entry: &TrioArc<ValueEntry<K, V>>,
+        entry: &MiniArc<ValueEntry<K, V>>,
     ) {
         if let Some(tagged_node) = entry.access_order_q_node() {
             let (node, tag) = tagged_node.decompose();
@@ -111,7 +111,7 @@ impl<K> Deques<K> {
         }
     }
 
-    pub(crate) fn move_to_back_wo<V>(&mut self, entry: &TrioArc<ValueEntry<K, V>>) {
+    pub(crate) fn move_to_back_wo<V>(&mut self, entry: &MiniArc<ValueEntry<K, V>>) {
         if let Some(node) = entry.write_order_q_node() {
             let p = unsafe { node.as_ref() };
             if self.write_order.contains(p) {
@@ -122,7 +122,7 @@ impl<K> Deques<K> {
 
     pub(crate) fn move_to_back_wo_in_deque<V>(
         deq: &mut Deque<KeyHashDate<K>>,
-        entry: &TrioArc<ValueEntry<K, V>>,
+        entry: &MiniArc<ValueEntry<K, V>>,
     ) {
         if let Some(node) = entry.write_order_q_node() {
             let p = unsafe { node.as_ref() };
@@ -132,7 +132,7 @@ impl<K> Deques<K> {
         }
     }
 
-    pub(crate) fn unlink_ao<V>(&mut self, entry: &TrioArc<ValueEntry<K, V>>) {
+    pub(crate) fn unlink_ao<V>(&mut self, entry: &MiniArc<ValueEntry<K, V>>) {
         if let Some(node) = entry.take_access_order_q_node() {
             self.unlink_node_ao(node);
         }
@@ -141,14 +141,14 @@ impl<K> Deques<K> {
     pub(crate) fn unlink_ao_from_deque<V>(
         deq_name: &str,
         deq: &mut Deque<KeyHashDate<K>>,
-        entry: &TrioArc<ValueEntry<K, V>>,
+        entry: &MiniArc<ValueEntry<K, V>>,
     ) {
         if let Some(node) = entry.take_access_order_q_node() {
             unsafe { Self::unlink_node_ao_from_deque(deq_name, deq, node) };
         }
     }
 
-    pub(crate) fn unlink_wo<V>(deq: &mut Deque<KeyHashDate<K>>, entry: &TrioArc<ValueEntry<K, V>>) {
+    pub(crate) fn unlink_wo<V>(deq: &mut Deque<KeyHashDate<K>>, entry: &MiniArc<ValueEntry<K, V>>) {
         if let Some(node) = entry.take_write_order_q_node() {
             Self::unlink_node_wo(deq, node);
         }
