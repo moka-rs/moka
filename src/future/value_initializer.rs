@@ -416,7 +416,7 @@ where
 
         let type_id = TypeId::of::<ComputeNone>();
         let (w_key, w_hash) = waiter_key_hash(&self.waiters, &c_key, type_id);
-        let waiter = TrioArc::new(RwLock::new(WaiterValue::Computing));
+        let waiter = MiniArc::new(RwLock::new(WaiterValue::Computing));
         // NOTE: We have to acquire a write lock before `try_insert_waiter`,
         // so that any concurrent attempt will get our lock and wait on it.
         let lock = waiter.write().await;
