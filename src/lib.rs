@@ -221,7 +221,7 @@
 //! The following cache method calls may trigger the maintenance tasks:
 //!
 //! - All cache write methods: `insert`, `get_with`, `invalidate`, etc., except for
-//!  `invalidate_all` and `invalidate_entries_if`.
+//!   `invalidate_all` and `invalidate_entries_if`.
 //! - Some of the cache read methods: `get`
 //! - `run_pending_tasks` method, which executes the pending maintenance tasks
 //!    explicitly.
