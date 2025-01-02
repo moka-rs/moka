@@ -1658,10 +1658,14 @@ where
 
     /// Discards all cached values.
     ///
-    /// This method returns immediately and a background thread will evict all the
-    /// cached values inserted before the time when this method was called. It is
-    /// guaranteed that the `get` method must not return these invalidated values
-    /// even if they have not been evicted.
+    /// This method returns immediately by just setting the current time as the
+    /// invalidation time. `get` and other retrieval methods are guaranteed not to
+    /// return the entries inserted before or at the invalidation time.
+    ///
+    /// The actual removal of the invalidated entries is done as a maintenance task
+    /// driven by a user thread. For more details, see
+    /// [the Maintenance Tasks section](../index.html#maintenance-tasks) in the crate
+    /// level documentation.
     ///
     /// Like the `invalidate` method, this method does not clear the historic
     /// popularity estimator of keys so that it retains the client activities of
@@ -1672,15 +1676,21 @@ where
 
     /// Discards cached values that satisfy a predicate.
     ///
-    /// `invalidate_entries_if` takes a closure that returns `true` or `false`. This
-    /// method returns immediately and a background thread will apply the closure to
-    /// each cached value inserted before the time when `invalidate_entries_if` was
-    /// called. If the closure returns `true` on a value, that value will be evicted
-    /// from the cache.
+    /// `invalidate_entries_if` takes a closure that returns `true` or `false`. The
+    /// closure is called against each cached entry inserted before or at the time
+    /// when this method was called. If the closure returns `true` that entry will be
+    /// evicted from the cache.
     ///
-    /// Also the `get` method will apply the closure to a value to determine if it
-    /// should have been invalidated. Therefore, it is guaranteed that the `get`
-    /// method must not return invalidated values.
+    /// This method returns immediately by not actually removing the invalidated
+    /// entries. Instead, it just sets the predicate to the cache with the time when
+    /// this method was called. The actual removal of the invalidated entries is done
+    /// as a maintenance task driven by a user thread. For more details, see
+    /// [the Maintenance Tasks section](../index.html#maintenance-tasks) in the crate
+    /// level documentation.
+    ///
+    /// Also the `get` and other retrieval methods will apply the closure to a cached
+    /// entry to determine if it should have been invalidated. Therefore, it is
+    /// guaranteed that these methods must not return invalidated values.
     ///
     /// Note that you must call
     /// [`CacheBuilder::support_invalidation_closures`][support-invalidation-closures]
@@ -1693,8 +1703,10 @@ where
     /// popularity estimator of keys so that it retains the client activities of
     /// trying to retrieve an item.
     ///
-    /// [support-invalidation-closures]: ./struct.CacheBuilder.html#method.support_invalidation_closures
-    /// [invalidation-disabled-error]: ../enum.PredicateError.html#variant.InvalidationClosuresDisabled
+    /// [support-invalidation-closures]:
+    ///     ./struct.CacheBuilder.html#method.support_invalidation_closures
+    /// [invalidation-disabled-error]:
+    ///     ../enum.PredicateError.html#variant.InvalidationClosuresDisabled
     pub fn invalidate_entries_if<F>(&self, predicate: F) -> Result<PredicateId, PredicateError>
     where
         F: Fn(&K, &V) -> bool + Send + Sync + 'static,
