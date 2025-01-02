@@ -7,8 +7,12 @@ Bumped the minimum supported Rust version (MSRV) to 1.70 (June 1, 2023)
 
 ### Fixed
 
-- Fixed an occasional panic in an internal `to_std_instant` method when per-entry
+- Prevent an occasional panic in an internal `to_std_instant` method when per-entry
   expiration policy is used. ([#472][gh-issue-0472])
+- Documentation: Removed leftover mentions of background threads.
+  ([#464][gh-issue-0464])
+    - Also added the implementation details chapter to the crate top-level
+      documentation to explain some internal behavior of the cache.
 
 ### Added
 
@@ -19,8 +23,8 @@ Bumped the minimum supported Rust version (MSRV) to 1.70 (June 1, 2023)
 
 - Removed `triomphe` crate from the dependency by adding our own internal `Arc` type.
   ([#456][gh-pull-0456])
-    - Our `Arc` is more memory efficient than `std::sync::Arc` or `triomphe::Arc` on
-      64-bit platforms as it uses a single `AtomicU32` counter.
+    - Our `Arc` will be more memory efficient than `std::sync::Arc` or
+      `triomphe::Arc` on 64-bit platforms as it uses a single `AtomicU32` counter.
 - Removed needless traits along with `async-trait` usage. ([#445][gh-pull-0445], by
   [@Swatinem][gh-Swatinem])
 
@@ -909,6 +913,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-zonyitoo]: https://github.com/zonyitoo
 
 [gh-issue-0472]: https://github.com/moka-rs/moka/issues/472/
+[gh-issue-0464]: https://github.com/moka-rs/moka/issues/464/
 [gh-issue-0412]: https://github.com/moka-rs/moka/issues/412/
 [gh-issue-0385]: https://github.com/moka-rs/moka/issues/385/
 [gh-issue-0329]: https://github.com/moka-rs/moka/issues/329/

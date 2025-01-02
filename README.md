@@ -473,7 +473,7 @@ Moka's minimum supported Rust versions (MSRV) are the followings:
 | `sync`   | Rust 1.70.0 (June 3, 2022) |
 
 It will keep a rolling MSRV policy of at least 6 months. If the default features with
-a mondatory features (`future` or `sync`) are enabled, MSRV will be updated
+a mandatory features (`future` or `sync`) are enabled, MSRV will be updated
 conservatively. When using other features, MSRV might be updated more frequently, up
 to the latest stable.
 
