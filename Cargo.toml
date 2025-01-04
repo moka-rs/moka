@@ -47,7 +47,7 @@ crossbeam-channel = "0.5.5"
 crossbeam-epoch = "0.9.9"
 crossbeam-utils = "0.8"
 parking_lot = "0.12"
-portable-atomic = { version = "1.6", default-features = false }
+portable-atomic = "1.6"
 smallvec = "1.8"
 tagptr = "0.2"
 thiserror = "1.0"
