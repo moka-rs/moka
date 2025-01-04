@@ -12,12 +12,9 @@ pub(crate) mod entry_info;
 #[cfg(feature = "sync")]
 pub(crate) mod housekeeper;
 
+#[cfg_attr(feature = "quanta", path = "concurrent/atomic_time/atomic_time.rs")]
 #[cfg_attr(
-    all(feature = "atomic64", feature = "quanta", target_has_atomic = "64"),
-    path = "concurrent/atomic_time/atomic_time.rs"
-)]
-#[cfg_attr(
-    not(all(feature = "atomic64", feature = "quanta")),
+    not(feature = "quanta"),
     path = "concurrent/atomic_time/atomic_time_compat.rs"
 )]
 pub(crate) mod atomic_time;

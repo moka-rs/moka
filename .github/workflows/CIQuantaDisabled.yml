@@ -68,20 +68,20 @@ jobs:
         run: ./.ci_extras/remove-examples-msrv.sh
 
       - name: Run tests (debug, but no quanta feature)
-        run: cargo test --no-default-features --features 'sync, atomic64'
+        run: cargo test --no-default-features --features sync
         env:
           RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (release, but no quanta feature)
-        run: cargo test --release --no-default-features --features 'sync, atomic64'
+        run: cargo test --release --no-default-features --features sync
         env:
           RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (future feature, but no quanta and sync features)
-        run: cargo test --no-default-features --features 'future, atomic64'
+        run: cargo test --no-default-features --features future
 
       - name: Run tests (future, sync and logging features, but no quanta feature)
-        run: cargo test --no-default-features --features 'sync, future, atomic64, logging'
+        run: cargo test --no-default-features --features 'sync, future, logging'
 
       - name: Run tests (sync feature, but no quanta feature, drop cache)
         run: cargo test --release --lib --no-default-features --features sync sync::cache::tests::ensure_gc_runs_when_dropping_cache -- --exact --ignored

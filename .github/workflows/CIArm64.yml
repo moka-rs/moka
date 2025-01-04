@@ -56,7 +56,7 @@ jobs:
         run: cargo test --release --lib --features sync sync::cache::tests::ensure_gc_runs_when_dropping_cache -- --exact --ignored
 
       - name: Run tests (future feature, but no sync feature)
-        run: cargo test --no-default-features --features 'future, atomic64, quanta'
+        run: cargo test --features future
         env:
           RUSTFLAGS: '--cfg skip_large_mem_tests'
 
