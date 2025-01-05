@@ -863,14 +863,6 @@ where
         }
     }
 
-    // pub(crate) async fn set_expiration_clock(&self, clock: Option<Clock>) {
-    //     self.inner.set_expiration_clock(clock).await;
-    //     if let Some(hk) = &self.housekeeper {
-    //         let now = self.current_time_from_expiration_clock();
-    //         hk.reset_run_after(now);
-    //     }
-    // }
-
     pub(crate) fn key_locks_map_is_empty(&self) -> bool {
         self.inner.key_locks_map_is_empty()
     }

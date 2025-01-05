@@ -2079,10 +2079,6 @@ where
         self.base.reconfigure_for_testing().await;
     }
 
-    // async fn set_expiration_clock(&self, clock: Option<crate::common::time::Clock>) {
-    //     self.base.set_expiration_clock(clock).await;
-    // }
-
     fn key_locks_map_is_empty(&self) -> bool {
         self.base.key_locks_map_is_empty()
     }
