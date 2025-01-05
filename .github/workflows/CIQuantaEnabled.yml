@@ -1,4 +1,4 @@
-name: CI (Quanta disabled)
+name: CI (Quanta enabled)
 
 on:
   push:
@@ -67,21 +67,27 @@ jobs:
         if: ${{ matrix.rust == '1.70.0' }}
         run: ./.ci_extras/remove-examples-msrv.sh
 
-      - name: Run tests (debug, but no quanta feature)
-        run: cargo test --no-default-features --features sync
+      - name: Show cargo tree
+        run: cargo tree --features 'sync, future, quanta'
+
+      - name: Run tests (debug, sync, quanta features)
+        run: cargo test --features 'sync, quanta'
         env:
           RUSTFLAGS: '--cfg rustver'
 
-      - name: Run tests (release, but no quanta feature)
-        run: cargo test --release --no-default-features --features sync
+      - name: Run tests (release, sync, quanta features)
+        run: cargo test --release --features 'sync, quanta'
         env:
           RUSTFLAGS: '--cfg rustver'
 
-      - name: Run tests (future feature, but no quanta and sync features)
-        run: cargo test --no-default-features --features future
+      - name: Run tests (debug, future, quanta features)
+        run: cargo test --features 'future, quanta'
 
-      - name: Run tests (future, sync and logging features, but no quanta feature)
-        run: cargo test --no-default-features --features 'sync, future, logging'
+      - name: Run tests (release, future, quanta features)
+        run: cargo test --release --features 'future, quanta'
 
-      - name: Run tests (sync feature, but no quanta feature, drop cache)
-        run: cargo test --release --lib --no-default-features --features sync sync::cache::tests::ensure_gc_runs_when_dropping_cache -- --exact --ignored
+      - name: Run tests (future, sync, logging, quanta features)
+        run: cargo test --features 'sync, future, quanta, logging'
+
+      - name: Run tests (sync, quanta features, drop cache)
+        run: cargo test --release --lib --features 'sync, quanta' sync::cache::tests::ensure_gc_runs_when_dropping_cache -- --exact --ignored

@@ -16,7 +16,7 @@ exclude = [".devcontainer", ".github", ".gitpod.yml", ".vscode"]
 build = "build.rs"
 
 [features]
-default = ["quanta"]
+default = []
 
 # Enable this feature to use `moka::sync::{Cache, SegmentedCache}`
 sync = []
@@ -29,8 +29,10 @@ future = ["async-lock", "event-listener", "futures-util"]
 # callback closure.
 logging = ["log"]
 
-# This feature is enabled by default. It will slightly speed up some cache operations
-# by using the `quanta` crate to measure time.
+# Enable this feature to use `quanta::Instant` for some performance critical
+# operations in the cache instead of `std::time::Instant`. As of v0.12.10, this
+# feature will not make any noticeable performance difference, but in the future
+# when cache metrics are added, it will be useful to have this feature enabled.
 quanta = ["dep:quanta"]
 
 # This is an old feature and has no effect in v0.12.10 or newer. It is kept for

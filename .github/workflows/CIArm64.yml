@@ -55,7 +55,7 @@ jobs:
       - name: Run tests (sync feature, drop cache)
         run: cargo test --release --lib --features sync sync::cache::tests::ensure_gc_runs_when_dropping_cache -- --exact --ignored
 
-      - name: Run tests (future feature, but no sync feature)
+      - name: Run tests (future feature)
         run: cargo test --features future
         env:
           RUSTFLAGS: '--cfg skip_large_mem_tests'
