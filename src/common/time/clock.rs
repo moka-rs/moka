@@ -38,13 +38,9 @@ impl Default for ClockType {
     fn default() -> Self {
         #[cfg(feature = "quanta")]
         {
-            // Try to get the both origins at close to the same time. Assuming that
-            // `quanta::Instant::now` has lower latency than `StdInstant::now`.
-            let quanta_origin = quanta::Instant::now();
-            let std_origin = StdInstant::now();
             return ClockType::Hybrid {
-                std_origin,
-                quanta_origin,
+                std_origin: StdInstant::now(),
+                quanta_origin: quanta::Instant::now(),
             };
         }
 
@@ -113,6 +109,9 @@ impl Clock {
     }
 
     /// Converts an `Instant` to a `std::time::Instant`.
+    ///
+    /// **IMPORTANT**: The caller must ensure that the `Instant` was created by this
+    /// `Clock`, otherwise the resulting `std::time::Instant` will be incorrect.
     pub(crate) fn to_std_instant(&self, instant: Instant) -> StdInstant {
         match &self.ty {
             ClockType::Standard { origin } => {
