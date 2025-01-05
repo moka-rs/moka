@@ -215,9 +215,8 @@ mod test {
         };
 
         let expected_sizes = match (arch, is_quanta_enabled) {
-            (Linux64 | Linux32Arm, true) => vec![("1.51", 56)],
+            (Linux64 | Linux32Arm | Linux32Mips, true) => vec![("1.51", 56)],
             (Linux32X86, true) => vec![("1.51", 48)],
-            (Linux32Mips, true) => unimplemented!(),
             (MacOS64, true) => vec![("1.62", 56)],
             (Linux64, false) => vec![("1.66", 104), ("1.60", 128)],
             (Linux32X86, false) => unimplemented!(),

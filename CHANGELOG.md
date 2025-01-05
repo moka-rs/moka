@@ -1,5 +1,16 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.10
+
+### Changed
+
+- Switched to `AtomicU64` of `portable-atomic` crate for the platforms where
+  `AtomicU64` is not available in `std`. ([#480][gh-pull-0480])
+    - `moka`'s `atomic64` feature no longer has any effect on the build as
+      `AtomicU64` is now always used. But the feature is kept for backward
+      compatibility.
+
+
 ## Version 0.12.9
 
 Bumped the minimum supported Rust version (MSRV) to 1.70 (June 1, 2023)
@@ -937,6 +948,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0480]: https://github.com/moka-rs/moka/pull/480/
 [gh-pull-0474]: https://github.com/moka-rs/moka/pull/474/
 [gh-pull-0466]: https://github.com/moka-rs/moka/pull/466/
 [gh-pull-0460]: https://github.com/moka-rs/moka/pull/460/

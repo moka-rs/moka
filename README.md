@@ -143,8 +143,6 @@ routers. Here are some highlights:
     - [Size Aware Eviction](#example-size-aware-eviction)
 - [Expiration Policies](#expiration-policies)
 - [Minimum Supported Rust Versions](#minimum-supported-rust-versions)
-- Troubleshooting
-    - [Compile Errors on Some 32-bit Platforms](#compile-errors-on-some-32-bit-platforms)
 - [Developing Moka](#developing-moka)
 - [Road Map](#road-map)
 - [About the Name](#about-the-name)
@@ -482,36 +480,6 @@ In both cases, increasing MSRV is _not_ considered a semver-breaking change.
 <!--
 - quanta v0.12.4 requires 1.70.0.
 -->
-
-
-## Troubleshooting
-
-### Compile Errors on Some 32-bit Platforms (Moka v0.12.8 or earlier)
-
-On some 32-bit target platforms including the followings, you may encounter compile
-errors if you use Moka v0.12.8 or earlier:
-
-- `armv5te-unknown-linux-musleabi`
-- `mips-unknown-linux-musl`
-- `mipsel-unknown-linux-musl`
-
-```console
-error[E0432]: unresolved import `std::sync::atomic::AtomicU64`
-  --> ... /moka-0.5.3/src/sync.rs:10:30
-   |
-10 |         atomic::{AtomicBool, AtomicU64, Ordering},
-   |                              ^^^^^^^^^
-   |                              |
-   |                              no `AtomicU64` in `sync::atomic`
-```
-
-Such errors can occur because `std::sync::atomic::AtomicU64` is not provided on these
-platforms but Moka uses it.
-
-You can avoid the errors by upgrading Moka to v0.12.9 or later. These versions should
-automatically disable the `atomic64` feature, which is one of the default features of
-Moka. Disabling the feature will cause Moka to switch to a fall-back implementation,
-so that it will compile.
 
 ## Developing Moka
 

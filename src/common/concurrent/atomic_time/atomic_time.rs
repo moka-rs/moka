@@ -1,9 +1,8 @@
 use crate::common::time::{clock::Instant as ClockInstant, Instant};
 
-use std::{
-    any::TypeId,
-    sync::atomic::{AtomicU64, Ordering},
-};
+use std::{any::TypeId, sync::atomic::Ordering};
+
+use portable_atomic::AtomicU64;
 
 #[derive(Debug)]
 pub(crate) struct AtomicInstant {

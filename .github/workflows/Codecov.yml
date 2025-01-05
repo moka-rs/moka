@@ -29,7 +29,7 @@ jobs:
           RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (no quanta feature)
-        run: cargo llvm-cov --no-report --no-default-features --features 'sync, future, atomic64'
+        run: cargo llvm-cov --no-report --no-default-features --features 'sync, future'
         env:
           RUSTFLAGS: '--cfg rustver'
 

@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.12.9"
+version = "0.12.10"
 edition = "2021"
 # Rust 1.70 was released on June 1, 2023.
 rust-version = "1.70"
@@ -16,7 +16,7 @@ exclude = [".devcontainer", ".github", ".gitpod.yml", ".vscode"]
 build = "build.rs"
 
 [features]
-default = ["atomic64", "quanta"]
+default = ["quanta"]
 
 # Enable this feature to use `moka::sync::{Cache, SegmentedCache}`
 sync = []
@@ -29,9 +29,12 @@ future = ["async-lock", "event-listener", "futures-util"]
 # callback closure.
 logging = ["log"]
 
-# This feature is enabled by default, but will be automatically disabled if the
-# target platform does not support `std::sync::atomic::AtomicU64`.
-# (e.g. `armv5te-unknown-linux-musleabi` or `mips-unknown-linux-musl`)
+# This feature is enabled by default. It will slightly speed up some cache operations
+# by using the `quanta` crate to measure time.
+quanta = ["dep:quanta"]
+
+# This is an old feature and has no effect in v0.12.10 or newer. It is kept for
+# backward compatibility and will be removed in v0.13.0.
 atomic64 = []
 
 # This unstable feature adds `GlobalDebugCounters::current` function, which returns
@@ -44,6 +47,7 @@ crossbeam-channel = "0.5.5"
 crossbeam-epoch = "0.9.9"
 crossbeam-utils = "0.8"
 parking_lot = "0.12"
+portable-atomic = "1.6"
 smallvec = "1.8"
 tagptr = "0.2"
 thiserror = "1.0"
