@@ -103,5 +103,8 @@ jobs:
       - name: Run tests (future feature, but no sync feature)
         run: cargo test --features future
 
+      - name: Run tests (release, future feature, but no sync feature)
+        run: cargo test --release --features future
+
       - name: Run tests (future, sync and logging features)
         run: cargo test --features 'future, sync, logging'
