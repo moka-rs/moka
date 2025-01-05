@@ -1,5 +1,6 @@
 use super::{cache::Cache, CacheBuilder, OwnedKeyEntrySelector, RefKeyEntrySelector};
 use crate::common::concurrent::Weigher;
+use crate::common::time::Clock;
 use crate::{
     common::HousekeeperConfig,
     notification::EvictionListener,
@@ -108,6 +109,7 @@ where
             ExpirationPolicy::default(),
             HousekeeperConfig::default(),
             false,
+            Clock::default(),
         )
     }
 
@@ -215,6 +217,7 @@ where
         expiration_policy: ExpirationPolicy<K, V>,
         housekeeper_config: HousekeeperConfig,
         invalidator_enabled: bool,
+        clock: Clock,
     ) -> Self {
         Self {
             inner: Arc::new(Inner::new(
@@ -229,6 +232,7 @@ where
                 expiration_policy,
                 housekeeper_config,
                 invalidator_enabled,
+                clock,
             )),
         }
     }
@@ -688,39 +692,11 @@ where
         }
     }
 
-    fn create_mock_expiration_clock(&self) -> MockExpirationClock {
-        let mut exp_clock = MockExpirationClock::default();
-
-        for segment in self.inner.segments.iter() {
-            let (clock, mock) = crate::common::time::Clock::mock();
-            segment.set_expiration_clock(Some(clock));
-            exp_clock.mocks.push(mock);
-        }
-
-        exp_clock
-    }
-
     fn key_locks_map_is_empty(&self) -> bool {
         self.inner
             .segments
             .iter()
             .all(|seg| seg.key_locks_map_is_empty())
-    }
-}
-
-// For unit tests.
-#[cfg(test)]
-#[derive(Default)]
-struct MockExpirationClock {
-    mocks: Vec<Arc<crate::common::time::Mock>>,
-}
-
-#[cfg(test)]
-impl MockExpirationClock {
-    fn increment(&mut self, duration: std::time::Duration) {
-        for mock in &mut self.mocks {
-            mock.increment(duration);
-        }
     }
 }
 
@@ -753,6 +729,7 @@ where
         expiration_policy: ExpirationPolicy<K, V>,
         housekeeper_config: HousekeeperConfig,
         invalidator_enabled: bool,
+        clock: Clock,
     ) -> Self {
         assert!(num_segments > 0);
 
@@ -777,6 +754,7 @@ where
                     expiration_policy.clone(),
                     housekeeper_config.clone(),
                     invalidator_enabled,
+                    clock.clone(),
                 )
             })
             .collect::<Vec<_>>();
@@ -1181,15 +1159,16 @@ mod tests {
             a1.lock().insert(k, (v, cause));
         };
 
+        let (clock, mock) = crate::common::time::Clock::mock();
+
         // Create a cache with the eviction listener.
         let mut cache = SegmentedCache::builder(SEGMENTS)
             .max_capacity(100)
             .support_invalidation_closures()
             .eviction_listener(listener)
+            .clock(clock)
             .build();
         cache.reconfigure_for_testing();
-
-        let mut mock = cache.create_mock_expiration_clock();
 
         // Make the cache exterior immutable.
         let cache = cache;

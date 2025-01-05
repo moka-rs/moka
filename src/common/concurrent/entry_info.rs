@@ -1,7 +1,7 @@
 use std::sync::atomic::{self, AtomicBool, AtomicU16, AtomicU32, Ordering};
 
 use super::{AccessTime, KeyHash};
-use crate::common::{concurrent::atomic_time::AtomicInstant, time::Instant};
+use crate::common::time::{AtomicInstant, Instant};
 
 #[derive(Debug)]
 pub(crate) struct EntryInfo<K> {
@@ -191,7 +191,6 @@ mod test {
         // e.g. "1.64"
         let ver =
             option_env!("RUSTC_SEMVER").expect("RUSTC_SEMVER env var was not set at compile time");
-        let is_quanta_enabled = cfg!(feature = "quanta");
         let arch = if cfg!(target_os = "linux") {
             if cfg!(target_pointer_width = "64") {
                 Linux64
@@ -214,14 +213,10 @@ mod test {
             panic!("Unsupported target architecture");
         };
 
-        let expected_sizes = match (arch, is_quanta_enabled) {
-            (Linux64 | Linux32Arm | Linux32Mips, true) => vec![("1.51", 56)],
-            (Linux32X86, true) => vec![("1.51", 48)],
-            (MacOS64, true) => vec![("1.62", 56)],
-            (Linux64, false) => vec![("1.66", 104), ("1.60", 128)],
-            (Linux32X86, false) => unimplemented!(),
-            (Linux32Arm | Linux32Mips, false) => vec![("1.66", 104), ("1.62", 128), ("1.60", 80)],
-            (MacOS64, false) => vec![("1.62", 104)],
+        let expected_sizes = match arch {
+            Linux64 | Linux32Arm | Linux32Mips => vec![("1.51", 56)],
+            Linux32X86 => vec![("1.51", 48)],
+            MacOS64 => vec![("1.62", 56)],
         };
 
         let mut expected = None;

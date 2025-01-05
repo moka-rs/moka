@@ -1,9 +1,8 @@
 use crate::common::{
-    concurrent::{
-        atomic_time::AtomicInstant,
-        constants::{LOG_SYNC_INTERVAL_MILLIS, READ_LOG_FLUSH_POINT, WRITE_LOG_FLUSH_POINT},
+    concurrent::constants::{
+        LOG_SYNC_INTERVAL_MILLIS, READ_LOG_FLUSH_POINT, WRITE_LOG_FLUSH_POINT,
     },
-    time::{CheckedTimeOps, Instant},
+    time::{AtomicInstant, Instant},
     HousekeeperConfig,
 };
 
@@ -55,7 +54,11 @@ pub(crate) struct Housekeeper {
 }
 
 impl Housekeeper {
-    pub(crate) fn new(is_eviction_listener_enabled: bool, config: HousekeeperConfig) -> Self {
+    pub(crate) fn new(
+        is_eviction_listener_enabled: bool,
+        config: HousekeeperConfig,
+        now: Instant,
+    ) -> Self {
         let (more_entries_to_evict, maintenance_task_timeout) = if is_eviction_listener_enabled {
             (
                 Some(AtomicBool::new(false)),
@@ -67,7 +70,7 @@ impl Housekeeper {
 
         Self {
             current_task: Mutex::default(),
-            run_after: AtomicInstant::new(Self::sync_after(Instant::now())),
+            run_after: AtomicInstant::new(Self::sync_after(now)),
             more_entries_to_evict,
             maintenance_task_timeout,
             max_log_sync_repeats: config.max_log_sync_repeats,
@@ -159,7 +162,7 @@ impl Housekeeper {
     {
         use futures_util::FutureExt;
 
-        let now = cache.current_time_from_expiration_clock();
+        let now = cache.current_time();
         let more_to_evict;
         // Async Cancellation Safety: Our maintenance task is cancellable as we save
         // it in the lock. If it is canceled, we will resume it in the next run.
@@ -200,10 +203,7 @@ impl Housekeeper {
 
     fn sync_after(now: Instant) -> Instant {
         let dur = Duration::from_millis(LOG_SYNC_INTERVAL_MILLIS);
-        let ts = now.checked_add(dur);
-        // Assuming that `now` is current wall clock time, this should never fail at
-        // least next millions of years.
-        ts.expect("Timestamp overflow")
+        now.saturating_add(dur)
     }
 }
 
@@ -211,9 +211,5 @@ impl Housekeeper {
 impl Housekeeper {
     pub(crate) fn disable_auto_run(&self) {
         self.auto_run_enabled.store(false, Ordering::Relaxed);
-    }
-
-    pub(crate) fn reset_run_after(&self, now: Instant) {
-        self.run_after.set_instant(Self::sync_after(now));
     }
 }

@@ -12,13 +12,6 @@ pub(crate) mod entry_info;
 #[cfg(feature = "sync")]
 pub(crate) mod housekeeper;
 
-#[cfg_attr(feature = "quanta", path = "concurrent/atomic_time/atomic_time.rs")]
-#[cfg_attr(
-    not(feature = "quanta"),
-    path = "concurrent/atomic_time/atomic_time_compat.rs"
-)]
-pub(crate) mod atomic_time;
-
 #[cfg(feature = "unstable-debug-counters")]
 pub(crate) mod debug_counters;
 
