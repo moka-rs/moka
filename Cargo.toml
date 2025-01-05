@@ -29,7 +29,7 @@ future = ["async-lock", "event-listener", "futures-util"]
 # callback closure.
 logging = ["log"]
 
-# Enable this feature to use `quanta::Instant` in some performance critical
+# Enable this feature to use `quanta::Instant` for some performance critical
 # operations in the cache instead of `std::time::Instant`. As of v0.12.10, this
 # feature will not make any noticeable performance difference, but in the future
 # when cache metrics are added, it will be useful to have this feature enabled.

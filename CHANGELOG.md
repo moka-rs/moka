@@ -4,13 +4,22 @@
 
 ### Changed
 
+- Disable the `quanta` feature by default. ([#482][gh-pull-0482])
 - Replaced most uses of `quanta::Instant` with `std::time::Instant` to increase the
-  accuracy of time measurements. ([#481][gh-pull-0481])
-- Switched to `AtomicU64` of `portable-atomic` crate for the platforms where
-  `AtomicU64` is not available in `std`. ([#480][gh-pull-0480])
+  accuracy of time measurements ([#481][gh-pull-0481]):
+    - When `quanta` feature is enabled, `quanta::Instant` is used for some
+      performance critical parts in the cache, and `std::time::Instant` is used for
+      the rest of the parts.
+    - However, as of this version, enabling the `quanta` feature will not make any
+      noticeable difference in the performance.
+    - When `quanta` feature is disabled (default), `std::time::Instant` is used for
+      all time measurements.
+- Switched to `AtomicU64` of the `portable-atomic` crate, which provides fallback
+  implementations for platforms where `std` `AtomicU64` is not available
+  ([#480][gh-pull-0480]):
     - `moka`'s `atomic64` feature no longer has any effect on the build as
-      `AtomicU64` is now always used. But the feature is kept for backward
-      compatibility.
+      `AtomicU64` is now always available on all platforms. But we keep the
+      `atomic64` feature in `Cargo.toml` for backward compatibility.
 
 
 ## Version 0.12.9
@@ -950,6 +959,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0482]: https://github.com/moka-rs/moka/pull/482/
 [gh-pull-0481]: https://github.com/moka-rs/moka/pull/481/
 [gh-pull-0480]: https://github.com/moka-rs/moka/pull/480/
 [gh-pull-0474]: https://github.com/moka-rs/moka/pull/474/
