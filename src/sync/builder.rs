@@ -1,6 +1,6 @@
 use super::{Cache, SegmentedCache};
 use crate::{
-    common::{builder_utils, concurrent::Weigher, HousekeeperConfig},
+    common::{builder_utils, concurrent::Weigher, time::Clock, HousekeeperConfig},
     notification::{EvictionListener, RemovalCause},
     policy::{EvictionPolicy, ExpirationPolicy},
     Expiry,
@@ -58,6 +58,7 @@ pub struct CacheBuilder<K, V, C> {
     expiration_policy: ExpirationPolicy<K, V>,
     housekeeper_config: HousekeeperConfig,
     invalidator_enabled: bool,
+    clock: Clock,
     cache_type: PhantomData<C>,
 }
 
@@ -78,6 +79,7 @@ where
             expiration_policy: ExpirationPolicy::default(),
             housekeeper_config: HousekeeperConfig::default(),
             invalidator_enabled: false,
+            clock: Clock::default(),
             cache_type: PhantomData,
         }
     }
@@ -119,6 +121,7 @@ where
             expiration_policy: self.expiration_policy,
             housekeeper_config: self.housekeeper_config,
             invalidator_enabled: self.invalidator_enabled,
+            clock: self.clock,
             cache_type: PhantomData,
         }
     }
@@ -148,6 +151,7 @@ where
             self.expiration_policy,
             self.housekeeper_config,
             self.invalidator_enabled,
+            self.clock,
         )
     }
 
@@ -236,6 +240,7 @@ where
             self.expiration_policy,
             self.housekeeper_config,
             self.invalidator_enabled,
+            self.clock,
         )
     }
 }
@@ -271,6 +276,7 @@ where
             self.expiration_policy,
             self.housekeeper_config,
             self.invalidator_enabled,
+            self.clock,
         )
     }
 
@@ -361,6 +367,7 @@ where
             self.expiration_policy,
             self.housekeeper_config,
             self.invalidator_enabled,
+            self.clock,
         )
     }
 }
@@ -489,6 +496,11 @@ impl<K, V, C> CacheBuilder<K, V, C> {
             housekeeper_config: conf,
             ..self
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn clock(self, clock: Clock) -> Self {
+        Self { clock, ..self }
     }
 
     /// Enables support for [`Cache::invalidate_entries_if`][cache-invalidate-if]

@@ -7,7 +7,7 @@ use crate::{
         concurrent::{
             constants::WRITE_RETRY_INTERVAL_MICROS, housekeeper::InnerSync, Weigher, WriteOp,
         },
-        time::Instant,
+        time::{Clock, Instant},
         HousekeeperConfig,
     },
     notification::EvictionListener,
@@ -711,6 +711,7 @@ where
             ExpirationPolicy::default(),
             HousekeeperConfig::default(),
             false,
+            Clock::default(),
         )
     }
 
@@ -742,6 +743,7 @@ where
         expiration_policy: ExpirationPolicy<K, V>,
         housekeeper_config: HousekeeperConfig,
         invalidator_enabled: bool,
+        clock: Clock,
     ) -> Self {
         Self {
             base: BaseCache::new(
@@ -755,6 +757,7 @@ where
                 expiration_policy,
                 housekeeper_config,
                 invalidator_enabled,
+                clock,
             ),
             value_initializer: Arc::new(ValueInitializer::with_hasher(build_hasher)),
         }
@@ -1616,7 +1619,7 @@ where
         match self.base.remove_entry(key, hash) {
             None => None,
             Some(kv) => {
-                let now = self.base.current_time_from_expiration_clock();
+                let now = self.base.current_time();
 
                 let info = kv.entry.entry_info();
                 let entry_gen = info.incr_entry_gen();
@@ -1884,10 +1887,6 @@ where
 
     pub(crate) fn reconfigure_for_testing(&mut self) {
         self.base.reconfigure_for_testing();
-    }
-
-    pub(crate) fn set_expiration_clock(&self, clock: Option<crate::common::time::Clock>) {
-        self.base.set_expiration_clock(clock);
     }
 
     pub(crate) fn key_locks_map_is_empty(&self) -> bool {
@@ -2332,16 +2331,16 @@ mod tests {
         let a1 = Arc::clone(&actual);
         let listener = move |k, v, cause| a1.lock().push((k, v, cause));
 
+        let (clock, mock) = Clock::mock();
+
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
             .support_invalidation_closures()
             .eviction_listener(listener)
+            .clock(clock)
             .build();
         cache.reconfigure_for_testing();
-
-        let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
 
         // Make the cache exterior immutable.
         let cache = cache;
@@ -2430,16 +2429,16 @@ mod tests {
         let a1 = Arc::clone(&actual);
         let listener = move |k, v, cause| a1.lock().push((k, v, cause));
 
+        let (clock, mock) = Clock::mock();
+
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
             .time_to_live(Duration::from_secs(10))
             .eviction_listener(listener)
+            .clock(clock)
             .build();
         cache.reconfigure_for_testing();
-
-        let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
 
         // Make the cache exterior immutable.
         let cache = cache;
@@ -2512,16 +2511,16 @@ mod tests {
         let a1 = Arc::clone(&actual);
         let listener = move |k, v, cause| a1.lock().push((k, v, cause));
 
+        let (clock, mock) = Clock::mock();
+
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
             .time_to_idle(Duration::from_secs(10))
             .eviction_listener(listener)
+            .clock(clock)
             .build();
         cache.reconfigure_for_testing();
-
-        let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
 
         // Make the cache exterior immutable.
         let cache = cache;
@@ -2584,14 +2583,13 @@ mod tests {
     // https://github.com/moka-rs/moka/issues/359
     #[test]
     fn ensure_access_time_is_updated_immediately_after_read() {
+        let (clock, mock) = Clock::mock();
         let mut cache = Cache::builder()
             .max_capacity(10)
             .time_to_idle(Duration::from_secs(5))
+            .clock(clock)
             .build();
         cache.reconfigure_for_testing();
-
-        let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
 
         // Make the cache exterior immutable.
         let cache = cache;
@@ -2655,16 +2653,16 @@ mod tests {
         let a1 = Arc::clone(&actual);
         let listener = move |k, v, cause| a1.lock().push((k, v, cause));
 
+        let (clock, mock) = Clock::mock();
+
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
             .expire_after(expiry)
             .eviction_listener(listener)
+            .clock(clock)
             .build();
         cache.reconfigure_for_testing();
-
-        let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
 
         // Make the cache exterior immutable.
         let cache = cache;
@@ -2770,16 +2768,16 @@ mod tests {
         let a1 = Arc::clone(&actual);
         let listener = move |k, v, cause| a1.lock().push((k, v, cause));
 
+        let (clock, mock) = Clock::mock();
+
         // Create a cache with the eviction listener.
         let mut cache = Cache::builder()
             .max_capacity(100)
             .expire_after(expiry)
             .eviction_listener(listener)
+            .clock(clock)
             .build();
         cache.reconfigure_for_testing();
-
-        let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
 
         // Make the cache exterior immutable.
         let cache = cache;
@@ -2927,12 +2925,12 @@ mod tests {
     // https://github.com/moka-rs/moka/issues/345
     #[test]
     fn test_race_between_updating_entry_and_processing_its_write_ops() {
+        let (clock, mock) = Clock::mock();
         let cache = Cache::builder()
             .max_capacity(2)
             .time_to_idle(Duration::from_secs(1))
+            .clock(clock)
             .build();
-        let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
 
         cache.insert("a", "alice");
         cache.insert("b", "bob");
@@ -4550,16 +4548,16 @@ mod tests {
         let a1 = Arc::clone(&actual);
         let listener = move |k, v, cause| a1.lock().push((k, v, cause));
 
+        let (clock, mock) = Clock::mock();
+
         // Create a cache with the eviction listener and also TTL and TTI.
         let mut cache = Cache::builder()
             .eviction_listener(listener)
             .time_to_live(Duration::from_secs(7))
             .time_to_idle(Duration::from_secs(5))
+            .clock(clock)
             .build();
         cache.reconfigure_for_testing();
-
-        let (clock, mock) = Clock::mock();
-        cache.set_expiration_clock(Some(clock));
 
         // Make the cache exterior immutable.
         let cache = cache;
@@ -4883,9 +4881,9 @@ mod tests {
             .eviction_policy(EvictionPolicy::lru())
             .eviction_listener(listener)
             .housekeeper_config(hk_conf)
+            .clock(clock)
             .build();
         cache.reconfigure_for_testing();
-        cache.set_expiration_clock(Some(clock));
 
         // Make the cache exterior immutable.
         let cache = cache;

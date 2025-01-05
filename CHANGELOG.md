@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Replaced most uses of `quanta::Instant` with `std::time::Instant` to increase the
+  accuracy of time measurements. ([#481][gh-pull-0481])
 - Switched to `AtomicU64` of `portable-atomic` crate for the platforms where
   `AtomicU64` is not available in `std`. ([#480][gh-pull-0480])
     - `moka`'s `atomic64` feature no longer has any effect on the build as
@@ -948,6 +950,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0481]: https://github.com/moka-rs/moka/pull/481/
 [gh-pull-0480]: https://github.com/moka-rs/moka/pull/480/
 [gh-pull-0474]: https://github.com/moka-rs/moka/pull/474/
 [gh-pull-0466]: https://github.com/moka-rs/moka/pull/466/

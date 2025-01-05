@@ -1,10 +1,7 @@
 use super::constants::LOG_SYNC_INTERVAL_MILLIS;
 
-use super::{
-    atomic_time::AtomicInstant,
-    constants::{READ_LOG_FLUSH_POINT, WRITE_LOG_FLUSH_POINT},
-};
-use crate::common::time::{CheckedTimeOps, Instant};
+use super::constants::{READ_LOG_FLUSH_POINT, WRITE_LOG_FLUSH_POINT};
+use crate::common::time::{AtomicInstant, Instant};
 use crate::common::HousekeeperConfig;
 
 use parking_lot::{Mutex, MutexGuard};
@@ -52,7 +49,11 @@ pub(crate) struct Housekeeper {
 }
 
 impl Housekeeper {
-    pub(crate) fn new(is_eviction_listener_enabled: bool, config: HousekeeperConfig) -> Self {
+    pub(crate) fn new(
+        is_eviction_listener_enabled: bool,
+        config: HousekeeperConfig,
+        now: Instant,
+    ) -> Self {
         let (more_entries_to_evict, maintenance_task_timeout) = if is_eviction_listener_enabled {
             (
                 Some(AtomicBool::new(false)),
@@ -64,7 +65,7 @@ impl Housekeeper {
 
         Self {
             run_lock: Mutex::default(),
-            run_after: AtomicInstant::new(Self::sync_after(Instant::now())),
+            run_after: AtomicInstant::new(Self::sync_after(now)),
             more_entries_to_evict,
             maintenance_task_timeout,
             max_log_sync_repeats: config.max_log_sync_repeats,
@@ -127,10 +128,7 @@ impl Housekeeper {
 
     fn sync_after(now: Instant) -> Instant {
         let dur = Duration::from_millis(LOG_SYNC_INTERVAL_MILLIS);
-        let ts = now.checked_add(dur);
-        // Assuming that `now` is current wall clock time, this should never fail at
-        // least next millions of years.
-        ts.expect("Timestamp overflow")
+        now.saturating_add(dur)
     }
 }
 
@@ -138,9 +136,5 @@ impl Housekeeper {
 impl Housekeeper {
     pub(crate) fn disable_auto_run(&self) {
         self.auto_run_enabled.store(false, Ordering::Relaxed);
-    }
-
-    pub(crate) fn reset_run_after(&self, now: Instant) {
-        self.run_after.set_instant(Self::sync_after(now));
     }
 }

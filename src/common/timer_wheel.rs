@@ -16,7 +16,7 @@ use std::{ptr::NonNull, time::Duration};
 use super::{
     concurrent::{arc::MiniArc, entry_info::EntryInfo, DeqNodes},
     deque::{DeqNode, Deque},
-    time::{CheckedTimeOps, Instant},
+    time::Instant,
 };
 
 use parking_lot::Mutex;
@@ -173,12 +173,6 @@ impl<K> TimerWheel<K> {
             origin: now,
             current: now,
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_origin(&mut self, time: Instant) {
-        self.origin = time;
-        self.current = time;
     }
 
     pub(crate) fn is_enabled(&self) -> bool {
@@ -354,12 +348,10 @@ impl<K> TimerWheel<K> {
     // Returns nano-seconds between the given `time` and the time when this timer
     // wheel was advanced. If the `time` is earlier than other, returns zero.
     fn duration_nanos_since_last_advanced(&self, time: Instant) -> u64 {
-        time.checked_duration_since(self.current)
-            // If `time` is earlier than `self.current`, use zero. This could happen
-            // when a user provided `Expiry` method returned zero or a very short
-            // duration.
-            .unwrap_or_default() // Assuming `Duration::default()` returns `ZERO`.
-            .as_nanos() as u64
+        // If `time` is earlier than `self.current`, use zero. This could happen
+        // when a user provided `Expiry` method returned zero or a very short
+        // duration.
+        time.saturating_duration_since(self.current).as_nanos() as u64
     }
 
     // Returns nano-seconds between the given `time` and `self.origin`, the time when
@@ -371,12 +363,11 @@ impl<K> TimerWheel<K> {
     //
     fn time_nanos(&self, time: Instant) -> u64 {
         let nanos_u128 = time
-            .checked_duration_since(self.origin)
             // If `time` is earlier than `self.origin`, use zero. This would never
             // happen in practice as there should be some delay between the timer
             // wheel was created and the first timer event is scheduled. But we will
             // do this just in case.
-            .unwrap_or_default() // Assuming `Duration::default()` returns `ZERO`.
+            .saturating_duration_since(self.origin)
             .as_nanos();
 
         // Convert an `u128` into an `u64`. If the value is too large, use `u64::MAX`
@@ -560,18 +551,18 @@ mod tests {
     use super::{TimerEvent, TimerWheel, SPANS};
     use crate::common::{
         concurrent::{arc::MiniArc, entry_info::EntryInfo, KeyHash},
-        time::{CheckedTimeOps, Clock, Instant, Mock},
+        time::{Clock, Instant, Mock},
     };
 
     #[test]
     fn test_bucket_indices() {
         fn bi(timer: &TimerWheel<()>, now: Instant, dur: Duration) -> (usize, usize) {
-            let t = now.checked_add(dur).unwrap();
+            let t = now.saturating_add(dur);
             timer.bucket_indices(t)
         }
 
         let (clock, mock) = Clock::mock();
-        let now = now(&clock);
+        let now = clock.now();
 
         let mut timer = TimerWheel::<()>::new(now);
         timer.enable();
@@ -652,7 +643,7 @@ mod tests {
             let key_hash = KeyHash::new(Arc::new(key), hash);
             let policy_weight = 0;
             let entry_info = MiniArc::new(EntryInfo::new(key_hash, now, policy_weight));
-            entry_info.set_expiration_time(Some(now.checked_add(ttl).unwrap()));
+            entry_info.set_expiration_time(Some(now.saturating_add(ttl)));
             let deq_nodes = Default::default();
             let timer_node = timer.schedule(entry_info, MiniArc::clone(&deq_nodes));
             deq_nodes.lock().set_timer_node(timer_node);
@@ -794,13 +785,9 @@ mod tests {
     // Utility functions
     //
 
-    fn now(clock: &Clock) -> Instant {
-        Instant::new(clock.now())
-    }
-
     fn advance_clock(clock: &Clock, mock: &Arc<Mock>, duration: Duration) -> Instant {
         mock.increment(duration);
-        now(clock)
+        clock.now()
     }
 
     /// Convert nano-seconds to duration.
