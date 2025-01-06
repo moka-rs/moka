@@ -160,8 +160,6 @@ The following platforms are tested on CI:
 
 - Linux 64-bit (x86_64, arm aarch64)
 - Linux 32-bit (i646, armv7, armv5, mips)
-    - If you get compile errors on 32-bit platforms, see
-      [troubleshooting](#compile-errors-on-some-32-bit-platforms).
 
 The following platforms are not tested on CI but should work:
 
