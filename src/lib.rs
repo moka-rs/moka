@@ -131,8 +131,8 @@
 //!
 //! | Feature  | MSRV                       |
 //! |:---------|:--------------------------:|
-//! | `future` | Rust 1.70.0 (June 3, 2022) |
-//! | `sync`   | Rust 1.70.0 (June 3, 2022) |
+//! | `future` | Rust 1.70.0 (June 1, 2023) |
+//! | `sync`   | Rust 1.70.0 (June 1, 2023) |
 //!
 //! It will keep a rolling MSRV policy of at least 6 months. If the default features
 //! with a mandatory features (`future` or `sync`) are enabled, MSRV will be updated
