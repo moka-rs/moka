@@ -120,7 +120,8 @@ impl FrequencySketch {
         let mut frequency = u8::MAX;
         for i in 0..4 {
             let index = self.index_of(hash, i);
-            let count = (self.table[index] >> ((start + i) << 2) & 0xF) as u8;
+            let shift = (start + i) << 2;
+            let count = ((self.table[index] >> shift) & 0xF) as u8;
             frequency = frequency.min(count);
         }
         frequency
