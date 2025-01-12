@@ -1,4 +1,4 @@
-name: CI
+name: Loom
 
 on:
   push:

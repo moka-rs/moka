@@ -126,7 +126,12 @@ impl Clock {
             #[cfg(test)]
             ClockType::Mocked { mock } => {
                 let duration = Duration::from_nanos(instant.as_nanos());
-                mock.origin + duration
+                // https://github.com/moka-rs/moka/issues/487
+                //
+                // This `dbg!` will workaround an incorrect compilation by Rust
+                // 1.84.0 for the armv7-unknown-linux-musleabihf target in the
+                // release build of the tests.
+                dbg!(mock.origin + duration)
             }
         }
     }
