@@ -516,7 +516,7 @@ You can fix these compilation errors by one of the following:
 
 1. (Recommended) Upgrade Moka to v0.12.10 or later. (`cargo update -p moka`)
 2. Or, keep using Moka v0.12.9 or earlier but disable the default features in
-   `Cargo.toml`.
+   `Cargo.toml`. (`default-features = false`)
     - The default features include the `atomic64` feature, which need to be disabled.
 
 These error messages are caused by the absence of `std::sync::atomic::AtomicU64` on
