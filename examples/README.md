@@ -60,6 +60,17 @@ existence of the entry.
     - Demonstrates when the expired entries will be actually evicted from the cache,
       and why the `run_pending_tasks` method could be important in some cases.
 
+- [jittered_expiry_policy_sync](./jittered_expiry_policy_sync.rs)
+    - Implements a jittered expiry policy for a cache.
+    - The `JitteredExpiry` struct is a custom expiry policy that adds jitter to the
+      base expiry duration.
+        - It implements the `moka::Expiry` trait and calculates the expiry duration
+          after a write or read operation.
+        - The jitter is randomly generated and added to or subtracted from the base
+          expiry duration.
+    - This example uses the `moka::sync::Cache` type, but The same expiry policy can
+      be used with the `moka::future::Cache`.
+
 - [cascading_drop_async](./cascading_drop_async.rs)
     - Controls the lifetime of the objects in a separate `BTreeMap` collection from
       the cache using an eviction listener.
