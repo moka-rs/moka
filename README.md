@@ -6,7 +6,6 @@
 [![dependency status][deps-rs-badge]][deps-rs]
 [![codecov][codecov-badge]][codecov]
 [![license][license-badge]](#license)
-[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_shield)
 
 > **note**
 > `v0.12.0` had major breaking changes on the API and internal behavior. Please read
@@ -29,14 +28,12 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 [deps-rs-badge]: https://deps.rs/repo/github/moka-rs/moka/status.svg
 [codecov-badge]: https://codecov.io/gh/moka-rs/moka/graph/badge.svg?token=7GYZNS7O67
 [license-badge]: https://img.shields.io/crates/l/moka.svg
-[fossa-badge]: https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=shield
 
 [gh-actions]: https://github.com/moka-rs/moka/actions?query=workflow%3ACI
 [crate]: https://crates.io/crates/moka
 [docs]: https://docs.rs/moka
 [deps-rs]: https://deps.rs/repo/github/moka-rs/moka
 [codecov]: https://codecov.io/gh/moka-rs/moka
-[fossa]: https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_shield
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 
@@ -143,6 +140,8 @@ routers. Here are some highlights:
     - [Size Aware Eviction](#example-size-aware-eviction)
 - [Expiration Policies](#expiration-policies)
 - [Minimum Supported Rust Versions](#minimum-supported-rust-versions)
+- Troubleshooting
+    - [Compile Errors on Some 32-bit Platforms](#compile-errors-on-some-32-bit-platforms)
 - [Developing Moka](#developing-moka)
 - [Road Map](#road-map)
 - [About the Name](#about-the-name)
@@ -160,6 +159,8 @@ The following platforms are tested on CI:
 
 - Linux 64-bit (x86_64, arm aarch64)
 - Linux 32-bit (i646, armv7, armv5, mips)
+    - If you get compile errors on 32-bit platforms, see
+      [troubleshooting](#compile-errors-on-some-32-bit-platforms).
 
 The following platforms are not tested on CI but should work:
 
@@ -478,6 +479,50 @@ In both cases, increasing MSRV is _not_ considered a semver-breaking change.
 <!--
 - quanta v0.12.4 requires 1.70.0.
 -->
+
+## Troubleshooting
+
+### Compile Errors on Some 32-bit Platforms
+
+#### Symptoms
+
+When using Moka v0.12.9 or earlier on some 32-bit platforms, you may get compile
+errors:
+
+```console
+error[E0432]: unresolved import `std::sync::atomic::AtomicU64`
+  --> ... /moka-0.5.3/src/sync.rs:10:30
+   |
+10 |         atomic::{AtomicBool, AtomicU64, Ordering},
+   |                              ^^^^^^^^^
+   |                              |
+   |                              no `AtomicU64` in `sync::atomic`
+```
+
+or
+
+```console
+error[E0583]: file not found for module `atomic_time`
+  --> ... /moka-0.12.9/src/common/concurrent.rs:23:1
+   |
+23 | pub(crate) mod atomic_time;
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+```
+
+#### How to Fix
+
+You can fix these compilation errors by one of the following:
+
+1. (Recommended) Upgrade Moka to v0.12.10 or later. (`cargo update -p moka`)
+2. Or, keep using Moka v0.12.9 or earlier but disable the default features in
+   `Cargo.toml`. (`default-features = false`)
+    - The default features include the `atomic64` feature, which need to be disabled.
+
+These error messages are caused by the absence of `std::sync::atomic::AtomicU64` on
+some 32-bit platforms. Moka v0.12.10 and later will automatically use a fallback
+implementation when `AtomicU64` is not available. With v0.12.9 and earlier, you must
+manually disable the `atomic64` feature to use the fallback implementation.
 
 ## Developing Moka
 
