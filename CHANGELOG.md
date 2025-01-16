@@ -1,5 +1,13 @@
 # Moka Cache &mdash; Change Log
 
+## Version 0.12.11
+
+### Added
+
+- Support `Equivalent` trait for the key type `K` of the caches.
+  ([#492][gh-pull-0492])
+
+
 ## Version 0.12.10
 
 ### Changed
@@ -959,6 +967,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0492]: https://github.com/moka-rs/moka/pull/492/
 [gh-pull-0482]: https://github.com/moka-rs/moka/pull/482/
 [gh-pull-0481]: https://github.com/moka-rs/moka/pull/481/
 [gh-pull-0480]: https://github.com/moka-rs/moka/pull/480/
