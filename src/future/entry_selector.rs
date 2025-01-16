@@ -1,9 +1,10 @@
+use equivalent::Equivalent;
+
 use crate::{ops::compute, Entry};
 
 use super::Cache;
 
 use std::{
-    borrow::Borrow,
     future::Future,
     hash::{BuildHasher, Hash},
     sync::Arc,
@@ -681,8 +682,8 @@ where
 
 impl<'a, K, Q, V, S> RefKeyEntrySelector<'a, K, Q, V, S>
 where
-    K: Borrow<Q> + Hash + Eq + Send + Sync + 'static,
-    Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+    K: Hash + Eq + Send + Sync + 'static,
+    Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {

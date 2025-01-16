@@ -38,13 +38,13 @@ use crate::cht::map::{
 use super::iter::{Iter, ScanningGet};
 
 use std::{
-    borrow::Borrow,
     hash::{BuildHasher, Hash},
     ptr,
     sync::atomic::{self, AtomicUsize, Ordering},
 };
 
 use crossbeam_epoch::Atomic;
+use equivalent::Equivalent;
 
 /// A lock-free hash map implemented with segmented bucket pointer arrays, open
 /// addressing, and linear probing.
@@ -500,8 +500,7 @@ impl<K: Hash + Eq, V, S: BuildHasher> HashMap<K, V, S> {
     #[inline]
     pub(crate) fn hash<Q>(&self, key: &Q) -> u64
     where
-        Q: Hash + Eq + ?Sized,
-        K: Borrow<Q>,
+        Q: Equivalent<K> + Hash + ?Sized,
     {
         bucket::hash(&self.build_hasher, key)
     }

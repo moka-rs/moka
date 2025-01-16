@@ -228,7 +228,7 @@ where
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
         let maybe_entry = cache
             .base
-            .get_with_hash_and_ignore_if(&c_key, c_hash, ignore_if, true);
+            .get_with_hash_and_ignore_if(&*c_key, c_hash, ignore_if, true);
         let maybe_value = if allow_nop {
             maybe_entry.as_ref().map(|ent| ent.value().clone())
         } else {
@@ -286,7 +286,7 @@ where
                 }
             }
             Op::Remove => {
-                let maybe_prev_v = cache.invalidate_with_hash(&c_key, c_hash, true);
+                let maybe_prev_v = cache.invalidate_with_hash(&*c_key, c_hash, true);
                 if let Some(prev_v) = maybe_prev_v {
                     crossbeam_epoch::pin().flush();
                     let entry = Entry::new(Some(c_key), prev_v, false, false);

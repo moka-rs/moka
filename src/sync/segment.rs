@@ -1,3 +1,5 @@
+use equivalent::Equivalent;
+
 use super::{cache::Cache, CacheBuilder, OwnedKeyEntrySelector, RefKeyEntrySelector};
 use crate::common::concurrent::Weigher;
 use crate::common::time::Clock;
@@ -10,7 +12,6 @@ use crate::{
 };
 
 use std::{
-    borrow::Borrow,
     collections::hash_map::RandomState,
     fmt,
     hash::{BuildHasher, Hash, Hasher},
@@ -248,8 +249,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Equivalent<K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         self.inner.select(hash).contains_key_with_hash(key, hash)
@@ -267,8 +267,7 @@ where
     /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
     pub fn get<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Equivalent<K> + Hash + Eq + ?Sized,
     {
         let hash = self.inner.hash(key);
         self.inner
@@ -288,8 +287,7 @@ where
 
     pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
     where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         let cache = self.inner.select(hash);
@@ -340,8 +338,7 @@ where
     /// cache, the key will be cloned to create new entry in the cache.
     pub fn get_with_by_ref<Q>(&self, key: &Q, init: impl FnOnce() -> V) -> V
     where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         let replace_if = None as Option<fn(&V) -> bool>;
@@ -405,8 +402,7 @@ where
     pub fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
     where
         F: FnOnce() -> Option<V>,
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         self.inner
@@ -451,8 +447,7 @@ where
     where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         self.inner
@@ -479,8 +474,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn invalidate<Q>(&self, key: &Q)
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Equivalent<K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         self.inner
@@ -497,8 +491,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn remove<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Equivalent<K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         self.inner
@@ -762,8 +755,7 @@ where
     #[inline]
     fn hash<Q>(&self, key: &Q) -> u64
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Equivalent<K> + Hash + ?Sized,
     {
         let mut hasher = self.build_hasher.build_hasher();
         key.hash(&mut hasher);
