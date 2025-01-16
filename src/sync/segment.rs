@@ -143,8 +143,8 @@ impl<K, V, S> SegmentedCache<K, V, S> {
     ///
     /// The value returned is _an estimate_; the actual count may differ if there are
     /// concurrent insertions or removals, or if some entries are pending removal due
-    /// to expiration. This inaccuracy can be mitigated by performing a `sync()`
-    /// first.
+    /// to expiration. This inaccuracy can be mitigated by performing a
+    /// `run_pending_tasks` first.
     ///
     /// # Example
     ///
@@ -184,8 +184,9 @@ impl<K, V, S> SegmentedCache<K, V, S> {
     ///
     /// The value returned is _an estimate_; the actual size may differ if there are
     /// concurrent insertions or removals, or if some entries are pending removal due
-    /// to expiration. This inaccuracy can be mitigated by performing a `sync()`
-    /// first. See [`entry_count`](#method.entry_count) for a sample code.
+    /// to expiration. This inaccuracy can be mitigated by performing a
+    /// `run_pending_tasks` first. See [`entry_count`](#method.entry_count) for a
+    /// sample code.
     pub fn weighted_size(&self) -> u64 {
         self.inner
             .segments
@@ -634,15 +635,6 @@ where
             segment.run_pending_tasks();
         }
     }
-
-    // /// This is used by unit tests to get consistent result.
-    // #[cfg(test)]
-    // pub(crate) fn reconfigure_for_testing(&mut self) {
-    //     // Stop the housekeeping job that may cause sync() method to return earlier.
-    //     for segment in self.inner.segments.iter_mut() {
-    //         segment.reconfigure_for_testing()
-    //     }
-    // }
 }
 
 impl<'a, K, V, S> IntoIterator for &'a SegmentedCache<K, V, S>

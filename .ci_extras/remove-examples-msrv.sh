@@ -4,7 +4,7 @@
 
 set -eux
 
-function disable_example_sync() {
+function disable_example() {
     local example_name="$1"
 
     mv ./examples/${example_name}.rs ./examples/${example_name}.rs.bak
@@ -18,4 +18,4 @@ EOF
 }
 
 # `OnceLock` was introduced in 1.70.0.
-# disable_example_sync reinsert_expired_entries_sync
+# disable_example reinsert_expired_entries_sync
