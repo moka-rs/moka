@@ -237,7 +237,7 @@ compile_error!(
 );
 
 // Reexport(s)
-pub use equivalent;
+pub use equivalent::Equivalent;
 
 #[cfg(feature = "future")]
 #[cfg_attr(docsrs, doc(cfg(feature = "future")))]
