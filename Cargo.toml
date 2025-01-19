@@ -1,6 +1,6 @@
 [package]
 name = "moka"
-version = "0.12.10"
+version = "0.12.11"
 edition = "2021"
 # Rust 1.70 was released on June 1, 2023.
 rust-version = "1.70"
@@ -48,6 +48,7 @@ unstable-debug-counters = ["future", "once_cell"]
 crossbeam-channel = "0.5.5"
 crossbeam-epoch = "0.9.9"
 crossbeam-utils = "0.8"
+equivalent = "1.0"
 parking_lot = "0.12"
 portable-atomic = "1.6"
 smallvec = "1.8"
@@ -55,7 +56,7 @@ tagptr = "0.2"
 thiserror = "1.0"
 uuid = { version = "1.1", features = ["v4"] }
 
-# Optional dependencies (enabled by default)
+# Optional dependencies (quanta)
 quanta = { version = "0.12.2", optional = true }
 
 # Optional dependencies (future)

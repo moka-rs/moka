@@ -223,7 +223,7 @@ where
         // Check if the value has already been inserted by other thread.
         if let Some(value) = cache
             .base
-            .get_with_hash(c_key, c_hash, ignore_if.as_mut(), false, false)
+            .get_with_hash(&**c_key, c_hash, ignore_if.as_mut(), false, false)
             .await
             .map(Entry::into_value)
         {
@@ -321,7 +321,7 @@ where
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
         let maybe_entry = cache
             .base
-            .get_with_hash(&c_key, c_hash, ignore_if, true, true)
+            .get_with_hash(&*c_key, c_hash, ignore_if, true, true)
             .await;
         let maybe_value = if allow_nop {
             maybe_entry.as_ref().map(|ent| ent.value().clone())
@@ -384,7 +384,7 @@ where
                 }
             }
             Op::Remove => {
-                let maybe_prev_v = cache.invalidate_with_hash(&c_key, c_hash, true).await;
+                let maybe_prev_v = cache.invalidate_with_hash(&*c_key, c_hash, true).await;
                 if let Some(prev_v) = maybe_prev_v {
                     crossbeam_epoch::pin().flush();
                     let entry = Entry::new(Some(c_key), prev_v, false, false);
@@ -430,7 +430,7 @@ where
             let ignore_if = None as Option<&mut fn(&V) -> bool>;
             let maybe_entry = cache
                 .base
-                .get_with_hash(&c_key, c_hash, ignore_if, true, true)
+                .get_with_hash(&*c_key, c_hash, ignore_if, true, true)
                 .await;
             let maybe_value = maybe_entry.as_ref().map(|ent| ent.value().clone());
 
@@ -460,7 +460,7 @@ where
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
         let maybe_entry = cache
             .base
-            .get_with_hash(&c_key, c_hash, ignore_if, true, true)
+            .get_with_hash(&*c_key, c_hash, ignore_if, true, true)
             .await;
         let maybe_value = if allow_nop {
             maybe_entry.as_ref().map(|ent| ent.value().clone())
@@ -522,7 +522,7 @@ where
                 }
             }
             Op::Remove => {
-                let maybe_prev_v = cache.invalidate_with_hash(&c_key, c_hash, true).await;
+                let maybe_prev_v = cache.invalidate_with_hash(&*c_key, c_hash, true).await;
                 if let Some(prev_v) = maybe_prev_v {
                     crossbeam_epoch::pin().flush();
                     let entry = Entry::new(Some(c_key), prev_v, false, false);

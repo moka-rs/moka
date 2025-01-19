@@ -1,3 +1,5 @@
+use equivalent::Equivalent;
+
 use super::{
     base_cache::BaseCache,
     value_initializer::{InitResult, ValueInitializer},
@@ -16,7 +18,6 @@ use crate::{
 use crate::common::concurrent::debug_counters::CacheDebugStats;
 
 use std::{
-    borrow::Borrow,
     collections::hash_map::RandomState,
     fmt,
     future::Future,
@@ -858,8 +859,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub fn contains_key<Q>(&self, key: &Q) -> bool
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Equivalent<K> + Hash + ?Sized,
     {
         self.base.contains_key_with_hash(key, self.base.hash(key))
     }
@@ -876,8 +876,7 @@ where
     /// [rustdoc-std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
     pub async fn get<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Equivalent<K> + Hash + ?Sized,
     {
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
 
@@ -961,8 +960,7 @@ where
     /// ```
     pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
     where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
     {
         let hash = self.base.hash(key);
         RefKeyEntrySelector::new(key, hash, self)
@@ -1065,8 +1063,7 @@ where
     /// cache, the key will be cloned to create new entry in the cache.
     pub async fn get_with_by_ref<Q>(&self, key: &Q, init: impl Future<Output = V>) -> V
     where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
     {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
@@ -1204,8 +1201,7 @@ where
     pub async fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
     where
         F: Future<Output = Option<V>>,
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
     {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
@@ -1328,8 +1324,7 @@ where
     where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
     {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
@@ -1356,8 +1351,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub async fn invalidate<Q>(&self, key: &Q)
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Equivalent<K> + Hash + ?Sized,
     {
         let hash = self.base.hash(key);
         self.invalidate_with_hash(key, hash, false).await;
@@ -1372,8 +1366,7 @@ where
     /// on the borrowed form _must_ match those for the key type.
     pub async fn remove<Q>(&self, key: &Q) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Equivalent<K> + Hash + ?Sized,
     {
         let hash = self.base.hash(key);
         self.invalidate_with_hash(key, hash, true).await
@@ -1542,7 +1535,7 @@ where
     ) -> Entry<K, V> {
         let maybe_entry = self
             .base
-            .get_with_hash(&key, hash, replace_if.as_mut(), need_key, true)
+            .get_with_hash(&*key, hash, replace_if.as_mut(), need_key, true)
             .await;
         if let Some(entry) = maybe_entry {
             entry
@@ -1561,8 +1554,7 @@ where
         need_key: bool,
     ) -> Entry<K, V>
     where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
     {
         let maybe_entry = self
             .base
@@ -1616,7 +1608,7 @@ where
     ) -> Entry<K, V> {
         match self
             .base
-            .get_with_hash(&key, hash, never_ignore(), true, true)
+            .get_with_hash(&*key, hash, never_ignore(), true, true)
             .await
         {
             Some(entry) => entry,
@@ -1636,8 +1628,7 @@ where
         init: impl FnOnce() -> V,
     ) -> Entry<K, V>
     where
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
     {
         match self
             .base
@@ -1667,7 +1658,7 @@ where
     {
         let entry = self
             .base
-            .get_with_hash(&key, hash, never_ignore(), need_key, true)
+            .get_with_hash(&*key, hash, never_ignore(), need_key, true)
             .await;
         if entry.is_some() {
             return entry;
@@ -1686,8 +1677,7 @@ where
     ) -> Option<Entry<K, V>>
     where
         F: Future<Output = Option<V>>,
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
     {
         let entry = self
             .base
@@ -1748,7 +1738,7 @@ where
     {
         if let Some(entry) = self
             .base
-            .get_with_hash(&key, hash, never_ignore(), need_key, true)
+            .get_with_hash(&*key, hash, never_ignore(), need_key, true)
             .await
         {
             return Ok(entry);
@@ -1768,8 +1758,7 @@ where
     where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
-        K: Borrow<Q>,
-        Q: ToOwned<Owned = K> + Hash + Eq + ?Sized,
+        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
     {
         if let Some(entry) = self
             .base
@@ -1939,8 +1928,7 @@ where
         need_value: bool,
     ) -> Option<V>
     where
-        K: Borrow<Q>,
-        Q: Hash + Eq + ?Sized,
+        Q: Equivalent<K> + Hash + ?Sized,
     {
         use futures_util::FutureExt;
 

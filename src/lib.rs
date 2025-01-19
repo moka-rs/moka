@@ -236,6 +236,9 @@ compile_error!(
     `moka` crate. Please update your dependencies in Cargo.toml"
 );
 
+// Reexport(s)
+pub use equivalent::Equivalent;
+
 #[cfg(feature = "future")]
 #[cfg_attr(docsrs, doc(cfg(feature = "future")))]
 pub mod future;
