@@ -3,7 +3,7 @@ use std::time::Duration;
 pub(crate) mod builder_utils;
 pub(crate) mod concurrent;
 pub(crate) mod deque;
-pub(crate) mod entry;
+pub mod entry;
 pub(crate) mod error;
 pub(crate) mod frequency_sketch;
 pub(crate) mod time;

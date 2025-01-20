@@ -1,4 +1,13 @@
-use std::{fmt::Debug, sync::Arc};
+use std::{
+    fmt::Debug,
+    hash::{BuildHasher, Hash},
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use crate::sync::Cache;
+
+use super::concurrent::KeyHashDate;
 
 /// A snapshot of a single entry in the cache.
 ///
@@ -89,4 +98,184 @@ impl<K, V> Entry<K, V> {
     pub fn is_old_value_replaced(&self) -> bool {
         self.is_old_value_replaced
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct EntryMetadata {
+    region: EntryRegion,
+    policy_weight: u32,
+    estimated_frequency: u8,
+    last_modified: Instant,
+    last_accessed: Instant,
+    expiration_time: Option<Instant>,
+}
+
+impl EntryMetadata {
+    pub fn new(
+        region: EntryRegion,
+        policy_weight: u32,
+        estimated_frequency: u8,
+        last_modified: Instant,
+        last_accessed: Instant,
+        expiration_time: Option<Instant>,
+    ) -> Self {
+        Self {
+            region,
+            policy_weight,
+            estimated_frequency,
+            last_modified,
+            last_accessed,
+            expiration_time,
+        }
+    }
+
+    pub(crate) fn from_element<K>(
+        region: EntryRegion,
+        estimated_frequency: u8,
+        element: &KeyHashDate<K>,
+        clock: &super::time::Clock,
+        time_to_live: Option<Duration>,
+        time_to_idle: Option<Duration>,
+    ) -> Self {
+        // SAFETY: `last_accessed` and `last_modified` should be `Some` since we
+        // assume the element is not dirty. But we use `unwrap_or_default` to avoid
+        // panicking just in case they are `None`.
+        let last_modified = clock.to_std_instant(element.last_modified().unwrap_or_default());
+        let last_accessed = clock.to_std_instant(element.last_accessed().unwrap_or_default());
+
+        // When per-entry expiration is used, the expiration time is set in the
+        // element, otherwise, we calculate the expiration time based on the
+        // `time_to_live` and `time_to_idle` settings.
+        let expiration_time = if element.expiration_time().is_some() {
+            element.expiration_time().map(|ts| clock.to_std_instant(ts))
+        } else {
+            match (time_to_live, time_to_idle) {
+                (Some(ttl), Some(tti)) => {
+                    let exp_by_ttl = last_modified + ttl;
+                    let exp_by_tti = last_accessed + tti;
+                    Some(exp_by_ttl.min(exp_by_tti))
+                }
+                (Some(ttl), None) => Some(last_modified + ttl),
+                (None, Some(tti)) => Some(last_accessed + tti),
+                (None, None) => None,
+            }
+        };
+
+        Self {
+            region,
+            policy_weight: element.entry_info().policy_weight(),
+            estimated_frequency,
+            last_modified,
+            last_accessed,
+            expiration_time,
+        }
+    }
+
+    pub fn region(&self) -> EntryRegion {
+        self.region
+    }
+
+    pub fn policy_weight(&self) -> u32 {
+        self.policy_weight
+    }
+
+    pub fn estimated_frequency(&self) -> u8 {
+        self.estimated_frequency
+    }
+
+    pub fn last_modified(&self) -> Instant {
+        self.last_modified
+    }
+
+    pub fn last_accessed(&self) -> Instant {
+        self.last_accessed
+    }
+
+    pub fn expiration_time(&self) -> Option<Instant> {
+        self.expiration_time
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryRegion {
+    Window,
+    Main,
+}
+
+#[derive(Debug, Clone)]
+pub struct EntrySnapshot<K> {
+    snapshot_at: Instant,
+    coldest: Vec<(Arc<K>, EntryMetadata)>,
+    hottest: Vec<(Arc<K>, EntryMetadata)>,
+}
+
+impl<K> EntrySnapshot<K> {
+    pub(crate) fn new(
+        snapshot_at: Instant,
+        coldest: Vec<(Arc<K>, EntryMetadata)>,
+        hottest: Vec<(Arc<K>, EntryMetadata)>,
+    ) -> Self {
+        Self {
+            snapshot_at,
+            coldest,
+            hottest,
+        }
+    }
+
+    pub fn snapshot_at(&self) -> Instant {
+        self.snapshot_at
+    }
+
+    pub fn coldest(&self) -> &[(Arc<K>, EntryMetadata)] {
+        &self.coldest
+    }
+
+    pub fn hottest(&self) -> &[(Arc<K>, EntryMetadata)] {
+        &self.hottest
+    }
+}
+
+pub struct EntrySnapshotRequest<K, V, S> {
+    cache: Cache<K, V, S>,
+    config: EntrySnapshotConfig,
+}
+
+impl<K, V, S> EntrySnapshotRequest<K, V, S> {
+    pub(crate) fn new_with_cache(cache: Cache<K, V, S>) -> Self {
+        Self {
+            cache,
+            config: EntrySnapshotConfig::default(),
+        }
+    }
+
+    pub fn with_coldest(self, count: usize) -> Self {
+        let mut req = self;
+        req.config.coldest = count;
+        req
+    }
+
+    pub fn with_hottest(self, count: usize) -> Self {
+        let mut req = self;
+        req.config.hottest = count;
+        req
+    }
+
+    // pub fn config(&self) -> &EntrySnapshotConfig {
+    //     &self.config
+    // }
+
+    pub fn capture(self) -> EntrySnapshot<K>
+    where
+        K: Hash + Send + Sync + Eq + 'static,
+        V: Clone + Send + Sync + 'static,
+        S: BuildHasher + Clone + Send + Sync + 'static,
+    {
+        self.cache.capture_entry_snapshot(self.config)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct EntrySnapshotConfig {
+    pub(crate) coldest: usize,
+    pub(crate) hottest: usize,
 }

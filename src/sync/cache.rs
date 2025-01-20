@@ -10,6 +10,7 @@ use crate::{
         time::{Clock, Instant},
         HousekeeperConfig,
     },
+    entry::{EntrySnapshot, EntrySnapshotConfig, EntrySnapshotRequest},
     notification::EvictionListener,
     ops::compute::{self, CompResult},
     policy::{EvictionPolicy, ExpirationPolicy},
@@ -637,6 +638,10 @@ impl<K, V, S> Cache<K, V, S> {
     /// A future version may support to modify it.
     pub fn policy(&self) -> Policy {
         self.base.policy()
+    }
+
+    pub fn policy_snapshot(&self) -> EntrySnapshotRequest<K, V, S> {
+        EntrySnapshotRequest::new_with_cache(self.clone())
     }
 
     /// Returns an approximate number of entries in this cache.
@@ -1767,8 +1772,21 @@ where
     /// Performs any pending maintenance operations needed by the cache.
     pub fn run_pending_tasks(&self) {
         if let Some(hk) = &self.base.housekeeper {
-            hk.run_pending_tasks(&*self.base.inner);
+            hk.run_pending_tasks(&*self.base.inner, None);
         }
+    }
+
+    pub(crate) fn capture_entry_snapshot(
+        &self,
+        snapshot_config: EntrySnapshotConfig,
+    ) -> EntrySnapshot<K> {
+        if let Some(hk) = &self.base.housekeeper {
+            if let Some(snap) = hk.run_pending_tasks(&*self.base.inner, Some(snapshot_config)) {
+                return snap;
+            }
+        }
+        let now = self.base.clock().to_std_instant(self.base.current_time());
+        EntrySnapshot::new(now, Vec::default(), Vec::default())
     }
 }
 
@@ -1821,11 +1839,11 @@ where
     // TODO: Like future::Cache, move this method to BaseCache.
     #[inline]
     fn schedule_write_op(
-        inner: &impl InnerSync,
+        inner: &impl InnerSync<K>,
         ch: &Sender<WriteOp<K, V>>,
         op: WriteOp<K, V>,
         now: Instant,
-        housekeeper: Option<&HouseKeeperArc>,
+        housekeeper: Option<&HouseKeeperArc<K>>,
     ) -> Result<(), TrySendError<WriteOp<K, V>>> {
         let mut op = op;
 
@@ -1987,6 +2005,12 @@ mod tests {
         assert!(cache.contains_key(&"b"));
         assert!(!cache.contains_key(&"c"));
         assert!(cache.contains_key(&"d"));
+
+        dbg!(cache
+            .policy_snapshot()
+            .with_coldest(5)
+            .with_hottest(5)
+            .capture());
 
         cache.invalidate(&"b");
         expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));
