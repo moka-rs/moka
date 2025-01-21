@@ -1,12 +1,9 @@
-use std::{
-    fmt::Debug,
-    hash::{BuildHasher, Hash},
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{fmt::Debug, sync::Arc, time::Instant};
 
-use crate::sync::Cache;
+#[cfg(feature = "sync")]
+use std::time::Duration;
 
+#[cfg(feature = "sync")]
 use super::concurrent::KeyHashDate;
 
 /// A snapshot of a single entry in the cache.
@@ -104,38 +101,39 @@ impl<K, V> Entry<K, V> {
 pub struct EntryMetadata {
     region: EntryRegion,
     policy_weight: u32,
-    estimated_frequency: u8,
     last_modified: Instant,
     last_accessed: Instant,
     expiration_time: Option<Instant>,
+    snapshot_at: Instant,
 }
 
 impl EntryMetadata {
     pub fn new(
         region: EntryRegion,
         policy_weight: u32,
-        estimated_frequency: u8,
         last_modified: Instant,
         last_accessed: Instant,
         expiration_time: Option<Instant>,
+        snapshot_at: Instant,
     ) -> Self {
         Self {
             region,
             policy_weight,
-            estimated_frequency,
             last_modified,
             last_accessed,
             expiration_time,
+            snapshot_at,
         }
     }
 
+    #[cfg(feature = "sync")]
     pub(crate) fn from_element<K>(
         region: EntryRegion,
-        estimated_frequency: u8,
         element: &KeyHashDate<K>,
         clock: &super::time::Clock,
         time_to_live: Option<Duration>,
         time_to_idle: Option<Duration>,
+        snapshot_at: Instant,
     ) -> Self {
         // SAFETY: `last_accessed` and `last_modified` should be `Some` since we
         // assume the element is not dirty. But we use `unwrap_or_default` to avoid
@@ -164,10 +162,10 @@ impl EntryMetadata {
         Self {
             region,
             policy_weight: element.entry_info().policy_weight(),
-            estimated_frequency,
             last_modified,
             last_accessed,
             expiration_time,
+            snapshot_at,
         }
     }
 
@@ -177,10 +175,6 @@ impl EntryMetadata {
 
     pub fn policy_weight(&self) -> u32 {
         self.policy_weight
-    }
-
-    pub fn estimated_frequency(&self) -> u8 {
-        self.estimated_frequency
     }
 
     pub fn last_modified(&self) -> Instant {
@@ -194,88 +188,14 @@ impl EntryMetadata {
     pub fn expiration_time(&self) -> Option<Instant> {
         self.expiration_time
     }
+
+    pub fn snapshot_at(&self) -> Instant {
+        self.snapshot_at
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EntryRegion {
     Window,
     Main,
-}
-
-#[derive(Debug, Clone)]
-pub struct EntrySnapshot<K> {
-    snapshot_at: Instant,
-    coldest: Vec<(Arc<K>, EntryMetadata)>,
-    hottest: Vec<(Arc<K>, EntryMetadata)>,
-}
-
-impl<K> EntrySnapshot<K> {
-    pub(crate) fn new(
-        snapshot_at: Instant,
-        coldest: Vec<(Arc<K>, EntryMetadata)>,
-        hottest: Vec<(Arc<K>, EntryMetadata)>,
-    ) -> Self {
-        Self {
-            snapshot_at,
-            coldest,
-            hottest,
-        }
-    }
-
-    pub fn snapshot_at(&self) -> Instant {
-        self.snapshot_at
-    }
-
-    pub fn coldest(&self) -> &[(Arc<K>, EntryMetadata)] {
-        &self.coldest
-    }
-
-    pub fn hottest(&self) -> &[(Arc<K>, EntryMetadata)] {
-        &self.hottest
-    }
-}
-
-pub struct EntrySnapshotRequest<K, V, S> {
-    cache: Cache<K, V, S>,
-    config: EntrySnapshotConfig,
-}
-
-impl<K, V, S> EntrySnapshotRequest<K, V, S> {
-    pub(crate) fn new_with_cache(cache: Cache<K, V, S>) -> Self {
-        Self {
-            cache,
-            config: EntrySnapshotConfig::default(),
-        }
-    }
-
-    pub fn with_coldest(self, count: usize) -> Self {
-        let mut req = self;
-        req.config.coldest = count;
-        req
-    }
-
-    pub fn with_hottest(self, count: usize) -> Self {
-        let mut req = self;
-        req.config.hottest = count;
-        req
-    }
-
-    // pub fn config(&self) -> &EntrySnapshotConfig {
-    //     &self.config
-    // }
-
-    pub fn capture(self) -> EntrySnapshot<K>
-    where
-        K: Hash + Send + Sync + Eq + 'static,
-        V: Clone + Send + Sync + 'static,
-        S: BuildHasher + Clone + Send + Sync + 'static,
-    {
-        self.cache.capture_entry_snapshot(self.config)
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub(crate) struct EntrySnapshotConfig {
-    pub(crate) coldest: usize,
-    pub(crate) hottest: usize,
 }

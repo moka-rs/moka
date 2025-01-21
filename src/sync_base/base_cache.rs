@@ -16,8 +16,8 @@ use crate::{
             deques::Deques,
             entry_info::EntryInfo,
             housekeeper::{Housekeeper, InnerSync},
-            AccessTime, KeyHash, KeyHashDate, KeyHashDateNodePtr, KvEntry, OldEntryInfo, ReadOp,
-            ValueEntry, Weigher, WriteOp,
+            AccessTime, KeyHash, KeyHashDate, KvEntry, OldEntryInfo, ReadOp, ValueEntry, Weigher,
+            WriteOp,
         },
         deque::{DeqNode, Deque},
         frequency_sketch::FrequencySketch,
@@ -25,9 +25,10 @@ use crate::{
         timer_wheel::{ReschedulingResult, TimerWheel},
         CacheRegion, HousekeeperConfig,
     },
-    entry::{EntryMetadata, EntrySnapshot, EntrySnapshotConfig},
     notification::{notifier::RemovalNotifier, EvictionListener, RemovalCause},
-    policy::{EvictionPolicy, EvictionPolicyConfig, ExpirationPolicy},
+    policy::{
+        EntrySnapshot, EntrySnapshotConfig, EvictionPolicy, EvictionPolicyConfig, ExpirationPolicy,
+    },
     Entry, Expiry, Policy, PredicateError,
 };
 
@@ -98,10 +99,6 @@ impl<K, V, S> BaseCache<K, V, S> {
 
     pub(crate) fn is_map_disabled(&self) -> bool {
         self.inner.max_capacity == Some(0)
-    }
-
-    pub(crate) fn clock(&self) -> &Clock {
-        &self.inner.clock
     }
 
     #[inline]
@@ -1183,9 +1180,7 @@ where
     ) -> (bool, Option<EntrySnapshot<K>>) {
         if self.max_capacity == Some(0) {
             if snapshot_config.is_some() {
-                let now = self.clock().to_std_instant(self.current_time());
-                let snap = EntrySnapshot::new(now, Vec::default(), Vec::default());
-                return (false, Some(snap));
+                return (false, Some(EntrySnapshot::default()));
             } else {
                 return (false, None);
             }
@@ -1314,7 +1309,10 @@ where
 
         crossbeam_epoch::pin().flush();
 
-        let snapshot = snapshot_config.map(|req| self.capture_snapshot(req, &deqs));
+        let snapshot = snapshot_config.map(|req| {
+            self.expiration_policy
+                .capture_entry_snapshot(req, &deqs, &self.clock)
+        });
 
         // Ensure the deqs lock is held until here.
         drop(deqs);
@@ -2303,72 +2301,6 @@ where
         if more_to_evict {
             eviction_state.more_entries_to_evict = true;
         }
-    }
-
-    fn capture_snapshot(&self, sc: EntrySnapshotConfig, deqs: &Deques<K>) -> EntrySnapshot<K> {
-        use crate::entry::EntryRegion;
-
-        let freq = &self.frequency_sketch.read();
-        let now = self.clock().to_std_instant(self.current_time());
-
-        let coldest_entries = Self::top_entries(
-            EntryRegion::Main,
-            sc.coldest,
-            deqs.probation.peek_front_ptr(),
-            DeqNode::next_node_ptr,
-            freq,
-            self.clock(),
-            self.time_to_live(),
-            self.time_to_idle(),
-        );
-
-        let hottest_entries = Self::top_entries(
-            EntryRegion::Main,
-            sc.hottest,
-            deqs.probation.peek_back_ptr(),
-            DeqNode::prev_node_ptr,
-            freq,
-            self.clock(),
-            self.time_to_live(),
-            self.time_to_idle(),
-        );
-
-        EntrySnapshot::new(now, coldest_entries, hottest_entries)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn top_entries(
-        region: crate::entry::EntryRegion,
-        count: usize,
-        head: Option<KeyHashDateNodePtr<K>>,
-        next_fun: fn(KeyHashDateNodePtr<K>) -> Option<KeyHashDateNodePtr<K>>,
-        freq: &FrequencySketch,
-        clock: &Clock,
-        time_to_live: Option<Duration>,
-        time_to_idle: Option<Duration>,
-    ) -> Vec<(Arc<K>, EntryMetadata)> {
-        let mut entries = Vec::with_capacity(count);
-
-        let mut next = head;
-        while let Some(current) = next.take() {
-            next = next_fun(current);
-            let elem = &unsafe { current.as_ref() }.element;
-
-            if elem.is_dirty() {
-                continue;
-            }
-
-            let f = freq.frequency(elem.hash());
-            let md =
-                EntryMetadata::from_element(region, f, elem, clock, time_to_live, time_to_idle);
-            entries.push((Arc::clone(elem.key()), md));
-
-            if entries.len() >= count {
-                break;
-            }
-        }
-
-        entries
     }
 }
 

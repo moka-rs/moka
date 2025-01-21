@@ -3,7 +3,7 @@ use super::constants::LOG_SYNC_INTERVAL_MILLIS;
 use super::constants::{READ_LOG_FLUSH_POINT, WRITE_LOG_FLUSH_POINT};
 use crate::common::time::{AtomicInstant, Instant};
 use crate::common::HousekeeperConfig;
-use crate::entry::{EntrySnapshot, EntrySnapshotConfig};
+use crate::policy::{EntrySnapshot, EntrySnapshotConfig};
 
 use parking_lot::{Mutex, MutexGuard};
 use std::marker::PhantomData;

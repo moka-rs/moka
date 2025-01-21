@@ -4,6 +4,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::entry::EntryMetadata;
+
 #[derive(Clone, Debug)]
 /// The policy of a cache.
 pub struct Policy {
@@ -400,6 +402,104 @@ pub(crate) mod test_utils {
                 self.actual_updates.load(Ordering::Relaxed),
                 "expected_updates != actual_updates"
             );
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct EntrySnapshot<K> {
+    coldest: Vec<(Arc<K>, EntryMetadata)>,
+    hottest: Vec<(Arc<K>, EntryMetadata)>,
+}
+
+impl<K> Default for EntrySnapshot<K> {
+    fn default() -> Self {
+        Self {
+            coldest: Vec::default(),
+            hottest: Vec::default(),
+        }
+    }
+}
+
+impl<K> EntrySnapshot<K> {
+    #[cfg(feature = "sync")]
+    pub(crate) fn new(
+        coldest: Vec<(Arc<K>, EntryMetadata)>,
+        hottest: Vec<(Arc<K>, EntryMetadata)>,
+    ) -> Self {
+        Self { coldest, hottest }
+    }
+
+    pub fn coldest(&self) -> &[(Arc<K>, EntryMetadata)] {
+        &self.coldest
+    }
+
+    pub fn hottest(&self) -> &[(Arc<K>, EntryMetadata)] {
+        &self.hottest
+    }
+}
+
+#[cfg(feature = "sync")]
+#[derive(Debug, Clone, Default)]
+pub(crate) struct EntrySnapshotConfig {
+    pub(crate) coldest: usize,
+    pub(crate) hottest: usize,
+}
+
+#[cfg(feature = "sync")]
+pub mod sync {
+    use std::hash::{BuildHasher, Hash};
+
+    use crate::sync::Cache;
+
+    use super::{EntrySnapshot, EntrySnapshotConfig};
+
+    pub struct PolicyExt<'a, K, V, S> {
+        cache: &'a Cache<K, V, S>,
+    }
+
+    impl<'a, K, V, S> PolicyExt<'a, K, V, S> {
+        pub(crate) fn new(cache: &'a Cache<K, V, S>) -> Self {
+            Self { cache }
+        }
+
+        pub fn entry_snapshot(&self) -> EntrySnapshotRequest<'_, K, V, S> {
+            EntrySnapshotRequest::new(self.cache)
+        }
+    }
+
+    pub struct EntrySnapshotRequest<'a, K, V, S> {
+        cache: &'a Cache<K, V, S>,
+        config: EntrySnapshotConfig,
+    }
+
+    impl<'a, K, V, S> EntrySnapshotRequest<'a, K, V, S> {
+        pub(crate) fn new(cache: &'a Cache<K, V, S>) -> Self {
+            Self {
+                cache,
+                config: EntrySnapshotConfig::default(),
+            }
+        }
+
+        pub fn with_coldest(self, count: usize) -> Self {
+            let mut req = self;
+            req.config.coldest = count;
+            req
+        }
+
+        pub fn with_hottest(self, count: usize) -> Self {
+            let mut req = self;
+            req.config.hottest = count;
+            req
+        }
+
+        pub fn capture(self) -> EntrySnapshot<K>
+        where
+            K: Hash + Send + Sync + Eq + 'static,
+            V: Clone + Send + Sync + 'static,
+            S: BuildHasher + Clone + Send + Sync + 'static,
+        {
+            self.cache.capture_entry_snapshot(self.config)
         }
     }
 }

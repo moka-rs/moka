@@ -80,6 +80,7 @@ impl<K> KeyHashDate<K> {
         self.entry_info.last_accessed()
     }
 
+    #[cfg(feature = "sync")]
     pub(crate) fn expiration_time(&self) -> Option<Instant> {
         self.entry_info.expiration_time()
     }
@@ -89,8 +90,10 @@ impl<K> KeyHashDate<K> {
     }
 }
 
+#[cfg(feature = "sync")]
 pub(crate) type KeyHashDateNode<K> = DeqNode<KeyHashDate<K>>;
 
+#[cfg(feature = "sync")]
 pub(crate) type KeyHashDateNodePtr<K> = NonNull<KeyHashDateNode<K>>;
 
 pub(crate) struct KvEntry<K, V> {

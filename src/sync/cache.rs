@@ -10,10 +10,11 @@ use crate::{
         time::{Clock, Instant},
         HousekeeperConfig,
     },
-    entry::{EntrySnapshot, EntrySnapshotConfig, EntrySnapshotRequest},
     notification::EvictionListener,
     ops::compute::{self, CompResult},
-    policy::{EvictionPolicy, ExpirationPolicy},
+    policy::{
+        sync::PolicyExt, EntrySnapshot, EntrySnapshotConfig, EvictionPolicy, ExpirationPolicy,
+    },
     sync::{Iter, PredicateId},
     sync_base::{
         base_cache::{BaseCache, HouseKeeperArc},
@@ -640,8 +641,8 @@ impl<K, V, S> Cache<K, V, S> {
         self.base.policy()
     }
 
-    pub fn policy_snapshot(&self) -> EntrySnapshotRequest<K, V, S> {
-        EntrySnapshotRequest::new_with_cache(self.clone())
+    pub fn policy_ext(&self) -> PolicyExt<'_, K, V, S> {
+        PolicyExt::new(self)
     }
 
     /// Returns an approximate number of entries in this cache.
@@ -1780,13 +1781,11 @@ where
         &self,
         snapshot_config: EntrySnapshotConfig,
     ) -> EntrySnapshot<K> {
-        if let Some(hk) = &self.base.housekeeper {
-            if let Some(snap) = hk.run_pending_tasks(&*self.base.inner, Some(snapshot_config)) {
-                return snap;
-            }
-        }
-        let now = self.base.clock().to_std_instant(self.base.current_time());
-        EntrySnapshot::new(now, Vec::default(), Vec::default())
+        self.base
+            .housekeeper
+            .as_ref()
+            .and_then(|hk| hk.run_pending_tasks(&*self.base.inner, Some(snapshot_config)))
+            .unwrap_or_default()
     }
 }
 
@@ -2007,7 +2006,8 @@ mod tests {
         assert!(cache.contains_key(&"d"));
 
         dbg!(cache
-            .policy_snapshot()
+            .policy_ext()
+            .entry_snapshot()
             .with_coldest(5)
             .with_hottest(5)
             .capture());
