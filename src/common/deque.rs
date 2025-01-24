@@ -52,7 +52,6 @@ impl<T> DeqNode<T> {
         }
     }
 
-    #[cfg(feature = "sync")]
     pub(crate) fn prev_node_ptr(this: NonNull<Self>) -> Option<NonNull<DeqNode<T>>> {
         unsafe { this.as_ref() }.prev
     }
@@ -167,7 +166,6 @@ impl<T> Deque<T> {
         self.tail.as_ref().map(|node| unsafe { node.as_ref() })
     }
 
-    #[cfg(feature = "sync")]
     pub(crate) fn peek_back_ptr(&self) -> Option<NonNull<DeqNode<T>>> {
         self.tail.as_ref().copied()
     }

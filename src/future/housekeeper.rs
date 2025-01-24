@@ -1,9 +1,12 @@
-use crate::common::{
-    concurrent::constants::{
-        LOG_SYNC_INTERVAL_MILLIS, READ_LOG_FLUSH_POINT, WRITE_LOG_FLUSH_POINT,
+use crate::{
+    common::{
+        concurrent::constants::{
+            LOG_SYNC_INTERVAL_MILLIS, READ_LOG_FLUSH_POINT, WRITE_LOG_FLUSH_POINT,
+        },
+        time::{AtomicInstant, Instant},
+        HousekeeperConfig,
     },
-    time::{AtomicInstant, Instant},
-    HousekeeperConfig,
+    policy::{EntrySnapshot, EntrySnapshotConfig},
 };
 
 use std::{
@@ -23,9 +26,11 @@ use futures_util::future::{BoxFuture, Shared};
 
 use super::base_cache::Inner;
 
-pub(crate) struct Housekeeper {
+type RunTasksResult<K> = (bool, Option<EntrySnapshot<K>>);
+
+pub(crate) struct Housekeeper<K> {
     /// A shared `Future` of the maintenance task that is currently being resolved.
-    current_task: Mutex<Option<Shared<BoxFuture<'static, bool>>>>,
+    current_task: Mutex<Option<Shared<BoxFuture<'static, RunTasksResult<K>>>>>,
     run_after: AtomicInstant,
     /// A flag to indicate if the last call on `run_pending_tasks` method left some
     /// entries to evict.
@@ -53,7 +58,7 @@ pub(crate) struct Housekeeper {
     pub(crate) complete_count: AtomicUsize,
 }
 
-impl Housekeeper {
+impl<K> Housekeeper<K> {
     pub(crate) fn new(
         is_eviction_listener_enabled: bool,
         config: HousekeeperConfig,
@@ -111,14 +116,19 @@ impl Housekeeper {
             && (ch_len >= ch_flush_point || now >= self.run_after.instant().unwrap())
     }
 
-    pub(crate) async fn run_pending_tasks<K, V, S>(&self, cache: Arc<Inner<K, V, S>>)
+    pub(crate) async fn run_pending_tasks<V, S>(
+        &self,
+        cache: Arc<Inner<K, V, S>>,
+        snapshot_config: Option<EntrySnapshotConfig>,
+    ) -> Option<EntrySnapshot<K>>
     where
         K: Hash + Eq + Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
         S: BuildHasher + Clone + Send + Sync + 'static,
     {
         let mut current_task = self.current_task.lock().await;
-        self.do_run_pending_tasks(Arc::clone(&cache), &mut current_task)
+        let snap = self
+            .do_run_pending_tasks(Arc::clone(&cache), &mut current_task, snapshot_config)
             .await;
 
         drop(current_task);
@@ -126,18 +136,20 @@ impl Housekeeper {
         // If there are any async tasks waiting in `BaseCache::schedule_write_op`
         // method for the write op channel, notify them.
         cache.write_op_ch_ready_event.notify(usize::MAX);
+
+        snap
     }
 
     /// Tries to run the pending tasks if the lock is free. Returns `true` if there
     /// are more entries to evict in next run.
-    pub(crate) async fn try_run_pending_tasks<K, V, S>(&self, cache: &Arc<Inner<K, V, S>>) -> bool
+    pub(crate) async fn try_run_pending_tasks<V, S>(&self, cache: &Arc<Inner<K, V, S>>) -> bool
     where
         K: Hash + Eq + Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
         S: BuildHasher + Clone + Send + Sync + 'static,
     {
         if let Some(mut current_task) = self.current_task.try_lock() {
-            self.do_run_pending_tasks(Arc::clone(cache), &mut current_task)
+            self.do_run_pending_tasks(Arc::clone(cache), &mut current_task, None)
                 .await;
         } else {
             return false;
@@ -151,11 +163,13 @@ impl Housekeeper {
         true
     }
 
-    async fn do_run_pending_tasks<K, V, S>(
+    async fn do_run_pending_tasks<V, S>(
         &self,
         cache: Arc<Inner<K, V, S>>,
-        current_task: &mut Option<Shared<BoxFuture<'static, bool>>>,
-    ) where
+        current_task: &mut Option<Shared<BoxFuture<'static, RunTasksResult<K>>>>,
+        snapshot_config: Option<EntrySnapshotConfig>,
+    ) -> Option<EntrySnapshot<K>>
+    where
         K: Hash + Eq + Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
         S: BuildHasher + Clone + Send + Sync + 'static,
@@ -164,13 +178,14 @@ impl Housekeeper {
 
         let now = cache.current_time();
         let more_to_evict;
+        let snap;
         // Async Cancellation Safety: Our maintenance task is cancellable as we save
         // it in the lock. If it is canceled, we will resume it in the next run.
 
         if let Some(task) = &*current_task {
             // This task was cancelled in the previous run due to the enclosing
             // Future was dropped. Resume the task now by awaiting.
-            more_to_evict = task.clone().await;
+            (more_to_evict, snap) = task.clone().await;
         } else {
             let timeout = self.maintenance_task_timeout;
             let repeats = self.max_log_sync_repeats;
@@ -178,7 +193,7 @@ impl Housekeeper {
             // Create a new maintenance task and await it.
             let task = async move {
                 cache
-                    .do_run_pending_tasks(timeout, repeats, batch_size)
+                    .do_run_pending_tasks(timeout, repeats, batch_size, snapshot_config)
                     .await
             }
             .boxed()
@@ -188,7 +203,7 @@ impl Housekeeper {
             #[cfg(test)]
             self.start_count.fetch_add(1, Ordering::AcqRel);
 
-            more_to_evict = task.await;
+            (more_to_evict, snap) = task.await;
         }
 
         // If we are here, it means that the maintenance task has been completed.
@@ -199,6 +214,8 @@ impl Housekeeper {
 
         #[cfg(test)]
         self.complete_count.fetch_add(1, Ordering::AcqRel);
+
+        snap
     }
 
     fn sync_after(now: Instant) -> Instant {
@@ -208,7 +225,7 @@ impl Housekeeper {
 }
 
 #[cfg(test)]
-impl Housekeeper {
+impl<K> Housekeeper<K> {
     pub(crate) fn disable_auto_run(&self) {
         self.auto_run_enabled.store(false, Ordering::Relaxed);
     }

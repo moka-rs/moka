@@ -6,14 +6,12 @@ pub(crate) mod deque;
 pub mod entry;
 pub(crate) mod error;
 pub(crate) mod frequency_sketch;
-
-#[cfg(feature = "sync")]
 pub(crate) mod policy_impl;
+pub(crate) mod time;
+pub(crate) mod timer_wheel;
 
 #[cfg(test)]
 pub(crate) mod test_utils;
-pub(crate) mod time;
-pub(crate) mod timer_wheel;
 
 use self::concurrent::constants::{
     DEFAULT_EVICTION_BATCH_SIZE, DEFAULT_MAINTENANCE_TASK_TIMEOUT_MILLIS,

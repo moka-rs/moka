@@ -1,9 +1,9 @@
-use std::{fmt::Debug, sync::Arc, time::Instant};
+use std::{
+    fmt::Debug,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-#[cfg(feature = "sync")]
-use std::time::Duration;
-
-#[cfg(feature = "sync")]
 use super::concurrent::KeyHashDate;
 
 /// A snapshot of a single entry in the cache.
@@ -126,7 +126,6 @@ impl EntryMetadata {
         }
     }
 
-    #[cfg(feature = "sync")]
     pub(crate) fn from_element<K>(
         region: EntryRegion,
         element: &KeyHashDate<K>,
