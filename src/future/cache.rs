@@ -10,7 +10,9 @@ use crate::{
     common::{concurrent::Weigher, time::Clock, HousekeeperConfig},
     notification::AsyncEvictionListener,
     ops::compute::{self, CompResult},
-    policy::{EvictionPolicy, ExpirationPolicy},
+    policy::{
+        future::PolicyExt, EntrySnapshot, EntrySnapshotConfig, EvictionPolicy, ExpirationPolicy,
+    },
     Entry, Policy, PredicateError,
 };
 
@@ -705,6 +707,10 @@ impl<K, V, S> Cache<K, V, S> {
     /// A future version may support to modify it.
     pub fn policy(&self) -> Policy {
         self.base.policy()
+    }
+
+    pub fn policy_ext(&self) -> PolicyExt<'_, K, V, S> {
+        PolicyExt::new(self)
     }
 
     /// Returns an approximate number of entries in this cache.
@@ -1496,7 +1502,21 @@ where
     pub async fn run_pending_tasks(&self) {
         if let Some(hk) = &self.base.housekeeper {
             self.base.retry_interrupted_ops().await;
-            hk.run_pending_tasks(Arc::clone(&self.base.inner)).await;
+            hk.run_pending_tasks(Arc::clone(&self.base.inner), None)
+                .await;
+        }
+    }
+
+    pub(crate) async fn capture_entry_snapshot(
+        &self,
+        snapshot_config: EntrySnapshotConfig,
+    ) -> EntrySnapshot<K> {
+        if let Some(hk) = &self.base.housekeeper {
+            hk.run_pending_tasks(Arc::clone(&self.base.inner), Some(snapshot_config))
+                .await
+                .unwrap_or_default()
+        } else {
+            EntrySnapshot::default()
         }
     }
 }
@@ -2285,6 +2305,16 @@ mod tests {
         assert!(cache.contains_key(&"b"));
         assert!(!cache.contains_key(&"c"));
         assert!(cache.contains_key(&"d"));
+
+        dbg!(
+            cache
+                .policy_ext()
+                .entry_snapshot()
+                .with_coldest(5)
+                .with_hottest(5)
+                .capture()
+                .await
+        );
 
         cache.invalidate(&"b").await;
         expected.push((Arc::new("b"), "bob", RemovalCause::Explicit));

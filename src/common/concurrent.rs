@@ -80,10 +80,18 @@ impl<K> KeyHashDate<K> {
         self.entry_info.last_accessed()
     }
 
+    pub(crate) fn expiration_time(&self) -> Option<Instant> {
+        self.entry_info.expiration_time()
+    }
+
     pub(crate) fn is_dirty(&self) -> bool {
         self.entry_info.is_dirty()
     }
 }
+
+pub(crate) type KeyHashDateNode<K> = DeqNode<KeyHashDate<K>>;
+
+pub(crate) type KeyHashDateNodePtr<K> = NonNull<KeyHashDateNode<K>>;
 
 pub(crate) struct KvEntry<K, V> {
     pub(crate) key: Arc<K>,

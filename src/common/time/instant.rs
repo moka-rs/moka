@@ -4,7 +4,7 @@ pub(crate) const MAX_NANOS: u64 = u64::MAX - 1;
 
 /// `Instant` represents a point in time since the `Clock` was created. It has
 /// nanosecond precision.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Instant {
     elapsed_ns: u64,
 }

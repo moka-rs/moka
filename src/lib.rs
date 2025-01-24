@@ -273,7 +273,7 @@ pub use common::error::PredicateError;
 
 #[cfg(any(feature = "sync", feature = "future"))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
-pub use common::entry::Entry;
+pub use common::entry::{self, Entry};
 
 #[cfg(any(feature = "sync", feature = "future"))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
