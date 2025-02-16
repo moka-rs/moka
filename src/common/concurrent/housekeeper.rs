@@ -3,14 +3,16 @@ use super::constants::LOG_SYNC_INTERVAL_MILLIS;
 use super::constants::{READ_LOG_FLUSH_POINT, WRITE_LOG_FLUSH_POINT};
 use crate::common::time::{AtomicInstant, Instant};
 use crate::common::HousekeeperConfig;
+use crate::policy::{EntrySnapshot, EntrySnapshotConfig};
 
 use parking_lot::{Mutex, MutexGuard};
+use std::marker::PhantomData;
 use std::{
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
 
-pub(crate) trait InnerSync {
+pub(crate) trait InnerSync<K> {
     /// Runs the pending tasks. Returns `true` if there are more entries to evict in
     /// next run.
     fn run_pending_tasks(
@@ -18,12 +20,13 @@ pub(crate) trait InnerSync {
         timeout: Option<Duration>,
         max_log_sync_repeats: u32,
         eviction_batch_size: u32,
-    ) -> bool;
+        snapshot_request: Option<EntrySnapshotConfig>,
+    ) -> (bool, Option<EntrySnapshot<K>>);
 
     fn now(&self) -> Instant;
 }
 
-pub(crate) struct Housekeeper {
+pub(crate) struct Housekeeper<K> {
     run_lock: Mutex<()>,
     run_after: AtomicInstant,
     /// A flag to indicate if the last call on `run_pending_tasks` method left some
@@ -46,9 +49,10 @@ pub(crate) struct Housekeeper {
     /// Default: `EVICTION_BATCH_SIZE`.
     eviction_batch_size: u32,
     auto_run_enabled: AtomicBool,
+    key_ty: PhantomData<K>,
 }
 
-impl Housekeeper {
+impl<K> Housekeeper<K> {
     pub(crate) fn new(
         is_eviction_listener_enabled: bool,
         config: HousekeeperConfig,
@@ -71,6 +75,7 @@ impl Housekeeper {
             max_log_sync_repeats: config.max_log_sync_repeats,
             eviction_batch_size: config.eviction_batch_size,
             auto_run_enabled: AtomicBool::new(true),
+            key_ty: PhantomData,
         }
     }
 
@@ -102,28 +107,39 @@ impl Housekeeper {
             && (ch_len >= ch_flush_point || now >= self.run_after.instant().unwrap())
     }
 
-    pub(crate) fn run_pending_tasks<T: InnerSync>(&self, cache: &T) {
+    pub(crate) fn run_pending_tasks<T: InnerSync<K>>(
+        &self,
+        cache: &T,
+        snapshot_config: Option<EntrySnapshotConfig>,
+    ) -> Option<EntrySnapshot<K>> {
         let lock = self.run_lock.lock();
-        self.do_run_pending_tasks(cache, lock);
+        self.do_run_pending_tasks(cache, lock, snapshot_config)
     }
 
-    pub(crate) fn try_run_pending_tasks<T: InnerSync>(&self, cache: &T) -> bool {
+    pub(crate) fn try_run_pending_tasks<T: InnerSync<K>>(&self, cache: &T) -> bool {
         if let Some(lock) = self.run_lock.try_lock() {
-            self.do_run_pending_tasks(cache, lock);
+            self.do_run_pending_tasks(cache, lock, None);
             true
         } else {
             false
         }
     }
 
-    fn do_run_pending_tasks<T: InnerSync>(&self, cache: &T, _lock: MutexGuard<'_, ()>) {
+    fn do_run_pending_tasks<T: InnerSync<K>>(
+        &self,
+        cache: &T,
+        _lock: MutexGuard<'_, ()>,
+        snapshot_config: Option<EntrySnapshotConfig>,
+    ) -> Option<EntrySnapshot<K>> {
         let now = cache.now();
         self.run_after.set_instant(Self::sync_after(now));
         let timeout = self.maintenance_task_timeout;
         let repeats = self.max_log_sync_repeats;
         let batch_size = self.eviction_batch_size;
-        let more_to_evict = cache.run_pending_tasks(timeout, repeats, batch_size);
+        let (more_to_evict, snap) =
+            cache.run_pending_tasks(timeout, repeats, batch_size, snapshot_config);
         self.set_more_entries_to_evict(more_to_evict);
+        snap
     }
 
     fn sync_after(now: Instant) -> Instant {
@@ -133,7 +149,7 @@ impl Housekeeper {
 }
 
 #[cfg(test)]
-impl Housekeeper {
+impl<K> Housekeeper<K> {
     pub(crate) fn disable_auto_run(&self) {
         self.auto_run_enabled.store(false, Ordering::Relaxed);
     }

@@ -12,7 +12,9 @@ use crate::{
     },
     notification::EvictionListener,
     ops::compute::{self, CompResult},
-    policy::{EvictionPolicy, ExpirationPolicy},
+    policy::{
+        sync::PolicyExt, EntrySnapshot, EntrySnapshotConfig, EvictionPolicy, ExpirationPolicy,
+    },
     sync::{Iter, PredicateId},
     sync_base::{
         base_cache::{BaseCache, HouseKeeperArc},
@@ -637,6 +639,10 @@ impl<K, V, S> Cache<K, V, S> {
     /// A future version may support to modify it.
     pub fn policy(&self) -> Policy {
         self.base.policy()
+    }
+
+    pub fn policy_ext(&self) -> PolicyExt<'_, K, V, S> {
+        PolicyExt::new(self)
     }
 
     /// Returns an approximate number of entries in this cache.
@@ -1767,8 +1773,19 @@ where
     /// Performs any pending maintenance operations needed by the cache.
     pub fn run_pending_tasks(&self) {
         if let Some(hk) = &self.base.housekeeper {
-            hk.run_pending_tasks(&*self.base.inner);
+            hk.run_pending_tasks(&*self.base.inner, None);
         }
+    }
+
+    pub(crate) fn capture_entry_snapshot(
+        &self,
+        snapshot_config: EntrySnapshotConfig,
+    ) -> EntrySnapshot<K> {
+        self.base
+            .housekeeper
+            .as_ref()
+            .and_then(|hk| hk.run_pending_tasks(&*self.base.inner, Some(snapshot_config)))
+            .unwrap_or_default()
     }
 }
 
@@ -1821,11 +1838,11 @@ where
     // TODO: Like future::Cache, move this method to BaseCache.
     #[inline]
     fn schedule_write_op(
-        inner: &impl InnerSync,
+        inner: &impl InnerSync<K>,
         ch: &Sender<WriteOp<K, V>>,
         op: WriteOp<K, V>,
         now: Instant,
-        housekeeper: Option<&HouseKeeperArc>,
+        housekeeper: Option<&HouseKeeperArc<K>>,
     ) -> Result<(), TrySendError<WriteOp<K, V>>> {
         let mut op = op;
 
@@ -1886,6 +1903,7 @@ mod tests {
     use super::Cache;
     use crate::{
         common::{time::Clock, HousekeeperConfig},
+        entry::{EntryMetadata, EntryRegion},
         notification::RemovalCause,
         policy::{test_utils::ExpiryCallCounters, EvictionPolicy},
         Expiry,
@@ -1920,7 +1938,7 @@ mod tests {
     }
 
     #[test]
-    fn basic_single_thread() {
+    fn basic_tiny_lfu_single_thread() {
         // The following `Vec`s will hold actual and expected notifications.
         let actual = Arc::new(Mutex::new(Vec::new()));
         let mut expected = Vec::new();
@@ -2097,6 +2115,352 @@ mod tests {
         assert!(cache.contains_key(&"g"));
 
         verify_notification_vec(&cache, actual, &expected);
+        assert!(cache.key_locks_map_is_empty());
+    }
+
+    #[test]
+    fn hot_and_cold_entries_tiny_lfu() {
+        const R_MAIN: EntryRegion = EntryRegion::Main;
+
+        let mut cache = Cache::builder().max_capacity(3).build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+
+        // counts: a -> 1, b -> 1
+        // NOTE: snapshot.capture() implicitly runs pending tasks.
+        let snapshot = cache
+            .policy_ext()
+            .entry_snapshot()
+            .with_coldest(5)
+            .with_hottest(5)
+            .capture();
+        verify_snapshot_entries(
+            snapshot.coldest(),
+            &[("a", R_MAIN), ("b", R_MAIN)],
+            "coldest",
+            line!(),
+        );
+        verify_snapshot_entries(
+            snapshot.hottest(),
+            &[("b", R_MAIN), ("a", R_MAIN)],
+            "hottest",
+            line!(),
+        );
+
+        cache.insert("c", "cindy");
+        assert_eq!(cache.get(&"c"), Some("cindy"));
+        assert!(cache.contains_key(&"c"));
+        // counts: a -> 1, b -> 1, c -> 1
+        let snapshot = cache
+            .policy_ext()
+            .entry_snapshot()
+            .with_coldest(3)
+            .with_hottest(2)
+            .capture();
+        verify_snapshot_entries(
+            snapshot.coldest(),
+            &[("a", R_MAIN), ("b", R_MAIN), ("c", R_MAIN)],
+            "coldest",
+            line!(),
+        );
+        verify_snapshot_entries(
+            snapshot.hottest(),
+            &[("c", R_MAIN), ("b", R_MAIN)],
+            "hottest",
+            line!(),
+        );
+
+        assert!(cache.contains_key(&"a"));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert!(cache.contains_key(&"b"));
+        // counts: a -> 2, b -> 2, c -> 1
+        let snapshot = cache
+            .policy_ext()
+            .entry_snapshot()
+            .with_coldest(2)
+            .with_hottest(3)
+            .capture();
+        verify_snapshot_entries(
+            snapshot.coldest(),
+            &[("c", R_MAIN), ("a", R_MAIN)],
+            "coldest",
+            line!(),
+        );
+        verify_snapshot_entries(
+            snapshot.hottest(),
+            &[("b", R_MAIN), ("a", R_MAIN), ("c", R_MAIN)],
+            "hottest",
+            line!(),
+        );
+
+        // "d" should not be admitted because its frequency is too low.
+        cache.insert("d", "david"); //   count: d -> 0
+        cache.run_pending_tasks();
+        assert_eq!(cache.get(&"d"), None); //   d -> 1
+        assert!(!cache.contains_key(&"d"));
+
+        cache.insert("d", "david");
+        cache.run_pending_tasks();
+        assert!(!cache.contains_key(&"d"));
+        assert_eq!(cache.get(&"d"), None); //   d -> 2
+
+        // "d" should be admitted and "c" should be evicted
+        // because d's frequency is higher than c's.
+        cache.insert("d", "dennis");
+        cache.run_pending_tasks();
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"c"), None);
+        assert_eq!(cache.get(&"d"), Some("dennis"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert!(!cache.contains_key(&"c"));
+        assert!(cache.contains_key(&"d"));
+
+        let snapshot = cache
+            .policy_ext()
+            .entry_snapshot()
+            .with_coldest(5)
+            .with_hottest(5)
+            .capture();
+        verify_snapshot_entries(
+            snapshot.coldest(),
+            &[("a", R_MAIN), ("b", R_MAIN), ("d", R_MAIN)],
+            "coldest",
+            line!(),
+        );
+        verify_snapshot_entries(
+            snapshot.hottest(),
+            &[("d", R_MAIN), ("b", R_MAIN), ("a", R_MAIN)],
+            "hottest",
+            line!(),
+        );
+
+        cache.invalidate(&"b");
+        cache.run_pending_tasks();
+        assert_eq!(cache.get(&"b"), None);
+        assert!(!cache.contains_key(&"b"));
+
+        assert!(cache.remove(&"b").is_none());
+        assert_eq!(cache.remove(&"d"), Some("dennis"));
+        cache.run_pending_tasks();
+        assert_eq!(cache.get(&"d"), None);
+        assert!(!cache.contains_key(&"d"));
+        let snapshot = cache
+            .policy_ext()
+            .entry_snapshot()
+            .with_coldest(5)
+            .with_hottest(5)
+            .capture();
+        verify_snapshot_entries(snapshot.coldest(), &[("a", R_MAIN)], "coldest", line!());
+        verify_snapshot_entries(snapshot.hottest(), &[("a", R_MAIN)], "hottest", line!());
+
+        assert!(cache.key_locks_map_is_empty());
+    }
+
+    #[test]
+    fn hot_and_cold_entries_lru() {
+        const R_MAIN: EntryRegion = EntryRegion::Main;
+
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .eviction_policy(EvictionPolicy::lru())
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        // a -> b
+        // NOTE: snapshot.capture() implicitly runs pending tasks.
+        let snapshot = cache
+            .policy_ext()
+            .entry_snapshot()
+            .with_coldest(5)
+            .with_hottest(5)
+            .capture();
+        verify_snapshot_entries(
+            snapshot.coldest(),
+            &[("a", R_MAIN), ("b", R_MAIN)],
+            "coldest",
+            line!(),
+        );
+        verify_snapshot_entries(
+            snapshot.hottest(),
+            &[("b", R_MAIN), ("a", R_MAIN)],
+            "hottest",
+            line!(),
+        );
+
+        cache.insert("c", "cindy");
+        assert_eq!(cache.get(&"c"), Some("cindy"));
+        assert!(cache.contains_key(&"c"));
+        // a -> b -> c
+        let snapshot = cache
+            .policy_ext()
+            .entry_snapshot()
+            .with_coldest(3)
+            .with_hottest(2)
+            .capture();
+        verify_snapshot_entries(
+            snapshot.coldest(),
+            &[("a", R_MAIN), ("b", R_MAIN), ("c", R_MAIN)],
+            "coldest",
+            line!(),
+        );
+        verify_snapshot_entries(
+            snapshot.hottest(),
+            &[("c", R_MAIN), ("b", R_MAIN)],
+            "hottest",
+            line!(),
+        );
+
+        assert!(cache.contains_key(&"a"));
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert!(cache.contains_key(&"b"));
+        // c -> a -> b
+        let snapshot = cache
+            .policy_ext()
+            .entry_snapshot()
+            .with_coldest(2)
+            .with_hottest(3)
+            .capture();
+        verify_snapshot_entries(
+            snapshot.coldest(),
+            &[("c", R_MAIN), ("a", R_MAIN)],
+            "coldest",
+            line!(),
+        );
+        verify_snapshot_entries(
+            snapshot.hottest(),
+            &[("b", R_MAIN), ("a", R_MAIN), ("c", R_MAIN)],
+            "hottest",
+            line!(),
+        );
+
+        // "d" should be admitted because the cache uses the LRU strategy.
+        cache.insert("d", "david");
+        // "c" is the LRU and should have be evicted.
+        // a -> b -> d
+        let snapshot = cache
+            .policy_ext()
+            .entry_snapshot()
+            .with_coldest(3)
+            .with_hottest(3)
+            .capture();
+        verify_snapshot_entries(
+            snapshot.coldest(),
+            &[("a", R_MAIN), ("b", R_MAIN), ("d", R_MAIN)],
+            "coldest",
+            line!(),
+        );
+        verify_snapshot_entries(
+            snapshot.hottest(),
+            &[("d", R_MAIN), ("b", R_MAIN), ("a", R_MAIN)],
+            "hottest",
+            line!(),
+        );
+
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"c"), None);
+        assert_eq!(cache.get(&"d"), Some("david"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert!(!cache.contains_key(&"c"));
+        assert!(cache.contains_key(&"d"));
+
+        cache.invalidate(&"b");
+        cache.run_pending_tasks();
+        // a -> d
+        assert_eq!(cache.get(&"b"), None);
+        assert!(!cache.contains_key(&"b"));
+
+        let snapshot = cache
+            .policy_ext()
+            .entry_snapshot()
+            .with_coldest(3)
+            .with_hottest(3)
+            .capture();
+        verify_snapshot_entries(
+            snapshot.coldest(),
+            &[("a", R_MAIN), ("d", R_MAIN)],
+            "coldest",
+            line!(),
+        );
+        verify_snapshot_entries(
+            snapshot.hottest(),
+            &[("d", R_MAIN), ("a", R_MAIN)],
+            "hottest",
+            line!(),
+        );
+
+        assert!(cache.remove(&"b").is_none());
+        assert_eq!(cache.remove(&"d"), Some("david"));
+        cache.run_pending_tasks();
+        // a
+        assert_eq!(cache.get(&"d"), None);
+        assert!(!cache.contains_key(&"d"));
+
+        let snapshot = cache
+            .policy_ext()
+            .entry_snapshot()
+            .with_coldest(3)
+            .with_hottest(3)
+            .capture();
+        verify_snapshot_entries(snapshot.coldest(), &[("a", R_MAIN)], "coldest", line!());
+        verify_snapshot_entries(snapshot.hottest(), &[("a", R_MAIN)], "hottest", line!());
+
+        cache.insert("e", "emily");
+        cache.insert("f", "frank");
+        // "a" should be evicted because it is the LRU.
+        cache.insert("g", "gina");
+        // e -> f -> g
+        let snapshot = cache
+            .policy_ext()
+            .entry_snapshot()
+            .with_coldest(3)
+            .with_hottest(3)
+            .capture();
+        verify_snapshot_entries(
+            snapshot.coldest(),
+            &[("e", R_MAIN), ("f", R_MAIN), ("g", R_MAIN)],
+            "coldest",
+            line!(),
+        );
+        verify_snapshot_entries(
+            snapshot.hottest(),
+            &[("g", R_MAIN), ("f", R_MAIN), ("e", R_MAIN)],
+            "hottest",
+            line!(),
+        );
+
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get(&"e"), Some("emily"));
+        assert_eq!(cache.get(&"f"), Some("frank"));
+        assert_eq!(cache.get(&"g"), Some("gina"));
+        assert!(!cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"e"));
+        assert!(cache.contains_key(&"f"));
+        assert!(cache.contains_key(&"g"));
+
         assert!(cache.key_locks_map_is_empty());
     }
 
@@ -5131,6 +5495,25 @@ mod tests {
             }
 
             break;
+        }
+    }
+
+    fn verify_snapshot_entries<K>(
+        actual: &[(Arc<K>, EntryMetadata)],
+        expected: &[(K, EntryRegion)],
+        label: &str,
+        line: u32,
+    ) where
+        K: Eq + std::fmt::Debug,
+    {
+        let al = actual.len();
+        let el = expected.len();
+        assert_eq!(al, el, "{label} len at line {line}");
+
+        for (i, ((ek, er), (ak, am))) in expected.iter().zip(actual).enumerate() {
+            assert_eq!(&**ak, ek, "{label} key[{i}] at line {line}");
+            let ar = &am.region();
+            assert_eq!(ar, er, "{label} region[{i}] at line {line}");
         }
     }
 }
