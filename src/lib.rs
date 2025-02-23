@@ -224,7 +224,7 @@
 //!   `invalidate_all` and `invalidate_entries_if`.
 //! - Some of the cache read methods: `get`
 //! - `run_pending_tasks` method, which executes the pending maintenance tasks
-//!    explicitly.
+//!   explicitly.
 //!
 //! Except `run_pending_tasks` method, the maintenance tasks are executed lazily
 //! when one of the conditions in the [Bounded Channels](#bounded-channels) section
