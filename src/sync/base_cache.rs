@@ -1,6 +1,5 @@
 use super::{
     invalidator::{Invalidator, KeyDateLite, PredicateFun},
-    iter::ScanningGet,
     key_lock::{KeyLock, KeyLockMap},
     PredicateId,
 };
@@ -21,6 +20,7 @@ use crate::{
         },
         deque::{DeqNode, Deque},
         frequency_sketch::FrequencySketch,
+        iter::ScanningGet,
         time::{AtomicInstant, Clock, Instant},
         timer_wheel::{ReschedulingResult, TimerWheel},
         CacheRegion, HousekeeperConfig,

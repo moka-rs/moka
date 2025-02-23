@@ -4,10 +4,12 @@ use super::{cache::Cache, CacheBuilder, OwnedKeyEntrySelector, RefKeyEntrySelect
 use crate::common::concurrent::Weigher;
 use crate::common::time::Clock;
 use crate::{
-    common::HousekeeperConfig,
+    common::{
+        iter::{Iter, ScanningGet},
+        HousekeeperConfig,
+    },
     notification::EvictionListener,
     policy::{EvictionPolicy, ExpirationPolicy},
-    sync_base::iter::{Iter, ScanningGet},
     Entry, Policy, PredicateError,
 };
 

@@ -55,10 +55,10 @@ pub trait FutureExt: Future {
 /// Iterator visiting all key-value pairs in a cache in arbitrary order.
 ///
 /// Call [`Cache::iter`](./struct.Cache.html#method.iter) method to obtain an `Iter`.
-pub struct Iter<'i, K, V>(crate::sync_base::iter::Iter<'i, K, V>);
+pub struct Iter<'i, K, V>(crate::common::iter::Iter<'i, K, V>);
 
 impl<'i, K, V> Iter<'i, K, V> {
-    pub(crate) fn new(inner: crate::sync_base::iter::Iter<'i, K, V>) -> Self {
+    pub(crate) fn new(inner: crate::common::iter::Iter<'i, K, V>) -> Self {
         Self(inner)
     }
 }

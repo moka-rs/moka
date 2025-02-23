@@ -265,9 +265,6 @@ pub mod ops;
 pub mod policy;
 
 #[cfg(any(feature = "sync", feature = "future"))]
-pub(crate) mod sync_base;
-
-#[cfg(any(feature = "sync", feature = "future"))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
 pub use common::error::PredicateError;
 
