@@ -21,6 +21,7 @@ use crate::{
         },
         deque::{DeqNode, Deque},
         frequency_sketch::FrequencySketch,
+        iter::ScanningGet,
         time::{AtomicInstant, Clock, Instant},
         timer_wheel::{ReschedulingResult, TimerWheel},
         CacheRegion, HousekeeperConfig,
@@ -28,7 +29,6 @@ use crate::{
     future::CancelGuard,
     notification::{AsyncEvictionListener, RemovalCause},
     policy::{EvictionPolicy, EvictionPolicyConfig, ExpirationPolicy},
-    sync_base::iter::ScanningGet,
     Entry, Expiry, Policy, PredicateError,
 };
 

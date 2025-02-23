@@ -1486,7 +1486,7 @@ where
     /// ```
     ///
     pub fn iter(&self) -> Iter<'_, K, V> {
-        use crate::sync_base::iter::{Iter as InnerIter, ScanningGet};
+        use crate::common::iter::{Iter as InnerIter, ScanningGet};
 
         let inner = InnerIter::with_single_cache_segment(&self.base, self.base.num_cht_segments());
         Iter::new(inner)

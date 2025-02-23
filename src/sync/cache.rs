@@ -1,4 +1,5 @@
 use super::{
+    base_cache::{BaseCache, HouseKeeperArc},
     value_initializer::{InitResult, ValueInitializer},
     CacheBuilder, OwnedKeyEntrySelector, RefKeyEntrySelector,
 };
@@ -7,6 +8,7 @@ use crate::{
         concurrent::{
             constants::WRITE_RETRY_INTERVAL_MICROS, housekeeper::InnerSync, Weigher, WriteOp,
         },
+        iter::ScanningGet,
         time::{Clock, Instant},
         HousekeeperConfig,
     },
@@ -14,10 +16,6 @@ use crate::{
     ops::compute::{self, CompResult},
     policy::{EvictionPolicy, ExpirationPolicy},
     sync::{Iter, PredicateId},
-    sync_base::{
-        base_cache::{BaseCache, HouseKeeperArc},
-        iter::ScanningGet,
-    },
     Entry, Policy, PredicateError,
 };
 

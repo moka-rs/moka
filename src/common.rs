@@ -6,6 +6,7 @@ pub(crate) mod deque;
 pub(crate) mod entry;
 pub(crate) mod error;
 pub(crate) mod frequency_sketch;
+pub(crate) mod iter;
 pub(crate) mod time;
 pub(crate) mod timer_wheel;
 
