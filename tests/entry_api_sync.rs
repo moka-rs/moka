@@ -16,9 +16,9 @@ const NUM_THREADS: u8 = 16;
 const FILE: &str = "./Cargo.toml";
 
 macro_rules! generate_test_get_with {
-    ($name:ident, $cache_init:expr) => {
+    ($test_fn_name:ident, $cache_init:expr) => {
         #[test]
-        fn $name() {
+        fn $test_fn_name() {
             const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
 
             let cache = $cache_init;
@@ -85,9 +85,9 @@ macro_rules! generate_test_get_with {
 }
 
 macro_rules! generate_test_optionally_get_with {
-    ($name:ident, $cache_init:expr) => {
+    ($test_fn_name:ident, $cache_init:expr) => {
         #[test]
-        fn $name() {
+        fn $test_fn_name() {
             let cache = $cache_init;
             let call_counter = Arc::new(AtomicUsize::default());
             let barrier = Arc::new(Barrier::new(NUM_THREADS as usize));
@@ -157,9 +157,9 @@ macro_rules! generate_test_optionally_get_with {
 }
 
 macro_rules! generate_test_try_get_with {
-    ($name:ident, $cache_init:expr) => {
+    ($test_fn_name:ident, $cache_init:expr) => {
         #[test]
-        fn $name() {
+        fn $test_fn_name() {
             let cache = $cache_init;
             let call_counter = Arc::new(AtomicUsize::default());
             let barrier = Arc::new(Barrier::new(NUM_THREADS as usize));
