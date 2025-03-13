@@ -638,8 +638,6 @@ pub struct Cache<K, V, S = RandomState> {
     schedule_write_op_should_block: AtomicBool,
 }
 
-// TODO: https://github.com/moka-rs/moka/issues/54
-#[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl<K, V, S> Send for Cache<K, V, S>
 where
     K: Send + Sync,
