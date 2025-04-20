@@ -85,7 +85,7 @@ tokio = { version = "1.19", features = ["fs", "io-util", "macros", "rt-multi-thr
 
 # We cannot use `cfg(loom)` here because an indirect dependency `concurrent-queue`
 # uses it.
-[target.'cfg(moka_loom)'.dependencies]
+[target.'cfg(moka_loom)'.dev-dependencies]
 loom = "0.7"
 
 [target.'cfg(trybuild)'.dev-dependencies]
