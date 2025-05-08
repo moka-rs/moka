@@ -102,7 +102,8 @@ impl<T: ?Sized> MiniArc<T> {
     /// coercion by using the `unsize` crate. `MiniArc` does not have such a
     /// feature, so we are safe for now.
     #[inline]
-    #[allow(ambiguous_wide_pointer_comparisons)] // Remove when MSRV is 1.76 or newer.
+    #[allow(ambiguous_wide_pointer_comparisons)] // Remove this when MSRV is 1.76 or newer.
+    #[allow(clippy::ptr_eq)] // Remove this when MSRV is 1.76 or newer.
     pub(crate) fn ptr_eq(this: &Self, other: &Self) -> bool {
         // `addr_eq` requires Rust 1.76 or newer.
         // ptr::addr_eq(this.ptr.as_ptr(), other.ptr.as_ptr())
