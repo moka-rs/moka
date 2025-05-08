@@ -32,7 +32,7 @@ jobs:
   run-kani:
     needs: pre_job
     if: needs.pre_job.outputs.should_skip != 'true'
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout Moka
         uses: actions/checkout@v4
