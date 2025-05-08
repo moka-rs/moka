@@ -785,7 +785,7 @@ mod tests {
     use super::SegmentedCache;
     use crate::notification::RemovalCause;
     use parking_lot::Mutex;
-    use std::{sync::Arc, time::Duration};
+    use std::{error::Error, fmt::Display, sync::Arc, time::Duration};
 
     #[test]
     fn max_capacity_zero() {
@@ -1556,9 +1556,16 @@ mod tests {
             thread::{sleep, spawn},
         };
 
-        #[derive(thiserror::Error, Debug)]
-        #[error("{}", _0)]
+        #[derive(Debug)]
         pub struct MyError(String);
+
+        impl Display for MyError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+
+        impl Error for MyError {}
 
         type MyResult<T> = Result<T, Arc<MyError>>;
 
