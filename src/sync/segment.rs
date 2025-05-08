@@ -34,8 +34,6 @@ pub struct SegmentedCache<K, V, S = RandomState> {
     inner: Arc<Inner<K, V, S>>,
 }
 
-// TODO: https://github.com/moka-rs/moka/issues/54
-#[allow(clippy::non_send_fields_in_send_ty)]
 unsafe impl<K, V, S> Send for SegmentedCache<K, V, S>
 where
     K: Send + Sync,
