@@ -279,7 +279,7 @@ where
 
     pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
     where
-        Q: Equivalent<K> + ToOwnedArc<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         let cache = self.inner.select(hash);
@@ -291,7 +291,7 @@ where
     /// cache, the key will be cloned to create new entry in the cache.
     pub fn get_with_by_ref<Q>(&self, key: &Q, init: impl FnOnce() -> V) -> V
     where
-        Q: Equivalent<K> + ToOwnedArc<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         let replace_if = None as Option<fn(&V) -> bool>;
@@ -308,7 +308,7 @@ where
     pub fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
     where
         F: FnOnce() -> Option<V>,
-        Q: Equivalent<K> + ToOwnedArc<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         self.inner
@@ -324,7 +324,7 @@ where
     where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
-        Q: Equivalent<K> + ToOwnedArc<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         self.inner

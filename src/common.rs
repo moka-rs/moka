@@ -141,26 +141,26 @@ pub(crate) fn available_parallelism() -> usize {
 // Implementation Note: follow
 // https://doc.rust-lang.org/std/borrow/trait.ToOwned.html#implementors
 pub trait ToOwnedArc {
-    type Owned: Borrow<Self> + ?Sized;
+    type ArcOwned: Borrow<Self> + ?Sized;
 
-    fn to_owned_arc(&self) -> Arc<Self::Owned>;
+    fn to_owned_arc(&self) -> Arc<Self::ArcOwned>;
 }
 
 impl<T: ToOwned> ToOwnedArc for T
 where
     T: Clone,
 {
-    type Owned = T;
+    type ArcOwned = T;
 
-    fn to_owned_arc(&self) -> Arc<Self::Owned> {
+    fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
         Arc::new(self.clone())
     }
 }
 
 impl ToOwnedArc for str {
-    type Owned = Self;
+    type ArcOwned = Self;
 
-    fn to_owned_arc(&self) -> Arc<Self::Owned> {
+    fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
         self.into()
     }
 }
@@ -175,33 +175,33 @@ impl ToOwnedArc for str {
 // }
 
 impl ToOwnedArc for CStr {
-    type Owned = Self;
+    type ArcOwned = Self;
 
-    fn to_owned_arc(&self) -> Arc<Self::Owned> {
+    fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
         self.into()
     }
 }
 
 impl ToOwnedArc for OsStr {
-    type Owned = Self;
+    type ArcOwned = Self;
 
-    fn to_owned_arc(&self) -> Arc<Self::Owned> {
+    fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
         self.into()
     }
 }
 
 impl ToOwnedArc for Path {
-    type Owned = Self;
+    type ArcOwned = Self;
 
-    fn to_owned_arc(&self) -> Arc<Self::Owned> {
+    fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
         self.into()
     }
 }
 
 impl<T: Clone> ToOwnedArc for [T] {
-    type Owned = Self;
+    type ArcOwned = Self;
 
-    fn to_owned_arc(&self) -> Arc<Self::Owned> {
+    fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
         self.into()
     }
 }

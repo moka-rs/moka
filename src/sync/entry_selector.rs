@@ -569,7 +569,7 @@ where
 impl<'a, K: ?Sized, Q, V, S> RefKeyEntrySelector<'a, K, Q, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    Q: Equivalent<K> + ToOwnedArc<Owned = K> + Hash + ?Sized,
+    Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {

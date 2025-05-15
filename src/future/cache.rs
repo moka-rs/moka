@@ -918,7 +918,7 @@ where
     /// ```
     pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
     where
-        Q: Equivalent<K> + ToOwnedArc<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.base.hash(key);
         RefKeyEntrySelector::new(key, hash, self)
@@ -929,7 +929,7 @@ where
     /// cache, the key will be cloned to create new entry in the cache.
     pub async fn get_with_by_ref<Q>(&self, key: &Q, init: impl Future<Output = V>) -> V
     where
-        Q: Equivalent<K> + ToOwnedArc<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
     {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
@@ -946,7 +946,7 @@ where
     pub async fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
     where
         F: Future<Output = Option<V>>,
-        Q: Equivalent<K> + ToOwnedArc<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
     {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
@@ -962,7 +962,7 @@ where
     where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
-        Q: Equivalent<K> + ToOwnedArc<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
     {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
@@ -1183,7 +1183,7 @@ where
         need_key: bool,
     ) -> Entry<K, V>
     where
-        Q: Equivalent<K> + ToOwnedArc<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
     {
         let maybe_entry = self
             .base
@@ -1257,7 +1257,7 @@ where
         init: impl FnOnce() -> V,
     ) -> Entry<K, V>
     where
-        Q: Equivalent<K> + ToOwnedArc<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
     {
         match self
             .base
@@ -1306,7 +1306,7 @@ where
     ) -> Option<Entry<K, V>>
     where
         F: Future<Output = Option<V>>,
-        Q: Equivalent<K> + ToOwnedArc<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
     {
         let entry = self
             .base
@@ -1387,7 +1387,7 @@ where
     where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
-        Q: Equivalent<K> + ToOwnedArc<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
     {
         if let Some(entry) = self
             .base
