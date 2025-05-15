@@ -1,7 +1,7 @@
 use std::{hash::Hash, sync::Arc};
 
 // This trait is implemented by `sync::BaseCache` and `sync::Cache`.
-pub(crate) trait ScanningGet<K, V> {
+pub(crate) trait ScanningGet<K: ?Sized, V> {
     /// Returns the number of segments in the concurrent hash table.
     fn num_cht_segments(&self) -> usize;
 
@@ -19,7 +19,7 @@ pub(crate) trait ScanningGet<K, V> {
 /// Iterator visiting all key-value pairs in a cache in arbitrary order.
 ///
 /// Call [`Cache::iter`](./struct.Cache.html#method.iter) method to obtain an `Iter`.
-pub struct Iter<'i, K, V> {
+pub struct Iter<'i, K: ?Sized, V> {
     keys: Option<Vec<Arc<K>>>,
     cache_segments: Box<[&'i dyn ScanningGet<K, V>]>,
     num_cht_segments: usize,
@@ -28,7 +28,7 @@ pub struct Iter<'i, K, V> {
     is_done: bool,
 }
 
-impl<'i, K, V> Iter<'i, K, V> {
+impl<'i, K: ?Sized, V> Iter<'i, K, V> {
     pub(crate) fn with_single_cache_segment(
         cache: &'i dyn ScanningGet<K, V>,
         num_cht_segments: usize,
@@ -59,7 +59,7 @@ impl<'i, K, V> Iter<'i, K, V> {
     }
 }
 
-impl<K, V> Iterator for Iter<'_, K, V>
+impl<K: ?Sized, V> Iterator for Iter<'_, K, V>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -82,7 +82,7 @@ where
     }
 }
 
-impl<'i, K, V> Iter<'i, K, V>
+impl<'i, K: ?Sized, V> Iter<'i, K, V>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,

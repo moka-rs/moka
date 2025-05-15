@@ -46,7 +46,7 @@ pub(crate) enum InitResult<V, E> {
     InitErr(Arc<E>),
 }
 
-pub(crate) struct ValueInitializer<K, V, S> {
+pub(crate) struct ValueInitializer<K: ?Sized, V, S> {
     // TypeId is the type ID of the concrete error type of generic type E in the
     // try_get_with method. We use the type ID as a part of the key to ensure that
     // we can always downcast the trait object ErrorObject (in Waiter<V>) into
@@ -54,7 +54,7 @@ pub(crate) struct ValueInitializer<K, V, S> {
     waiters: crate::cht::SegmentedHashMap<(Arc<K>, TypeId), Waiter<V>, S>,
 }
 
-impl<K, V, S> ValueInitializer<K, V, S>
+impl<K: ?Sized, V, S> ValueInitializer<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -383,7 +383,7 @@ where
 }
 
 #[cfg(test)]
-impl<K, V, S> ValueInitializer<K, V, S> {
+impl<K: ?Sized, V, S> ValueInitializer<K, V, S> {
     pub(crate) fn waiter_count(&self) -> usize {
         self.waiters.len()
     }

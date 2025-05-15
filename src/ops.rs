@@ -20,7 +20,7 @@ pub mod compute {
 
     /// The result of the `and_compute_with` and similar methods.
     #[derive(Debug)]
-    pub enum CompResult<K, V> {
+    pub enum CompResult<K: ?Sized, V> {
         /// The entry did not exist and still does not exist.
         StillNone(Arc<K>),
         /// The entry already existed and was not modified. The returned entry

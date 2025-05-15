@@ -59,7 +59,7 @@ const fn aligned_duration(duration: Duration) -> u64 {
 }
 
 /// A timer node stored in a bucket of a timer wheel.
-pub(crate) enum TimerNode<K> {
+pub(crate) enum TimerNode<K: ?Sized> {
     /// A sentinel node that is used to mark the end of a timer wheel bucket.
     Sentinel,
     /// A timer entry that is holding Arc pointers to the data structures in a cache
@@ -74,7 +74,7 @@ pub(crate) enum TimerNode<K> {
     },
 }
 
-impl<K> TimerNode<K> {
+impl<K: ?Sized> TimerNode<K> {
     fn new(
         entry_info: MiniArc<EntryInfo<K>>,
         deq_nodes: MiniArc<Mutex<DeqNodes<K>>>,
@@ -137,7 +137,7 @@ impl<K> TimerNode<K> {
 type Bucket<K> = Deque<TimerNode<K>>;
 
 #[must_use = "this `ReschedulingResult` may be an `Removed` variant, which should be handled"]
-pub(crate) enum ReschedulingResult<K> {
+pub(crate) enum ReschedulingResult<K: ?Sized> {
     /// The timer event was rescheduled.
     Rescheduled,
     /// The timer event was not rescheduled because the entry has no expiration time.
@@ -149,7 +149,7 @@ pub(crate) enum ReschedulingResult<K> {
 ///
 /// The expiration events are deferred until the timer is advanced, which is
 /// performed as part of the cache's housekeeping cycle.
-pub(crate) struct TimerWheel<K> {
+pub(crate) struct TimerWheel<K: ?Sized> {
     /// The hierarchical timer wheels.
     wheels: Box<[Box<[Bucket<K>]>]>,
     /// The time when this `TimerWheel` was created.
@@ -166,7 +166,7 @@ pub(crate) struct TimerWheel<K> {
 // pointers.
 unsafe impl<K> Send for TimerWheel<K> {}
 
-impl<K> TimerWheel<K> {
+impl<K: ?Sized> TimerWheel<K> {
     pub(crate) fn new(now: Instant) -> Self {
         Self {
             wheels: Box::default(), // Empty.
@@ -380,7 +380,7 @@ impl<K> TimerWheel<K> {
 /// descheduled timer. `TimerWheel::advance` method returns an iterator over timer
 /// events.
 #[derive(Debug)]
-pub(crate) enum TimerEvent<K> {
+pub(crate) enum TimerEvent<K: ?Sized> {
     /// This cache entry has expired.
     Expired(Box<DeqNode<TimerNode<K>>>),
     // This cache entry has been rescheduled. Rescheduling includes moving a timer
@@ -396,7 +396,7 @@ pub(crate) enum TimerEvent<K> {
 }
 
 /// An iterator over expired cache entries.
-pub(crate) struct TimerEventsIter<'iter, K> {
+pub(crate) struct TimerEventsIter<'iter, K: ?Sized> {
     timer_wheel: &'iter mut TimerWheel<K>,
     previous_time: Instant,
     current_time: Instant,
@@ -409,7 +409,7 @@ pub(crate) struct TimerEventsIter<'iter, K> {
     is_new_index: bool,
 }
 
-impl<'iter, K> TimerEventsIter<'iter, K> {
+impl<'iter, K: ?Sized> TimerEventsIter<'iter, K> {
     fn new(
         timer_wheel: &'iter mut TimerWheel<K>,
         previous_time: Instant,
@@ -430,7 +430,7 @@ impl<'iter, K> TimerEventsIter<'iter, K> {
     }
 }
 
-impl<K> Drop for TimerEventsIter<'_, K> {
+impl<K: ?Sized> Drop for TimerEventsIter<'_, K> {
     fn drop(&mut self) {
         if !self.is_done {
             // This iterator was dropped before consuming all events. Reset the
@@ -441,7 +441,7 @@ impl<K> Drop for TimerEventsIter<'_, K> {
     }
 }
 
-impl<K> Iterator for TimerEventsIter<'_, K> {
+impl<K: ?Sized> Iterator for TimerEventsIter<'_, K> {
     type Item = TimerEvent<K>;
 
     /// NOTE: When necessary, this iterator will unset the timer node pointer in the

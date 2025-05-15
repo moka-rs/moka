@@ -20,9 +20,9 @@ fn main() {
     // is because the internal concurrent hash table of `Cache` is a lock free data
     // structure and does not use any mutexes. So it cannot guarantee: (1) the `&mut
     // Vec<_>` is unique, and (2) it is not accessed concurrently by other threads.
-    let cache: Cache<String, Arc<RwLock<Vec<i32>>>> = Cache::new(100);
+    let cache: Cache<str, Arc<RwLock<Vec<i32>>>> = Cache::new(100);
 
-    let key = "key".to_string();
+    let key: Arc<str> = "key".into();
 
     let entry = append_to_cached_vec(&cache, &key, 1);
     assert!(entry.is_fresh());
@@ -41,10 +41,10 @@ fn main() {
 }
 
 fn append_to_cached_vec(
-    cache: &Cache<String, Arc<RwLock<Vec<i32>>>>,
+    cache: &Cache<str, Arc<RwLock<Vec<i32>>>>,
     key: &str,
     value: i32,
-) -> Entry<String, Arc<RwLock<Vec<i32>>>> {
+) -> Entry<str, Arc<RwLock<Vec<i32>>>> {
     cache.entry_by_ref(key).and_upsert_with(|maybe_entry| {
         if let Some(entry) = maybe_entry {
             // The entry exists, append the value to the Vec.

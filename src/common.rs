@@ -1,4 +1,10 @@
-use std::time::Duration;
+use std::{
+    borrow::Borrow,
+    ffi::{CStr, OsStr},
+    path::Path,
+    sync::Arc,
+    time::Duration,
+};
 
 pub(crate) mod builder_utils;
 pub(crate) mod concurrent;
@@ -122,4 +128,80 @@ pub(crate) fn sketch_capacity(max_capacity: u64) -> u32 {
 pub(crate) fn available_parallelism() -> usize {
     use std::{num::NonZeroUsize, thread::available_parallelism};
     available_parallelism().map(NonZeroUsize::get).unwrap_or(1)
+}
+
+/// [`ToOwned`], but wrapped inside an [`Arc`]
+/// moka internally uses [`Arc<K>`] to store the key type.
+/// So we can leverage this to eliminate one pointer indirection for common unsized
+/// types like [`str`].
+///
+/// Put it simply, if we use [`ToOwned`], which means that we would store [`Arc<String>`],
+/// then we would follow two pointers to access the data. However, with [`ToOwnedArc`],
+/// we can be sure that the data is optimally stored inside an [`Arc`], e.g. [`Arc<str>`].
+// Implementation Note: follow
+// https://doc.rust-lang.org/std/borrow/trait.ToOwned.html#implementors
+pub trait ToOwnedArc {
+    type Owned: Borrow<Self> + ?Sized;
+
+    fn to_owned_arc(&self) -> Arc<Self::Owned>;
+}
+
+impl<T: ToOwned> ToOwnedArc for T
+where
+    T: Clone,
+{
+    type Owned = T;
+
+    fn to_owned_arc(&self) -> Arc<Self::Owned> {
+        Arc::new(self.clone())
+    }
+}
+
+impl ToOwnedArc for str {
+    type Owned = Self;
+
+    fn to_owned_arc(&self) -> Arc<Self::Owned> {
+        self.into()
+    }
+}
+
+// unstable
+// impl ToOwnedArc for ByteStr {
+//     type Owned = ByteStr;
+
+//     fn to_owned_arc(&self) -> Arc<Self::Owned> {
+//         self.into()
+//     }
+// }
+
+impl ToOwnedArc for CStr {
+    type Owned = Self;
+
+    fn to_owned_arc(&self) -> Arc<Self::Owned> {
+        self.into()
+    }
+}
+
+impl ToOwnedArc for OsStr {
+    type Owned = Self;
+
+    fn to_owned_arc(&self) -> Arc<Self::Owned> {
+        self.into()
+    }
+}
+
+impl ToOwnedArc for Path {
+    type Owned = Self;
+
+    fn to_owned_arc(&self) -> Arc<Self::Owned> {
+        self.into()
+    }
+}
+
+impl<T: Clone> ToOwnedArc for [T] {
+    type Owned = Self;
+
+    fn to_owned_arc(&self) -> Arc<Self::Owned> {
+        self.into()
+    }
 }

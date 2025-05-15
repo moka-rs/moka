@@ -5,14 +5,14 @@ use std::sync::{
 
 use crate::notification::{EvictionListener, RemovalCause};
 
-pub(crate) struct RemovalNotifier<K, V> {
+pub(crate) struct RemovalNotifier<K: ?Sized, V> {
     listener: EvictionListener<K, V>,
     is_enabled: AtomicBool,
     #[cfg(feature = "logging")]
     cache_name: Option<String>,
 }
 
-impl<K, V> RemovalNotifier<K, V> {
+impl<K: ?Sized, V> RemovalNotifier<K, V> {
     pub(crate) fn new(listener: EvictionListener<K, V>, _cache_name: Option<String>) -> Self {
         Self {
             listener,
