@@ -129,7 +129,7 @@ where
 // Let's suppress the warning.
 // https://rust-lang.github.io/rust-clippy/master/index.html#extra_unused_lifetimes
 #[allow(clippy::extra_unused_lifetimes)]
-unsafe impl<'a, K, V> Send for Iter<'_, K, V>
+unsafe impl<'a, K: ?Sized, V> Send for Iter<'_, K, V>
 where
     K: 'a + Eq + Hash + Send,
     V: 'a + Send,
@@ -141,7 +141,7 @@ where
 // Let's suppress the warning.
 // https://rust-lang.github.io/rust-clippy/master/index.html#extra_unused_lifetimes
 #[allow(clippy::extra_unused_lifetimes)]
-unsafe impl<'a, K, V> Sync for Iter<'_, K, V>
+unsafe impl<'a, K: ?Sized, V> Sync for Iter<'_, K, V>
 where
     K: 'a + Eq + Hash + Sync,
     V: 'a + Sync,

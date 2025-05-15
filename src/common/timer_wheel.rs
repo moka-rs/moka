@@ -164,7 +164,7 @@ pub(crate) struct TimerWheel<K: ?Sized> {
 // Multi-threaded async runtimes require base_cache::Inner to be Send, but it will
 // not be without this `unsafe impl`. This is because DeqNodes have NonNull
 // pointers.
-unsafe impl<K> Send for TimerWheel<K> {}
+unsafe impl<K: ?Sized> Send for TimerWheel<K> {}
 
 impl<K: ?Sized> TimerWheel<K> {
     pub(crate) fn new(now: Instant) -> Self {

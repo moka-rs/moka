@@ -1,12 +1,14 @@
 //! This example demonstrates how to increment a cached `u64` counter. It uses the
 //! `and_upsert_with` method of `Cache`.
 
+use std::sync::Arc;
+
 use moka::{future::Cache, Entry};
 
 #[tokio::main]
 async fn main() {
-    let cache: Cache<String, u64> = Cache::new(100);
-    let key = "key".to_string();
+    let cache: Cache<str, u64> = Cache::new(100);
+    let key: Arc<str> = "key".into();
 
     let entry = increment_counter(&cache, &key).await;
     assert!(entry.is_fresh());
@@ -24,7 +26,7 @@ async fn main() {
     assert_eq!(entry.into_value(), 3);
 }
 
-async fn increment_counter(cache: &Cache<String, u64>, key: &str) -> Entry<String, u64> {
+async fn increment_counter(cache: &Cache<str, u64>, key: &str) -> Entry<str, u64> {
     cache
         .entry_by_ref(key)
         .and_upsert_with(|maybe_entry| {

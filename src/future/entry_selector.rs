@@ -1,6 +1,6 @@
 use equivalent::Equivalent;
 
-use crate::{ops::compute, Entry};
+use crate::{common::ToOwnedArc, ops::compute, Entry};
 
 use super::Cache;
 
@@ -671,7 +671,7 @@ where
 ///
 /// [`Entry`]: ../struct.Entry.html
 /// [entry-by-ref-method]: ./struct.Cache.html#method.entry_by_ref
-pub struct RefKeyEntrySelector<'a, K, Q, V, S>
+pub struct RefKeyEntrySelector<'a, K: ?Sized, Q, V, S>
 where
     Q: ?Sized,
 {
@@ -680,10 +680,10 @@ where
     cache: &'a Cache<K, V, S>,
 }
 
-impl<'a, K, Q, V, S> RefKeyEntrySelector<'a, K, Q, V, S>
+impl<'a, K: ?Sized, Q, V, S> RefKeyEntrySelector<'a, K, Q, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+    Q: Equivalent<K> + ToOwnedArc<Owned = K> + Hash + ?Sized,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
@@ -750,15 +750,15 @@ where
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///     let cache: Cache<String, u64> = Cache::new(100);
+    ///     let cache: Cache<str, u64> = Cache::new(100);
     ///     let key = "key1";
     ///
     ///     /// Increment a cached `u64` counter. If the counter is greater than or
     ///     /// equal to 2, remove it.
     ///     async fn inclement_or_remove_counter(
-    ///         cache: &Cache<String, u64>,
+    ///         cache: &Cache<str, u64>,
     ///         key: &str,
-    ///     ) -> CompResult<String, u64> {
+    ///     ) -> CompResult<str, u64> {
     ///         cache
     ///             .entry_by_ref(key)
     ///             .and_compute_with(|maybe_entry| {
@@ -824,7 +824,7 @@ where
         F: FnOnce(Option<Entry<K, V>>) -> Fut,
         Fut: Future<Output = compute::Op<V>>,
     {
-        let key = Arc::new(self.ref_key.to_owned());
+        let key = self.ref_key.to_owned_arc();
         self.cache
             .compute_with_hash_and_fun(key, self.hash, f)
             .await
@@ -888,7 +888,7 @@ where
         Fut: Future<Output = Result<compute::Op<V>, E>>,
         E: Send + Sync + 'static,
     {
-        let key = Arc::new(self.ref_key.to_owned());
+        let key = self.ref_key.to_owned_arc();
         self.cache
             .try_compute_with_hash_and_fun(key, self.hash, f)
             .await
@@ -903,7 +903,7 @@ where
         Fut: Future<Output = Result<compute::Op<V>, E>>,
         E: Send + Sync + 'static,
     {
-        let key = Arc::new(self.ref_key.to_owned());
+        let key = self.ref_key.to_owned_arc();
         self.cache
             .try_compute_if_nobody_else_with_hash_and_fun(key, self.hash, f)
             .await
@@ -947,7 +947,7 @@ where
     ///
     /// #[tokio::main]
     /// async fn main() {
-    ///     let cache: Cache<String, u64> = Cache::new(100);
+    ///     let cache: Cache<str, u64> = Cache::new(100);
     ///     let key = "key1";
     ///
     ///     let entry = cache
@@ -964,7 +964,7 @@ where
     ///         .await;
     ///     // It was not an update.
     ///     assert!(!entry.is_old_value_replaced());
-    ///     assert_eq!(entry.key(), &key);
+    ///     assert_eq!(entry.key(), key);
     ///     assert_eq!(entry.into_value(), 1);
     ///
     ///     let entry = cache
@@ -980,7 +980,7 @@ where
     ///         .await;
     ///     // It was an update.
     ///     assert!(entry.is_old_value_replaced());
-    ///     assert_eq!(entry.key(), &key);
+    ///     assert_eq!(entry.key(), key);
     ///     assert_eq!(entry.into_value(), 2);
     /// }
     /// ```
@@ -996,7 +996,7 @@ where
         F: FnOnce(Option<Entry<K, V>>) -> Fut,
         Fut: Future<Output = V>,
     {
-        let key = Arc::new(self.ref_key.to_owned());
+        let key = self.ref_key.to_owned_arc();
         self.cache.upsert_with_hash_and_fun(key, self.hash, f).await
     }
 

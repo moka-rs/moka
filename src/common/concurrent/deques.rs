@@ -20,7 +20,7 @@ pub(crate) struct Deques<K: ?Sized> {
 // Multi-threaded async runtimes require base_cache::Inner to be Send, but it will
 // not be without this `unsafe impl`. This is because DeqNodes have NonNull
 // pointers.
-unsafe impl<K> Send for Deques<K> {}
+unsafe impl<K: ?Sized> Send for Deques<K> {}
 
 impl<K: ?Sized> Default for Deques<K> {
     fn default() -> Self {

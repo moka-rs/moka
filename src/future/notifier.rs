@@ -7,14 +7,14 @@ use futures_util::FutureExt;
 
 use crate::notification::{AsyncEvictionListener, RemovalCause};
 
-pub(crate) struct RemovalNotifier<K, V> {
+pub(crate) struct RemovalNotifier<K: ?Sized, V> {
     listener: AsyncEvictionListener<K, V>,
     is_enabled: AtomicBool,
     #[cfg(feature = "logging")]
     cache_name: Option<String>,
 }
 
-impl<K, V> RemovalNotifier<K, V> {
+impl<K: ?Sized, V> RemovalNotifier<K, V> {
     pub(crate) fn new(listener: AsyncEvictionListener<K, V>, _cache_name: Option<String>) -> Self {
         Self {
             listener,

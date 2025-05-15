@@ -113,7 +113,7 @@ impl Housekeeper {
 
     pub(crate) async fn run_pending_tasks<K, V, S>(&self, cache: Arc<Inner<K, V, S>>)
     where
-        K: Hash + Eq + Send + Sync + 'static,
+        K: Hash + Eq + Send + Sync + ?Sized + 'static,
         V: Clone + Send + Sync + 'static,
         S: BuildHasher + Clone + Send + Sync + 'static,
     {
@@ -132,7 +132,7 @@ impl Housekeeper {
     /// are more entries to evict in next run.
     pub(crate) async fn try_run_pending_tasks<K, V, S>(&self, cache: &Arc<Inner<K, V, S>>) -> bool
     where
-        K: Hash + Eq + Send + Sync + 'static,
+        K: Hash + Eq + Send + Sync + ?Sized + 'static,
         V: Clone + Send + Sync + 'static,
         S: BuildHasher + Clone + Send + Sync + 'static,
     {
@@ -156,7 +156,7 @@ impl Housekeeper {
         cache: Arc<Inner<K, V, S>>,
         current_task: &mut Option<Shared<BoxFuture<'static, bool>>>,
     ) where
-        K: Hash + Eq + Send + Sync + 'static,
+        K: Hash + Eq + Send + Sync + ?Sized + 'static,
         V: Clone + Send + Sync + 'static,
         S: BuildHasher + Clone + Send + Sync + 'static,
     {

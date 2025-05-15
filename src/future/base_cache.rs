@@ -54,7 +54,7 @@ use std::{
 
 pub(crate) type HouseKeeperArc = Arc<Housekeeper>;
 
-pub(crate) struct BaseCache<K, V, S = RandomState> {
+pub(crate) struct BaseCache<K: ?Sized, V, S = RandomState> {
     pub(crate) inner: Arc<Inner<K, V, S>>,
     read_op_ch: Sender<ReadOp<K, V>>,
     pub(crate) write_op_ch: Sender<WriteOp<K, V>>,
@@ -63,7 +63,7 @@ pub(crate) struct BaseCache<K, V, S = RandomState> {
     pub(crate) housekeeper: Option<HouseKeeperArc>,
 }
 
-impl<K, V, S> Clone for BaseCache<K, V, S> {
+impl<K: ?Sized, V, S> Clone for BaseCache<K, V, S> {
     /// Makes a clone of this shared cache.
     ///
     /// This operation is cheap as it only creates thread-safe reference counted
@@ -80,14 +80,14 @@ impl<K, V, S> Clone for BaseCache<K, V, S> {
     }
 }
 
-impl<K, V, S> Drop for BaseCache<K, V, S> {
+impl<K: ?Sized, V, S> Drop for BaseCache<K, V, S> {
     fn drop(&mut self) {
         // The housekeeper needs to be dropped before the inner is dropped.
         std::mem::drop(self.housekeeper.take());
     }
 }
 
-impl<K, V, S> BaseCache<K, V, S> {
+impl<K: ?Sized, V, S> BaseCache<K, V, S> {
     pub(crate) fn name(&self) -> Option<&str> {
         self.inner.name()
     }
@@ -141,7 +141,7 @@ impl<K, V, S> BaseCache<K, V, S> {
     }
 }
 
-impl<K, V, S> BaseCache<K, V, S>
+impl<K: ?Sized, V, S> BaseCache<K, V, S>
 where
     K: Hash + Eq,
     S: BuildHasher,
@@ -151,7 +151,7 @@ where
     }
 }
 
-impl<K, V, S> BaseCache<K, V, S>
+impl<K: ?Sized, V, S> BaseCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -412,7 +412,7 @@ where
 //
 // Iterator support
 //
-impl<K, V, S> ScanningGet<K, V> for BaseCache<K, V, S>
+impl<K: ?Sized, V, S> ScanningGet<K, V> for BaseCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -451,7 +451,7 @@ where
 //
 // private methods
 //
-impl<K, V, S> BaseCache<K, V, S>
+impl<K: ?Sized, V, S> BaseCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -747,7 +747,7 @@ where
     }
 }
 
-impl<K, V, S> BaseCache<K, V, S> {
+impl<K: ?Sized, V, S> BaseCache<K, V, S> {
     #[inline]
     fn new_value_entry(
         &self,
@@ -840,7 +840,7 @@ impl<K, V, S> BaseCache<K, V, S> {
 // for testing
 //
 #[cfg(test)]
-impl<K, V, S> BaseCache<K, V, S>
+impl<K: ?Sized, V, S> BaseCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -864,13 +864,13 @@ where
     }
 }
 
-struct EvictionState<'a, K, V> {
+struct EvictionState<'a, K: ?Sized, V> {
     counters: EvictionCounters,
     notifier: Option<&'a Arc<RemovalNotifier<K, V>>>,
     more_entries_to_evict: bool,
 }
 
-impl<'a, K, V> EvictionState<'a, K, V> {
+impl<'a, K: ?Sized, V> EvictionState<'a, K, V> {
     fn new(
         entry_count: u64,
         weighted_size: u64,
@@ -972,7 +972,7 @@ impl EntrySizeAndFrequency {
 // allocation as it will be used in a performance hot spot, and (2) this enum has a
 // very short lifetime and there will only one instance at a time.
 #[allow(clippy::large_enum_variant)]
-enum AdmissionResult<K> {
+enum AdmissionResult<K: ?Sized> {
     Admitted {
         /// A vec of pairs of `KeyHash` and `last_accessed`.
         victim_keys: SmallVec<[(KeyHash<K>, Option<Instant>); 8]>,
@@ -982,7 +982,7 @@ enum AdmissionResult<K> {
 
 type CacheStore<K, V, S> = crate::cht::SegmentedHashMap<Arc<K>, MiniArc<ValueEntry<K, V>>, S>;
 
-pub(crate) struct Inner<K, V, S> {
+pub(crate) struct Inner<K: ?Sized, V, S> {
     name: Option<String>,
     max_capacity: Option<u64>,
     entry_count: AtomicCell<u64>,
@@ -1006,7 +1006,7 @@ pub(crate) struct Inner<K, V, S> {
     clock: Clock,
 }
 
-impl<K, V, S> Drop for Inner<K, V, S> {
+impl<K: ?Sized, V, S> Drop for Inner<K, V, S> {
     fn drop(&mut self) {
         // Ensure crossbeam-epoch to collect garbages (`deferred_fn`s) in the
         // global bag so that previously cached values will be dropped.
@@ -1025,7 +1025,7 @@ impl<K, V, S> Drop for Inner<K, V, S> {
 // functions/methods used by BaseCache
 //
 
-impl<K, V, S> Inner<K, V, S> {
+impl<K: ?Sized, V, S> Inner<K, V, S> {
     fn name(&self) -> Option<&str> {
         self.name.as_deref()
     }
@@ -1121,7 +1121,7 @@ impl<K, V, S> Inner<K, V, S> {
     }
 }
 
-impl<K, V, S> Inner<K, V, S>
+impl<K: ?Sized, V, S> Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Send + Sync + 'static,
@@ -1281,7 +1281,7 @@ where
     }
 }
 
-impl<K, V, S> Inner<K, V, S>
+impl<K: ?Sized, V, S> Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -1446,7 +1446,7 @@ where
 //
 // private methods
 //
-impl<K, V, S> Inner<K, V, S>
+impl<K: ?Sized, V, S> Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Send + Sync + 'static,
@@ -2493,7 +2493,7 @@ where
     }
 }
 
-impl<K, V, S> Inner<K, V, S>
+impl<K: ?Sized, V, S> Inner<K, V, S>
 where
     K: Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -2590,7 +2590,7 @@ where
 // for testing
 //
 #[cfg(test)]
-impl<K, V, S> Inner<K, V, S>
+impl<K: ?Sized, V, S> Inner<K, V, S>
 where
     K: Hash + Eq,
     S: BuildHasher + Clone,
@@ -2618,7 +2618,10 @@ where
 
 /// Returns `true` if this entry is expired by its per-entry TTL.
 #[inline]
-fn is_expired_by_per_entry_ttl<K>(entry_info: &MiniArc<EntryInfo<K>>, now: Instant) -> bool {
+fn is_expired_by_per_entry_ttl<K: ?Sized>(
+    entry_info: &MiniArc<EntryInfo<K>>,
+    now: Instant,
+) -> bool {
     if let Some(ts) = entry_info.expiration_time() {
         ts <= now
     } else {
