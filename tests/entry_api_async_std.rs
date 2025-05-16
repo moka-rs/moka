@@ -28,7 +28,7 @@ async fn test_get_with() {
 
                 println!("Task {task_id} started.");
 
-                let key = "key1".to_string();
+                let key: Arc<str> = "key1".into();
                 let value = match task_id % 4 {
                     0 => {
                         my_cache
@@ -41,7 +41,7 @@ async fn test_get_with() {
                     }
                     1 => {
                         my_cache
-                            .get_with_by_ref(key.as_str(), async move {
+                            .get_with_by_ref::<_, true>(key.as_ref(), async move {
                                 println!("Task {task_id} inserting a value.");
                                 my_call_counter.fetch_add(1, Ordering::AcqRel);
                                 Arc::new(vec![0u8; TEN_MIB])
@@ -58,7 +58,7 @@ async fn test_get_with() {
                         .await
                         .into_value(),
                     3 => my_cache
-                        .entry_by_ref(key.as_str())
+                        .entry_by_ref::<_, true>(key.as_ref())
                         .or_insert_with(async move {
                             println!("Task {task_id} inserting a value.");
                             my_call_counter.fetch_add(1, Ordering::AcqRel);
@@ -70,7 +70,7 @@ async fn test_get_with() {
                 };
 
                 assert_eq!(value.len(), TEN_MIB);
-                assert!(my_cache.get(key.as_str()).await.is_some());
+                assert!(my_cache.get(key.as_ref()).await.is_some());
 
                 println!("Task {task_id} got the value. (len: {})", value.len());
             })

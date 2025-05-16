@@ -1,6 +1,8 @@
 //! This example demonstrates how to increment a cached `u64` counter. It uses the
 //! `and_compute_with` method of `Cache`.
 
+use std::sync::Arc;
+
 use moka::{
     future::Cache,
     ops::compute::{CompResult, Op},
@@ -8,8 +10,8 @@ use moka::{
 
 #[tokio::main]
 async fn main() {
-    let cache: Cache<String, u64> = Cache::new(100);
-    let key = "key".to_string();
+    let cache: Cache<str, u64> = Cache::new(100);
+    let key: Arc<str> = "key".into();
 
     // This should insert a new counter value 1 to the cache, and return the value
     // with the kind of the operation performed.
@@ -35,7 +37,7 @@ async fn main() {
     assert_eq!(entry.into_value(), 2);
 
     // The key should not exist.
-    assert!(!cache.contains_key(&key));
+    assert!(!cache.contains_key(key.as_ref()));
 
     // This should start over; insert a new counter value 1 to the cache.
     let result = inclement_or_remove_counter(&cache, &key).await;
@@ -49,15 +51,12 @@ async fn main() {
 /// remove it.
 ///
 /// This method uses cache's `and_compute_with` method.
-async fn inclement_or_remove_counter(
-    cache: &Cache<String, u64>,
-    key: &str,
-) -> CompResult<String, u64> {
+async fn inclement_or_remove_counter(cache: &Cache<str, u64>, key: &str) -> CompResult<str, u64> {
     // - If the counter does not exist, insert a new value of 1.
     // - If the counter is less than 2, increment it by 1.
     // - If the counter is greater than or equal to 2, remove it.
     cache
-        .entry_by_ref(key)
+        .entry_by_ref::<_, true>(key)
         .and_compute_with(|maybe_entry| {
             let op = if let Some(entry) = maybe_entry {
                 // The entry exists.

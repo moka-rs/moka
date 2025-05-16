@@ -4,7 +4,7 @@ use super::{AccessTime, KeyHash};
 use crate::common::time::{AtomicInstant, Instant};
 
 #[derive(Debug)]
-pub(crate) struct EntryInfo<K> {
+pub(crate) struct EntryInfo<K: ?Sized> {
     key_hash: KeyHash<K>,
     /// `is_admitted` indicates that the entry has been admitted to the cache. When
     /// `false`, it means the entry is _temporary_ admitted to the cache or evicted
@@ -23,7 +23,7 @@ pub(crate) struct EntryInfo<K> {
     policy_weight: AtomicU32,
 }
 
-impl<K> EntryInfo<K> {
+impl<K: ?Sized> EntryInfo<K> {
     #[inline]
     pub(crate) fn new(key_hash: KeyHash<K>, timestamp: Instant, policy_weight: u32) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
@@ -131,13 +131,13 @@ impl<K> EntryInfo<K> {
 }
 
 #[cfg(feature = "unstable-debug-counters")]
-impl<K> Drop for EntryInfo<K> {
+impl<K: ?Sized> Drop for EntryInfo<K> {
     fn drop(&mut self) {
         super::debug_counters::InternalGlobalDebugCounters::entry_info_dropped();
     }
 }
 
-impl<K> AccessTime for EntryInfo<K> {
+impl<K: ?Sized> AccessTime for EntryInfo<K> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
         self.last_accessed.instant()

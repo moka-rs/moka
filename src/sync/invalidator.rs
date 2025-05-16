@@ -22,13 +22,13 @@ pub(crate) type PredicateFun<K, V> = Arc<dyn Fn(&K, &V) -> bool + Send + Sync + 
 
 const PREDICATE_MAP_NUM_SEGMENTS: usize = 16;
 
-pub(crate) struct KeyDateLite<K> {
+pub(crate) struct KeyDateLite<K: ?Sized> {
     key: Arc<K>,
     hash: u64,
     timestamp: Instant,
 }
 
-impl<K> Clone for KeyDateLite<K> {
+impl<K: ?Sized> Clone for KeyDateLite<K> {
     fn clone(&self) -> Self {
         Self {
             key: Arc::clone(&self.key),
@@ -38,7 +38,7 @@ impl<K> Clone for KeyDateLite<K> {
     }
 }
 
-impl<K> KeyDateLite<K> {
+impl<K: ?Sized> KeyDateLite<K> {
     pub(crate) fn new(key: &Arc<K>, hash: u64, timestamp: Instant) -> Self {
         Self {
             key: Arc::clone(key),
@@ -48,7 +48,7 @@ impl<K> KeyDateLite<K> {
     }
 }
 
-pub(crate) struct Invalidator<K, V, S> {
+pub(crate) struct Invalidator<K: ?Sized, V, S> {
     predicates: crate::cht::SegmentedHashMap<PredicateId, Predicate<K, V>, S>,
     is_empty: AtomicBool,
     scan_context: Arc<ScanContext<K, V>>,
@@ -57,7 +57,7 @@ pub(crate) struct Invalidator<K, V, S> {
 //
 // Crate public methods.
 //
-impl<K, V, S> Invalidator<K, V, S> {
+impl<K: ?Sized, V, S> Invalidator<K, V, S> {
     pub(crate) fn new(hasher: S) -> Self
     where
         S: BuildHasher,
@@ -203,7 +203,7 @@ impl<K, V, S> Invalidator<K, V, S> {
 //
 // Private methods.
 //
-impl<K, V, S> Invalidator<K, V, S>
+impl<K: ?Sized, V, S> Invalidator<K, V, S>
 where
     K: Hash + Eq,
     S: BuildHasher,
@@ -328,17 +328,17 @@ where
 // for testing
 //
 #[cfg(test)]
-impl<K, V, S> Invalidator<K, V, S> {
+impl<K: ?Sized, V, S> Invalidator<K, V, S> {
     pub(crate) fn predicate_count(&self) -> usize {
         self.predicates.len()
     }
 }
 
-struct ScanContext<K, V> {
+struct ScanContext<K: ?Sized, V> {
     predicates: Mutex<Vec<Predicate<K, V>>>,
 }
 
-impl<K, V> Default for ScanContext<K, V> {
+impl<K: ?Sized, V> Default for ScanContext<K, V> {
     fn default() -> Self {
         Self {
             predicates: Mutex::new(Vec::default()),
@@ -346,13 +346,13 @@ impl<K, V> Default for ScanContext<K, V> {
     }
 }
 
-struct Predicate<K, V> {
+struct Predicate<K: ?Sized, V> {
     id: PredicateId,
     f: PredicateFun<K, V>,
     registered_at: Instant,
 }
 
-impl<K, V> Clone for Predicate<K, V> {
+impl<K: ?Sized, V> Clone for Predicate<K, V> {
     fn clone(&self) -> Self {
         Self {
             id: self.id.clone(),
@@ -362,7 +362,7 @@ impl<K, V> Clone for Predicate<K, V> {
     }
 }
 
-impl<K, V> Predicate<K, V> {
+impl<K: ?Sized, V> Predicate<K, V> {
     fn new(id: PredicateIdStr<'_>, f: PredicateFun<K, V>, registered_at: Instant) -> Self {
         Self {
             id: id.to_string(),

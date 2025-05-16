@@ -10,7 +10,7 @@ use crate::{
         },
         iter::ScanningGet,
         time::{Clock, Instant},
-        HousekeeperConfig,
+        HousekeeperConfig, OwnedOrArc, ToOwnedArc,
     },
     notification::EvictionListener,
     ops::compute::{self, CompResult},
@@ -568,12 +568,12 @@ use std::{
 ///
 /// [builder-name-method]: ./struct.CacheBuilder.html#method.name
 ///
-pub struct Cache<K, V, S = RandomState> {
+pub struct Cache<K: ?Sized, V, S = RandomState> {
     pub(crate) base: BaseCache<K, V, S>,
     value_initializer: Arc<ValueInitializer<K, V, S>>,
 }
 
-unsafe impl<K, V, S> Send for Cache<K, V, S>
+unsafe impl<K: ?Sized, V, S> Send for Cache<K, V, S>
 where
     K: Send + Sync,
     V: Send + Sync,
@@ -581,7 +581,7 @@ where
 {
 }
 
-unsafe impl<K, V, S> Sync for Cache<K, V, S>
+unsafe impl<K: ?Sized, V, S> Sync for Cache<K, V, S>
 where
     K: Send + Sync,
     V: Send + Sync,
@@ -590,7 +590,7 @@ where
 }
 
 // NOTE: We cannot do `#[derive(Clone)]` because it will add `Clone` bound to `K`.
-impl<K, V, S> Clone for Cache<K, V, S> {
+impl<K: ?Sized, V, S> Clone for Cache<K, V, S> {
     /// Makes a clone of this shared cache.
     ///
     /// This operation is cheap as it only creates thread-safe reference counted
@@ -603,7 +603,7 @@ impl<K, V, S> Clone for Cache<K, V, S> {
     }
 }
 
-impl<K, V, S> fmt::Debug for Cache<K, V, S>
+impl<K: ?Sized, V, S> fmt::Debug for Cache<K, V, S>
 where
     K: fmt::Debug + Eq + Hash + Send + Sync + 'static,
     V: fmt::Debug + Clone + Send + Sync + 'static,
@@ -621,7 +621,7 @@ where
     }
 }
 
-impl<K, V, S> Cache<K, V, S> {
+impl<K: ?Sized, V, S> Cache<K, V, S> {
     /// Returns cache’s name.
     pub fn name(&self) -> Option<&str> {
         self.base.name()
@@ -684,7 +684,7 @@ impl<K, V, S> Cache<K, V, S> {
     }
 }
 
-impl<K, V> Cache<K, V, RandomState>
+impl<K: ?Sized, V> Cache<K, V, RandomState>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -721,7 +721,7 @@ where
     }
 }
 
-impl<K, V, S> Cache<K, V, S>
+impl<K: ?Sized, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -808,37 +808,6 @@ where
         self.base.get_with_hash(key, hash, need_key)
     }
 
-    /// Takes a key `K` and returns an [`OwnedKeyEntrySelector`] that can be used to
-    /// select or insert an entry.
-    ///
-    /// [`OwnedKeyEntrySelector`]: ./struct.OwnedKeyEntrySelector.html
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use moka::sync::Cache;
-    ///
-    /// let cache: Cache<String, u32> = Cache::new(100);
-    /// let key = "key1".to_string();
-    ///
-    /// let entry = cache.entry(key.clone()).or_insert(3);
-    /// assert!(entry.is_fresh());
-    /// assert_eq!(entry.key(), &key);
-    /// assert_eq!(entry.into_value(), 3);
-    ///
-    /// let entry = cache.entry(key).or_insert(6);
-    /// // Not fresh because the value was already in the cache.
-    /// assert!(!entry.is_fresh());
-    /// assert_eq!(entry.into_value(), 3);
-    /// ```
-    pub fn entry(&self, key: K) -> OwnedKeyEntrySelector<'_, K, V, S>
-    where
-        K: Hash + Eq,
-    {
-        let hash = self.base.hash(&key);
-        OwnedKeyEntrySelector::new(key, hash, self)
-    }
-
     /// Takes a reference `&Q` of a key and returns an [`RefKeyEntrySelector`] that
     /// can be used to select or insert an entry.
     ///
@@ -862,122 +831,28 @@ where
     /// assert!(!entry.is_fresh());
     /// assert_eq!(entry.into_value(), 3);
     /// ```
-    pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
+    pub fn entry_by_ref<'a, Q, const OPTIMAL: bool>(
+        &'a self,
+        key: &'a Q,
+    ) -> RefKeyEntrySelector<'a, K, Q, V, S, OPTIMAL>
     where
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.base.hash(key);
         RefKeyEntrySelector::new(key, hash, self)
     }
 
-    /// Returns a _clone_ of the value corresponding to the key. If the value does
-    /// not exist, evaluates the `init` closure and inserts the output.
-    ///
-    /// # Concurrent calls on the same key
-    ///
-    /// This method guarantees that concurrent calls on the same not-existing key are
-    /// coalesced into one evaluation of the `init` closure. Only one of the calls
-    /// evaluates its closure, and other calls wait for that closure to complete.
-    ///
-    /// The following code snippet demonstrates this behavior:
-    ///
-    /// ```rust
-    /// use moka::sync::Cache;
-    /// use std::{sync::Arc, thread};
-    ///
-    /// const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
-    /// let cache = Cache::new(100);
-    ///
-    /// // Spawn four threads.
-    /// let threads: Vec<_> = (0..4_u8)
-    ///     .map(|task_id| {
-    ///         let my_cache = cache.clone();
-    ///         thread::spawn(move || {
-    ///             println!("Thread {task_id} started.");
-    ///
-    ///             // Try to insert and get the value for key1. Although all four
-    ///             // threads will call `get_with` at the same time, the `init` closure
-    ///             // must be evaluated only once.
-    ///             let value = my_cache.get_with("key1", || {
-    ///                 println!("Thread {task_id} inserting a value.");
-    ///                 Arc::new(vec![0u8; TEN_MIB])
-    ///             });
-    ///
-    ///             // Ensure the value exists now.
-    ///             assert_eq!(value.len(), TEN_MIB);
-    ///             assert!(my_cache.get(&"key1").is_some());
-    ///
-    ///             println!("Thread {task_id} got the value. (len: {})", value.len());
-    ///         })
-    ///     })
-    ///     .collect();
-    ///
-    /// // Wait all threads to complete.
-    /// threads
-    ///     .into_iter()
-    ///     .for_each(|t| t.join().expect("Thread failed"));
-    /// ```
-    ///
-    /// **Result**
-    ///
-    /// - The `init` closure was called exactly once by thread 1.
-    /// - Other threads were blocked until thread 1 inserted the value.
-    ///
-    /// ```console
-    /// Thread 1 started.
-    /// Thread 0 started.
-    /// Thread 3 started.
-    /// Thread 2 started.
-    /// Thread 1 inserting a value.
-    /// Thread 2 got the value. (len: 10485760)
-    /// Thread 1 got the value. (len: 10485760)
-    /// Thread 0 got the value. (len: 10485760)
-    /// Thread 3 got the value. (len: 10485760)
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This method panics when the `init` closure has panicked. When it happens,
-    /// only the caller whose `init` closure panicked will get the panic (e.g. only
-    /// thread 1 in the above sample). If there are other calls in progress (e.g.
-    /// thread 0, 2 and 3 above), this method will restart and resolve one of the
-    /// remaining `init` closure.
-    ///
-    pub fn get_with(&self, key: K, init: impl FnOnce() -> V) -> V {
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
-        let replace_if = None as Option<fn(&V) -> bool>;
-        self.get_or_insert_with_hash_and_fun(key, hash, init, replace_if, false)
-            .into_value()
-    }
-
     /// Similar to [`get_with`](#method.get_with), but instead of passing an owned
     /// key, you can pass a reference to the key. If the key does not exist in the
     /// cache, the key will be cloned to create new entry in the cache.
-    pub fn get_with_by_ref<Q>(&self, key: &Q, init: impl FnOnce() -> V) -> V
+    pub fn get_with_by_ref<Q, const OPTIMAL: bool>(&self, key: &Q, init: impl FnOnce() -> V) -> V
     where
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.base.hash(key);
         let replace_if = None as Option<fn(&V) -> bool>;
 
         self.get_or_insert_with_hash_by_ref_and_fun(key, hash, init, replace_if, false)
-            .into_value()
-    }
-
-    /// TODO: Remove this in v0.13.0.
-    /// Deprecated, replaced with
-    /// [`entry()::or_insert_with_if()`](./struct.OwnedKeyEntrySelector.html#method.or_insert_with_if)
-    #[deprecated(since = "0.10.0", note = "Replaced with `entry().or_insert_with_if()`")]
-    pub fn get_with_if(
-        &self,
-        key: K,
-        init: impl FnOnce() -> V,
-        replace_if: impl FnMut(&V) -> bool,
-    ) -> V {
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
-        self.get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if), false)
             .into_value()
     }
 
@@ -999,7 +874,7 @@ where
     // require key reference to have `ToOwned` trait. If we modify the existing
     // `get_or_insert_with_hash_and_fun` function, it will require all the existing
     // apis that depends on it to make the `K` to have `ToOwned` trait.
-    pub(crate) fn get_or_insert_with_hash_by_ref_and_fun<Q>(
+    pub(crate) fn get_or_insert_with_hash_by_ref_and_fun<Q, const OPTIMAL: bool>(
         &self,
         key: &Q,
         hash: u64,
@@ -1008,12 +883,12 @@ where
         need_key: bool,
     ) -> Entry<K, V>
     where
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         self.base
             .get_with_hash_and_ignore_if(key, hash, replace_if.as_mut(), need_key)
             .unwrap_or_else(|| {
-                let key = Arc::new(key.to_owned());
+                let key = key.to_owned_arc();
                 self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key)
             })
     }
@@ -1070,19 +945,19 @@ where
         }
     }
 
-    pub(crate) fn get_or_insert_with_hash_by_ref<Q>(
+    pub(crate) fn get_or_insert_with_hash_by_ref<Q, const OPTIMAL: bool>(
         &self,
         key: &Q,
         hash: u64,
         init: impl FnOnce() -> V,
     ) -> Entry<K, V>
     where
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         match self.base.get_with_hash(key, hash, true) {
             Some(entry) => entry,
             None => {
-                let key = Arc::new(key.to_owned());
+                let key = key.to_owned_arc();
                 let value = init();
                 self.insert_with_hash(Arc::clone(&key), hash, value.clone());
                 Entry::new(Some(key), value, true, false)
@@ -1090,108 +965,18 @@ where
         }
     }
 
-    /// Returns a _clone_ of the value corresponding to the key. If the value does
-    /// not exist, evaluates the `init` closure, and inserts the value if
-    /// `Some(value)` was returned. If `None` was returned from the closure, this
-    /// method does not insert a value and returns `None`.
-    ///
-    /// # Concurrent calls on the same key
-    ///
-    /// This method guarantees that concurrent calls on the same not-existing key are
-    /// coalesced into one evaluation of the `init` closure. Only one of the calls
-    /// evaluates its closure, and other calls wait for that closure to complete.
-    ///
-    /// The following code snippet demonstrates this behavior:
-    ///
-    /// ```rust
-    /// use moka::sync::Cache;
-    /// use std::{path::Path, thread};
-    ///
-    /// /// This function tries to get the file size in bytes.
-    /// fn get_file_size(thread_id: u8, path: impl AsRef<Path>) -> Option<u64> {
-    ///     println!("get_file_size() called by thread {thread_id}.");
-    ///     std::fs::metadata(path).ok().map(|m| m.len())
-    /// }
-    ///
-    /// let cache = Cache::new(100);
-    ///
-    /// // Spawn four threads.
-    /// let threads: Vec<_> = (0..4_u8)
-    ///     .map(|thread_id| {
-    ///         let my_cache = cache.clone();
-    ///         thread::spawn(move || {
-    ///             println!("Thread {thread_id} started.");
-    ///
-    ///             // Try to insert and get the value for key1. Although all four
-    ///             // threads will call `optionally_get_with` at the same time,
-    ///             // get_file_size() must be called only once.
-    ///             let value = my_cache.optionally_get_with(
-    ///                 "key1",
-    ///                 || get_file_size(thread_id, "./Cargo.toml"),
-    ///             );
-    ///
-    ///             // Ensure the value exists now.
-    ///             assert!(value.is_some());
-    ///             assert!(my_cache.get(&"key1").is_some());
-    ///
-    ///             println!(
-    ///                 "Thread {thread_id} got the value. (len: {})",
-    ///                 value.unwrap()
-    ///             );
-    ///         })
-    ///     })
-    ///     .collect();
-    ///
-    /// // Wait all threads to complete.
-    /// threads
-    ///     .into_iter()
-    ///     .for_each(|t| t.join().expect("Thread failed"));
-    /// ```
-    ///
-    /// **Result**
-    ///
-    /// - `get_file_size()` was called exactly once by thread 0.
-    /// - Other threads were blocked until thread 0 inserted the value.
-    ///
-    /// ```console
-    /// Thread 0 started.
-    /// Thread 1 started.
-    /// Thread 2 started.
-    /// get_file_size() called by thread 0.
-    /// Thread 3 started.
-    /// Thread 2 got the value. (len: 1466)
-    /// Thread 0 got the value. (len: 1466)
-    /// Thread 1 got the value. (len: 1466)
-    /// Thread 3 got the value. (len: 1466)
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This method panics when the `init` closure has panicked. When it happens,
-    /// only the caller whose `init` closure panicked will get the panic (e.g. only
-    /// thread 1 in the above sample). If there are other calls in progress (e.g.
-    /// thread 0, 2 and 3 above), this method will restart and resolve one of the
-    /// remaining `init` closure.
-    ///
-    pub fn optionally_get_with<F>(&self, key: K, init: F) -> Option<V>
-    where
-        F: FnOnce() -> Option<V>,
-    {
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
-
-        self.get_or_optionally_insert_with_hash_and_fun(key, hash, init, false)
-            .map(Entry::into_value)
-    }
-
     /// Similar to [`optionally_get_with`](#method.optionally_get_with), but instead
     /// of passing an owned key, you can pass a reference to the key. If the key does
     /// not exist in the cache, the key will be cloned to create new entry in the
     /// cache.
-    pub fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
+    pub fn optionally_get_with_by_ref<F, Q, const OPTIMAL: bool>(
+        &self,
+        key: &Q,
+        init: F,
+    ) -> Option<V>
     where
         F: FnOnce() -> Option<V>,
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.base.hash(key);
         self.get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init, false)
@@ -1216,7 +1001,7 @@ where
         self.optionally_insert_with_hash_and_fun(key, hash, init, need_key)
     }
 
-    pub(super) fn get_or_optionally_insert_with_hash_by_ref_and_fun<F, Q>(
+    pub(super) fn get_or_optionally_insert_with_hash_by_ref_and_fun<F, Q, const OPTIMAL: bool>(
         &self,
         key: &Q,
         hash: u64,
@@ -1225,14 +1010,14 @@ where
     ) -> Option<Entry<K, V>>
     where
         F: FnOnce() -> Option<V>,
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let entry = self.get_with_hash(key, hash, need_key);
         if entry.is_some() {
             return entry;
         }
 
-        let key = Arc::new(key.to_owned());
+        let key = key.to_owned_arc();
         self.optionally_insert_with_hash_and_fun(key, hash, init, need_key)
     }
 
@@ -1278,111 +1063,18 @@ where
         }
     }
 
-    /// Returns a _clone_ of the value corresponding to the key. If the value does
-    /// not exist, evaluates the `init` closure, and inserts the value if `Ok(value)`
-    /// was returned. If `Err(_)` was returned from the closure, this method does not
-    /// insert a value and returns the `Err` wrapped by [`std::sync::Arc`][std-arc].
-    ///
-    /// [std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
-    ///
-    /// # Concurrent calls on the same key
-    ///
-    /// This method guarantees that concurrent calls on the same not-existing key are
-    /// coalesced into one evaluation of the `init` closure (as long as these
-    /// closures return the same error type). Only one of the calls evaluates its
-    /// closure, and other calls wait for that closure to complete.
-    ///
-    /// The following code snippet demonstrates this behavior:
-    ///
-    /// ```rust
-    /// use moka::sync::Cache;
-    /// use std::{path::Path, thread};
-    ///
-    /// /// This function tries to get the file size in bytes.
-    /// fn get_file_size(thread_id: u8, path: impl AsRef<Path>) -> Result<u64, std::io::Error> {
-    ///     println!("get_file_size() called by thread {thread_id}.");
-    ///     Ok(std::fs::metadata(path)?.len())
-    /// }
-    ///
-    /// let cache = Cache::new(100);
-    ///
-    /// // Spawn four threads.
-    /// let threads: Vec<_> = (0..4_u8)
-    ///     .map(|thread_id| {
-    ///         let my_cache = cache.clone();
-    ///         thread::spawn(move || {
-    ///             println!("Thread {thread_id} started.");
-    ///
-    ///             // Try to insert and get the value for key1. Although all four
-    ///             // threads will call `try_get_with` at the same time,
-    ///             // get_file_size() must be called only once.
-    ///             let value = my_cache.try_get_with(
-    ///                 "key1",
-    ///                 || get_file_size(thread_id, "./Cargo.toml"),
-    ///             );
-    ///
-    ///             // Ensure the value exists now.
-    ///             assert!(value.is_ok());
-    ///             assert!(my_cache.get(&"key1").is_some());
-    ///
-    ///             println!(
-    ///                 "Thread {thread_id} got the value. (len: {})",
-    ///                 value.unwrap()
-    ///             );
-    ///         })
-    ///     })
-    ///     .collect();
-    ///
-    /// // Wait all threads to complete.
-    /// threads
-    ///     .into_iter()
-    ///     .for_each(|t| t.join().expect("Thread failed"));
-    /// ```
-    ///
-    /// **Result**
-    ///
-    /// - `get_file_size()` was called exactly once by thread 1.
-    /// - Other threads were blocked until thread 1 inserted the value.
-    ///
-    /// ```console
-    /// Thread 1 started.
-    /// Thread 2 started.
-    /// get_file_size() called by thread 1.
-    /// Thread 3 started.
-    /// Thread 0 started.
-    /// Thread 2 got the value. (len: 1466)
-    /// Thread 0 got the value. (len: 1466)
-    /// Thread 1 got the value. (len: 1466)
-    /// Thread 3 got the value. (len: 1466)
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This method panics when the `init` closure has panicked. When it happens,
-    /// only the caller whose `init` closure panicked will get the panic (e.g. only
-    /// thread 1 in the above sample). If there are other calls in progress (e.g.
-    /// thread 0, 2 and 3 above), this method will restart and resolve one of the
-    /// remaining `init` closure.
-    ///
-    pub fn try_get_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
-    where
-        F: FnOnce() -> Result<V, E>,
-        E: Send + Sync + 'static,
-    {
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
-        self.get_or_try_insert_with_hash_and_fun(key, hash, init, false)
-            .map(Entry::into_value)
-    }
-
     /// Similar to [`try_get_with`](#method.try_get_with), but instead of passing an
     /// owned key, you can pass a reference to the key. If the key does not exist in
     /// the cache, the key will be cloned to create new entry in the cache.
-    pub fn try_get_with_by_ref<F, E, Q>(&self, key: &Q, init: F) -> Result<V, Arc<E>>
+    pub fn try_get_with_by_ref<F, E, Q, const OPTIMAL: bool>(
+        &self,
+        key: &Q,
+        init: F,
+    ) -> Result<V, Arc<E>>
     where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.base.hash(key);
         self.get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init, false)
@@ -1407,7 +1099,7 @@ where
         self.try_insert_with_hash_and_fun(key, hash, init, need_key)
     }
 
-    pub(crate) fn get_or_try_insert_with_hash_by_ref_and_fun<F, Q, E>(
+    pub(crate) fn get_or_try_insert_with_hash_by_ref_and_fun<F, Q, E, const OPTIMAL: bool>(
         &self,
         key: &Q,
         hash: u64,
@@ -1417,13 +1109,13 @@ where
     where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         if let Some(entry) = self.get_with_hash(key, hash, false) {
             return Ok(entry);
         }
 
-        let key = Arc::new(key.to_owned());
+        let key = key.to_owned_arc();
         self.try_insert_with_hash_and_fun(key, hash, init, need_key)
     }
 
@@ -1468,15 +1160,6 @@ where
                 Err(e)
             }
         }
-    }
-
-    /// Inserts a key-value pair into the cache.
-    ///
-    /// If the cache has this key present, the value is updated.
-    pub fn insert(&self, key: K, value: V) {
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
-        self.insert_with_hash(key, hash, value);
     }
 
     pub(crate) fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
@@ -1768,7 +1451,357 @@ where
     }
 }
 
-impl<'a, K, V, S> IntoIterator for &'a Cache<K, V, S>
+impl<K: ?Sized, V, S> Cache<K, V, S>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    /// Takes a key `K` and returns an [`OwnedKeyEntrySelector`] that can be used to
+    /// select or insert an entry.
+    ///
+    /// [`OwnedKeyEntrySelector`]: ./struct.OwnedKeyEntrySelector.html
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use moka::sync::Cache;
+    ///
+    /// let cache: Cache<String, u32> = Cache::new(100);
+    /// let key = "key1".to_string();
+    ///
+    /// let entry = cache.entry(key.clone()).or_insert(3);
+    /// assert!(entry.is_fresh());
+    /// assert_eq!(entry.key(), &key);
+    /// assert_eq!(entry.into_value(), 3);
+    ///
+    /// let entry = cache.entry(key).or_insert(6);
+    /// // Not fresh because the value was already in the cache.
+    /// assert!(!entry.is_fresh());
+    /// assert_eq!(entry.into_value(), 3);
+    /// ```
+    pub fn entry<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+    ) -> OwnedKeyEntrySelector<'_, K, V, S, OK, ARC>
+    where
+        K: Hash + Eq,
+    {
+        let hash = self.base.hash(key.borrow_ref());
+        OwnedKeyEntrySelector::new(key, hash, self)
+    }
+
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, evaluates the `init` closure and inserts the output.
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` closure. Only one of the calls
+    /// evaluates its closure, and other calls wait for that closure to complete.
+    ///
+    /// The following code snippet demonstrates this behavior:
+    ///
+    /// ```rust
+    /// use moka::sync::Cache;
+    /// use std::{sync::Arc, thread};
+    ///
+    /// const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
+    /// let cache = Cache::new(100);
+    ///
+    /// // Spawn four threads.
+    /// let threads: Vec<_> = (0..4_u8)
+    ///     .map(|task_id| {
+    ///         let my_cache = cache.clone();
+    ///         thread::spawn(move || {
+    ///             println!("Thread {task_id} started.");
+    ///
+    ///             // Try to insert and get the value for key1. Although all four
+    ///             // threads will call `get_with` at the same time, the `init` closure
+    ///             // must be evaluated only once.
+    ///             let value = my_cache.get_with("key1", || {
+    ///                 println!("Thread {task_id} inserting a value.");
+    ///                 Arc::new(vec![0u8; TEN_MIB])
+    ///             });
+    ///
+    ///             // Ensure the value exists now.
+    ///             assert_eq!(value.len(), TEN_MIB);
+    ///             assert!(my_cache.get(&"key1").is_some());
+    ///
+    ///             println!("Thread {task_id} got the value. (len: {})", value.len());
+    ///         })
+    ///     })
+    ///     .collect();
+    ///
+    /// // Wait all threads to complete.
+    /// threads
+    ///     .into_iter()
+    ///     .for_each(|t| t.join().expect("Thread failed"));
+    /// ```
+    ///
+    /// **Result**
+    ///
+    /// - The `init` closure was called exactly once by thread 1.
+    /// - Other threads were blocked until thread 1 inserted the value.
+    ///
+    /// ```console
+    /// Thread 1 started.
+    /// Thread 0 started.
+    /// Thread 3 started.
+    /// Thread 2 started.
+    /// Thread 1 inserting a value.
+    /// Thread 2 got the value. (len: 10485760)
+    /// Thread 1 got the value. (len: 10485760)
+    /// Thread 0 got the value. (len: 10485760)
+    /// Thread 3 got the value. (len: 10485760)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` closure has panicked. When it happens,
+    /// only the caller whose `init` closure panicked will get the panic (e.g. only
+    /// thread 1 in the above sample). If there are other calls in progress (e.g.
+    /// thread 0, 2 and 3 above), this method will restart and resolve one of the
+    /// remaining `init` closure.
+    ///
+    pub fn get_with<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: impl FnOnce() -> V,
+    ) -> V {
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
+        let replace_if = None as Option<fn(&V) -> bool>;
+        self.get_or_insert_with_hash_and_fun(key, hash, init, replace_if, false)
+            .into_value()
+    }
+
+    /// TODO: Remove this in v0.13.0.
+    /// Deprecated, replaced with
+    /// [`entry()::or_insert_with_if()`](./struct.OwnedKeyEntrySelector.html#method.or_insert_with_if)
+    #[deprecated(since = "0.10.0", note = "Replaced with `entry().or_insert_with_if()`")]
+    pub fn get_with_if<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: impl FnOnce() -> V,
+        replace_if: impl FnMut(&V) -> bool,
+    ) -> V {
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
+        self.get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if), false)
+            .into_value()
+    }
+
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, evaluates the `init` closure, and inserts the value if
+    /// `Some(value)` was returned. If `None` was returned from the closure, this
+    /// method does not insert a value and returns `None`.
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` closure. Only one of the calls
+    /// evaluates its closure, and other calls wait for that closure to complete.
+    ///
+    /// The following code snippet demonstrates this behavior:
+    ///
+    /// ```rust
+    /// use moka::sync::Cache;
+    /// use std::{path::Path, thread};
+    ///
+    /// /// This function tries to get the file size in bytes.
+    /// fn get_file_size(thread_id: u8, path: impl AsRef<Path>) -> Option<u64> {
+    ///     println!("get_file_size() called by thread {thread_id}.");
+    ///     std::fs::metadata(path).ok().map(|m| m.len())
+    /// }
+    ///
+    /// let cache = Cache::new(100);
+    ///
+    /// // Spawn four threads.
+    /// let threads: Vec<_> = (0..4_u8)
+    ///     .map(|thread_id| {
+    ///         let my_cache = cache.clone();
+    ///         thread::spawn(move || {
+    ///             println!("Thread {thread_id} started.");
+    ///
+    ///             // Try to insert and get the value for key1. Although all four
+    ///             // threads will call `optionally_get_with` at the same time,
+    ///             // get_file_size() must be called only once.
+    ///             let value = my_cache.optionally_get_with(
+    ///                 "key1",
+    ///                 || get_file_size(thread_id, "./Cargo.toml"),
+    ///             );
+    ///
+    ///             // Ensure the value exists now.
+    ///             assert!(value.is_some());
+    ///             assert!(my_cache.get(&"key1").is_some());
+    ///
+    ///             println!(
+    ///                 "Thread {thread_id} got the value. (len: {})",
+    ///                 value.unwrap()
+    ///             );
+    ///         })
+    ///     })
+    ///     .collect();
+    ///
+    /// // Wait all threads to complete.
+    /// threads
+    ///     .into_iter()
+    ///     .for_each(|t| t.join().expect("Thread failed"));
+    /// ```
+    ///
+    /// **Result**
+    ///
+    /// - `get_file_size()` was called exactly once by thread 0.
+    /// - Other threads were blocked until thread 0 inserted the value.
+    ///
+    /// ```console
+    /// Thread 0 started.
+    /// Thread 1 started.
+    /// Thread 2 started.
+    /// get_file_size() called by thread 0.
+    /// Thread 3 started.
+    /// Thread 2 got the value. (len: 1466)
+    /// Thread 0 got the value. (len: 1466)
+    /// Thread 1 got the value. (len: 1466)
+    /// Thread 3 got the value. (len: 1466)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` closure has panicked. When it happens,
+    /// only the caller whose `init` closure panicked will get the panic (e.g. only
+    /// thread 1 in the above sample). If there are other calls in progress (e.g.
+    /// thread 0, 2 and 3 above), this method will restart and resolve one of the
+    /// remaining `init` closure.
+    ///
+    pub fn optionally_get_with<F, const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: F,
+    ) -> Option<V>
+    where
+        F: FnOnce() -> Option<V>,
+    {
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
+
+        self.get_or_optionally_insert_with_hash_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
+    }
+
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, evaluates the `init` closure, and inserts the value if `Ok(value)`
+    /// was returned. If `Err(_)` was returned from the closure, this method does not
+    /// insert a value and returns the `Err` wrapped by [`std::sync::Arc`][std-arc].
+    ///
+    /// [std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` closure (as long as these
+    /// closures return the same error type). Only one of the calls evaluates its
+    /// closure, and other calls wait for that closure to complete.
+    ///
+    /// The following code snippet demonstrates this behavior:
+    ///
+    /// ```rust
+    /// use moka::sync::Cache;
+    /// use std::{path::Path, thread};
+    ///
+    /// /// This function tries to get the file size in bytes.
+    /// fn get_file_size(thread_id: u8, path: impl AsRef<Path>) -> Result<u64, std::io::Error> {
+    ///     println!("get_file_size() called by thread {thread_id}.");
+    ///     Ok(std::fs::metadata(path)?.len())
+    /// }
+    ///
+    /// let cache = Cache::new(100);
+    ///
+    /// // Spawn four threads.
+    /// let threads: Vec<_> = (0..4_u8)
+    ///     .map(|thread_id| {
+    ///         let my_cache = cache.clone();
+    ///         thread::spawn(move || {
+    ///             println!("Thread {thread_id} started.");
+    ///
+    ///             // Try to insert and get the value for key1. Although all four
+    ///             // threads will call `try_get_with` at the same time,
+    ///             // get_file_size() must be called only once.
+    ///             let value = my_cache.try_get_with(
+    ///                 "key1",
+    ///                 || get_file_size(thread_id, "./Cargo.toml"),
+    ///             );
+    ///
+    ///             // Ensure the value exists now.
+    ///             assert!(value.is_ok());
+    ///             assert!(my_cache.get(&"key1").is_some());
+    ///
+    ///             println!(
+    ///                 "Thread {thread_id} got the value. (len: {})",
+    ///                 value.unwrap()
+    ///             );
+    ///         })
+    ///     })
+    ///     .collect();
+    ///
+    /// // Wait all threads to complete.
+    /// threads
+    ///     .into_iter()
+    ///     .for_each(|t| t.join().expect("Thread failed"));
+    /// ```
+    ///
+    /// **Result**
+    ///
+    /// - `get_file_size()` was called exactly once by thread 1.
+    /// - Other threads were blocked until thread 1 inserted the value.
+    ///
+    /// ```console
+    /// Thread 1 started.
+    /// Thread 2 started.
+    /// get_file_size() called by thread 1.
+    /// Thread 3 started.
+    /// Thread 0 started.
+    /// Thread 2 got the value. (len: 1466)
+    /// Thread 0 got the value. (len: 1466)
+    /// Thread 1 got the value. (len: 1466)
+    /// Thread 3 got the value. (len: 1466)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` closure has panicked. When it happens,
+    /// only the caller whose `init` closure panicked will get the panic (e.g. only
+    /// thread 1 in the above sample). If there are other calls in progress (e.g.
+    /// thread 0, 2 and 3 above), this method will restart and resolve one of the
+    /// remaining `init` closure.
+    ///
+    pub fn try_get_with<F, E, const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: F,
+    ) -> Result<V, Arc<E>>
+    where
+        F: FnOnce() -> Result<V, E>,
+        E: Send + Sync + 'static,
+    {
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
+        self.get_or_try_insert_with_hash_and_fun(key, hash, init, false)
+            .map(Entry::into_value)
+    }
+
+    /// Inserts a key-value pair into the cache.
+    ///
+    /// If the cache has this key present, the value is updated.
+    pub fn insert<const ARC: bool, OK: OwnedOrArc<K, ARC>>(&self, key: OK, value: V) {
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
+        self.insert_with_hash(key, hash, value);
+    }
+}
+
+impl<'a, K: ?Sized, V, S> IntoIterator for &'a Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -1786,7 +1819,7 @@ where
 //
 // Iterator support
 //
-impl<K, V, S> ScanningGet<K, V> for Cache<K, V, S>
+impl<K: ?Sized, V, S> ScanningGet<K, V> for Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -1808,7 +1841,7 @@ where
 //
 // private methods
 //
-impl<K, V, S> Cache<K, V, S>
+impl<K: ?Sized, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -1846,7 +1879,7 @@ where
 
 // For unit tests.
 #[cfg(test)]
-impl<K, V, S> Cache<K, V, S> {
+impl<K: ?Sized, V, S> Cache<K, V, S> {
     pub(crate) fn is_table_empty(&self) -> bool {
         self.entry_count() == 0
     }
@@ -1857,7 +1890,7 @@ impl<K, V, S> Cache<K, V, S> {
 }
 
 #[cfg(test)]
-impl<K, V, S> Cache<K, V, S>
+impl<K: ?Sized, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,

@@ -55,7 +55,7 @@ use std::{
 /// ```
 ///
 #[must_use]
-pub struct CacheBuilder<K, V, C> {
+pub struct CacheBuilder<K: ?Sized, V, C> {
     name: Option<String>,
     max_capacity: Option<u64>,
     initial_capacity: Option<usize>,
@@ -69,7 +69,7 @@ pub struct CacheBuilder<K, V, C> {
     cache_type: PhantomData<C>,
 }
 
-impl<K, V> Default for CacheBuilder<K, V, Cache<K, V, RandomState>>
+impl<K: ?Sized, V> Default for CacheBuilder<K, V, Cache<K, V, RandomState>>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -91,7 +91,7 @@ where
     }
 }
 
-impl<K, V> CacheBuilder<K, V, Cache<K, V, RandomState>>
+impl<K: ?Sized, V> CacheBuilder<K, V, Cache<K, V, RandomState>>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -231,7 +231,7 @@ where
     }
 }
 
-impl<K, V, C> CacheBuilder<K, V, C> {
+impl<K: ?Sized, V, C> CacheBuilder<K, V, C> {
     /// Sets the name of the cache. Currently the name is used for identification
     /// only in logging messages.
     pub fn name(self, name: &str) -> Self {

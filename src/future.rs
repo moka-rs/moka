@@ -55,15 +55,15 @@ pub trait FutureExt: Future {
 /// Iterator visiting all key-value pairs in a cache in arbitrary order.
 ///
 /// Call [`Cache::iter`](./struct.Cache.html#method.iter) method to obtain an `Iter`.
-pub struct Iter<'i, K, V>(crate::common::iter::Iter<'i, K, V>);
+pub struct Iter<'i, K: ?Sized, V>(crate::common::iter::Iter<'i, K, V>);
 
-impl<'i, K, V> Iter<'i, K, V> {
+impl<'i, K: ?Sized, V> Iter<'i, K, V> {
     pub(crate) fn new(inner: crate::common::iter::Iter<'i, K, V>) -> Self {
         Self(inner)
     }
 }
 
-impl<K, V> Iterator for Iter<'_, K, V>
+impl<K: ?Sized, V> Iterator for Iter<'_, K, V>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -76,7 +76,7 @@ where
 }
 
 /// Operation that has been interrupted (stopped polling) by async cancellation.
-pub(crate) enum InterruptedOp<K, V> {
+pub(crate) enum InterruptedOp<K: ?Sized, V> {
     CallEvictionListener {
         ts: Instant,
         // 'static means that the future can capture only owned value and/or static
@@ -95,14 +95,14 @@ pub(crate) enum InterruptedOp<K, V> {
 /// `InterruptedOp` and send it to the interrupted operations channel. Later, the
 /// interrupted op will be retried by `retry_interrupted_ops` method of
 /// `BaseCache`.
-struct CancelGuard<'a, K, V> {
+struct CancelGuard<'a, K: ?Sized, V> {
     interrupted_op_ch: &'a Sender<InterruptedOp<K, V>>,
     ts: Instant,
     future: Option<Shared<BoxFuture<'static, ()>>>,
     op: Option<WriteOp<K, V>>,
 }
 
-impl<'a, K, V> CancelGuard<'a, K, V> {
+impl<'a, K: ?Sized, V> CancelGuard<'a, K, V> {
     fn new(interrupted_op_ch: &'a Sender<InterruptedOp<K, V>>, ts: Instant) -> Self {
         Self {
             interrupted_op_ch,
@@ -131,7 +131,7 @@ impl<'a, K, V> CancelGuard<'a, K, V> {
     }
 }
 
-impl<K, V> Drop for CancelGuard<'_, K, V> {
+impl<K: ?Sized, V> Drop for CancelGuard<'_, K, V> {
     fn drop(&mut self) {
         let interrupted_op = match (self.future.take(), self.op.take()) {
             (Some(future), Some(op)) => InterruptedOp::CallEvictionListener {

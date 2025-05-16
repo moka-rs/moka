@@ -17,21 +17,21 @@ use std::{fmt::Debug, sync::Arc};
 ///     - [`entry`](./future/struct.Cache.html#method.entry)
 ///     - [`entry_by_ref`](./future/struct.Cache.html#method.entry_by_ref)
 ///
-pub struct Entry<K, V> {
+pub struct Entry<K: ?Sized, V> {
     key: Option<Arc<K>>,
     value: V,
     is_fresh: bool,
     is_old_value_replaced: bool,
 }
 
-impl<K, V> Debug for Entry<K, V>
+impl<K: ?Sized, V> Debug for Entry<K, V>
 where
     K: Debug,
     V: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Entry")
-            .field("key", self.key())
+            .field("key", &self.key())
             .field("value", &self.value)
             .field("is_fresh", &self.is_fresh)
             .field("is_old_value_replaced", &self.is_old_value_replaced)
@@ -39,7 +39,7 @@ where
     }
 }
 
-impl<K, V> Entry<K, V> {
+impl<K: ?Sized, V> Entry<K, V> {
     pub(crate) fn new(
         key: Option<Arc<K>>,
         value: V,

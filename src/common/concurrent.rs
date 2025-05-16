@@ -29,18 +29,18 @@ pub(crate) trait AccessTime {
 }
 
 #[derive(Debug)]
-pub(crate) struct KeyHash<K> {
+pub(crate) struct KeyHash<K: ?Sized> {
     pub(crate) key: Arc<K>,
     pub(crate) hash: u64,
 }
 
-impl<K> KeyHash<K> {
+impl<K: ?Sized> KeyHash<K> {
     pub(crate) fn new(key: Arc<K>, hash: u64) -> Self {
         Self { key, hash }
     }
 }
 
-impl<K> Clone for KeyHash<K> {
+impl<K: ?Sized> Clone for KeyHash<K> {
     fn clone(&self) -> Self {
         Self {
             key: Arc::clone(&self.key),
@@ -49,11 +49,11 @@ impl<K> Clone for KeyHash<K> {
     }
 }
 
-pub(crate) struct KeyHashDate<K> {
+pub(crate) struct KeyHashDate<K: ?Sized> {
     entry_info: MiniArc<EntryInfo<K>>,
 }
 
-impl<K> KeyHashDate<K> {
+impl<K: ?Sized> KeyHashDate<K> {
     pub(crate) fn new(entry_info: &MiniArc<EntryInfo<K>>) -> Self {
         Self {
             entry_info: MiniArc::clone(entry_info),
@@ -85,18 +85,18 @@ impl<K> KeyHashDate<K> {
     }
 }
 
-pub(crate) struct KvEntry<K, V> {
+pub(crate) struct KvEntry<K: ?Sized, V> {
     pub(crate) key: Arc<K>,
     pub(crate) entry: MiniArc<ValueEntry<K, V>>,
 }
 
-impl<K, V> KvEntry<K, V> {
+impl<K: ?Sized, V> KvEntry<K, V> {
     pub(crate) fn new(key: Arc<K>, entry: MiniArc<ValueEntry<K, V>>) -> Self {
         Self { key, entry }
     }
 }
 
-impl<K, V> Clone for KvEntry<K, V> {
+impl<K: ?Sized, V> Clone for KvEntry<K, V> {
     fn clone(&self) -> Self {
         Self {
             key: Arc::clone(&self.key),
@@ -105,7 +105,7 @@ impl<K, V> Clone for KvEntry<K, V> {
     }
 }
 
-impl<K> AccessTime for DeqNode<KeyHashDate<K>> {
+impl<K: ?Sized> AccessTime for DeqNode<KeyHashDate<K>> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
         self.element.entry_info.last_accessed()
@@ -136,13 +136,13 @@ type KeyDeqNodeWo<K> = NonNull<DeqNode<KeyHashDate<K>>>;
 // DeqNode for the timer wheel.
 type DeqNodeTimer<K> = NonNull<DeqNode<TimerNode<K>>>;
 
-pub(crate) struct DeqNodes<K> {
+pub(crate) struct DeqNodes<K: ?Sized> {
     access_order_q_node: Option<KeyDeqNodeAo<K>>,
     write_order_q_node: Option<KeyDeqNodeWo<K>>,
     timer_node: Option<DeqNodeTimer<K>>,
 }
 
-impl<K> Default for DeqNodes<K> {
+impl<K: ?Sized> Default for DeqNodes<K> {
     fn default() -> Self {
         Self {
             access_order_q_node: None,
@@ -153,21 +153,21 @@ impl<K> Default for DeqNodes<K> {
 }
 
 // We need this `unsafe impl` as DeqNodes have NonNull pointers.
-unsafe impl<K> Send for DeqNodes<K> {}
+unsafe impl<K: ?Sized> Send for DeqNodes<K> {}
 
-impl<K> DeqNodes<K> {
+impl<K: ?Sized> DeqNodes<K> {
     pub(crate) fn set_timer_node(&mut self, timer_node: Option<DeqNodeTimer<K>>) {
         self.timer_node = timer_node;
     }
 }
 
-pub(crate) struct ValueEntry<K, V> {
+pub(crate) struct ValueEntry<K: ?Sized, V> {
     pub(crate) value: V,
     info: MiniArc<EntryInfo<K>>,
     nodes: MiniArc<Mutex<DeqNodes<K>>>,
 }
 
-impl<K, V> ValueEntry<K, V> {
+impl<K: ?Sized, V> ValueEntry<K, V> {
     pub(crate) fn new(value: V, entry_info: MiniArc<EntryInfo<K>>) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
         self::debug_counters::InternalGlobalDebugCounters::value_entry_created();
@@ -258,13 +258,13 @@ impl<K, V> ValueEntry<K, V> {
 }
 
 #[cfg(feature = "unstable-debug-counters")]
-impl<K, V> Drop for ValueEntry<K, V> {
+impl<K: ?Sized, V> Drop for ValueEntry<K, V> {
     fn drop(&mut self) {
         self::debug_counters::InternalGlobalDebugCounters::value_entry_dropped();
     }
 }
 
-impl<K, V> AccessTime for MiniArc<ValueEntry<K, V>> {
+impl<K: ?Sized, V> AccessTime for MiniArc<ValueEntry<K, V>> {
     #[inline]
     fn last_accessed(&self) -> Option<Instant> {
         self.info.last_accessed()
@@ -286,7 +286,7 @@ impl<K, V> AccessTime for MiniArc<ValueEntry<K, V>> {
     }
 }
 
-pub(crate) enum ReadOp<K, V> {
+pub(crate) enum ReadOp<K: ?Sized, V> {
     Hit {
         value_entry: MiniArc<ValueEntry<K, V>>,
         is_expiry_modified: bool,
@@ -295,7 +295,7 @@ pub(crate) enum ReadOp<K, V> {
     Miss(u64),
 }
 
-pub(crate) enum WriteOp<K, V> {
+pub(crate) enum WriteOp<K: ?Sized, V> {
     Upsert {
         key_hash: KeyHash<K>,
         value_entry: MiniArc<ValueEntry<K, V>>,
@@ -312,7 +312,7 @@ pub(crate) enum WriteOp<K, V> {
 
 /// Cloning a `WriteOp` is safe and cheap because it uses `Arc` and `MiniArc` pointers to
 /// the actual data.
-impl<K, V> Clone for WriteOp<K, V> {
+impl<K: ?Sized, V> Clone for WriteOp<K, V> {
     fn clone(&self) -> Self {
         match self {
             Self::Upsert {
@@ -339,7 +339,7 @@ impl<K, V> Clone for WriteOp<K, V> {
     }
 }
 
-impl<K, V> fmt::Debug for WriteOp<K, V> {
+impl<K: ?Sized, V> fmt::Debug for WriteOp<K, V> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Upsert { .. } => f.debug_struct("Upsert").finish(),
@@ -348,7 +348,7 @@ impl<K, V> fmt::Debug for WriteOp<K, V> {
     }
 }
 
-impl<K, V> WriteOp<K, V> {
+impl<K: ?Sized, V> WriteOp<K, V> {
     pub(crate) fn new_upsert(
         key: &Arc<K>,
         hash: u64,
@@ -369,13 +369,13 @@ impl<K, V> WriteOp<K, V> {
     }
 }
 
-pub(crate) struct OldEntryInfo<K, V> {
+pub(crate) struct OldEntryInfo<K: ?Sized, V> {
     pub(crate) entry: MiniArc<ValueEntry<K, V>>,
     pub(crate) last_accessed: Option<Instant>,
     pub(crate) last_modified: Option<Instant>,
 }
 
-impl<K, V> OldEntryInfo<K, V> {
+impl<K: ?Sized, V> OldEntryInfo<K, V> {
     pub(crate) fn new(entry: &MiniArc<ValueEntry<K, V>>) -> Self {
         Self {
             entry: MiniArc::clone(entry),
