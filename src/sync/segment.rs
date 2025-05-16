@@ -3,7 +3,7 @@ use equivalent::Equivalent;
 use super::{cache::Cache, CacheBuilder, OwnedKeyEntrySelector, RefKeyEntrySelector};
 use crate::common::concurrent::Weigher;
 use crate::common::time::Clock;
-use crate::common::ToOwnedArc;
+use crate::common::{OwnedOrArc, ToOwnedArc};
 use crate::{
     common::{
         iter::{Iter, ScanningGet},
@@ -509,17 +509,20 @@ where
     }
 }
 
-impl<K: Sized, V, S> SegmentedCache<K, V, S>
+impl<K: ?Sized, V, S> SegmentedCache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    pub fn entry(&self, key: K) -> OwnedKeyEntrySelector<'_, K, V, S>
+    pub fn entry<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+    ) -> OwnedKeyEntrySelector<'_, K, V, S, OK, ARC>
     where
         K: Hash + Eq,
     {
-        let hash = self.inner.hash(&key);
+        let hash = self.inner.hash(key.borrow_ref());
         let cache = self.inner.select(hash);
         OwnedKeyEntrySelector::new(key, hash, cache)
     }
@@ -527,14 +530,22 @@ where
     /// TODO: Remove this in v0.13.0.
     /// Deprecated, replaced with [`get_with`](#method.get_with)
     #[deprecated(since = "0.8.0", note = "Replaced with `get_with`")]
-    pub fn get_or_insert_with(&self, key: K, init: impl FnOnce() -> V) -> V {
+    pub fn get_or_insert_with<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: impl FnOnce() -> V,
+    ) -> V {
         self.get_with(key, init)
     }
 
     /// TODO: Remove this in v0.13.0.
     /// Deprecated, replaced with [`try_get_with`](#method.try_get_with)
     #[deprecated(since = "0.8.0", note = "Replaced with `try_get_with`")]
-    pub fn get_or_try_insert_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
+    pub fn get_or_try_insert_with<F, E, const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: F,
+    ) -> Result<V, Arc<E>>
     where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
@@ -553,9 +564,13 @@ where
     /// [`Cache::get_with`][get-with-method] for more details.
     ///
     /// [get-with-method]: ./struct.Cache.html#method.get_with
-    pub fn get_with(&self, key: K, init: impl FnOnce() -> V) -> V {
-        let hash = self.inner.hash(&key);
-        let key = Arc::new(key);
+    pub fn get_with<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: impl FnOnce() -> V,
+    ) -> V {
+        let hash = self.inner.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
         let replace_if = None as Option<fn(&V) -> bool>;
         self.inner
             .select(hash)
@@ -571,14 +586,14 @@ where
     ///
     /// - The key does not exist.
     /// - Or, `replace_if` closure returns `true`.
-    pub fn get_with_if(
+    pub fn get_with_if<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
         &self,
-        key: K,
+        key: OK,
         init: impl FnOnce() -> V,
         replace_if: impl FnMut(&V) -> bool,
     ) -> V {
-        let hash = self.inner.hash(&key);
-        let key = Arc::new(key);
+        let hash = self.inner.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
         self.inner
             .select(hash)
             .get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if), false)
@@ -598,12 +613,16 @@ where
     /// See [`Cache::optionally_get_with`][opt-get-with-method] for more details.
     ///
     /// [opt-get-with-method]: ./struct.Cache.html#method.optionally_get_with
-    pub fn optionally_get_with<F>(&self, key: K, init: F) -> Option<V>
+    pub fn optionally_get_with<F, const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: F,
+    ) -> Option<V>
     where
         F: FnOnce() -> Option<V>,
     {
-        let hash = self.inner.hash(&key);
-        let key = Arc::new(key);
+        let hash = self.inner.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
         self.inner
             .select(hash)
             .get_or_optionally_insert_with_hash_and_fun(key, hash, init, false)
@@ -625,13 +644,17 @@ where
     /// [`Cache::try_get_with`][try-get-with-method] for more details.
     ///
     /// [try-get-with-method]: ./struct.Cache.html#method.try_get_with
-    pub fn try_get_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
+    pub fn try_get_with<F, E, const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: F,
+    ) -> Result<V, Arc<E>>
     where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
     {
-        let hash = self.inner.hash(&key);
-        let key = Arc::new(key);
+        let hash = self.inner.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
         self.inner
             .select(hash)
             .get_or_try_insert_with_hash_and_fun(key, hash, init, false)
@@ -641,9 +664,9 @@ where
     /// Inserts a key-value pair into the cache.
     ///
     /// If the cache has this key present, the value is updated.
-    pub fn insert(&self, key: K, value: V) {
-        let hash = self.inner.hash(&key);
-        let key = Arc::new(key);
+    pub fn insert<const ARC: bool, OK: OwnedOrArc<K, ARC>>(&self, key: OK, value: V) {
+        let hash = self.inner.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
         self.inner.select(hash).insert_with_hash(key, hash, value);
     }
 }

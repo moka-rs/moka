@@ -45,16 +45,18 @@ fn append_to_cached_vec(
     key: &str,
     value: i32,
 ) -> Entry<str, Arc<RwLock<Vec<i32>>>> {
-    cache.entry_by_ref(key).and_upsert_with(|maybe_entry| {
-        if let Some(entry) = maybe_entry {
-            // The entry exists, append the value to the Vec.
-            let v = entry.into_value();
-            v.write().unwrap().push(value);
-            v
-        } else {
-            // The entry does not exist, insert a new Vec containing
-            // the value.
-            Arc::new(RwLock::new(vec![value]))
-        }
-    })
+    cache
+        .entry_by_ref::<_, true>(key)
+        .and_upsert_with(|maybe_entry| {
+            if let Some(entry) = maybe_entry {
+                // The entry exists, append the value to the Vec.
+                let v = entry.into_value();
+                v.write().unwrap().push(value);
+                v
+            } else {
+                // The entry does not exist, insert a new Vec containing
+                // the value.
+                Arc::new(RwLock::new(vec![value]))
+            }
+        })
 }

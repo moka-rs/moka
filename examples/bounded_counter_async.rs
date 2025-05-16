@@ -56,7 +56,7 @@ async fn inclement_or_remove_counter(cache: &Cache<str, u64>, key: &str) -> Comp
     // - If the counter is less than 2, increment it by 1.
     // - If the counter is greater than or equal to 2, remove it.
     cache
-        .entry_by_ref(key)
+        .entry_by_ref::<_, true>(key)
         .and_compute_with(|maybe_entry| {
             let op = if let Some(entry) = maybe_entry {
                 // The entry exists.

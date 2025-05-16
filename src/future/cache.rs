@@ -7,7 +7,7 @@ use super::{
     WriteOp,
 };
 use crate::{
-    common::{concurrent::Weigher, time::Clock, HousekeeperConfig, ToOwnedArc},
+    common::{concurrent::Weigher, time::Clock, HousekeeperConfig, OwnedOrArc, ToOwnedArc},
     notification::AsyncEvictionListener,
     ops::compute::{self, CompResult},
     policy::{EvictionPolicy, ExpirationPolicy},
@@ -1736,7 +1736,7 @@ where
     }
 }
 
-impl<K: Sized, V, S> Cache<K, V, S>
+impl<K: ?Sized, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -1774,11 +1774,14 @@ where
     ///     assert_eq!(entry.into_value(), 3);
     /// }
     /// ```
-    pub fn entry(&self, key: K) -> OwnedKeyEntrySelector<'_, K, V, S>
+    pub fn entry<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+    ) -> OwnedKeyEntrySelector<'_, K, V, S, OK, ARC>
     where
         K: Hash + Eq,
     {
-        let hash = self.base.hash(&key);
+        let hash = self.base.hash(key.borrow_ref());
         OwnedKeyEntrySelector::new(key, hash, self)
     }
 
@@ -1864,10 +1867,14 @@ where
     /// and 2 above), this method will restart and resolve one of the remaining
     /// `init` futures.
     ///
-    pub async fn get_with(&self, key: K, init: impl Future<Output = V>) -> V {
+    pub async fn get_with<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: impl Future<Output = V>,
+    ) -> V {
         futures_util::pin_mut!(init);
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
         let replace_if = None as Option<fn(&V) -> bool>;
         self.get_or_insert_with_hash_and_fun(key, hash, init, replace_if, false)
             .await
@@ -1878,15 +1885,15 @@ where
     /// Deprecated, replaced with
     /// [`entry()::or_insert_with_if()`](./struct.OwnedKeyEntrySelector.html#method.or_insert_with_if)
     #[deprecated(since = "0.10.0", note = "Replaced with `entry().or_insert_with_if()`")]
-    pub async fn get_with_if(
+    pub async fn get_with_if<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
         &self,
-        key: K,
+        key: OK,
         init: impl Future<Output = V>,
         replace_if: impl FnMut(&V) -> bool + Send,
     ) -> V {
         futures_util::pin_mut!(init);
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
         self.get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if), false)
             .await
             .into_value()
@@ -1983,13 +1990,17 @@ where
     /// and 3 above), this method will restart and resolve one of the remaining
     /// `init` futures.
     ///
-    pub async fn optionally_get_with<F>(&self, key: K, init: F) -> Option<V>
+    pub async fn optionally_get_with<F, const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: F,
+    ) -> Option<V>
     where
         F: Future<Output = Option<V>>,
     {
         futures_util::pin_mut!(init);
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
         self.get_or_optionally_insert_with_hash_and_fun(key, hash, init, false)
             .await
             .map(Entry::into_value)
@@ -2089,14 +2100,18 @@ where
     /// and 3 above), this method will restart and resolve one of the remaining
     /// `init` futures.
     ///
-    pub async fn try_get_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
+    pub async fn try_get_with<F, E, const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: F,
+    ) -> Result<V, Arc<E>>
     where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
     {
         futures_util::pin_mut!(init);
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
         self.get_or_try_insert_with_hash_and_fun(key, hash, init, false)
             .await
             .map(Entry::into_value)
@@ -2105,9 +2120,9 @@ where
     /// Inserts a key-value pair into the cache.
     ///
     /// If the cache has this key present, the value is updated.
-    pub async fn insert(&self, key: K, value: V) {
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
+    pub async fn insert<const ARC: bool, OK: OwnedOrArc<K, ARC>>(&self, key: OK, value: V) {
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
         self.insert_with_hash(key, hash, value).await;
     }
 }

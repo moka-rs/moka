@@ -50,7 +50,7 @@ async fn append_to_cached_vec(
     value: i32,
 ) -> Entry<str, Arc<RwLock<Vec<i32>>>> {
     cache
-        .entry_by_ref(key)
+        .entry_by_ref::<_, true>(key)
         .and_upsert_with(|maybe_entry| async {
             if let Some(entry) = maybe_entry {
                 // The entry exists, append the value to the Vec.

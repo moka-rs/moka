@@ -33,7 +33,7 @@ async fn test_get_with() {
                 let value = match task_id % 4 {
                     0 => {
                         my_cache
-                            .get_with_by_ref(key.as_ref(), async move {
+                            .get_with(key.clone(), async move {
                                 println!("Task {task_id} inserting a value.");
                                 my_call_counter.fetch_add(1, Ordering::AcqRel);
                                 Arc::new(vec![0u8; TEN_MIB])
@@ -42,7 +42,7 @@ async fn test_get_with() {
                     }
                     1 => {
                         my_cache
-                            .get_with_by_ref(key.as_ref(), async move {
+                            .get_with_by_ref::<_, true>(key.as_ref(), async move {
                                 println!("Task {task_id} inserting a value.");
                                 my_call_counter.fetch_add(1, Ordering::AcqRel);
                                 Arc::new(vec![0u8; TEN_MIB])
@@ -50,7 +50,7 @@ async fn test_get_with() {
                             .await
                     }
                     2 => my_cache
-                        .entry_by_ref(key.as_ref())
+                        .entry(key.clone())
                         .or_insert_with(async move {
                             println!("Task {task_id} inserting a value.");
                             my_call_counter.fetch_add(1, Ordering::AcqRel);
@@ -59,7 +59,7 @@ async fn test_get_with() {
                         .await
                         .into_value(),
                     3 => my_cache
-                        .entry_by_ref(key.as_ref())
+                        .entry_by_ref::<_, true>(key.as_ref())
                         .or_insert_with(async move {
                             println!("Task {task_id} inserting a value.");
                             my_call_counter.fetch_add(1, Ordering::AcqRel);
@@ -109,27 +109,27 @@ async fn test_optionally_get_with() {
                 let value = match task_id % 4 {
                     0 => {
                         my_cache
-                            .optionally_get_with_by_ref(
-                                key.as_ref(),
+                            .optionally_get_with(
+                                key.clone(),
                                 get_html(task_id, SITE, &my_call_counter),
                             )
                             .await
                     }
                     1 => {
                         my_cache
-                            .optionally_get_with_by_ref(
+                            .optionally_get_with_by_ref::<_, _, true>(
                                 key.as_ref(),
                                 get_html(task_id, SITE, &my_call_counter),
                             )
                             .await
                     }
                     2 => my_cache
-                        .entry_by_ref(key.as_ref())
+                        .entry(key.clone())
                         .or_optionally_insert_with(get_html(task_id, SITE, &my_call_counter))
                         .await
                         .map(Entry::into_value),
                     3 => my_cache
-                        .entry_by_ref(key.as_ref())
+                        .entry_by_ref::<_, true>(key.as_ref())
                         .or_optionally_insert_with(get_html(task_id, SITE, &my_call_counter))
                         .await
                         .map(Entry::into_value),
@@ -182,27 +182,27 @@ async fn test_try_get_with() {
                 let value = match task_id % 4 {
                     0 => {
                         my_cache
-                            .try_get_with_by_ref(
-                                key.as_ref(),
+                            .try_get_with::<_, _, true, _>(
+                                key.clone(),
                                 get_html(task_id, SITE, &my_call_counter),
                             )
                             .await
                     }
                     1 => {
                         my_cache
-                            .try_get_with_by_ref(
+                            .try_get_with_by_ref::<_, _, _, true>(
                                 key.as_ref(),
                                 get_html(task_id, SITE, &my_call_counter),
                             )
                             .await
                     }
                     2 => my_cache
-                        .entry_by_ref(key.as_ref())
+                        .entry(key.clone())
                         .or_try_insert_with(get_html(task_id, SITE, &my_call_counter))
                         .await
                         .map(Entry::into_value),
                     3 => my_cache
-                        .entry_by_ref(key.as_ref())
+                        .entry_by_ref::<_, true>(key.as_ref())
                         .or_try_insert_with(get_html(task_id, SITE, &my_call_counter))
                         .await
                         .map(Entry::into_value),

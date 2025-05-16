@@ -10,7 +10,7 @@ use crate::{
         },
         iter::ScanningGet,
         time::{Clock, Instant},
-        HousekeeperConfig, ToOwnedArc,
+        HousekeeperConfig, OwnedOrArc, ToOwnedArc,
     },
     notification::EvictionListener,
     ops::compute::{self, CompResult},
@@ -1451,7 +1451,7 @@ where
     }
 }
 
-impl<K: Sized, V, S> Cache<K, V, S>
+impl<K: ?Sized, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -1480,11 +1480,14 @@ where
     /// assert!(!entry.is_fresh());
     /// assert_eq!(entry.into_value(), 3);
     /// ```
-    pub fn entry(&self, key: K) -> OwnedKeyEntrySelector<'_, K, V, S>
+    pub fn entry<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+    ) -> OwnedKeyEntrySelector<'_, K, V, S, OK, ARC>
     where
         K: Hash + Eq,
     {
-        let hash = self.base.hash(&key);
+        let hash = self.base.hash(key.borrow_ref());
         OwnedKeyEntrySelector::new(key, hash, self)
     }
 
@@ -1561,9 +1564,13 @@ where
     /// thread 0, 2 and 3 above), this method will restart and resolve one of the
     /// remaining `init` closure.
     ///
-    pub fn get_with(&self, key: K, init: impl FnOnce() -> V) -> V {
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
+    pub fn get_with<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: impl FnOnce() -> V,
+    ) -> V {
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
         let replace_if = None as Option<fn(&V) -> bool>;
         self.get_or_insert_with_hash_and_fun(key, hash, init, replace_if, false)
             .into_value()
@@ -1573,14 +1580,14 @@ where
     /// Deprecated, replaced with
     /// [`entry()::or_insert_with_if()`](./struct.OwnedKeyEntrySelector.html#method.or_insert_with_if)
     #[deprecated(since = "0.10.0", note = "Replaced with `entry().or_insert_with_if()`")]
-    pub fn get_with_if(
+    pub fn get_with_if<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
         &self,
-        key: K,
+        key: OK,
         init: impl FnOnce() -> V,
         replace_if: impl FnMut(&V) -> bool,
     ) -> V {
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
         self.get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if), false)
             .into_value()
     }
@@ -1668,12 +1675,16 @@ where
     /// thread 0, 2 and 3 above), this method will restart and resolve one of the
     /// remaining `init` closure.
     ///
-    pub fn optionally_get_with<F>(&self, key: K, init: F) -> Option<V>
+    pub fn optionally_get_with<F, const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: F,
+    ) -> Option<V>
     where
         F: FnOnce() -> Option<V>,
     {
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
 
         self.get_or_optionally_insert_with_hash_and_fun(key, hash, init, false)
             .map(Entry::into_value)
@@ -1765,13 +1776,17 @@ where
     /// thread 0, 2 and 3 above), this method will restart and resolve one of the
     /// remaining `init` closure.
     ///
-    pub fn try_get_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
+    pub fn try_get_with<F, E, const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: F,
+    ) -> Result<V, Arc<E>>
     where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
     {
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
         self.get_or_try_insert_with_hash_and_fun(key, hash, init, false)
             .map(Entry::into_value)
     }
@@ -1779,9 +1794,9 @@ where
     /// Inserts a key-value pair into the cache.
     ///
     /// If the cache has this key present, the value is updated.
-    pub fn insert(&self, key: K, value: V) {
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
+    pub fn insert<const ARC: bool, OK: OwnedOrArc<K, ARC>>(&self, key: OK, value: V) {
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
         self.insert_with_hash(key, hash, value);
     }
 }

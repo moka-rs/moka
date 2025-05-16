@@ -26,13 +26,15 @@ fn main() {
 }
 
 fn increment_counter(cache: &Cache<str, u64>, key: &str) -> Entry<str, u64> {
-    cache.entry_by_ref(key).and_upsert_with(|maybe_entry| {
-        if let Some(entry) = maybe_entry {
-            // The entry exists, increment the value by 1.
-            entry.into_value().saturating_add(1)
-        } else {
-            // The entry does not exist, insert a new value of 1.
-            1
-        }
-    })
+    cache
+        .entry_by_ref::<_, true>(key)
+        .and_upsert_with(|maybe_entry| {
+            if let Some(entry) = maybe_entry {
+                // The entry exists, increment the value by 1.
+                entry.into_value().saturating_add(1)
+            } else {
+                // The entry does not exist, insert a new value of 1.
+                1
+            }
+        })
 }

@@ -16,7 +16,7 @@ const NUM_THREADS: u8 = 16;
 const FILE: &str = "./Cargo.toml";
 
 macro_rules! generate_test_get_with {
-    ($test_fn_name:ident, $cache_init:expr) => {
+    ($test_fn_name:ident, $cache_init:expr, $key_init:expr, $ref_fn:ident, $optimal:literal) => {
         #[test]
         fn $test_fn_name() {
             const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
@@ -36,20 +36,20 @@ macro_rules! generate_test_get_with {
 
                         println!("Thread {thread_id} started.");
 
-                        let key: Arc<str> = "key1".into();
+                        let key = $key_init;
                         let value = match thread_id % 4 {
-                            0 => my_cache.get_with_by_ref(key.as_ref(), || {
+                            0 => my_cache.get_with(key.clone(), || {
                                 println!("Thread {thread_id} inserting a value.");
                                 my_call_counter.fetch_add(1, Ordering::AcqRel);
                                 Arc::new(vec![0u8; TEN_MIB])
                             }),
-                            1 => my_cache.get_with_by_ref(key.as_ref(), || {
+                            1 => my_cache.get_with_by_ref::<_, $optimal>(key.$ref_fn(), || {
                                 println!("Thread {thread_id} inserting a value.");
                                 my_call_counter.fetch_add(1, Ordering::AcqRel);
                                 Arc::new(vec![0u8; TEN_MIB])
                             }),
                             2 => my_cache
-                                .entry_by_ref(key.as_ref())
+                                .entry(key.clone())
                                 .or_insert_with(|| {
                                     println!("Thread {thread_id} inserting a value.");
                                     my_call_counter.fetch_add(1, Ordering::AcqRel);
@@ -57,7 +57,7 @@ macro_rules! generate_test_get_with {
                                 })
                                 .into_value(),
                             3 => my_cache
-                                .entry_by_ref(key.as_ref())
+                                .entry_by_ref::<_, $optimal>(key.$ref_fn())
                                 .or_insert_with(|| {
                                     println!("Thread {thread_id} inserting a value.");
                                     my_call_counter.fetch_add(1, Ordering::AcqRel);
@@ -68,7 +68,7 @@ macro_rules! generate_test_get_with {
                         };
 
                         assert_eq!(value.len(), TEN_MIB);
-                        assert!(my_cache.get(key.as_ref()).is_some());
+                        assert!(my_cache.get(key.$ref_fn()).is_some());
 
                         println!("Thread {thread_id} got the value. (len: {})", value.len());
                     })
@@ -85,7 +85,7 @@ macro_rules! generate_test_get_with {
 }
 
 macro_rules! generate_test_optionally_get_with {
-    ($test_fn_name:ident, $cache_init:expr) => {
+    ($test_fn_name:ident, $cache_init:expr, $key_init:expr, $ref_fn:ident, $optimal:literal) => {
         #[test]
         fn $test_fn_name() {
             let cache = $cache_init;
@@ -113,22 +113,23 @@ macro_rules! generate_test_optionally_get_with {
 
                         println!("Thread {thread_id} started.");
 
-                        let key: Arc<str> = "key1".into();
+                        let key = $key_init;
                         let value = match thread_id % 4 {
-                            0 => my_cache.optionally_get_with_by_ref(key.as_ref(), || {
+                            0 => my_cache.optionally_get_with(key.clone(), || {
                                 get_file_size(thread_id, FILE, &my_call_counter)
                             }),
-                            1 => my_cache.optionally_get_with_by_ref(key.as_ref(), || {
-                                get_file_size(thread_id, FILE, &my_call_counter)
-                            }),
+                            1 => my_cache.optionally_get_with_by_ref::<_, _, $optimal>(
+                                key.$ref_fn(),
+                                || get_file_size(thread_id, FILE, &my_call_counter),
+                            ),
                             2 => my_cache
-                                .entry_by_ref(key.as_ref())
+                                .entry(key.clone())
                                 .or_optionally_insert_with(|| {
                                     get_file_size(thread_id, FILE, &my_call_counter)
                                 })
                                 .map(Entry::into_value),
                             3 => my_cache
-                                .entry_by_ref(key.as_ref())
+                                .entry_by_ref::<_, $optimal>(key.$ref_fn())
                                 .or_optionally_insert_with(|| {
                                     get_file_size(thread_id, FILE, &my_call_counter)
                                 })
@@ -137,7 +138,7 @@ macro_rules! generate_test_optionally_get_with {
                         };
 
                         assert!(value.is_some());
-                        assert!(my_cache.get(key.as_ref()).is_some());
+                        assert!(my_cache.get(key.$ref_fn()).is_some());
 
                         println!(
                             "Thread {thread_id} got the value. (len: {})",
@@ -157,7 +158,7 @@ macro_rules! generate_test_optionally_get_with {
 }
 
 macro_rules! generate_test_try_get_with {
-    ($test_fn_name:ident, $cache_init:expr) => {
+    ($test_fn_name:ident, $cache_init:expr, $key_init:expr, $ref_fn:ident, $optimal:literal) => {
         #[test]
         fn $test_fn_name() {
             let cache = $cache_init;
@@ -185,22 +186,23 @@ macro_rules! generate_test_try_get_with {
 
                         println!("Thread {thread_id} started.");
 
-                        let key: Arc<str> = "key1".into();
+                        let key = $key_init;
                         let value = match thread_id % 4 {
-                            0 => my_cache.try_get_with_by_ref(key.as_ref(), || {
+                            0 => my_cache.try_get_with::<_, _, $optimal, _>(key.clone(), || {
                                 get_file_size(thread_id, FILE, &my_call_counter)
                             }),
-                            1 => my_cache.try_get_with_by_ref(key.as_ref(), || {
-                                get_file_size(thread_id, FILE, &my_call_counter)
-                            }),
+                            1 => my_cache
+                                .try_get_with_by_ref::<_, _, _, $optimal>(key.$ref_fn(), || {
+                                    get_file_size(thread_id, FILE, &my_call_counter)
+                                }),
                             2 => my_cache
-                                .entry_by_ref(key.as_ref())
+                                .entry(key.clone())
                                 .or_try_insert_with(|| {
                                     get_file_size(thread_id, FILE, &my_call_counter)
                                 })
                                 .map(Entry::into_value),
                             3 => my_cache
-                                .entry_by_ref(key.as_ref())
+                                .entry_by_ref::<_, $optimal>(key.$ref_fn())
                                 .or_try_insert_with(|| {
                                     get_file_size(thread_id, FILE, &my_call_counter)
                                 })
@@ -209,7 +211,7 @@ macro_rules! generate_test_try_get_with {
                         };
 
                         assert!(value.is_ok());
-                        assert!(my_cache.get(key.as_ref()).is_some());
+                        assert!(my_cache.get(key.$ref_fn()).is_some());
 
                         println!(
                             "Thread {thread_id} got the value. (len: {})",
@@ -228,18 +230,96 @@ macro_rules! generate_test_try_get_with {
     };
 }
 
-generate_test_get_with!(test_cache_get_with, Cache::<str, Arc<Vec<u8>>>::new(100));
+generate_test_get_with!(
+    test_cache_get_with,
+    Cache::<String, Arc<Vec<u8>>>::new(100),
+    "key1".to_string(),
+    as_str,
+    false
+);
+
+generate_test_get_with!(
+    test_cache_arc_get_with,
+    Cache::<str, Arc<Vec<u8>>>::new(100),
+    Arc::<str>::from("key1"),
+    as_ref,
+    true
+);
+
 generate_test_get_with!(
     test_seg_cache_get_with,
-    SegmentedCache::<str, Arc<Vec<u8>>>::new(100, 4)
+    SegmentedCache::<String, Arc<Vec<u8>>>::new(100, 4),
+    "key1".to_string(),
+    as_str,
+    false
 );
-generate_test_optionally_get_with!(test_cache_optionally_get_with, Cache::<str, u64>::new(100));
+
+generate_test_get_with!(
+    test_seg_cache_arc_get_with,
+    SegmentedCache::<str, Arc<Vec<u8>>>::new(100, 4),
+    Arc::<str>::from("key1"),
+    as_ref,
+    true
+);
+
+generate_test_optionally_get_with!(
+    test_cache_optionally_get_with,
+    Cache::<String, u64>::new(100),
+    "key1".to_string(),
+    as_str,
+    false
+);
+
+generate_test_optionally_get_with!(
+    test_cache_arc_optionally_get_with,
+    Cache::<str, u64>::new(100),
+    Arc::<str>::from("key1"),
+    as_ref,
+    true
+);
+
 generate_test_optionally_get_with!(
     test_seg_cache_optionally_get_with,
-    SegmentedCache::<str, u64>::new(100, 4)
+    SegmentedCache::<String, u64>::new(100, 4),
+    "key1".to_string(),
+    as_str,
+    false
 );
-generate_test_try_get_with!(test_cache_try_get_with, Cache::<str, u64>::new(100));
+generate_test_optionally_get_with!(
+    test_seg_cache_arc_optionally_get_with,
+    SegmentedCache::<str, u64>::new(100, 4),
+    Arc::<str>::from("key1"),
+    as_ref,
+    true
+);
+generate_test_try_get_with!(
+    test_cache_try_get_with,
+    Cache::<String, u64>::new(100),
+    "key1".to_string(),
+    as_str,
+    false
+);
+
+generate_test_try_get_with!(
+    test_cache_arc_try_get_with,
+    Cache::<str, u64>::new(100),
+    Arc::<str>::from("key1"),
+    as_ref,
+    true
+);
+
 generate_test_try_get_with!(
     test_seg_cache_try_get_with,
-    SegmentedCache::<str, u64>::new(100, 4)
+    SegmentedCache::<String, u64>::new(100, 4),
+    "key1".to_string(),
+    as_str,
+    false
+);
+
+generate_test_try_get_with!(
+    test_seg_cache_arc_try_get_with,
+    SegmentedCache::<str, u64>::new(100, 4),
+    Arc::<str>::from("key1"),
+    as_ref,
+    true
 );

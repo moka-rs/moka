@@ -28,7 +28,7 @@ async fn main() {
 
 async fn increment_counter(cache: &Cache<str, u64>, key: &str) -> Entry<str, u64> {
     cache
-        .entry_by_ref(key)
+        .entry_by_ref::<_, true>(key)
         .and_upsert_with(|maybe_entry| {
             let counter = if let Some(entry) = maybe_entry {
                 // The entry exists, increment the value by 1.

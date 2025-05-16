@@ -54,20 +54,22 @@ fn inclement_or_remove_counter(cache: &Cache<str, u64>, key: &str) -> CompResult
     // - If the counter does not exist, insert a new value of 1.
     // - If the counter is less than 2, increment it by 1.
     // - If the counter is greater than or equal to 2, remove it.
-    cache.entry_by_ref(key).and_compute_with(|maybe_entry| {
-        if let Some(entry) = maybe_entry {
-            // The entry exists.
-            let counter = entry.into_value();
-            if counter < 2 {
-                // Increment the counter by 1.
-                Op::Put(counter.saturating_add(1))
+    cache
+        .entry_by_ref::<_, true>(key)
+        .and_compute_with(|maybe_entry| {
+            if let Some(entry) = maybe_entry {
+                // The entry exists.
+                let counter = entry.into_value();
+                if counter < 2 {
+                    // Increment the counter by 1.
+                    Op::Put(counter.saturating_add(1))
+                } else {
+                    // Remove the entry.
+                    Op::Remove
+                }
             } else {
-                // Remove the entry.
-                Op::Remove
+                // The entry does not exist, insert a new value of 1.
+                Op::Put(1)
             }
-        } else {
-            // The entry does not exist, insert a new value of 1.
-            Op::Put(1)
-        }
-    })
+        })
 }

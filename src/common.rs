@@ -130,16 +130,50 @@ pub(crate) fn available_parallelism() -> usize {
     available_parallelism().map(NonZeroUsize::get).unwrap_or(1)
 }
 
+// Q: ToOwnedArc<OPT, ArcOwned=K>
+// K: OwnedOrArc<T>
+
+/// Either a owned type or an Arc owned type
+pub trait OwnedOrArc<T: ?Sized, const ARC: bool>: Sized {
+    fn arc_wrapped(self) -> Arc<T>;
+
+    fn borrow_ref(&self) -> &T;
+}
+
+impl<T> OwnedOrArc<T, false> for T {
+    fn arc_wrapped(self) -> Arc<T> {
+        Arc::new(self)
+    }
+
+    fn borrow_ref(&self) -> &T {
+        self
+    }
+}
+
+impl<T: ?Sized> OwnedOrArc<T, true> for Arc<T> {
+    fn arc_wrapped(self) -> Arc<T> {
+        self
+    }
+
+    fn borrow_ref(&self) -> &T {
+        AsRef::as_ref(self)
+    }
+}
+
 /// [`ToOwned`], but wrapped inside an [`Arc`]
 ///
 /// `OPTIMAL` indicates whether the type would be optimally wrapped inside the [`Arc`]
 pub trait ToOwnedArc<const OPTIMAL: bool> {
+    /// The inner type when used in an Arc
     type ArcOwned: Borrow<Self> + ?Sized;
 
     fn to_owned_arc(&self) -> Arc<Self::ArcOwned>;
 }
 
-impl<T: ToOwned> ToOwnedArc<false> for T {
+impl<T: ToOwned + ?Sized> ToOwnedArc<false> for T
+where
+    <T as ToOwned>::Owned: Sized,
+{
     type ArcOwned = <T as ToOwned>::Owned;
 
     fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
@@ -147,7 +181,10 @@ impl<T: ToOwned> ToOwnedArc<false> for T {
     }
 }
 
-impl<T: ToOptimalOwnedArc + ?Sized> ToOwnedArc<true> for T {
+impl<T: ToOptimalOwnedArc + ?Sized> ToOwnedArc<true> for T
+where
+    Arc<<T as ToOptimalOwnedArc>::ArcOwned>: Borrow<T>,
+{
     type ArcOwned = <T as ToOptimalOwnedArc>::ArcOwned;
 
     fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
