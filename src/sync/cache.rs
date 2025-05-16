@@ -831,9 +831,12 @@ where
     /// assert!(!entry.is_fresh());
     /// assert_eq!(entry.into_value(), 3);
     /// ```
-    pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
+    pub fn entry_by_ref<'a, Q, const OPTIMAL: bool>(
+        &'a self,
+        key: &'a Q,
+    ) -> RefKeyEntrySelector<'a, K, Q, V, S, OPTIMAL>
     where
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.base.hash(key);
         RefKeyEntrySelector::new(key, hash, self)
@@ -842,9 +845,9 @@ where
     /// Similar to [`get_with`](#method.get_with), but instead of passing an owned
     /// key, you can pass a reference to the key. If the key does not exist in the
     /// cache, the key will be cloned to create new entry in the cache.
-    pub fn get_with_by_ref<Q>(&self, key: &Q, init: impl FnOnce() -> V) -> V
+    pub fn get_with_by_ref<Q, const OPTIMAL: bool>(&self, key: &Q, init: impl FnOnce() -> V) -> V
     where
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.base.hash(key);
         let replace_if = None as Option<fn(&V) -> bool>;
@@ -871,7 +874,7 @@ where
     // require key reference to have `ToOwned` trait. If we modify the existing
     // `get_or_insert_with_hash_and_fun` function, it will require all the existing
     // apis that depends on it to make the `K` to have `ToOwned` trait.
-    pub(crate) fn get_or_insert_with_hash_by_ref_and_fun<Q>(
+    pub(crate) fn get_or_insert_with_hash_by_ref_and_fun<Q, const OPTIMAL: bool>(
         &self,
         key: &Q,
         hash: u64,
@@ -880,7 +883,7 @@ where
         need_key: bool,
     ) -> Entry<K, V>
     where
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         self.base
             .get_with_hash_and_ignore_if(key, hash, replace_if.as_mut(), need_key)
@@ -942,14 +945,14 @@ where
         }
     }
 
-    pub(crate) fn get_or_insert_with_hash_by_ref<Q>(
+    pub(crate) fn get_or_insert_with_hash_by_ref<Q, const OPTIMAL: bool>(
         &self,
         key: &Q,
         hash: u64,
         init: impl FnOnce() -> V,
     ) -> Entry<K, V>
     where
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         match self.base.get_with_hash(key, hash, true) {
             Some(entry) => entry,
@@ -966,10 +969,14 @@ where
     /// of passing an owned key, you can pass a reference to the key. If the key does
     /// not exist in the cache, the key will be cloned to create new entry in the
     /// cache.
-    pub fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
+    pub fn optionally_get_with_by_ref<F, Q, const OPTIMAL: bool>(
+        &self,
+        key: &Q,
+        init: F,
+    ) -> Option<V>
     where
         F: FnOnce() -> Option<V>,
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.base.hash(key);
         self.get_or_optionally_insert_with_hash_by_ref_and_fun(key, hash, init, false)
@@ -994,7 +1001,7 @@ where
         self.optionally_insert_with_hash_and_fun(key, hash, init, need_key)
     }
 
-    pub(super) fn get_or_optionally_insert_with_hash_by_ref_and_fun<F, Q>(
+    pub(super) fn get_or_optionally_insert_with_hash_by_ref_and_fun<F, Q, const OPTIMAL: bool>(
         &self,
         key: &Q,
         hash: u64,
@@ -1003,7 +1010,7 @@ where
     ) -> Option<Entry<K, V>>
     where
         F: FnOnce() -> Option<V>,
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let entry = self.get_with_hash(key, hash, need_key);
         if entry.is_some() {
@@ -1059,11 +1066,15 @@ where
     /// Similar to [`try_get_with`](#method.try_get_with), but instead of passing an
     /// owned key, you can pass a reference to the key. If the key does not exist in
     /// the cache, the key will be cloned to create new entry in the cache.
-    pub fn try_get_with_by_ref<F, E, Q>(&self, key: &Q, init: F) -> Result<V, Arc<E>>
+    pub fn try_get_with_by_ref<F, E, Q, const OPTIMAL: bool>(
+        &self,
+        key: &Q,
+        init: F,
+    ) -> Result<V, Arc<E>>
     where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.base.hash(key);
         self.get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init, false)
@@ -1088,7 +1099,7 @@ where
         self.try_insert_with_hash_and_fun(key, hash, init, need_key)
     }
 
-    pub(crate) fn get_or_try_insert_with_hash_by_ref_and_fun<F, Q, E>(
+    pub(crate) fn get_or_try_insert_with_hash_by_ref_and_fun<F, Q, E, const OPTIMAL: bool>(
         &self,
         key: &Q,
         hash: u64,
@@ -1098,7 +1109,7 @@ where
     where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         if let Some(entry) = self.get_with_hash(key, hash, false) {
             return Ok(entry);

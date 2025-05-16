@@ -131,6 +131,30 @@ pub(crate) fn available_parallelism() -> usize {
 }
 
 /// [`ToOwned`], but wrapped inside an [`Arc`]
+///
+/// `OPTIMAL` indicates whether the type would be optimally wrapped inside the [`Arc`]
+pub trait ToOwnedArc<const OPTIMAL: bool> {
+    type ArcOwned: Borrow<Self> + ?Sized;
+
+    fn to_owned_arc(&self) -> Arc<Self::ArcOwned>;
+}
+
+impl<T: ToOwned> ToOwnedArc<false> for T {
+    type ArcOwned = <T as ToOwned>::Owned;
+
+    fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
+        Arc::new(self.to_owned())
+    }
+}
+
+impl<T: ToOptimalOwnedArc + ?Sized> ToOwnedArc<true> for T {
+    type ArcOwned = <T as ToOptimalOwnedArc>::ArcOwned;
+
+    fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
+        self.to_optimal_owned_arc()
+    }
+}
+
 /// moka internally uses [`Arc<K>`] to store the key type.
 /// So we can leverage this to eliminate one pointer indirection for common unsized
 /// types like [`str`].
@@ -140,27 +164,16 @@ pub(crate) fn available_parallelism() -> usize {
 /// we can be sure that the data is optimally stored inside an [`Arc`], e.g. [`Arc<str>`].
 // Implementation Note: follow
 // https://doc.rust-lang.org/std/borrow/trait.ToOwned.html#implementors
-pub trait ToOwnedArc {
+pub trait ToOptimalOwnedArc {
     type ArcOwned: Borrow<Self> + ?Sized;
 
-    fn to_owned_arc(&self) -> Arc<Self::ArcOwned>;
+    fn to_optimal_owned_arc(&self) -> Arc<Self::ArcOwned>;
 }
 
-impl<T: ToOwned> ToOwnedArc for T
-where
-    T: Clone,
-{
-    type ArcOwned = T;
-
-    fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
-        Arc::new(self.clone())
-    }
-}
-
-impl ToOwnedArc for str {
+impl ToOptimalOwnedArc for str {
     type ArcOwned = Self;
 
-    fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
+    fn to_optimal_owned_arc(&self) -> Arc<Self::ArcOwned> {
         self.into()
     }
 }
@@ -174,34 +187,34 @@ impl ToOwnedArc for str {
 //     }
 // }
 
-impl ToOwnedArc for CStr {
+impl ToOptimalOwnedArc for CStr {
     type ArcOwned = Self;
 
-    fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
+    fn to_optimal_owned_arc(&self) -> Arc<Self::ArcOwned> {
         self.into()
     }
 }
 
-impl ToOwnedArc for OsStr {
+impl ToOptimalOwnedArc for OsStr {
     type ArcOwned = Self;
 
-    fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
+    fn to_optimal_owned_arc(&self) -> Arc<Self::ArcOwned> {
         self.into()
     }
 }
 
-impl ToOwnedArc for Path {
+impl ToOptimalOwnedArc for Path {
     type ArcOwned = Self;
 
-    fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
+    fn to_optimal_owned_arc(&self) -> Arc<Self::ArcOwned> {
         self.into()
     }
 }
 
-impl<T: Clone> ToOwnedArc for [T] {
+impl<T: Clone> ToOptimalOwnedArc for [T] {
     type ArcOwned = Self;
 
-    fn to_owned_arc(&self) -> Arc<Self::ArcOwned> {
+    fn to_optimal_owned_arc(&self) -> Arc<Self::ArcOwned> {
         self.into()
     }
 }

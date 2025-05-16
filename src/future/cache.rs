@@ -916,9 +916,12 @@ where
     ///     assert_eq!(entry.into_value(), 3);
     /// }
     /// ```
-    pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
+    pub fn entry_by_ref<'a, Q, const OPTIMAL: bool>(
+        &'a self,
+        key: &'a Q,
+    ) -> RefKeyEntrySelector<'a, K, Q, V, S, OPTIMAL>
     where
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.base.hash(key);
         RefKeyEntrySelector::new(key, hash, self)
@@ -927,9 +930,13 @@ where
     /// Similar to [`get_with`](#method.get_with), but instead of passing an owned
     /// key, you can pass a reference to the key. If the key does not exist in the
     /// cache, the key will be cloned to create new entry in the cache.
-    pub async fn get_with_by_ref<Q>(&self, key: &Q, init: impl Future<Output = V>) -> V
+    pub async fn get_with_by_ref<Q, const OPTIMAL: bool>(
+        &self,
+        key: &Q,
+        init: impl Future<Output = V>,
+    ) -> V
     where
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
@@ -943,10 +950,14 @@ where
     /// of passing an owned key, you can pass a reference to the key. If the key does
     /// not exist in the cache, the key will be cloned to create new entry in the
     /// cache.
-    pub async fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
+    pub async fn optionally_get_with_by_ref<F, Q, const OPTIMAL: bool>(
+        &self,
+        key: &Q,
+        init: F,
+    ) -> Option<V>
     where
         F: Future<Output = Option<V>>,
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
@@ -958,11 +969,15 @@ where
     /// Similar to [`try_get_with`](#method.try_get_with), but instead of passing an
     /// owned key, you can pass a reference to the key. If the key does not exist in
     /// the cache, the key will be cloned to create new entry in the cache.
-    pub async fn try_get_with_by_ref<F, E, Q>(&self, key: &Q, init: F) -> Result<V, Arc<E>>
+    pub async fn try_get_with_by_ref<F, E, Q, const OPTIMAL: bool>(
+        &self,
+        key: &Q,
+        init: F,
+    ) -> Result<V, Arc<E>>
     where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
@@ -1174,7 +1189,7 @@ where
         }
     }
 
-    pub(crate) async fn get_or_insert_with_hash_by_ref_and_fun<Q>(
+    pub(crate) async fn get_or_insert_with_hash_by_ref_and_fun<Q, const OPTIMAL: bool>(
         &self,
         key: &Q,
         hash: u64,
@@ -1183,7 +1198,7 @@ where
         need_key: bool,
     ) -> Entry<K, V>
     where
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let maybe_entry = self
             .base
@@ -1250,14 +1265,14 @@ where
         }
     }
 
-    pub(crate) async fn get_or_insert_with_hash_by_ref<Q>(
+    pub(crate) async fn get_or_insert_with_hash_by_ref<Q, const OPTIMAL: bool>(
         &self,
         key: &Q,
         hash: u64,
         init: impl FnOnce() -> V,
     ) -> Entry<K, V>
     where
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         match self
             .base
@@ -1297,7 +1312,11 @@ where
             .await
     }
 
-    pub(crate) async fn get_or_optionally_insert_with_hash_by_ref_and_fun<F, Q>(
+    pub(crate) async fn get_or_optionally_insert_with_hash_by_ref_and_fun<
+        F,
+        Q,
+        const OPTIMAL: bool,
+    >(
         &self,
         key: &Q,
         hash: u64,
@@ -1306,7 +1325,7 @@ where
     ) -> Option<Entry<K, V>>
     where
         F: Future<Output = Option<V>>,
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let entry = self
             .base
@@ -1377,7 +1396,7 @@ where
             .await
     }
 
-    pub(super) async fn get_or_try_insert_with_hash_by_ref_and_fun<F, E, Q>(
+    pub(super) async fn get_or_try_insert_with_hash_by_ref_and_fun<F, E, Q, const OPTIMAL: bool>(
         &self,
         key: &Q,
         hash: u64,
@@ -1387,7 +1406,7 @@ where
     where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         if let Some(entry) = self
             .base

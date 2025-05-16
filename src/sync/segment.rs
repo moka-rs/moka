@@ -277,9 +277,12 @@ where
             .map(Entry::into_value)
     }
 
-    pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
+    pub fn entry_by_ref<'a, Q, const OPTIMAL: bool>(
+        &'a self,
+        key: &'a Q,
+    ) -> RefKeyEntrySelector<'a, K, Q, V, S, OPTIMAL>
     where
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         let cache = self.inner.select(hash);
@@ -289,9 +292,9 @@ where
     /// Similar to [`get_with`](#method.get_with), but instead of passing an owned
     /// key, you can pass a reference to the key. If the key does not exist in the
     /// cache, the key will be cloned to create new entry in the cache.
-    pub fn get_with_by_ref<Q>(&self, key: &Q, init: impl FnOnce() -> V) -> V
+    pub fn get_with_by_ref<Q, const OPTIMAL: bool>(&self, key: &Q, init: impl FnOnce() -> V) -> V
     where
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         let replace_if = None as Option<fn(&V) -> bool>;
@@ -305,10 +308,14 @@ where
     /// of passing an owned key, you can pass a reference to the key. If the key does
     /// not exist in the cache, the key will be cloned to create new entry in the
     /// cache.
-    pub fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
+    pub fn optionally_get_with_by_ref<F, Q, const OPTIMAL: bool>(
+        &self,
+        key: &Q,
+        init: F,
+    ) -> Option<V>
     where
         F: FnOnce() -> Option<V>,
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         self.inner
@@ -320,11 +327,15 @@ where
     /// Similar to [`try_get_with`](#method.try_get_with), but instead of passing an
     /// owned key, you can pass a reference to the key. If the key does not exist in
     /// the cache, the key will be cloned to create new entry in the cache.
-    pub fn try_get_with_by_ref<F, E, Q>(&self, key: &Q, init: F) -> Result<V, Arc<E>>
+    pub fn try_get_with_by_ref<F, E, Q, const OPTIMAL: bool>(
+        &self,
+        key: &Q,
+        init: F,
+    ) -> Result<V, Arc<E>>
     where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
-        Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.inner.hash(key);
         self.inner

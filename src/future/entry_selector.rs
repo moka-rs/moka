@@ -671,19 +671,19 @@ where
 ///
 /// [`Entry`]: ../struct.Entry.html
 /// [entry-by-ref-method]: ./struct.Cache.html#method.entry_by_ref
-pub struct RefKeyEntrySelector<'a, K: ?Sized, Q, V, S>
+pub struct RefKeyEntrySelector<'a, K: ?Sized, Q, V, S, const OPTIMAL: bool>
 where
-    Q: ?Sized,
+    Q: ?Sized + ToOwnedArc<OPTIMAL, ArcOwned = K>,
 {
     ref_key: &'a Q,
     hash: u64,
     cache: &'a Cache<K, V, S>,
 }
 
-impl<'a, K: ?Sized, Q, V, S> RefKeyEntrySelector<'a, K, Q, V, S>
+impl<'a, K: ?Sized, Q, V, S, const OPTIMAL: bool> RefKeyEntrySelector<'a, K, Q, V, S, OPTIMAL>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    Q: Equivalent<K> + ToOwnedArc<ArcOwned = K> + Hash + ?Sized,
+    Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
