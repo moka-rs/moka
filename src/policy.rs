@@ -1,5 +1,6 @@
 use std::{
     fmt,
+    ops::Deref,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -275,6 +276,38 @@ pub trait Expiry<K, V> {
         duration_until_expiry: Option<Duration>,
     ) -> Option<Duration> {
         duration_until_expiry
+    }
+}
+
+impl<K, V, T> Expiry<K, V> for T
+where
+    T: Deref<Target = dyn Expiry<K, V> + Send + Sync>,
+{
+    fn expire_after_create(&self, key: &K, value: &V, created_at: Instant) -> Option<Duration> {
+        self.deref().expire_after_create(key, value, created_at)
+    }
+
+    fn expire_after_read(
+        &self,
+        key: &K,
+        value: &V,
+        read_at: Instant,
+        duration_until_expiry: Option<Duration>,
+        last_modified_at: Instant,
+    ) -> Option<Duration> {
+        self.deref()
+            .expire_after_read(key, value, read_at, duration_until_expiry, last_modified_at)
+    }
+
+    fn expire_after_update(
+        &self,
+        key: &K,
+        value: &V,
+        updated_at: Instant,
+        duration_until_expiry: Option<Duration>,
+    ) -> Option<Duration> {
+        self.deref()
+            .expire_after_update(key, value, updated_at, duration_until_expiry)
     }
 }
 
