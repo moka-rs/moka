@@ -42,7 +42,7 @@ atomic64 = []
 # This unstable feature adds `GlobalDebugCounters::current` function, which returns
 # counters of internal object construction and destruction. It will have some
 # performance impacts and is intended for debugging.
-unstable-debug-counters = ["future", "once_cell"]
+unstable-debug-counters = ["future"]
 
 [dependencies]
 crossbeam-channel = "0.5.5"
@@ -65,9 +65,6 @@ futures-util = { version = "0.3.17", optional = true }
 
 # Optional dependencies (logging)
 log = { version = "0.4", optional = true }
-
-# Optional dependencies (unstable-debug-counters)
-once_cell = { version = "1.7", optional = true }
 
 [dev-dependencies]
 actix-rt = "2.8"
