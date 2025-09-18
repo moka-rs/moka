@@ -78,7 +78,7 @@ env_logger = "0.10.0"
 getrandom = "0.2"
 once_cell = "1.7"
 rand = "0.8.5"
-reqwest = { version = "0.11.11", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tokio = { version = "1.19", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time" ] }
 
 # We cannot use `cfg(loom)` here because an indirect dependency `concurrent-queue`
