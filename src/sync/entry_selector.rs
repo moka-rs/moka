@@ -1,6 +1,10 @@
 use equivalent::Equivalent;
 
-use crate::{ops::compute, Entry};
+use crate::{
+    common::{OwnedOrArc, ToOwnedArc},
+    ops::compute,
+    Entry,
+};
 
 use super::Cache;
 
@@ -19,19 +23,23 @@ use std::{
 ///
 /// [`Entry`]: ../struct.Entry.html
 /// [entry-method]: ./struct.Cache.html#method.entry
-pub struct OwnedKeyEntrySelector<'a, K, V, S> {
-    owned_key: K,
+pub struct OwnedKeyEntrySelector<'a, K: ?Sized, V, S, OK, const ARC: bool>
+where
+    OK: OwnedOrArc<K, ARC>,
+{
+    owned_key: OK,
     hash: u64,
     cache: &'a Cache<K, V, S>,
 }
 
-impl<'a, K, V, S> OwnedKeyEntrySelector<'a, K, V, S>
+impl<'a, K: ?Sized, V, S, OK, const ARC: bool> OwnedKeyEntrySelector<'a, K, V, S, OK, ARC>
 where
     K: Hash + Eq + Send + Sync + 'static,
+    OK: OwnedOrArc<K, ARC>,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
-    pub(crate) fn new(owned_key: K, hash: u64, cache: &'a Cache<K, V, S>) -> Self {
+    pub(crate) fn new(owned_key: OK, hash: u64, cache: &'a Cache<K, V, S>) -> Self {
         Self {
             owned_key,
             hash,
@@ -154,7 +162,7 @@ where
     where
         F: FnOnce(Option<Entry<K, V>>) -> compute::Op<V>,
     {
-        let key = Arc::new(self.owned_key);
+        let key = self.owned_key.arc_wrapped();
         self.cache.compute_with_hash_and_fun(key, self.hash, f)
     }
 
@@ -214,7 +222,7 @@ where
         F: FnOnce(Option<Entry<K, V>>) -> Result<compute::Op<V>, E>,
         E: Send + Sync + 'static,
     {
-        let key = Arc::new(self.owned_key);
+        let key = self.owned_key.arc_wrapped();
         self.cache.try_compute_with_hash_and_fun(key, self.hash, f)
     }
 
@@ -290,7 +298,7 @@ where
     where
         F: FnOnce(Option<Entry<K, V>>) -> V,
     {
-        let key = Arc::new(self.owned_key);
+        let key = self.owned_key.arc_wrapped();
         self.cache.upsert_with_hash_and_fun(key, self.hash, f)
     }
 
@@ -322,7 +330,7 @@ where
     where
         V: Default,
     {
-        let key = Arc::new(self.owned_key);
+        let key = self.owned_key.arc_wrapped();
         self.cache
             .get_or_insert_with_hash(key, self.hash, Default::default)
     }
@@ -352,7 +360,7 @@ where
     /// assert_eq!(entry.into_value(), 3);
     /// ```
     pub fn or_insert(self, default: V) -> Entry<K, V> {
-        let key = Arc::new(self.owned_key);
+        let key = self.owned_key.arc_wrapped();
         let init = || default;
         self.cache.get_or_insert_with_hash(key, self.hash, init)
     }
@@ -399,7 +407,7 @@ where
     ///
     /// [get-with-method]: ./struct.Cache.html#method.get_with
     pub fn or_insert_with(self, init: impl FnOnce() -> V) -> Entry<K, V> {
-        let key = Arc::new(self.owned_key);
+        let key = self.owned_key.arc_wrapped();
         let replace_if = None as Option<fn(&V) -> bool>;
         self.cache
             .get_or_insert_with_hash_and_fun(key, self.hash, init, replace_if, true)
@@ -418,7 +426,7 @@ where
         init: impl FnOnce() -> V,
         replace_if: impl FnMut(&V) -> bool,
     ) -> Entry<K, V> {
-        let key = Arc::new(self.owned_key);
+        let key = self.owned_key.arc_wrapped();
         self.cache
             .get_or_insert_with_hash_and_fun(key, self.hash, init, Some(replace_if), true)
     }
@@ -478,7 +486,7 @@ where
         self,
         init: impl FnOnce() -> Option<V>,
     ) -> Option<Entry<K, V>> {
-        let key = Arc::new(self.owned_key);
+        let key = self.owned_key.arc_wrapped();
         self.cache
             .get_or_optionally_insert_with_hash_and_fun(key, self.hash, init, true)
     }
@@ -541,7 +549,7 @@ where
         F: FnOnce() -> Result<V, E>,
         E: Send + Sync + 'static,
     {
-        let key = Arc::new(self.owned_key);
+        let key = self.owned_key.arc_wrapped();
         self.cache
             .get_or_try_insert_with_hash_and_fun(key, self.hash, init, true)
     }
@@ -557,19 +565,19 @@ where
 ///
 /// [`Entry`]: ../struct.Entry.html
 /// [entry-by-ref-method]: ./struct.Cache.html#method.entry_by_ref
-pub struct RefKeyEntrySelector<'a, K, Q, V, S>
+pub struct RefKeyEntrySelector<'a, K: ?Sized, Q, V, S, const OPTIMAL: bool>
 where
-    Q: ?Sized,
+    Q: ?Sized + ToOwnedArc<OPTIMAL, ArcOwned = K>,
 {
     ref_key: &'a Q,
     hash: u64,
     cache: &'a Cache<K, V, S>,
 }
 
-impl<'a, K, Q, V, S> RefKeyEntrySelector<'a, K, Q, V, S>
+impl<'a, K: ?Sized, Q, V, S, const OPTIMAL: bool> RefKeyEntrySelector<'a, K, Q, V, S, OPTIMAL>
 where
     K: Hash + Eq + Send + Sync + 'static,
-    Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+    Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     V: Clone + Send + Sync + 'static,
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
@@ -622,22 +630,23 @@ where
     /// # Example
     ///
     /// ```rust
+    /// use std::sync::Arc;
     /// use moka::{
     ///     sync::Cache,
     ///     ops::compute::{CompResult, Op},
     /// };
     ///
-    /// let cache: Cache<String, u64> = Cache::new(100);
-    /// let key = "key1".to_string();
+    /// let cache: Cache<str, u64> = Cache::new(100);
+    /// let key: Arc<str> = "key1".into();
     ///
     /// /// Increment a cached `u64` counter. If the counter is greater than or
     /// /// equal to 2, remove it.
     /// fn inclement_or_remove_counter(
-    ///     cache: &Cache<String, u64>,
+    ///     cache: &Cache<str, u64>,
     ///     key: &str,
-    /// ) -> CompResult<String, u64> {
+    /// ) -> CompResult<str, u64> {
     ///     cache
-    ///         .entry_by_ref(key)
+    ///         .entry_by_ref::<_,true>(key)
     ///         .and_compute_with(|maybe_entry| {
     ///             if let Some(entry) = maybe_entry {
     ///                 let counter = entry.into_value();
@@ -676,7 +685,7 @@ where
     /// assert_eq!(entry.into_value(), 2);
     ///
     /// // The key should no longer exist.
-    /// assert!(!cache.contains_key(&key));
+    /// assert!(!cache.contains_key(key.as_ref()));
     ///
     /// // This should start over; insert a new counter value 1 to the cache.
     /// let result = inclement_or_remove_counter(&cache, &key);
@@ -696,7 +705,7 @@ where
     where
         F: FnOnce(Option<Entry<K, V>>) -> compute::Op<V>,
     {
-        let key = Arc::new(self.ref_key.to_owned());
+        let key = self.ref_key.to_owned_arc();
         self.cache.compute_with_hash_and_fun(key, self.hash, f)
     }
 
@@ -756,7 +765,7 @@ where
         F: FnOnce(Option<Entry<K, V>>) -> Result<compute::Op<V>, E>,
         E: Send + Sync + 'static,
     {
-        let key = Arc::new(self.ref_key.to_owned());
+        let key = self.ref_key.to_owned_arc();
         self.cache.try_compute_with_hash_and_fun(key, self.hash, f)
     }
 
@@ -832,7 +841,7 @@ where
     where
         F: FnOnce(Option<Entry<K, V>>) -> V,
     {
-        let key = Arc::new(self.ref_key.to_owned());
+        let key = self.ref_key.to_owned_arc();
         self.cache.upsert_with_hash_and_fun(key, self.hash, f)
     }
 

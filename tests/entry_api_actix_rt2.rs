@@ -31,11 +31,11 @@ fn test_get_with() -> Result<(), Box<dyn std::error::Error>> {
 
                 println!("Task {task_id} started.");
 
-                let key = "key1".to_string();
+                let key: Arc<str> = "key1".into();
                 let value = match task_id % 4 {
                     0 => {
                         my_cache
-                            .get_with(key.clone(), async move {
+                            .get_with::<true, _>(key.clone(), async move {
                                 println!("Task {task_id} inserting a value.");
                                 my_call_counter.fetch_add(1, Ordering::AcqRel);
                                 Arc::new(vec![0u8; TEN_MIB])
@@ -44,7 +44,7 @@ fn test_get_with() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     1 => {
                         my_cache
-                            .get_with_by_ref(key.as_str(), async move {
+                            .get_with_by_ref::<_, true>(key.as_ref(), async move {
                                 println!("Task {task_id} inserting a value.");
                                 my_call_counter.fetch_add(1, Ordering::AcqRel);
                                 Arc::new(vec![0u8; TEN_MIB])
@@ -61,7 +61,7 @@ fn test_get_with() -> Result<(), Box<dyn std::error::Error>> {
                         .await
                         .into_value(),
                     3 => my_cache
-                        .entry_by_ref(key.as_str())
+                        .entry_by_ref::<_, true>(key.as_ref())
                         .or_insert_with(async move {
                             println!("Task {task_id} inserting a value.");
                             my_call_counter.fetch_add(1, Ordering::AcqRel);
@@ -73,7 +73,7 @@ fn test_get_with() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 assert_eq!(value.len(), TEN_MIB);
-                assert!(my_cache.get(key.as_str()).await.is_some());
+                assert!(my_cache.get(key.as_ref()).await.is_some());
 
                 println!("Task {task_id} got the value. (len: {})", value.len());
             })

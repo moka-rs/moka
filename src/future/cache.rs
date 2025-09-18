@@ -7,7 +7,7 @@ use super::{
     WriteOp,
 };
 use crate::{
-    common::{concurrent::Weigher, time::Clock, HousekeeperConfig},
+    common::{concurrent::Weigher, time::Clock, HousekeeperConfig, OwnedOrArc, ToOwnedArc},
     notification::AsyncEvictionListener,
     ops::compute::{self, CompResult},
     policy::{EvictionPolicy, ExpirationPolicy},
@@ -630,7 +630,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// [builder-name-method]: ./struct.CacheBuilder.html#method.name
 ///
-pub struct Cache<K, V, S = RandomState> {
+pub struct Cache<K: ?Sized, V, S = RandomState> {
     pub(crate) base: BaseCache<K, V, S>,
     value_initializer: Arc<ValueInitializer<K, V, S>>,
 
@@ -638,7 +638,7 @@ pub struct Cache<K, V, S = RandomState> {
     schedule_write_op_should_block: AtomicBool,
 }
 
-unsafe impl<K, V, S> Send for Cache<K, V, S>
+unsafe impl<K: ?Sized, V, S> Send for Cache<K, V, S>
 where
     K: Send + Sync,
     V: Send + Sync,
@@ -646,7 +646,7 @@ where
 {
 }
 
-unsafe impl<K, V, S> Sync for Cache<K, V, S>
+unsafe impl<K: ?Sized, V, S> Sync for Cache<K, V, S>
 where
     K: Send + Sync,
     V: Send + Sync,
@@ -655,7 +655,7 @@ where
 }
 
 // NOTE: We cannot do `#[derive(Clone)]` because it will add `Clone` bound to `K`.
-impl<K, V, S> Clone for Cache<K, V, S> {
+impl<K: ?Sized, V, S> Clone for Cache<K, V, S> {
     /// Makes a clone of this shared cache.
     ///
     /// This operation is cheap as it only creates thread-safe reference counted
@@ -673,7 +673,7 @@ impl<K, V, S> Clone for Cache<K, V, S> {
     }
 }
 
-impl<K, V, S> fmt::Debug for Cache<K, V, S>
+impl<K: ?Sized, V, S> fmt::Debug for Cache<K, V, S>
 where
     K: fmt::Debug + Eq + Hash + Send + Sync + 'static,
     V: fmt::Debug + Clone + Send + Sync + 'static,
@@ -691,7 +691,7 @@ where
     }
 }
 
-impl<K, V, S> Cache<K, V, S> {
+impl<K: ?Sized, V, S> Cache<K, V, S> {
     /// Returns cache’s name.
     pub fn name(&self) -> Option<&str> {
         self.base.name()
@@ -768,7 +768,7 @@ impl<K, V, S> Cache<K, V, S> {
     }
 }
 
-impl<K, V> Cache<K, V, RandomState>
+impl<K: ?Sized, V> Cache<K, V, RandomState>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -805,7 +805,7 @@ where
     }
 }
 
-impl<K, V, S> Cache<K, V, S>
+impl<K: ?Sized, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -884,46 +884,6 @@ where
             .map(Entry::into_value)
     }
 
-    /// Takes a key `K` and returns an [`OwnedKeyEntrySelector`] that can be used to
-    /// select or insert an entry.
-    ///
-    /// [`OwnedKeyEntrySelector`]: ./struct.OwnedKeyEntrySelector.html
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// // Cargo.toml
-    /// //
-    /// // [dependencies]
-    /// // moka = { version = "0.12", features = ["future"] }
-    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
-    ///
-    /// use moka::future::Cache;
-    ///
-    /// #[tokio::main]
-    /// async fn main() {
-    ///     let cache: Cache<String, u32> = Cache::new(100);
-    ///     let key = "key1".to_string();
-    ///
-    ///     let entry = cache.entry(key.clone()).or_insert(3).await;
-    ///     assert!(entry.is_fresh());
-    ///     assert_eq!(entry.key(), &key);
-    ///     assert_eq!(entry.into_value(), 3);
-    ///
-    ///     let entry = cache.entry(key).or_insert(6).await;
-    ///     // Not fresh because the value was already in the cache.
-    ///     assert!(!entry.is_fresh());
-    ///     assert_eq!(entry.into_value(), 3);
-    /// }
-    /// ```
-    pub fn entry(&self, key: K) -> OwnedKeyEntrySelector<'_, K, V, S>
-    where
-        K: Hash + Eq,
-    {
-        let hash = self.base.hash(&key);
-        OwnedKeyEntrySelector::new(key, hash, self)
-    }
-
     /// Takes a reference `&Q` of a key and returns an [`RefKeyEntrySelector`] that
     /// can be used to select or insert an entry.
     ///
@@ -956,112 +916,27 @@ where
     ///     assert_eq!(entry.into_value(), 3);
     /// }
     /// ```
-    pub fn entry_by_ref<'a, Q>(&'a self, key: &'a Q) -> RefKeyEntrySelector<'a, K, Q, V, S>
+    pub fn entry_by_ref<'a, Q, const OPTIMAL: bool>(
+        &'a self,
+        key: &'a Q,
+    ) -> RefKeyEntrySelector<'a, K, Q, V, S, OPTIMAL>
     where
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let hash = self.base.hash(key);
         RefKeyEntrySelector::new(key, hash, self)
     }
 
-    /// Returns a _clone_ of the value corresponding to the key. If the value does
-    /// not exist, resolve the `init` future and inserts the output.
-    ///
-    /// # Concurrent calls on the same key
-    ///
-    /// This method guarantees that concurrent calls on the same not-existing key are
-    /// coalesced into one evaluation of the `init` future. Only one of the calls
-    /// evaluates its future, and other calls wait for that future to resolve.
-    ///
-    /// The following code snippet demonstrates this behavior:
-    ///
-    /// ```rust
-    /// // Cargo.toml
-    /// //
-    /// // [dependencies]
-    /// // moka = { version = "0.12", features = ["future"] }
-    /// // futures-util = "0.3"
-    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
-    /// use moka::future::Cache;
-    /// use std::sync::Arc;
-    ///
-    /// #[tokio::main]
-    /// async fn main() {
-    ///     const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
-    ///     let cache = Cache::new(100);
-    ///
-    ///     // Spawn four async tasks.
-    ///     let tasks: Vec<_> = (0..4_u8)
-    ///         .map(|task_id| {
-    ///             let my_cache = cache.clone();
-    ///             tokio::spawn(async move {
-    ///                 println!("Task {task_id} started.");
-    ///
-    ///                 // Insert and get the value for key1. Although all four async
-    ///                 // tasks will call `get_with` at the same time, the `init`
-    ///                 // async block must be resolved only once.
-    ///                 let value = my_cache
-    ///                     .get_with("key1", async move {
-    ///                         println!("Task {task_id} inserting a value.");
-    ///                         Arc::new(vec![0u8; TEN_MIB])
-    ///                     })
-    ///                     .await;
-    ///
-    ///                 // Ensure the value exists now.
-    ///                 assert_eq!(value.len(), TEN_MIB);
-    ///                 assert!(my_cache.get(&"key1").await.is_some());
-    ///
-    ///                 println!("Task {task_id} got the value. (len: {})", value.len());
-    ///             })
-    ///         })
-    ///         .collect();
-    ///
-    ///     // Run all tasks concurrently and wait for them to complete.
-    ///     futures_util::future::join_all(tasks).await;
-    /// }
-    /// ```
-    ///
-    /// **A Sample Result**
-    ///
-    /// - The `init` future (async black) was resolved exactly once by task 3.
-    /// - Other tasks were blocked until task 3 inserted the value.
-    ///
-    /// ```console
-    /// Task 0 started.
-    /// Task 3 started.
-    /// Task 1 started.
-    /// Task 2 started.
-    /// Task 3 inserting a value.
-    /// Task 3 got the value. (len: 10485760)
-    /// Task 0 got the value. (len: 10485760)
-    /// Task 1 got the value. (len: 10485760)
-    /// Task 2 got the value. (len: 10485760)
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This method panics when the `init` future has panicked. When it happens, only
-    /// the caller whose `init` future panicked will get the panic (e.g. only task 3
-    /// in the above sample). If there are other calls in progress (e.g. task 0, 1
-    /// and 2 above), this method will restart and resolve one of the remaining
-    /// `init` futures.
-    ///
-    pub async fn get_with(&self, key: K, init: impl Future<Output = V>) -> V {
-        futures_util::pin_mut!(init);
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
-        let replace_if = None as Option<fn(&V) -> bool>;
-        self.get_or_insert_with_hash_and_fun(key, hash, init, replace_if, false)
-            .await
-            .into_value()
-    }
-
     /// Similar to [`get_with`](#method.get_with), but instead of passing an owned
     /// key, you can pass a reference to the key. If the key does not exist in the
     /// cache, the key will be cloned to create new entry in the cache.
-    pub async fn get_with_by_ref<Q>(&self, key: &Q, init: impl Future<Output = V>) -> V
+    pub async fn get_with_by_ref<Q, const OPTIMAL: bool>(
+        &self,
+        key: &Q,
+        init: impl Future<Output = V>,
+    ) -> V
     where
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
@@ -1071,135 +946,18 @@ where
             .into_value()
     }
 
-    /// TODO: Remove this in v0.13.0.
-    /// Deprecated, replaced with
-    /// [`entry()::or_insert_with_if()`](./struct.OwnedKeyEntrySelector.html#method.or_insert_with_if)
-    #[deprecated(since = "0.10.0", note = "Replaced with `entry().or_insert_with_if()`")]
-    pub async fn get_with_if(
-        &self,
-        key: K,
-        init: impl Future<Output = V>,
-        replace_if: impl FnMut(&V) -> bool + Send,
-    ) -> V {
-        futures_util::pin_mut!(init);
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
-        self.get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if), false)
-            .await
-            .into_value()
-    }
-
-    /// Returns a _clone_ of the value corresponding to the key. If the value does
-    /// not exist, resolves the `init` future, and inserts the value if `Some(value)`
-    /// was returned. If `None` was returned from the future, this method does not
-    /// insert a value and returns `None`.
-    ///
-    /// # Concurrent calls on the same key
-    ///
-    /// This method guarantees that concurrent calls on the same not-existing key are
-    /// coalesced into one evaluation of the `init` future. Only one of the calls
-    /// evaluates its future, and other calls wait for that future to resolve.
-    ///
-    /// The following code snippet demonstrates this behavior:
-    ///
-    /// ```rust
-    /// // Cargo.toml
-    /// //
-    /// // [dependencies]
-    /// // moka = { version = "0.12", features = ["future"] }
-    /// // futures-util = "0.3"
-    /// // reqwest = "0.11"
-    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
-    /// use moka::future::Cache;
-    ///
-    /// // This async function tries to get HTML from the given URI.
-    /// async fn get_html(task_id: u8, uri: &str) -> Option<String> {
-    ///     println!("get_html() called by task {task_id}.");
-    ///     reqwest::get(uri).await.ok()?.text().await.ok()
-    /// }
-    ///
-    /// #[tokio::main]
-    /// async fn main() {
-    ///     let cache = Cache::new(100);
-    ///
-    ///     // Spawn four async tasks.
-    ///     let tasks: Vec<_> = (0..4_u8)
-    ///         .map(|task_id| {
-    ///             let my_cache = cache.clone();
-    ///             tokio::spawn(async move {
-    ///                 println!("Task {task_id} started.");
-    ///
-    ///                 // Try to insert and get the value for key1. Although
-    ///                 // all four async tasks will call `try_get_with`
-    ///                 // at the same time, get_html() must be called only once.
-    ///                 let value = my_cache
-    ///                     .optionally_get_with(
-    ///                         "key1",
-    ///                         get_html(task_id, "https://www.rust-lang.org"),
-    ///                     ).await;
-    ///
-    ///                 // Ensure the value exists now.
-    ///                 assert!(value.is_some());
-    ///                 assert!(my_cache.get(&"key1").await.is_some());
-    ///
-    ///                 println!(
-    ///                     "Task {task_id} got the value. (len: {})",
-    ///                     value.unwrap().len()
-    ///                 );
-    ///             })
-    ///         })
-    ///         .collect();
-    ///
-    ///     // Run all tasks concurrently and wait for them to complete.
-    ///     futures_util::future::join_all(tasks).await;
-    /// }
-    /// ```
-    ///
-    /// **A Sample Result**
-    ///
-    /// - `get_html()` was called exactly once by task 2.
-    /// - Other tasks were blocked until task 2 inserted the value.
-    ///
-    /// ```console
-    /// Task 1 started.
-    /// Task 0 started.
-    /// Task 2 started.
-    /// Task 3 started.
-    /// get_html() called by task 2.
-    /// Task 2 got the value. (len: 19419)
-    /// Task 1 got the value. (len: 19419)
-    /// Task 0 got the value. (len: 19419)
-    /// Task 3 got the value. (len: 19419)
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This method panics when the `init` future has panicked. When it happens, only
-    /// the caller whose `init` future panicked will get the panic (e.g. only task 2
-    /// in the above sample). If there are other calls in progress (e.g. task 0, 1
-    /// and 3 above), this method will restart and resolve one of the remaining
-    /// `init` futures.
-    ///
-    pub async fn optionally_get_with<F>(&self, key: K, init: F) -> Option<V>
-    where
-        F: Future<Output = Option<V>>,
-    {
-        futures_util::pin_mut!(init);
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
-        self.get_or_optionally_insert_with_hash_and_fun(key, hash, init, false)
-            .await
-            .map(Entry::into_value)
-    }
-
     /// Similar to [`optionally_get_with`](#method.optionally_get_with), but instead
     /// of passing an owned key, you can pass a reference to the key. If the key does
     /// not exist in the cache, the key will be cloned to create new entry in the
     /// cache.
-    pub async fn optionally_get_with_by_ref<F, Q>(&self, key: &Q, init: F) -> Option<V>
+    pub async fn optionally_get_with_by_ref<F, Q, const OPTIMAL: bool>(
+        &self,
+        key: &Q,
+        init: F,
+    ) -> Option<V>
     where
         F: Future<Output = Option<V>>,
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
@@ -1208,136 +966,24 @@ where
             .map(Entry::into_value)
     }
 
-    /// Returns a _clone_ of the value corresponding to the key. If the value does
-    /// not exist, resolves the `init` future, and inserts the value if `Ok(value)`
-    /// was returned. If `Err(_)` was returned from the future, this method does not
-    /// insert a value and returns the `Err` wrapped by [`std::sync::Arc`][std-arc].
-    ///
-    /// [std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
-    ///
-    /// # Concurrent calls on the same key
-    ///
-    /// This method guarantees that concurrent calls on the same not-existing key are
-    /// coalesced into one evaluation of the `init` future (as long as these
-    /// futures return the same error type). Only one of the calls evaluates its
-    /// future, and other calls wait for that future to resolve.
-    ///
-    /// The following code snippet demonstrates this behavior:
-    ///
-    /// ```rust
-    /// // Cargo.toml
-    /// //
-    /// // [dependencies]
-    /// // moka = { version = "0.12", features = ["future"] }
-    /// // futures-util = "0.3"
-    /// // reqwest = "0.11"
-    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
-    /// use moka::future::Cache;
-    ///
-    /// // This async function tries to get HTML from the given URI.
-    /// async fn get_html(task_id: u8, uri: &str) -> Result<String, reqwest::Error> {
-    ///     println!("get_html() called by task {task_id}.");
-    ///     reqwest::get(uri).await?.text().await
-    /// }
-    ///
-    /// #[tokio::main]
-    /// async fn main() {
-    ///     let cache = Cache::new(100);
-    ///
-    ///     // Spawn four async tasks.
-    ///     let tasks: Vec<_> = (0..4_u8)
-    ///         .map(|task_id| {
-    ///             let my_cache = cache.clone();
-    ///             tokio::spawn(async move {
-    ///                 println!("Task {task_id} started.");
-    ///
-    ///                 // Try to insert and get the value for key1. Although
-    ///                 // all four async tasks will call `try_get_with`
-    ///                 // at the same time, get_html() must be called only once.
-    ///                 let value = my_cache
-    ///                     .try_get_with(
-    ///                         "key1",
-    ///                         get_html(task_id, "https://www.rust-lang.org"),
-    ///                     ).await;
-    ///
-    ///                 // Ensure the value exists now.
-    ///                 assert!(value.is_ok());
-    ///                 assert!(my_cache.get(&"key1").await.is_some());
-    ///
-    ///                 println!(
-    ///                     "Task {task_id} got the value. (len: {})",
-    ///                     value.unwrap().len()
-    ///                 );
-    ///             })
-    ///         })
-    ///         .collect();
-    ///
-    ///     // Run all tasks concurrently and wait for them to complete.
-    ///     futures_util::future::join_all(tasks).await;
-    /// }
-    /// ```
-    ///
-    /// **A Sample Result**
-    ///
-    /// - `get_html()` was called exactly once by task 2.
-    /// - Other tasks were blocked until task 2 inserted the value.
-    ///
-    /// ```console
-    /// Task 1 started.
-    /// Task 0 started.
-    /// Task 2 started.
-    /// Task 3 started.
-    /// get_html() called by task 2.
-    /// Task 2 got the value. (len: 19419)
-    /// Task 1 got the value. (len: 19419)
-    /// Task 0 got the value. (len: 19419)
-    /// Task 3 got the value. (len: 19419)
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This method panics when the `init` future has panicked. When it happens, only
-    /// the caller whose `init` future panicked will get the panic (e.g. only task 2
-    /// in the above sample). If there are other calls in progress (e.g. task 0, 1
-    /// and 3 above), this method will restart and resolve one of the remaining
-    /// `init` futures.
-    ///
-    pub async fn try_get_with<F, E>(&self, key: K, init: F) -> Result<V, Arc<E>>
-    where
-        F: Future<Output = Result<V, E>>,
-        E: Send + Sync + 'static,
-    {
-        futures_util::pin_mut!(init);
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
-        self.get_or_try_insert_with_hash_and_fun(key, hash, init, false)
-            .await
-            .map(Entry::into_value)
-    }
-
     /// Similar to [`try_get_with`](#method.try_get_with), but instead of passing an
     /// owned key, you can pass a reference to the key. If the key does not exist in
     /// the cache, the key will be cloned to create new entry in the cache.
-    pub async fn try_get_with_by_ref<F, E, Q>(&self, key: &Q, init: F) -> Result<V, Arc<E>>
+    pub async fn try_get_with_by_ref<F, E, Q, const OPTIMAL: bool>(
+        &self,
+        key: &Q,
+        init: F,
+    ) -> Result<V, Arc<E>>
     where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(key);
         self.get_or_try_insert_with_hash_by_ref_and_fun(key, hash, init, false)
             .await
             .map(Entry::into_value)
-    }
-
-    /// Inserts a key-value pair into the cache.
-    ///
-    /// If the cache has this key present, the value is updated.
-    pub async fn insert(&self, key: K, value: V) {
-        let hash = self.base.hash(&key);
-        let key = Arc::new(key);
-        self.insert_with_hash(key, hash, value).await;
     }
 
     /// Discards any cached value for the key.
@@ -1499,7 +1145,7 @@ where
     }
 }
 
-impl<'a, K, V, S> IntoIterator for &'a Cache<K, V, S>
+impl<'a, K: ?Sized, V, S> IntoIterator for &'a Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -1517,7 +1163,7 @@ where
 //
 // private methods
 //
-impl<K, V, S> Cache<K, V, S>
+impl<K: ?Sized, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -1543,7 +1189,7 @@ where
         }
     }
 
-    pub(crate) async fn get_or_insert_with_hash_by_ref_and_fun<Q>(
+    pub(crate) async fn get_or_insert_with_hash_by_ref_and_fun<Q, const OPTIMAL: bool>(
         &self,
         key: &Q,
         hash: u64,
@@ -1552,7 +1198,7 @@ where
         need_key: bool,
     ) -> Entry<K, V>
     where
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let maybe_entry = self
             .base
@@ -1561,7 +1207,7 @@ where
         if let Some(entry) = maybe_entry {
             entry
         } else {
-            let key = Arc::new(key.to_owned());
+            let key = key.to_owned_arc();
             self.insert_with_hash_and_fun(key, hash, init, replace_if, need_key)
                 .await
         }
@@ -1619,14 +1265,14 @@ where
         }
     }
 
-    pub(crate) async fn get_or_insert_with_hash_by_ref<Q>(
+    pub(crate) async fn get_or_insert_with_hash_by_ref<Q, const OPTIMAL: bool>(
         &self,
         key: &Q,
         hash: u64,
         init: impl FnOnce() -> V,
     ) -> Entry<K, V>
     where
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         match self
             .base
@@ -1635,7 +1281,7 @@ where
         {
             Some(entry) => entry,
             None => {
-                let key = Arc::new(key.to_owned());
+                let key = key.to_owned_arc();
                 let value = init();
                 self.insert_with_hash(Arc::clone(&key), hash, value.clone())
                     .await;
@@ -1666,7 +1312,11 @@ where
             .await
     }
 
-    pub(crate) async fn get_or_optionally_insert_with_hash_by_ref_and_fun<F, Q>(
+    pub(crate) async fn get_or_optionally_insert_with_hash_by_ref_and_fun<
+        F,
+        Q,
+        const OPTIMAL: bool,
+    >(
         &self,
         key: &Q,
         hash: u64,
@@ -1675,7 +1325,7 @@ where
     ) -> Option<Entry<K, V>>
     where
         F: Future<Output = Option<V>>,
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         let entry = self
             .base
@@ -1685,7 +1335,7 @@ where
             return entry;
         }
 
-        let key = Arc::new(key.to_owned());
+        let key = key.to_owned_arc();
         self.optionally_insert_with_hash_and_fun(key, hash, init, need_key)
             .await
     }
@@ -1746,7 +1396,7 @@ where
             .await
     }
 
-    pub(super) async fn get_or_try_insert_with_hash_by_ref_and_fun<F, E, Q>(
+    pub(super) async fn get_or_try_insert_with_hash_by_ref_and_fun<F, E, Q, const OPTIMAL: bool>(
         &self,
         key: &Q,
         hash: u64,
@@ -1756,7 +1406,7 @@ where
     where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
-        Q: Equivalent<K> + ToOwned<Owned = K> + Hash + ?Sized,
+        Q: Equivalent<K> + ToOwnedArc<OPTIMAL, ArcOwned = K> + Hash + ?Sized,
     {
         if let Some(entry) = self
             .base
@@ -1765,7 +1415,7 @@ where
         {
             return Ok(entry);
         }
-        let key = Arc::new(key.to_owned());
+        let key = key.to_owned_arc();
         self.try_insert_with_hash_and_fun(key, hash, init, need_key)
             .await
     }
@@ -2040,7 +1690,7 @@ where
 // For unit tests.
 // For unit tests.
 #[cfg(test)]
-impl<K, V, S> Cache<K, V, S> {
+impl<K: ?Sized, V, S> Cache<K, V, S> {
     pub(crate) fn is_table_empty(&self) -> bool {
         self.entry_count() == 0
     }
@@ -2051,7 +1701,7 @@ impl<K, V, S> Cache<K, V, S> {
 }
 
 #[cfg(test)]
-impl<K, V, S> Cache<K, V, S>
+impl<K: ?Sized, V, S> Cache<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -2083,6 +1733,397 @@ where
             .as_ref()
             .map(|hk| hk.complete_count.load(Ordering::Acquire))
             .expect("housekeeper is not set")
+    }
+}
+
+impl<K: ?Sized, V, S> Cache<K, V, S>
+where
+    K: Hash + Eq + Send + Sync + 'static,
+    V: Clone + Send + Sync + 'static,
+    S: BuildHasher + Clone + Send + Sync + 'static,
+{
+    /// Takes a key `K` and returns an [`OwnedKeyEntrySelector`] that can be used to
+    /// select or insert an entry.
+    ///
+    /// [`OwnedKeyEntrySelector`]: ./struct.OwnedKeyEntrySelector.html
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.12", features = ["future"] }
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    ///
+    /// use moka::future::Cache;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let cache: Cache<String, u32> = Cache::new(100);
+    ///     let key = "key1".to_string();
+    ///
+    ///     let entry = cache.entry(key.clone()).or_insert(3).await;
+    ///     assert!(entry.is_fresh());
+    ///     assert_eq!(entry.key(), &key);
+    ///     assert_eq!(entry.into_value(), 3);
+    ///
+    ///     let entry = cache.entry(key).or_insert(6).await;
+    ///     // Not fresh because the value was already in the cache.
+    ///     assert!(!entry.is_fresh());
+    ///     assert_eq!(entry.into_value(), 3);
+    /// }
+    /// ```
+    pub fn entry<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+    ) -> OwnedKeyEntrySelector<'_, K, V, S, OK, ARC>
+    where
+        K: Hash + Eq,
+    {
+        let hash = self.base.hash(key.borrow_ref());
+        OwnedKeyEntrySelector::new(key, hash, self)
+    }
+
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, resolve the `init` future and inserts the output.
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` future. Only one of the calls
+    /// evaluates its future, and other calls wait for that future to resolve.
+    ///
+    /// The following code snippet demonstrates this behavior:
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.12", features = ["future"] }
+    /// // futures-util = "0.3"
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    /// use moka::future::Cache;
+    /// use std::sync::Arc;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     const TEN_MIB: usize = 10 * 1024 * 1024; // 10MiB
+    ///     let cache = Cache::new(100);
+    ///
+    ///     // Spawn four async tasks.
+    ///     let tasks: Vec<_> = (0..4_u8)
+    ///         .map(|task_id| {
+    ///             let my_cache = cache.clone();
+    ///             tokio::spawn(async move {
+    ///                 println!("Task {task_id} started.");
+    ///
+    ///                 // Insert and get the value for key1. Although all four async
+    ///                 // tasks will call `get_with` at the same time, the `init`
+    ///                 // async block must be resolved only once.
+    ///                 let value = my_cache
+    ///                     .get_with("key1", async move {
+    ///                         println!("Task {task_id} inserting a value.");
+    ///                         Arc::new(vec![0u8; TEN_MIB])
+    ///                     })
+    ///                     .await;
+    ///
+    ///                 // Ensure the value exists now.
+    ///                 assert_eq!(value.len(), TEN_MIB);
+    ///                 assert!(my_cache.get(&"key1").await.is_some());
+    ///
+    ///                 println!("Task {task_id} got the value. (len: {})", value.len());
+    ///             })
+    ///         })
+    ///         .collect();
+    ///
+    ///     // Run all tasks concurrently and wait for them to complete.
+    ///     futures_util::future::join_all(tasks).await;
+    /// }
+    /// ```
+    ///
+    /// **A Sample Result**
+    ///
+    /// - The `init` future (async black) was resolved exactly once by task 3.
+    /// - Other tasks were blocked until task 3 inserted the value.
+    ///
+    /// ```console
+    /// Task 0 started.
+    /// Task 3 started.
+    /// Task 1 started.
+    /// Task 2 started.
+    /// Task 3 inserting a value.
+    /// Task 3 got the value. (len: 10485760)
+    /// Task 0 got the value. (len: 10485760)
+    /// Task 1 got the value. (len: 10485760)
+    /// Task 2 got the value. (len: 10485760)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` future has panicked. When it happens, only
+    /// the caller whose `init` future panicked will get the panic (e.g. only task 3
+    /// in the above sample). If there are other calls in progress (e.g. task 0, 1
+    /// and 2 above), this method will restart and resolve one of the remaining
+    /// `init` futures.
+    ///
+    pub async fn get_with<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: impl Future<Output = V>,
+    ) -> V {
+        futures_util::pin_mut!(init);
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
+        let replace_if = None as Option<fn(&V) -> bool>;
+        self.get_or_insert_with_hash_and_fun(key, hash, init, replace_if, false)
+            .await
+            .into_value()
+    }
+
+    /// TODO: Remove this in v0.13.0.
+    /// Deprecated, replaced with
+    /// [`entry()::or_insert_with_if()`](./struct.OwnedKeyEntrySelector.html#method.or_insert_with_if)
+    #[deprecated(since = "0.10.0", note = "Replaced with `entry().or_insert_with_if()`")]
+    pub async fn get_with_if<const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: impl Future<Output = V>,
+        replace_if: impl FnMut(&V) -> bool + Send,
+    ) -> V {
+        futures_util::pin_mut!(init);
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
+        self.get_or_insert_with_hash_and_fun(key, hash, init, Some(replace_if), false)
+            .await
+            .into_value()
+    }
+
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, resolves the `init` future, and inserts the value if `Some(value)`
+    /// was returned. If `None` was returned from the future, this method does not
+    /// insert a value and returns `None`.
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` future. Only one of the calls
+    /// evaluates its future, and other calls wait for that future to resolve.
+    ///
+    /// The following code snippet demonstrates this behavior:
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.12", features = ["future"] }
+    /// // futures-util = "0.3"
+    /// // reqwest = "0.11"
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    /// use moka::future::Cache;
+    ///
+    /// // This async function tries to get HTML from the given URI.
+    /// async fn get_html(task_id: u8, uri: &str) -> Option<String> {
+    ///     println!("get_html() called by task {task_id}.");
+    ///     reqwest::get(uri).await.ok()?.text().await.ok()
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let cache = Cache::new(100);
+    ///
+    ///     // Spawn four async tasks.
+    ///     let tasks: Vec<_> = (0..4_u8)
+    ///         .map(|task_id| {
+    ///             let my_cache = cache.clone();
+    ///             tokio::spawn(async move {
+    ///                 println!("Task {task_id} started.");
+    ///
+    ///                 // Try to insert and get the value for key1. Although
+    ///                 // all four async tasks will call `try_get_with`
+    ///                 // at the same time, get_html() must be called only once.
+    ///                 let value = my_cache
+    ///                     .optionally_get_with(
+    ///                         "key1",
+    ///                         get_html(task_id, "https://www.rust-lang.org"),
+    ///                     ).await;
+    ///
+    ///                 // Ensure the value exists now.
+    ///                 assert!(value.is_some());
+    ///                 assert!(my_cache.get(&"key1").await.is_some());
+    ///
+    ///                 println!(
+    ///                     "Task {task_id} got the value. (len: {})",
+    ///                     value.unwrap().len()
+    ///                 );
+    ///             })
+    ///         })
+    ///         .collect();
+    ///
+    ///     // Run all tasks concurrently and wait for them to complete.
+    ///     futures_util::future::join_all(tasks).await;
+    /// }
+    /// ```
+    ///
+    /// **A Sample Result**
+    ///
+    /// - `get_html()` was called exactly once by task 2.
+    /// - Other tasks were blocked until task 2 inserted the value.
+    ///
+    /// ```console
+    /// Task 1 started.
+    /// Task 0 started.
+    /// Task 2 started.
+    /// Task 3 started.
+    /// get_html() called by task 2.
+    /// Task 2 got the value. (len: 19419)
+    /// Task 1 got the value. (len: 19419)
+    /// Task 0 got the value. (len: 19419)
+    /// Task 3 got the value. (len: 19419)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` future has panicked. When it happens, only
+    /// the caller whose `init` future panicked will get the panic (e.g. only task 2
+    /// in the above sample). If there are other calls in progress (e.g. task 0, 1
+    /// and 3 above), this method will restart and resolve one of the remaining
+    /// `init` futures.
+    ///
+    pub async fn optionally_get_with<F, const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: F,
+    ) -> Option<V>
+    where
+        F: Future<Output = Option<V>>,
+    {
+        futures_util::pin_mut!(init);
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
+        self.get_or_optionally_insert_with_hash_and_fun(key, hash, init, false)
+            .await
+            .map(Entry::into_value)
+    }
+
+    /// Returns a _clone_ of the value corresponding to the key. If the value does
+    /// not exist, resolves the `init` future, and inserts the value if `Ok(value)`
+    /// was returned. If `Err(_)` was returned from the future, this method does not
+    /// insert a value and returns the `Err` wrapped by [`std::sync::Arc`][std-arc].
+    ///
+    /// [std-arc]: https://doc.rust-lang.org/stable/std/sync/struct.Arc.html
+    ///
+    /// # Concurrent calls on the same key
+    ///
+    /// This method guarantees that concurrent calls on the same not-existing key are
+    /// coalesced into one evaluation of the `init` future (as long as these
+    /// futures return the same error type). Only one of the calls evaluates its
+    /// future, and other calls wait for that future to resolve.
+    ///
+    /// The following code snippet demonstrates this behavior:
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.12", features = ["future"] }
+    /// // futures-util = "0.3"
+    /// // reqwest = "0.11"
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    /// use moka::future::Cache;
+    ///
+    /// // This async function tries to get HTML from the given URI.
+    /// async fn get_html(task_id: u8, uri: &str) -> Result<String, reqwest::Error> {
+    ///     println!("get_html() called by task {task_id}.");
+    ///     reqwest::get(uri).await?.text().await
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let cache = Cache::new(100);
+    ///
+    ///     // Spawn four async tasks.
+    ///     let tasks: Vec<_> = (0..4_u8)
+    ///         .map(|task_id| {
+    ///             let my_cache = cache.clone();
+    ///             tokio::spawn(async move {
+    ///                 println!("Task {task_id} started.");
+    ///
+    ///                 // Try to insert and get the value for key1. Although
+    ///                 // all four async tasks will call `try_get_with`
+    ///                 // at the same time, get_html() must be called only once.
+    ///                 let value = my_cache
+    ///                     .try_get_with(
+    ///                         "key1",
+    ///                         get_html(task_id, "https://www.rust-lang.org"),
+    ///                     ).await;
+    ///
+    ///                 // Ensure the value exists now.
+    ///                 assert!(value.is_ok());
+    ///                 assert!(my_cache.get(&"key1").await.is_some());
+    ///
+    ///                 println!(
+    ///                     "Task {task_id} got the value. (len: {})",
+    ///                     value.unwrap().len()
+    ///                 );
+    ///             })
+    ///         })
+    ///         .collect();
+    ///
+    ///     // Run all tasks concurrently and wait for them to complete.
+    ///     futures_util::future::join_all(tasks).await;
+    /// }
+    /// ```
+    ///
+    /// **A Sample Result**
+    ///
+    /// - `get_html()` was called exactly once by task 2.
+    /// - Other tasks were blocked until task 2 inserted the value.
+    ///
+    /// ```console
+    /// Task 1 started.
+    /// Task 0 started.
+    /// Task 2 started.
+    /// Task 3 started.
+    /// get_html() called by task 2.
+    /// Task 2 got the value. (len: 19419)
+    /// Task 1 got the value. (len: 19419)
+    /// Task 0 got the value. (len: 19419)
+    /// Task 3 got the value. (len: 19419)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method panics when the `init` future has panicked. When it happens, only
+    /// the caller whose `init` future panicked will get the panic (e.g. only task 2
+    /// in the above sample). If there are other calls in progress (e.g. task 0, 1
+    /// and 3 above), this method will restart and resolve one of the remaining
+    /// `init` futures.
+    ///
+    pub async fn try_get_with<F, E, const ARC: bool, OK: OwnedOrArc<K, ARC>>(
+        &self,
+        key: OK,
+        init: F,
+    ) -> Result<V, Arc<E>>
+    where
+        F: Future<Output = Result<V, E>>,
+        E: Send + Sync + 'static,
+    {
+        futures_util::pin_mut!(init);
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
+        self.get_or_try_insert_with_hash_and_fun(key, hash, init, false)
+            .await
+            .map(Entry::into_value)
+    }
+
+    /// Inserts a key-value pair into the cache.
+    ///
+    /// If the cache has this key present, the value is updated.
+    pub async fn insert<const ARC: bool, OK: OwnedOrArc<K, ARC>>(&self, key: OK, value: V) {
+        let hash = self.base.hash(key.borrow_ref());
+        let key = key.arc_wrapped();
+        self.insert_with_hash(key, hash, value).await;
     }
 }
 

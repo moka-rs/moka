@@ -12,7 +12,7 @@ const LOCK_MAP_NUM_SEGMENTS: usize = 64;
 type LockMap<K, S> = SegmentedHashMap<Arc<K>, MiniArc<Mutex<()>>, S>;
 
 // We need the `where` clause here because of the Drop impl.
-pub(crate) struct KeyLock<'a, K, S>
+pub(crate) struct KeyLock<'a, K: ?Sized, S>
 where
     K: Eq + Hash,
     S: BuildHasher,
@@ -23,7 +23,7 @@ where
     lock: MiniArc<Mutex<()>>,
 }
 
-impl<K, S> Drop for KeyLock<'_, K, S>
+impl<K: ?Sized, S> Drop for KeyLock<'_, K, S>
 where
     K: Eq + Hash,
     S: BuildHasher,
@@ -39,7 +39,7 @@ where
     }
 }
 
-impl<'a, K, S> KeyLock<'a, K, S>
+impl<'a, K: ?Sized, S> KeyLock<'a, K, S>
 where
     K: Eq + Hash,
     S: BuildHasher,
@@ -58,11 +58,11 @@ where
     }
 }
 
-pub(crate) struct KeyLockMap<K, S> {
+pub(crate) struct KeyLockMap<K: ?Sized, S> {
     locks: LockMap<K, S>,
 }
 
-impl<K, S> KeyLockMap<K, S>
+impl<K: ?Sized, S> KeyLockMap<K, S>
 where
     K: Eq + Hash,
     S: BuildHasher,
@@ -87,7 +87,7 @@ where
 }
 
 #[cfg(test)]
-impl<K, S> KeyLockMap<K, S> {
+impl<K: ?Sized, S> KeyLockMap<K, S> {
     pub(crate) fn is_empty(&self) -> bool {
         self.locks.len() == 0
     }

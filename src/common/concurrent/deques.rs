@@ -7,7 +7,7 @@ use crate::common::{
 use std::ptr::NonNull;
 use tagptr::TagNonNull;
 
-pub(crate) struct Deques<K> {
+pub(crate) struct Deques<K: ?Sized> {
     pub(crate) window: Deque<KeyHashDate<K>>, //    Not used yet.
     pub(crate) probation: Deque<KeyHashDate<K>>,
     pub(crate) protected: Deque<KeyHashDate<K>>, // Not used yet.
@@ -20,9 +20,9 @@ pub(crate) struct Deques<K> {
 // Multi-threaded async runtimes require base_cache::Inner to be Send, but it will
 // not be without this `unsafe impl`. This is because DeqNodes have NonNull
 // pointers.
-unsafe impl<K> Send for Deques<K> {}
+unsafe impl<K: ?Sized> Send for Deques<K> {}
 
-impl<K> Default for Deques<K> {
+impl<K: ?Sized> Default for Deques<K> {
     fn default() -> Self {
         Self {
             window: Deque::new(CacheRegion::Window),
@@ -33,7 +33,7 @@ impl<K> Default for Deques<K> {
     }
 }
 
-impl<K> Deques<K> {
+impl<K: ?Sized> Deques<K> {
     pub(crate) fn select_mut(
         &mut self,
         selector: CacheRegion,

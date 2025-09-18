@@ -52,7 +52,7 @@ impl<V> fmt::Debug for WaiterValue<V> {
 type Waiter<V> = MiniArc<RwLock<WaiterValue<V>>>;
 type WaiterMap<K, V, S> = crate::cht::SegmentedHashMap<(Arc<K>, TypeId), Waiter<V>, S>;
 
-struct WaiterGuard<'a, K, V, S>
+struct WaiterGuard<'a, K: ?Sized, V, S>
 // NOTE: We usually do not attach trait bounds to here at the struct definition, but
 // the Drop trait requires these bounds here.
 where
@@ -66,7 +66,7 @@ where
     write_lock: RwLockWriteGuard<'a, WaiterValue<V>>,
 }
 
-impl<'a, K, V, S> WaiterGuard<'a, K, V, S>
+impl<'a, K: ?Sized, V, S> WaiterGuard<'a, K, V, S>
 where
     K: Eq + Hash,
     V: Clone,
@@ -94,7 +94,7 @@ where
     }
 }
 
-impl<K, V, S> Drop for WaiterGuard<'_, K, V, S>
+impl<K: ?Sized, V, S> Drop for WaiterGuard<'_, K, V, S>
 where
     K: Eq + Hash,
     V: Clone,
@@ -111,7 +111,7 @@ where
     }
 }
 
-pub(crate) struct ValueInitializer<K, V, S> {
+pub(crate) struct ValueInitializer<K: ?Sized, V, S> {
     // TypeId is the type ID of the concrete error type of generic type E in the
     // try_get_with method. We use the type ID as a part of the key to ensure that we
     // can always downcast the trait object ErrorObject (in Waiter<V>) into its
@@ -119,7 +119,7 @@ pub(crate) struct ValueInitializer<K, V, S> {
     waiters: MiniArc<WaiterMap<K, V, S>>,
 }
 
-impl<K, V, S> ValueInitializer<K, V, S>
+impl<K: ?Sized, V, S> ValueInitializer<K, V, S>
 where
     K: Eq + Hash + Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
@@ -604,15 +604,18 @@ where
 }
 
 #[cfg(test)]
-impl<K, V, S> ValueInitializer<K, V, S> {
+impl<K: ?Sized, V, S> ValueInitializer<K, V, S> {
     pub(crate) fn waiter_count(&self) -> usize {
         self.waiters.len()
     }
 }
 
 #[inline]
-fn remove_waiter<K, V, S>(waiter_map: &WaiterMap<K, V, S>, w_key: (Arc<K>, TypeId), w_hash: u64)
-where
+fn remove_waiter<K: ?Sized, V, S>(
+    waiter_map: &WaiterMap<K, V, S>,
+    w_key: (Arc<K>, TypeId),
+    w_hash: u64,
+) where
     (Arc<K>, TypeId): Eq + Hash,
     S: BuildHasher,
 {
@@ -620,7 +623,7 @@ where
 }
 
 #[inline]
-fn try_insert_waiter<K, V, S>(
+fn try_insert_waiter<K: ?Sized, V, S>(
     waiter_map: &WaiterMap<K, V, S>,
     w_key: (Arc<K>, TypeId),
     w_hash: u64,
@@ -635,7 +638,7 @@ where
 }
 
 #[inline]
-fn waiter_key_hash<K, V, S>(
+fn waiter_key_hash<K: ?Sized, V, S>(
     waiter_map: &WaiterMap<K, V, S>,
     c_key: &Arc<K>,
     type_id: TypeId,

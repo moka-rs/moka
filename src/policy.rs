@@ -155,7 +155,7 @@ impl Default for EvictionPolicyConfig {
 /// `current_duration: Option<Instant>` (not modify the current expiration time).
 /// Override some of them as you need.
 ///
-pub trait Expiry<K, V> {
+pub trait Expiry<K: ?Sized, V> {
     /// Specifies that the entry should be automatically removed from the cache once
     /// the duration has elapsed after the entry's creation. This method is called
     /// for cache write methods such as `insert` and `get_with` but only when the key
@@ -278,13 +278,13 @@ pub trait Expiry<K, V> {
     }
 }
 
-pub(crate) struct ExpirationPolicy<K, V> {
+pub(crate) struct ExpirationPolicy<K: ?Sized, V> {
     time_to_live: Option<Duration>,
     time_to_idle: Option<Duration>,
     expiry: Option<Arc<dyn Expiry<K, V> + Send + Sync + 'static>>,
 }
 
-impl<K, V> Default for ExpirationPolicy<K, V> {
+impl<K: ?Sized, V> Default for ExpirationPolicy<K, V> {
     fn default() -> Self {
         Self {
             time_to_live: None,
@@ -294,7 +294,7 @@ impl<K, V> Default for ExpirationPolicy<K, V> {
     }
 }
 
-impl<K, V> Clone for ExpirationPolicy<K, V> {
+impl<K: ?Sized, V> Clone for ExpirationPolicy<K, V> {
     fn clone(&self) -> Self {
         Self {
             time_to_live: self.time_to_live,
@@ -304,7 +304,7 @@ impl<K, V> Clone for ExpirationPolicy<K, V> {
     }
 }
 
-impl<K, V> ExpirationPolicy<K, V> {
+impl<K: ?Sized, V> ExpirationPolicy<K, V> {
     #[cfg(test)]
     pub(crate) fn new(
         time_to_live: Option<Duration>,
