@@ -73,7 +73,7 @@ jobs:
       - name: Remove integration tests and force enable rustc_version crate
         run: |
           rm -rf tests
-          sed -i '/actix-rt\|async-std\|reqwest/d' Cargo.toml
+          sed -i '/actix-rt\|reqwest/d' Cargo.toml
           sed -i 's/target.*rustver.*\.//' Cargo.toml
           sed -i 's/build = "build.rs"/build = ".ci_extras\/build_linux_cross.rs"/' Cargo.toml
           cat Cargo.toml
