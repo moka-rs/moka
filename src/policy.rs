@@ -125,16 +125,11 @@ impl fmt::Debug for EvictionPolicy {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) enum EvictionPolicyConfig {
+    #[default]
     TinyLfu,
     Lru,
-}
-
-impl Default for EvictionPolicyConfig {
-    fn default() -> Self {
-        Self::TinyLfu
-    }
 }
 
 /// Calculates when cache entries expire. A single expiration time is retained on

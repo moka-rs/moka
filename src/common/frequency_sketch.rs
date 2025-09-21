@@ -212,7 +212,7 @@ mod tests {
     static ITEM: Lazy<u32> = Lazy::new(|| {
         let mut buf = [0; 4];
         getrandom::getrandom(&mut buf).unwrap();
-        unsafe { std::mem::transmute::<[u8; 4], u32>(buf) }
+        u32::from_ne_bytes(buf)
     });
 
     // This test was ported from Caffeine.
