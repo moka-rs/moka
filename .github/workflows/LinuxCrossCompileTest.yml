@@ -51,9 +51,11 @@ jobs:
           - target: mips-unknown-linux-musl
             rust-version: "1.72.1"
             cargo-version: "+1.72.1"
+            remove-reqwest: true
           - target: mipsel-unknown-linux-musl
             rust-version: "1.72.1"
             cargo-version: "+1.72.1"
+            remove-reqwest: true
 
     steps:
       - name: Checkout Moka
@@ -73,10 +75,14 @@ jobs:
       - name: Remove integration tests and force enable rustc_version crate
         run: |
           rm -rf tests
-          sed -i '/actix-rt\|reqwest/d' Cargo.toml
+          cargo remove actix-rt
           sed -i 's/target.*rustver.*\.//' Cargo.toml
           sed -i 's/build = "build.rs"/build = ".ci_extras\/build_linux_cross.rs"/' Cargo.toml
           cat Cargo.toml
+
+      - name: Remove reqwest dependency (for some platforms)
+        if: ${{ matrix.platform.remove-reqwest == true }}
+        run: cargo remove reqwest
 
       - run: cargo clean
 
