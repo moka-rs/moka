@@ -66,7 +66,7 @@ impl Clock {
 
     /// Returns the current time using a reliable source of time.
     ///
-    /// When the the type is `Standard` or `Hybrid`, the time is based on
+    /// When the type is `Standard` or `Hybrid`, the time is based on
     /// `std::time::Instant`. When the type is `Mocked`, the time is based on the
     /// mocked source of time.
     pub(crate) fn now(&self) -> Instant {
