@@ -6,12 +6,44 @@
 
 - Support `Equivalent` trait for the key type `K` of the caches.
   ([#492][gh-pull-0492])
+- Added the `jittered_expiry_policy` example ([#489][gh-pull-0489]).
+
+### Changed
+
+- Adjusted license expression: some code is Apache-2.0 only ([#529][gh-pull-0529], by
+  [@musicinmybrain][gh-musicinmybrain]).
+    - The license expression in `Cargo.toml` was changed from
+      `MIT OR Apache-2.0` to `(MIT OR Apache-2.0) AND Apache-2.0`.
+    - See the [license section](README.md#license) of the README for details.
+- Upgrading a crate in the dependencies:
+    - Raised the minimum version of `crossbeam-channel` crate from `v0.5.5` to
+      `v0.5.15` to avoid the following issue ([#514][gh-pull-0514],
+      by [karankurbur][gh-karankurbur]).
+        - [RUSTSEC-2025-0024] crossbeam-channel: double free on Drop
+- Moving a crate from the dependencies to the dev-dependencies:
+    - Switched `loom` crate to a dev-dependency
+      ([#509][gh-pull-0509], by [thomaseizinger][gh-thomaseizinger]).
+- Updating a crate in the dev-dependencies:
+    - Upgraded `reqwest` crate in the dev-dependencies from `v0.11` to `v0.12`
+      ([#531][gh-pull-0531], by [musicinmybrain][gh-musicinmybrain]).
 
 ### Removed
 
-- Removed unmaintained `paste` crate from the dev-dependencies ([#504][gh-pull-0504]).
-    - [RUSTSEC-2024-0436](https://rustsec.org/advisories/RUSTSEC-2024-0436.html)
-      paste - no longer maintained
+- Removing a crate from the dependencies:
+    - Removed `thiserror` crate by manually implementing `std::error::Error` for
+      `moka::PredicateError` ([#512][gh-pull-0512], by [@brownjohnf][gh-brownjohnf]).
+- Removing crates from the dev-dependencies:
+    - Removed unmaintained `paste` crate from the dev-dependencies ([#504][gh-pull-0504]).
+        - [RUSTSEC-2024-0436] paste - no longer maintained
+    - Removed discontinued `async-std` crate from the dev-dependencies ([#534][gh-pull-0534]).
+        - [RUSTSEC-2025-0052] async-std has been discontinued
+- Removed clippy ignore `non_send_fields_in_send_ty` that no longer applies
+  ([#505][gh-pull-0505], by [@qti3e][gh-qti3e]).
+
+### Fixed
+
+- Remove redundant word in source code comment ([#532][gh-pull-0532],
+  by [@quantpoet][gh-quantpoet]).
 
 
 ## Version 0.12.10
@@ -927,23 +959,32 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [ghsa-qc84-gqf4-9926]: https://github.com/advisories/GHSA-qc84-gqf4-9926
 [gh-rust-issue-62958]: https://github.com/rust-lang/rust/issues/62958
 
+[RUSTSEC-2025-0052]: https://rustsec.org/advisories/RUSTSEC-2025-0052.html
+[RUSTSEC-2025-0024]: https://rustsec.org/advisories/RUSTSEC-2025-0024.html
+[RUSTSEC-2024-0436]: https://rustsec.org/advisories/RUSTSEC-2024-0436.html
 [RUSTSEC-2020-0168]: https://rustsec.org/advisories/RUSTSEC-2020-0168.html
 
 [gh-06chaynes]: https://github.com/06chaynes
 [gh-arcstur]: https://github.com/arcstur
 [gh-aspect]: https://github.com/aspect
 [gh-barkanido]: https://github.com/barkanido
+[gh-brownjohnf]: https://github.com/brownjohnf
 [gh-ClSlaid]: https://github.com/ClSlaid
 [gh-eaufavor]: https://github.com/eaufavor
 [gh-JoJoDeveloping]: https://github.com/JoJoDeveloping
+[gh-karankurbur]: https://github.com/karankurbur
 [gh-LMJW]: https://github.com/LMJW
 [gh-messense]: https://github.com/messense
 [gh-Milo123459]: https://github.com/Milo123459
+[gh-musicinmybrain]: https://github.com/musicinmybrain
 [gh-nyurik]: https://github.com/nyurik
 [gh-paolobarbolini]: https://github.com/paolobarbolini
 [gh-peter-scholtens]: https://github.com/peter-scholtens
+[gh-qti3e]: https://github.com/qti3e
+[gh-quantpoet]: https://github.com/quantpoet
 [gh-saethlin]: https://github.com/saethlin
 [gh-Swatinem]: https://github.com/Swatinem
+[gh-thomaseizinger]: https://github.com/thomaseizinger
 [gh-tinou98]: https://github.com/tinou98
 [gh-xuehaonan27]: https://github.com/xuehaonan27
 [gh-zonyitoo]: https://github.com/zonyitoo
@@ -973,8 +1014,18 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0534]: https://github.com/moka-rs/moka/pull/534/
+[gh-pull-0532]: https://github.com/moka-rs/moka/pull/532/
+[gh-pull-0531]: https://github.com/moka-rs/moka/pull/531/
+[gh-pull-0529]: https://github.com/moka-rs/moka/pull/529/
+[gh-pull-0514]: https://github.com/moka-rs/moka/pull/514/
+[gh-pull-0512]: https://github.com/moka-rs/moka/pull/512/
+[gh-pull-0509]: https://github.com/moka-rs/moka/pull/509/
+[gh-pull-0505]: https://github.com/moka-rs/moka/pull/505/
 [gh-pull-0504]: https://github.com/moka-rs/moka/pull/504/
+[gh-pull-0503]: https://github.com/moka-rs/moka/pull/503/
 [gh-pull-0492]: https://github.com/moka-rs/moka/pull/492/
+[gh-pull-0489]: https://github.com/moka-rs/moka/pull/489/
 [gh-pull-0482]: https://github.com/moka-rs/moka/pull/482/
 [gh-pull-0481]: https://github.com/moka-rs/moka/pull/481/
 [gh-pull-0480]: https://github.com/moka-rs/moka/pull/480/
