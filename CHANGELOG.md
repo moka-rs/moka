@@ -12,14 +12,16 @@
 
 - Adjusted license expression: some code is Apache-2.0 only ([#529][gh-pull-0529], by
   [@musicinmybrain][gh-musicinmybrain]).
-     - The license expression in `Cargo.toml` was changed from
-       `MIT OR Apache-2.0` to `(MIT OR Apache-2.0) AND Apache-2.0`.
+    - The license expression in `Cargo.toml` was changed from
+      `MIT OR Apache-2.0` to `(MIT OR Apache-2.0) AND Apache-2.0`.
+    - See the [license section](README.md#license) of the README for details.
 - Upgrading a crate in the dependencies:
     - Raised the minimum version of `crossbeam-channel` crate from `v0.5.5` to
-      `v0.5.15` ([#514][gh-pull-0514], by [karankurbur][gh-karankurbur]).
+      `v0.5.15` to avoid the following issue ([#514][gh-pull-0514],
+      by [karankurbur][gh-karankurbur]).
         - [RUSTSEC-2025-0024] crossbeam-channel: double free on Drop
 - Moving a crate from the dependencies to the dev-dependencies:
-    - Switched `loom` crate from the dependencies to the dev-dependencies
+    - Switched `loom` crate to a dev-dependency
       ([#509][gh-pull-0509], by [thomaseizinger][gh-thomaseizinger]).
 - Updating a crate in the dev-dependencies:
     - Upgraded `reqwest` crate in the dev-dependencies from `v0.11` to `v0.12`
@@ -33,7 +35,7 @@
 - Removing crates from the dev-dependencies:
     - Removed unmaintained `paste` crate from the dev-dependencies ([#504][gh-pull-0504]).
         - [RUSTSEC-2024-0436] paste - no longer maintained
-    - Removed discontinued `async-std` crate from the dev-dependencies ([#534][gh-pull-0503]).
+    - Removed discontinued `async-std` crate from the dev-dependencies ([#534][gh-pull-0534]).
         - [RUSTSEC-2025-0052] async-std has been discontinued
 - Removed clippy ignore `non_send_fields_in_send_ty` that no longer applies
   ([#505][gh-pull-0505], by [@qti3e][gh-qti3e]).
