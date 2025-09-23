@@ -3,6 +3,7 @@
 [![GitHub Actions][gh-actions-badge]][gh-actions]
 [![crates.io release][release-badge]][crate]
 [![docs][docs-badge]][docs]
+[![DeepWiki][deepwiki-badge]][deepwiki]
 [![dependency status][deps-rs-badge]][deps-rs]
 [![codecov][codecov-badge]][codecov]
 [![license][license-badge]](#license)
@@ -25,6 +26,7 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 [gh-actions-badge]: https://github.com/moka-rs/moka/workflows/CI/badge.svg
 [release-badge]: https://img.shields.io/crates/v/moka.svg
 [docs-badge]: https://docs.rs/moka/badge.svg
+[deepwiki-badge]: https://deepwiki.com/badge.svg
 [deps-rs-badge]: https://deps.rs/repo/github/moka-rs/moka/status.svg
 [codecov-badge]: https://codecov.io/gh/moka-rs/moka/graph/badge.svg?token=7GYZNS7O67
 [license-badge]: https://img.shields.io/crates/l/moka.svg
@@ -32,6 +34,7 @@ algorithm to determine which entries to evict when the capacity is exceeded.
 [gh-actions]: https://github.com/moka-rs/moka/actions?query=workflow%3ACI
 [crate]: https://crates.io/crates/moka
 [docs]: https://docs.rs/moka
+[deepwiki]: https://deepwiki.com/moka-rs/moka
 [deps-rs]: https://deps.rs/repo/github/moka-rs/moka
 [codecov]: https://codecov.io/gh/moka-rs/moka
 
