@@ -625,11 +625,19 @@ Thanks go to Gregory Meyer.
 Moka is distributed under either of
 
 - The MIT license
-- The Apache License (Version 2.0)
+- The Apache License 2.0
 
 at your option.
 
 See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.
+
+**Note on Licensing:**
+
+Certain components, specifically
+[`src/common/frequency_sketch.rs`](src/common/frequency_sketch.rs) and
+[`src/common/timer_wheel.rs`](src/common/timer_wheel.rs), are distributed solely
+under the Apache License 2.0. These files were ported from the [Caffeine][caffeine-git]
+library and are not dual-licensed.
 
 <!--
 [![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fmoka-rs%2Fmoka?ref=badge_large)
