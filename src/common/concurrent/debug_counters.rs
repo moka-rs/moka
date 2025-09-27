@@ -1,5 +1,4 @@
 use crossbeam_utils::atomic::AtomicCell;
-use once_cell::sync::Lazy;
 
 #[derive(Clone, Debug)]
 pub struct GlobalDebugCounters {
@@ -23,8 +22,20 @@ impl GlobalDebugCounters {
     }
 }
 
-static COUNTERS: Lazy<InternalGlobalDebugCounters> =
-    Lazy::new(InternalGlobalDebugCounters::default);
+static COUNTERS: InternalGlobalDebugCounters = InternalGlobalDebugCounters {
+    bucket_array_creation_count: AtomicCell::new(0),
+    bucket_array_allocation_bytes: AtomicCell::new(0),
+    bucket_array_drop_count: AtomicCell::new(0),
+    bucket_array_release_bytes: AtomicCell::new(0),
+    bucket_creation_count: AtomicCell::new(0),
+    bucket_drop_count: AtomicCell::new(0),
+    value_entry_creation_count: AtomicCell::new(0),
+    value_entry_drop_count: AtomicCell::new(0),
+    entry_info_creation_count: AtomicCell::new(0),
+    entry_info_drop_count: AtomicCell::new(0),
+    deq_node_creation_count: AtomicCell::new(0),
+    deq_node_drop_count: AtomicCell::new(0),
+};
 
 #[derive(Default)]
 pub(crate) struct InternalGlobalDebugCounters {
