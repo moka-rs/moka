@@ -1884,11 +1884,12 @@ where
             timer_wheel.enable();
         }
 
+        // Get timer_node with its expiry generation to detect stale pointers.
+        let (timer_node, expected_expiry_gen) = entry.timer_node_with_expiry_gen();
+        let current_expiry_gen = entry.entry_info().expiry_gen();
+
         // Update the timer wheel.
-        match (
-            entry.entry_info().expiration_time().is_some(),
-            entry.timer_node(),
-        ) {
+        match (entry.entry_info().expiration_time().is_some(), timer_node) {
             // Do nothing; the cache entry has no expiration time and not registered
             // to the timer wheel.
             (false, None) => (),
@@ -1898,26 +1899,39 @@ where
                 let timer = timer_wheel.schedule(
                     MiniArc::clone(entry.entry_info()),
                     MiniArc::clone(entry.deq_nodes()),
+                    current_expiry_gen,
                 );
                 entry.set_timer_node(timer);
             }
             // Reschedule the cache entry in the timer wheel; the cache entry has an
             // expiration time and already registered to the timer wheel.
             (true, Some(tn)) => {
-                let result = timer_wheel.reschedule(tn);
-                if let ReschedulingResult::Removed(removed_tn) = result {
-                    // The timer node was removed from the timer wheel because the
-                    // expiration time has been unset by other thread after we
-                    // checked.
-                    entry.set_timer_node(None);
-                    drop(removed_tn);
+                // Reschedule with generation validation to prevent use-after-free
+                match timer_wheel.reschedule(tn, expected_expiry_gen) {
+                    Some(ReschedulingResult::Removed(removed_tn)) => {
+                        // The timer node was removed from the timer wheel because the
+                        // expiration time has been unset by other thread after we
+                        // checked.
+                        entry.set_timer_node(None);
+                        drop(removed_tn);
+                    }
+                    Some(ReschedulingResult::Rescheduled) => {
+                        // Successfully rescheduled, nothing to do.
+                    }
+                    None => {
+                        // The timer node was invalid (stale - expiry gen mismatch).
+                        // Clear the timer_node to prevent further issues.
+                        entry.set_timer_node(None);
+                    }
                 }
             }
             // Unregister the cache entry from the timer wheel; the cache entry has
             // no expiration time but registered to the timer wheel.
             (false, Some(tn)) => {
                 entry.set_timer_node(None);
-                timer_wheel.deschedule(tn);
+                // Returns false if the node was stale, but we've already
+                // cleared timer_node above, so we can ignore the return value.
+                let _ = timer_wheel.deschedule(tn, expected_expiry_gen);
             }
         }
     }
@@ -1929,8 +1943,11 @@ where
         gen: Option<u16>,
         counters: &mut EvictionCounters,
     ) {
-        if let Some(timer_node) = entry.take_timer_node() {
-            timer_wheel.deschedule(timer_node);
+        let (timer_node, expiry_gen) = entry.take_timer_node();
+        if let Some(tn) = timer_node {
+            // Returns false if the node was stale, but we've already
+            // taken (cleared) the timer_node, so we can ignore the return value.
+            let _ = timer_wheel.deschedule(tn, expiry_gen);
         }
         Self::handle_remove_without_timer_wheel(deqs, entry, gen, counters);
     }
@@ -1963,8 +1980,13 @@ where
         entry: MiniArc<ValueEntry<K, V>>,
         counters: &mut EvictionCounters,
     ) {
-        if let Some(timer) = entry.take_timer_node() {
-            timer_wheel.deschedule(timer);
+        // Take the timer node along with its stored expiry generation for validation.
+        let (timer_node, expiry_gen) = entry.take_timer_node();
+        if let Some(timer) = timer_node {
+            // Deschedule with generation validation to prevent use-after-free.
+            // Returns false if the node was stale, but we've already
+            // taken (cleared) the timer_node, so we can ignore the return value.
+            let _ = timer_wheel.deschedule(timer, expiry_gen);
         }
         if entry.is_admitted() {
             entry.set_admitted(false);

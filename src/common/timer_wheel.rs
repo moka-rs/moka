@@ -67,6 +67,9 @@ pub(crate) enum TimerNode<K> {
     Entry {
         /// The position (level and index) of the timer wheel bucket.
         pos: Option<(u8, u8)>,
+        /// The expiry generation when this timer node was created.
+        /// Used to detect stale timer node pointers.
+        expiry_gen: u32,
         /// An Arc pointer to the `EntryInfo` of the cache entry (`ValueEntry`).
         entry_info: MiniArc<EntryInfo<K>>,
         /// An Arc pointer to the `DeqNodes` of the cache entry (`ValueEntry`).
@@ -78,11 +81,13 @@ impl<K> TimerNode<K> {
     fn new(
         entry_info: MiniArc<EntryInfo<K>>,
         deq_nodes: MiniArc<Mutex<DeqNodes<K>>>,
+        expiry_gen: u32,
         level: usize,
         index: usize,
     ) -> Self {
         Self::Entry {
             pos: Some((level as u8, index as u8)),
+            expiry_gen,
             entry_info,
             deq_nodes,
         }
@@ -127,9 +132,19 @@ impl<K> TimerNode<K> {
 
     fn unset_timer_node_in_deq_nodes(&self) {
         if let Self::Entry { deq_nodes, .. } = &self {
-            deq_nodes.lock().set_timer_node(None);
+            deq_nodes.lock().set_timer_node(None, 0);
         } else {
             unreachable!();
+        }
+    }
+
+    /// Returns the expiry generation stored in this timer node.
+    /// Used to validate the timer node hasn't become stale.
+    pub(crate) fn expiry_gen(&self) -> u32 {
+        if let Self::Entry { expiry_gen, .. } = &self {
+            *expiry_gen
+        } else {
+            0 // Sentinel has no expiry_gen
         }
     }
 }
@@ -200,17 +215,20 @@ impl<K> TimerWheel<K> {
     }
 
     /// Schedules a timer event for the node.
+    /// The `expiry_gen` is the current expiry generation from EntryInfo, used for
+    /// validation when operating on the timer node later.
     pub(crate) fn schedule(
         &mut self,
         entry_info: MiniArc<EntryInfo<K>>,
         deq_nodes: MiniArc<Mutex<DeqNodes<K>>>,
+        expiry_gen: u32,
     ) -> Option<NonNull<DeqNode<TimerNode<K>>>> {
         debug_assert!(self.is_enabled());
 
         if let Some(t) = entry_info.expiration_time() {
             let (level, index) = self.bucket_indices(t);
             let node = Box::new(DeqNode::new(TimerNode::new(
-                entry_info, deq_nodes, level, index,
+                entry_info, deq_nodes, expiry_gen, level, index,
             )));
             let node = self.wheels[level][index].push_back(node);
             Some(node)
@@ -249,28 +267,88 @@ impl<K> TimerWheel<K> {
     }
 
     /// Reschedules an active timer event for the node.
+    ///
+    /// This method validates that the timer node's expiry generation matches the
+    /// expected generation before operating on it. This prevents use-after-free
+    /// when a stale timer_node pointer is used.
+    ///
+    /// Returns `Some` with the result if successful, `None` if validation failed
+    /// or the node was invalid.
     pub(crate) fn reschedule(
         &mut self,
         node: NonNull<DeqNode<TimerNode<K>>>,
-    ) -> ReschedulingResult<K> {
+        expected_expiry_gen: u32,
+    ) -> Option<ReschedulingResult<K>> {
         debug_assert!(self.is_enabled());
-        unsafe { self.unlink_timer(node) };
-        self.schedule_existing_node(node)
+        unsafe {
+            // First validate the node by checking if expiry generation matches
+            let p = node.as_ref();
+            let actual_gen = p.element.expiry_gen();
+            if actual_gen != expected_expiry_gen {
+                // The timer node is stale (expiry changed since it was scheduled)
+                #[cfg(feature = "logging")]
+                log::error!(
+                    "reschedule: expiry generation mismatch. \
+                     Expected: {expected_expiry_gen}, Actual: {actual_gen}. Timer node is stale.",
+                );
+                return None;
+            }
+        }
+
+        if unsafe { self.unlink_timer(node) } {
+            Some(self.schedule_existing_node(node))
+        } else {
+            // Node was invalid, cannot reschedule
+            None
+        }
     }
 
     /// Removes a timer event for this node if present.
-    pub(crate) fn deschedule(&mut self, node: NonNull<DeqNode<TimerNode<K>>>) {
+    ///
+    /// This method validates that the timer node's expiry generation matches the
+    /// expected generation before operating on it. This prevents use-after-free
+    /// when a stale timer_node pointer is used.
+    ///
+    /// Returns `true` if the node was successfully descheduled, `false` if the node
+    /// was invalid or validation failed.
+    pub(crate) fn deschedule(
+        &mut self,
+        node: NonNull<DeqNode<TimerNode<K>>>,
+        expected_expiry_gen: u32,
+    ) -> bool {
         debug_assert!(self.is_enabled());
         unsafe {
-            self.unlink_timer(node);
-            Self::drop_node(node);
+            // First validate the node by checking if expiry generation matches
+            let p = node.as_ref();
+            let actual_gen = p.element.expiry_gen();
+            if actual_gen != expected_expiry_gen {
+                // The timer node is stale (expiry changed since it was scheduled)
+                #[cfg(feature = "logging")]
+                log::error!(
+                    "deschedule: expiry generation mismatch. \
+                     Expected: {expected_expiry_gen}, Actual: {actual_gen}. Timer node is stale.",
+                );
+                return false;
+            }
+
+            if self.unlink_timer(node) {
+                Self::drop_node(node);
+                true
+            } else {
+                // Node was invalid, do not attempt to drop
+                false
+            }
         }
     }
 
     /// Removes a timer event for this node if present.
     ///
     /// IMPORTANT: This method does not drop the node.
-    unsafe fn unlink_timer(&mut self, mut node: NonNull<DeqNode<TimerNode<K>>>) {
+    ///
+    /// Returns `true` if the node was a valid `TimerNode::Entry`, `false` otherwise.
+    /// The caller should check the return value and handle the case where the node
+    /// is not a valid entry (e.g., due to use-after-free or memory corruption).
+    unsafe fn unlink_timer(&mut self, mut node: NonNull<DeqNode<TimerNode<K>>>) -> bool {
         // SAFETY: The self (`TimerWheel`) is the only owner of the node, and we have
         // `&mut self` here. We are the only one who can mutate the node.
         let p = node.as_mut();
@@ -279,8 +357,17 @@ impl<K> TimerWheel<K> {
                 self.wheels[level][index].unlink(node);
                 entry.unset_position();
             }
+            true
         } else {
-            unreachable!();
+            // This should not happen in normal operation. If we reach here, it means
+            // the node pointer is invalid (possibly use-after-free or memory corruption).
+            // Log the error and return false to allow the caller to handle gracefully.
+            #[cfg(feature = "logging")]
+            log::error!(
+                "unlink_timer: expected TimerNode::Entry but found Sentinel. \
+                 This indicates a bug in the timer wheel or use-after-free."
+            );
+            false
         }
     }
 
@@ -643,10 +730,10 @@ mod tests {
             let key_hash = KeyHash::new(Arc::new(key), hash);
             let policy_weight = 0;
             let entry_info = MiniArc::new(EntryInfo::new(key_hash, now, policy_weight));
-            entry_info.set_expiration_time(Some(now.saturating_add(ttl)));
+            let expiry_gen = entry_info.set_expiration_time(Some(now.saturating_add(ttl)));
             let deq_nodes = Default::default();
-            let timer_node = timer.schedule(entry_info, MiniArc::clone(&deq_nodes));
-            deq_nodes.lock().set_timer_node(timer_node);
+            let timer_node = timer.schedule(entry_info, MiniArc::clone(&deq_nodes), expiry_gen);
+            deq_nodes.lock().set_timer_node(timer_node, expiry_gen);
         }
 
         fn expired_key(maybe_entry: Option<TimerEvent<u32>>) -> u32 {

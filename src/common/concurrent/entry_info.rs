@@ -17,6 +17,9 @@ pub(crate) struct EntryInfo<K> {
     /// is applied to the cache policies including the access-order queue (the LRU
     /// deque).
     policy_gen: AtomicU16,
+    /// `expiry_gen` (expiry generation) is incremented every time the entry's
+    /// expiration time is modified. Used to detect stale timer node pointers.
+    expiry_gen: AtomicU32,
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
     expiration_time: AtomicInstant,
@@ -35,6 +38,7 @@ impl<K> EntryInfo<K> {
             // `entry_gen` starts at 1 and `policy_gen` start at 0.
             entry_gen: AtomicU16::new(1),
             policy_gen: AtomicU16::new(0),
+            expiry_gen: AtomicU32::new(0),
             last_accessed: AtomicInstant::new(timestamp),
             last_modified: AtomicInstant::new(timestamp),
             expiration_time: AtomicInstant::default(),
@@ -121,12 +125,21 @@ impl<K> EntryInfo<K> {
         self.expiration_time.instant()
     }
 
-    pub(crate) fn set_expiration_time(&self, time: Option<Instant>) {
+    /// Returns the new expiry generation.
+    pub(crate) fn set_expiration_time(&self, time: Option<Instant>) -> u32 {
         if let Some(t) = time {
             self.expiration_time.set_instant(t);
         } else {
             self.expiration_time.clear();
         }
+        self.expiry_gen
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1)
+    }
+
+    #[inline]
+    pub(crate) fn expiry_gen(&self) -> u32 {
+        self.expiry_gen.load(Ordering::Acquire)
     }
 }
 
