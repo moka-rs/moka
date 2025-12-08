@@ -70,6 +70,7 @@ log = { version = "0.4", optional = true }
 actix-rt = "2.8"
 ahash = "0.8.3"
 anyhow = "1.0.19"
+criterion = "0.5"
 env_logger = "0.10.0"
 getrandom = "0.2"
 once_cell = "1.7"
@@ -172,4 +173,11 @@ required-features = ["future"]
 
 [[example]]
 name = "try_append_value_sync"
+required-features = ["sync"]
+
+# Benchmarks
+
+[[bench]]
+name = "cache_ops"
+harness = false
 required-features = ["sync"]
