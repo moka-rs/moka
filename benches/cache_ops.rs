@@ -1,7 +1,8 @@
 //! Benchmark suite for moka cache operations.
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use moka::sync::Cache;
+use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
