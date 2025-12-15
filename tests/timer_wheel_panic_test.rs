@@ -69,6 +69,7 @@ impl<K, V> Expiry<K, HandleResult<V>> for CustomExpiry {
 fn test_timer_wheel_panic() {
     // Use shorter duration for CI, increase for more thorough testing
     let test_duration = Duration::from_secs(5);
+    const NUM_KEYS: u64 = if cfg!(miri) { 25 } else { 100 };
 
     let panics = Arc::new(AtomicUsize::new(0));
 
@@ -92,7 +93,7 @@ fn test_timer_wheel_panic() {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut ops = 0u64;
                     while start.elapsed() < duration {
-                        for key in 0..100u64 {
+                        for key in 0..NUM_KEYS {
                             let key = key + (tid as u64 * 10000);
                             // Insert error first (creates timer node with TTL)
                             cache.insert(key, Err("error".into()));
@@ -125,7 +126,7 @@ fn test_timer_wheel_panic() {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut ops = 0u64;
                     while start.elapsed() < duration {
-                        for key in 0..100u64 {
+                        for key in 0..NUM_KEYS {
                             // Read from different thread's key space to increase contention
                             let key = key + ((ops % 4) * 10000);
                             let _ = cache.get(&key);
