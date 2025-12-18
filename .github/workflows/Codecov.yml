@@ -25,13 +25,9 @@ jobs:
 
       - name: Run tests (sync and future features)
         run: cargo llvm-cov --no-report --features 'sync, future'
-        env:
-          RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (with quanta feature)
         run: cargo llvm-cov --no-report --features 'sync, future, quanta'
-        env:
-          RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (sync feature, key lock test for notification)
         run: |

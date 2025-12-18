@@ -36,12 +36,12 @@ jobs:
       - name: Run tests (debug, sync feature)
         run: cargo test --features sync
         env:
-          RUSTFLAGS: '--cfg rustver --cfg skip_large_mem_tests'
+          RUSTFLAGS: '--cfg skip_large_mem_tests'
 
       - name: Run tests (release, sync feature)
         run: cargo test --release --features sync
         env:
-          RUSTFLAGS: '--cfg rustver --cfg skip_large_mem_tests'
+          RUSTFLAGS: '--cfg skip_large_mem_tests'
 
       - name: Run tests (sync feature, key lock test for notification)
         run: cargo test --release --lib --features sync sync::cache::tests::test_key_lock_used_by_immediate_removal_notifications -- --exact --ignored
