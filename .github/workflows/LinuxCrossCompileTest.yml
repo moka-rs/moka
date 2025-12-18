@@ -76,8 +76,6 @@ jobs:
         run: |
           rm -rf tests
           cargo remove --dev actix-rt
-          sed -i 's/target.*rustver.*\.//' Cargo.toml
-          sed -i 's/build = "build.rs"/build = ".ci_extras\/build_linux_cross.rs"/' Cargo.toml
           cat Cargo.toml
 
       - name: Remove reqwest dependency (for some platforms)
@@ -88,10 +86,8 @@ jobs:
 
       - name: Run tests (sync feature)
         run: |
-          cross ${{ matrix.platform.carge-version }} test --release -F sync \
+          cross ${{ matrix.platform.cargo-version }} test --release -F sync \
             --target ${{ matrix.platform.target }}
-        env:
-          RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (future feature)
         run: |

@@ -56,7 +56,6 @@
         "rustdoc",
         "RUSTFLAGS",
         "rustfmt",
-        "rustver",
         "semver",
         "SIGABRT",
         "SIGILL",

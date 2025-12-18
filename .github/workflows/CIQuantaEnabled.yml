@@ -72,13 +72,9 @@ jobs:
 
       - name: Run tests (debug, sync, quanta features)
         run: cargo test --features 'sync, quanta'
-        env:
-          RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (release, sync, quanta features)
         run: cargo test --release --features 'sync, quanta'
-        env:
-          RUSTFLAGS: '--cfg rustver'
 
       - name: Run tests (debug, future, quanta features)
         run: cargo test --features 'future, quanta'

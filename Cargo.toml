@@ -13,7 +13,6 @@ keywords = ["cache", "concurrent"]
 categories = ["caching", "concurrency"]
 readme = "README.md"
 exclude = [".devcontainer", ".github", ".gitpod.yml", ".vscode", "tests/compile_tests/", ".ci_extras/", ".codecov.yml", "MIGRATION-GUIDE.md", "CHANGELOG.md", "examples", ".gitignore"]
-build = "build.rs"
 
 [features]
 default = []
@@ -85,9 +84,6 @@ loom = "0.7"
 [target.'cfg(trybuild)'.dev-dependencies]
 trybuild = "1.0"
 
-[target.'cfg(rustver)'.build-dependencies]
-rustc_version = "0.4.0"
-
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = [
     "cfg(armv5te)",
@@ -95,7 +91,6 @@ unexpected_cfgs = { level = "warn", check-cfg = [
     "cfg(kani)",
     "cfg(moka_loom)",
     "cfg(mips)",
-    "cfg(rustver)",
     "cfg(skip_large_mem_tests)",
     "cfg(trybuild)",
 ] }
