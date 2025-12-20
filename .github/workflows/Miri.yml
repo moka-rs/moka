@@ -48,25 +48,34 @@ jobs:
       - run: cargo miri setup
 
       - name: Run Miri test on arc module using tree borrows
-        run: cargo miri test arc --features 'sync, future'
+        run: cargo miri test arc --lib --features 'sync, future'
         env:
           MIRIFLAGS: '-Zmiri-tree-borrows'
 
       - name: Run Miri test on deque module using tree borrows
-        run: cargo miri test deque --features 'sync, future'
+        run: cargo miri test deque --lib --features 'sync, future'
         env:
           MIRIFLAGS: '-Zmiri-tree-borrows'
 
       - name: Run Miri test on timer_wheel module using tree borrows
-        run: cargo miri test timer_wheel --features 'sync, future'
+        run: cargo miri test timer_wheel --lib --features 'sync, future'
         env:
           MIRIFLAGS: '-Zmiri-tree-borrows'
 
+      # Ignore memory leaks here because crossbeam-epoch does not guarantee that
+      # all memory is reclaimed on the test exit. Note that we do not run stacked
+      # borrows tests on these black-box tests because crossbeam-epoch will not
+      # work with stacked borrows.
+      - name: Run Miri test on timer wheel black-box tests using tree borrows
+        run: cargo miri test test_timer_wheel_panic --features sync
+        env:
+          MIRIFLAGS: '-Zmiri-tree-borrows -Zmiri-ignore-leaks'
+
       - name: Run Miri test on arc module using stacked borrows
-        run: cargo miri test arc --features 'sync, future'
+        run: cargo miri test arc --lib --features 'sync, future'
 
       - name: Run Miri test on deque module using stacked borrows
-        run: cargo miri test deque --features 'sync, future'
+        run: cargo miri test deque --lib --features 'sync, future'
 
       - name: Run Miri test on timer_wheel module using stacked borrows
-        run: cargo miri test timer_wheel --features 'sync, future'
+        run: cargo miri test timer_wheel --lib --features 'sync, future'
