@@ -44,7 +44,7 @@ use smallvec::SmallVec;
 use std::{
     borrow::Borrow,
     collections::hash_map::RandomState,
-    hash::{BuildHasher, Hash, Hasher},
+    hash::{BuildHasher, Hash},
     sync::{
         atomic::{AtomicBool, AtomicU8, Ordering},
         Arc,
@@ -1206,9 +1206,7 @@ where
     where
         Q: Equivalent<K> + Hash + ?Sized,
     {
-        let mut hasher = self.build_hasher.build_hasher();
-        key.hash(&mut hasher);
-        hasher.finish()
+        self.build_hasher.hash_one(key)
     }
 
     #[inline]
