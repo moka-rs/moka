@@ -127,7 +127,8 @@ impl<K> EntryInfo<K> {
 
     /// Returns the new expiry generation.
     pub(crate) fn set_expiration_time(&self, time: Option<Instant>) -> u32 {
-        let new_gen = self.expiry_gen
+        let new_gen = self
+            .expiry_gen
             .fetch_add(1, Ordering::AcqRel)
             .wrapping_add(1);
         if let Some(t) = time {
@@ -136,7 +137,7 @@ impl<K> EntryInfo<K> {
             self.expiration_time.clear();
         }
         new_gen
-   }
+    }
 
     #[inline]
     pub(crate) fn expiry_gen(&self) -> u32 {
