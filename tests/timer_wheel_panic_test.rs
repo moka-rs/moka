@@ -176,12 +176,31 @@ fn test_timer_wheel_panic() {
 
 /// Extended stress test - runs longer for more thorough testing.
 ///
-/// Use `cargo test --release -p moka --test timer_wheel_panic_test stress -- --ignored`
-/// to run this test.
+/// To run this test, do one of the following:
+///
+/// ```console
+/// ## Normal cargo test command for release build
+/// $ cargo test --release -p moka -F sync --test timer_wheel_panic_test stress -- \
+///     --ignored --no-capture
+///
+/// ## Miri command with appropriate flags
+/// ##
+/// ## - `miri-ignore-leaks` for ignoring `crossbeam-epoch`'s not yet reclaimed memory.
+/// ## - `miri-permissive-provenance` to avoid provenance-related warnings for `tagptr`
+/// ##    crate.
+/// ## - `miri-disable-isolation` to use the wall-clock time for the test duration,
+/// ##     instead of Miri's emulated virtual clock, which may advance significantly
+/// ##     slower.
+/// $ MIRIFLAGS='-Zmiri-tree-borrows -Zmiri-ignore-leaks -Zmiri-permissive-provenance -Zmiri-disable-isolation' \
+///     cargo +nightly miri test stress_test_timer_wheel_panic -F sync -- \
+///       --ignored --no-capture
+/// ```
 #[test]
 #[ignore]
 fn stress_test_timer_wheel_panic() {
-    let test_duration = Duration::from_secs(60);
+    // If Miri is used, extend the duration significantly.
+    const DURATION_MINUTES: u64 = if cfg!(miri) { 20 } else { 1 };
+    let test_duration = Duration::from_secs(DURATION_MINUTES * 60);
 
     let panics = Arc::new(AtomicUsize::new(0));
 
@@ -196,11 +215,11 @@ fn stress_test_timer_wheel_panic() {
     let start = Instant::now();
 
     // More aggressive thread count for stress testing
-    let num_insert_threads = 8;
-    let num_get_threads = 8;
+    const NUM_INSERT_THREADS: i32 = if cfg!(miri) { 6 } else { 8 };
+    const NUM_GET_THREADS: i32 = if cfg!(miri) { 4 } else { 8 };
 
     // Insert threads
-    let insert_handles: Vec<_> = (0..num_insert_threads)
+    let insert_handles: Vec<_> = (0..NUM_INSERT_THREADS)
         .map(|tid| {
             let cache = Arc::clone(&cache);
             let panics = Arc::clone(&panics);
@@ -208,7 +227,8 @@ fn stress_test_timer_wheel_panic() {
             thread::spawn(move || {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut ops = 0u64;
-                    while start.elapsed() < duration {
+                    const REPORT_INTERVAL: u64 = if cfg!(miri) { 5 } else { 100_000 };
+                    'l: loop {
                         for key in 0..200u64 {
                             let key = key + (tid as u64 * 10000);
                             cache.insert(key, Err("error".into()));
@@ -220,6 +240,13 @@ fn stress_test_timer_wheel_panic() {
                                 cache.invalidate(&key);
                             }
                             ops += 1;
+                            if ops % REPORT_INTERVAL == 0 {
+                                println!("[Insert {}] running: {} ops", tid, ops);
+                            }
+
+                            if start.elapsed() >= duration {
+                                break 'l;
+                            }
                         }
                     }
                     println!("[Insert {}] done: {} ops", tid, ops);
@@ -233,7 +260,7 @@ fn stress_test_timer_wheel_panic() {
         .collect();
 
     // Get threads
-    let get_handles: Vec<_> = (0..num_get_threads)
+    let get_handles: Vec<_> = (0..NUM_GET_THREADS)
         .map(|tid| {
             let cache = Arc::clone(&cache);
             let panics = Arc::clone(&panics);
@@ -241,11 +268,19 @@ fn stress_test_timer_wheel_panic() {
             thread::spawn(move || {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut ops = 0u64;
-                    while start.elapsed() < duration {
+                    const REPORT_INTERVAL: u64 = if cfg!(miri) { 50 } else { 100_000 };
+                    'l: loop {
                         for key in 0..200u64 {
-                            let key = key + ((ops % num_get_threads as u64) * 10000);
+                            let key = key + ((ops % NUM_GET_THREADS as u64) * 10000);
                             let _ = cache.get(&key);
                             ops += 1;
+                            if ops % REPORT_INTERVAL == 0 {
+                                println!("[Get {}] running: {} ops", tid, ops);
+                            }
+
+                            if start.elapsed() >= duration {
+                                break 'l;
+                            }
                         }
                     }
                     println!("[Get {}] done: {} ops", tid, ops);
@@ -258,25 +293,36 @@ fn stress_test_timer_wheel_panic() {
         })
         .collect();
 
-    let hk_handles: Vec<_> = (0..2)
-        .map(|tid| {
-            let cache = Arc::clone(&cache);
-            let panics = Arc::clone(&panics);
-            let duration = test_duration;
-            thread::spawn(move || {
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    while start.elapsed() < duration {
-                        cache.run_pending_tasks();
-                        thread::sleep(Duration::from_millis(25));
-                    }
-                }))
-                .unwrap_or_else(|e| {
-                    panics.fetch_add(1, Ordering::Relaxed);
-                    eprintln!("[HK {}] PANICKED: {:?}", tid, e);
-                });
+    let hk_handles = if cfg!(miri) {
+        None
+    } else {
+        let handles = (0..2)
+            .map(|tid| {
+                let cache = Arc::clone(&cache);
+                let panics = Arc::clone(&panics);
+                let duration = test_duration;
+                thread::spawn(move || {
+                    let mut ops = 0u64;
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        while start.elapsed() < duration {
+                            cache.run_pending_tasks();
+                            thread::sleep(Duration::from_millis(25));
+
+                            ops += 1;
+                            if ops % 50 == 0 {
+                                println!("[HK {}] running: {} ops", tid, ops);
+                            }
+                        }
+                    }))
+                    .unwrap_or_else(|e| {
+                        panics.fetch_add(1, Ordering::Relaxed);
+                        eprintln!("[HK {}] PANICKED: {:?}", tid, e);
+                    });
+                })
             })
-        })
-        .collect();
+            .collect::<Vec<_>>();
+        Some(handles)
+    };
 
     // Wait for all threads
     for h in insert_handles {
@@ -285,8 +331,10 @@ fn stress_test_timer_wheel_panic() {
     for h in get_handles {
         let _ = h.join();
     }
-    for h in hk_handles {
-        let _ = h.join();
+    if let Some(hk_handles) = hk_handles {
+        for h in hk_handles {
+            let _ = h.join();
+        }
     }
 
     let total_panics = panics.load(Ordering::Relaxed);
