@@ -9,6 +9,10 @@
 [![license][license-badge]](#license)
 
 > **note**
+> If you have any questions about Moka's API or internals in deeper detail, visit
+> its DeepWiki page and ask questions there: https://deepwiki.com/moka-rs/moka
+
+> **note**
 > `v0.12.0` had major breaking changes on the API and internal behavior. Please read
 > the [MIGRATION-GUIDE.md][migration-guide-v012] for the details.
 
