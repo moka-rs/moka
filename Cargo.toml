@@ -2,8 +2,8 @@
 name = "moka"
 version = "0.12.11"
 edition = "2021"
-# Rust 1.70 was released on June 1, 2023.
-rust-version = "1.70"
+# Rust 1.71.1 was released on August 3, 2023.
+rust-version = "1.71.1"
 description = "A fast and concurrent cache library inspired by Java Caffeine"
 license = "(MIT OR Apache-2.0) AND Apache-2.0"
 # homepage = "https://"
