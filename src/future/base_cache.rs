@@ -104,8 +104,12 @@ impl<K, V, S> BaseCache<K, V, S> {
         self.inner.weighted_size()
     }
 
+    pub(crate) fn set_max_capacity(&self, max_capacity: Option<u64>) {
+        self.inner.set_max_capacity(max_capacity);
+    }
+
     pub(crate) fn is_map_disabled(&self) -> bool {
-        self.inner.max_capacity == Some(0)
+        self.inner.max_capacity.load() == Some(0)
     }
 
     #[inline]
@@ -984,7 +988,7 @@ type CacheStore<K, V, S> = crate::cht::SegmentedHashMap<Arc<K>, MiniArc<ValueEnt
 
 pub(crate) struct Inner<K, V, S> {
     name: Option<String>,
-    max_capacity: Option<u64>,
+    max_capacity: AtomicCell<Option<u64>>,
     entry_count: AtomicCell<u64>,
     weighted_size: AtomicCell<u64>,
     pub(crate) cache: CacheStore<K, V, S>,
@@ -1032,7 +1036,12 @@ impl<K, V, S> Inner<K, V, S> {
 
     fn policy(&self) -> Policy {
         let exp = &self.expiration_policy;
-        Policy::new(self.max_capacity, 1, exp.time_to_live(), exp.time_to_idle())
+        Policy::new(
+            self.max_capacity.load(),
+            1,
+            exp.time_to_live(),
+            exp.time_to_idle(),
+        )
     }
 
     #[inline]
@@ -1043,6 +1052,10 @@ impl<K, V, S> Inner<K, V, S> {
     #[inline]
     fn weighted_size(&self) -> u64 {
         self.weighted_size.load()
+    }
+
+    fn set_max_capacity(&self, max_capacity: Option<u64>) {
+        self.max_capacity.store(max_capacity);
     }
 
     #[inline]
@@ -1178,7 +1191,7 @@ where
 
         Self {
             name,
-            max_capacity,
+            max_capacity: AtomicCell::new(max_capacity),
             entry_count: AtomicCell::default(),
             weighted_size: AtomicCell::default(),
             cache,
@@ -1292,7 +1305,7 @@ where
         max_log_sync_repeats: u32,
         eviction_batch_size: u32,
     ) -> bool {
-        if self.max_capacity == Some(0) {
+        if self.max_capacity.load() == Some(0) {
             return false;
         }
 
@@ -1451,20 +1464,21 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     fn has_enough_capacity(&self, candidate_weight: u32, counters: &EvictionCounters) -> bool {
-        self.max_capacity.map_or(true, |limit| {
+        self.max_capacity.load().map_or(true, |limit| {
             counters.weighted_size + candidate_weight as u64 <= limit
         })
     }
 
     fn weights_to_evict(&self, counters: &EvictionCounters) -> u64 {
         self.max_capacity
+            .load()
             .map(|limit| counters.weighted_size.saturating_sub(limit))
             .unwrap_or_default()
     }
 
     #[inline]
     fn should_enable_frequency_sketch(&self, counters: &EvictionCounters) -> bool {
-        match self.max_capacity {
+        match self.max_capacity.load() {
             None | Some(0) => false,
             Some(max_cap) => {
                 if self.frequency_sketch_enabled.load(Ordering::Acquire) {
@@ -1478,7 +1492,7 @@ where
 
     #[inline]
     async fn enable_frequency_sketch(&self, counters: &EvictionCounters) {
-        if let Some(max_cap) = self.max_capacity {
+        if let Some(max_cap) = self.max_capacity.load() {
             let c = counters;
             let cap = if self.weigher.is_none() {
                 max_cap
@@ -1491,7 +1505,7 @@ where
 
     #[cfg(test)]
     async fn enable_frequency_sketch_for_testing(&self) {
-        if let Some(max_cap) = self.max_capacity {
+        if let Some(max_cap) = self.max_capacity.load() {
             self.do_enable_frequency_sketch(max_cap).await;
         }
     }
@@ -1624,7 +1638,7 @@ where
             }
         }
 
-        if let Some(max) = self.max_capacity {
+        if let Some(max) = self.max_capacity.load() {
             if new_weight as u64 > max {
                 // The candidate is too big to fit in the cache. Reject it.
 
