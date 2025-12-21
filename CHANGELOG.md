@@ -1,6 +1,50 @@
 # Moka Cache &mdash; Change Log
 
+> [!NOTE]
+> If you have any questions about Moka's APIs or internals in deeper detail, visit
+> its DeepWiki page and ask questions there: <https://deepwiki.com/moka-rs/moka>
+
+## Version 0.12.12
+
+Bumped the minimum supported Rust version (MSRV) to 1.71.1, released on August 3,
+2023 ([#555][gh-pull-0555]).
+
+### Fixed
+
+- Fixed use-after-free panic in the hierarchical timer wheels when `Expiry` returns
+  `None` ([#548][gh-pull-0548], by [@awarus][gh-awarus]).
+- Fixed a subtle undefined behavior (UB) in the internal `deque::move_to_back` method
+  (found by Miri) ([#553][gh-pull-0553]).
+
+### Added
+
+- `impl Expiry` for some types ([#519][gh-pull-0519], by [@koushiro][gh-koushiro]).
+
+### Removed
+
+- Removed several unneeded files from the published package ([#541][gh-pull-0541],
+  by [@weiznich][gh-weiznich]).
+- Removed the `once_cell` crate from the dependencies ([#520][gh-pull-0520], by
+  [@Expyron][gh-Expyron]).
+- Removed the `rustc_version` crate from the dev-dependencies ([#554][gh-pull-0554]).
+
+
 ## Version 0.12.11
+
+### Breaking Changes
+
+- After releasing v0.12.11, we found that supporting `Equivalent` trait was an
+  unintended breaking change.
+    - If you get a compilation error something like following, please update your
+      code to reborrow the key like `&*key`.
+      - ```console
+        error[E0277]: the trait bound `T: Borrow<Arc<T>>` is not satisfied
+        ...
+        = note: required for `Arc<T>` to implement `Equivalent<T>`
+        ```
+    - See [this PR comment][gh-pull-0492-breaking-change] for more details.
+
+[gh-pull-0492-breaking-change]: https://github.com/moka-rs/moka/pull/492/#issuecomment-3621308432
 
 ### Added
 
@@ -967,12 +1011,15 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-06chaynes]: https://github.com/06chaynes
 [gh-arcstur]: https://github.com/arcstur
 [gh-aspect]: https://github.com/aspect
+[gh-awarus]: https://github.com/awarus
 [gh-barkanido]: https://github.com/barkanido
 [gh-brownjohnf]: https://github.com/brownjohnf
 [gh-ClSlaid]: https://github.com/ClSlaid
 [gh-eaufavor]: https://github.com/eaufavor
+[gh-Expyron]: https://github.com/Expyron
 [gh-JoJoDeveloping]: https://github.com/JoJoDeveloping
 [gh-karankurbur]: https://github.com/karankurbur
+[gh-koushiro]: https://github.com/koushiro
 [gh-LMJW]: https://github.com/LMJW
 [gh-messense]: https://github.com/messense
 [gh-Milo123459]: https://github.com/Milo123459
@@ -986,6 +1033,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-thomaseizinger]: https://github.com/thomaseizinger
 [gh-tinou98]: https://github.com/tinou98
+[gh-weiznich]: https://github.com/weiznich
 [gh-xuehaonan27]: https://github.com/xuehaonan27
 [gh-zonyitoo]: https://github.com/zonyitoo
 
@@ -1014,10 +1062,17 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0555]: https://github.com/moka-rs/moka/pull/555/
+[gh-pull-0554]: https://github.com/moka-rs/moka/pull/554/
+[gh-pull-0553]: https://github.com/moka-rs/moka/pull/553/
+[gh-pull-0548]: https://github.com/moka-rs/moka/pull/548/
+[gh-pull-0541]: https://github.com/moka-rs/moka/pull/541/
 [gh-pull-0534]: https://github.com/moka-rs/moka/pull/534/
 [gh-pull-0532]: https://github.com/moka-rs/moka/pull/532/
 [gh-pull-0531]: https://github.com/moka-rs/moka/pull/531/
 [gh-pull-0529]: https://github.com/moka-rs/moka/pull/529/
+[gh-pull-0520]: https://github.com/moka-rs/moka/pull/520/
+[gh-pull-0519]: https://github.com/moka-rs/moka/pull/519/
 [gh-pull-0514]: https://github.com/moka-rs/moka/pull/514/
 [gh-pull-0512]: https://github.com/moka-rs/moka/pull/512/
 [gh-pull-0509]: https://github.com/moka-rs/moka/pull/509/
