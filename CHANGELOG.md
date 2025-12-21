@@ -1,18 +1,18 @@
 # Moka Cache &mdash; Change Log
 
-> **note**
+> [!NOTE]
 > If you have any questions about Moka's APIs or internals in deeper detail, visit
-> its DeepWiki page and ask questions there: https://deepwiki.com/moka-rs/moka
+> its DeepWiki page and ask questions there: <https://deepwiki.com/moka-rs/moka>
 
 ## Version 0.12.12
 
 Bumped the minimum supported Rust version (MSRV) to 1.71.1, released on August 3,
-2023 ([#556][gh-pull-0556]).
+2023 ([#555][gh-pull-0555]).
 
 ### Fixed
 
 - Fixed use-after-free panic in the hierarchical timer wheels when `Expiry` returns
-  `None` ([#548][gh-pull-0548], by [@conradludgate][gh-conradludgate]).
+  `None` ([#548][gh-pull-0548], by [@awarus][gh-awarus]).
 - Fixed a subtle undefined behavior (UB) in the internal `deque::move_to_back` method
   (found by Miri) ([#553][gh-pull-0553]).
 
@@ -24,7 +24,7 @@ Bumped the minimum supported Rust version (MSRV) to 1.71.1, released on August 3
 
 - Removed several unneeded files from the published package ([#541][gh-pull-0541],
   by [@weiznich][gh-weiznich]).
-- Removed `once_cell` crate from the dependencies ([#520][gh-pull-0520], by
+- Removed the `once_cell` crate from the dependencies ([#520][gh-pull-0520], by
   [@Expyron][gh-Expyron]).
 - Removed the `rustc_version` crate from the dev-dependencies ([#554][gh-pull-0554]).
 
@@ -1011,10 +1011,10 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-06chaynes]: https://github.com/06chaynes
 [gh-arcstur]: https://github.com/arcstur
 [gh-aspect]: https://github.com/aspect
+[gh-awarus]: https://github.com/awarus
 [gh-barkanido]: https://github.com/barkanido
 [gh-brownjohnf]: https://github.com/brownjohnf
 [gh-ClSlaid]: https://github.com/ClSlaid
-[gh-conradludgate]: https://github.com/conradludgate
 [gh-eaufavor]: https://github.com/eaufavor
 [gh-Expyron]: https://github.com/Expyron
 [gh-JoJoDeveloping]: https://github.com/JoJoDeveloping
@@ -1062,7 +1062,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
-[gh-pull-0556]: https://github.com/moka-rs/moka/pull/556/
+[gh-pull-0555]: https://github.com/moka-rs/moka/pull/555/
 [gh-pull-0554]: https://github.com/moka-rs/moka/pull/554/
 [gh-pull-0553]: https://github.com/moka-rs/moka/pull/553/
 [gh-pull-0548]: https://github.com/moka-rs/moka/pull/548/
