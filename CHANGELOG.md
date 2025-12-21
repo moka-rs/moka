@@ -37,11 +37,11 @@ Bumped the minimum supported Rust version (MSRV) to 1.71.1, released on August 3
   unintended breaking change.
     - If you get a compilation error something like following, please update your
       code to reborrow the key like `&*key`.
-      - ```console
-        error[E0277]: the trait bound `T: Borrow<Arc<T>>` is not satisfied
-        ...
-        = note: required for `Arc<T>` to implement `Equivalent<T>`
-        ```
+        - ```console
+          error[E0277]: the trait bound `T: Borrow<Arc<T>>` is not satisfied
+          ...
+          = note: required for `Arc<T>` to implement `Equivalent<T>`
+          ```
     - See [this PR comment][gh-pull-0492-breaking-change] for more details.
 
 [gh-pull-0492-breaking-change]: https://github.com/moka-rs/moka/pull/492/#issuecomment-3621308432
