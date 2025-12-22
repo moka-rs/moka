@@ -17,3 +17,4 @@ cargo update -p indexmap --precise 2.11.4
 cargo update -p parking_lot --precise 0.12.4
 cargo update -p parking_lot_core --precise 0.9.11
 cargo update -p lock_api --precise 0.4.13
+cargo update -p async-lock --precise 3.4.1
