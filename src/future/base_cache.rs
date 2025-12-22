@@ -808,8 +808,11 @@ impl<K, V, S> BaseCache<K, V, S> {
         let current_time = clock.to_std_instant(ts);
         let ei = &value_entry.entry_info();
 
+        // Track the current per-entry expiration time
+        let current_per_entry_exp_time = ei.expiration_time();
+
         let exp_time = IntoIterator::into_iter([
-            ei.expiration_time(),
+            current_per_entry_exp_time,
             ttl.and_then(|dur| ei.last_modified().map(|ts| ts.saturating_add(dur))),
             tti.and_then(|dur| ei.last_accessed().map(|ts| ts.saturating_add(dur))),
         ])
@@ -829,6 +832,10 @@ impl<K, V, S> BaseCache<K, V, S> {
                 .entry_info()
                 .set_expiration_time(expiration_time);
             // The `expiration_time` has changed from `None` to `Some` or vice versa.
+            true
+        } else if duration.is_none() && current_per_entry_exp_time.is_some() {
+            // Clear the expired per-entry expiration time.
+            value_entry.entry_info().set_expiration_time(None);
             true
         } else {
             false
