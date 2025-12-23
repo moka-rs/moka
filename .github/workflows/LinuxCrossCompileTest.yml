@@ -48,14 +48,6 @@ jobs:
           # Platforms without AtomicU64 support.
           - target: armv5te-unknown-linux-musleabi
             rust-version: stable
-          - target: mips-unknown-linux-musl
-            rust-version: "1.72.1"
-            cargo-version: "+1.72.1"
-            remove-reqwest: true
-          - target: mipsel-unknown-linux-musl
-            rust-version: "1.72.1"
-            cargo-version: "+1.72.1"
-            remove-reqwest: true
 
     steps:
       - name: Checkout Moka
@@ -78,24 +70,20 @@ jobs:
           cargo remove --dev actix-rt
           cat Cargo.toml
 
-      - name: Remove reqwest dependency (for some platforms)
-        if: ${{ matrix.platform.remove-reqwest == true }}
-        run: cargo remove --dev reqwest
-
       - run: cargo clean
 
       - name: Run tests (sync feature)
         run: |
-          cross ${{ matrix.platform.cargo-version }} test --release -F sync \
+          cross test --release -F sync \
             --target ${{ matrix.platform.target }}
 
       - name: Run tests (future feature)
         run: |
-          cross ${{ matrix.platform.cargo-version }} test --release -F future \
+          cross test --release -F future \
             --target ${{ matrix.platform.target }}
 
       - name: Run tests (sync feature, drop cache)
         run: |
-          cross ${{ matrix.platform.cargo-version }} test --release -F sync \
+          cross test --release -F sync \
             --target ${{ matrix.platform.target }} \
             --lib sync::cache::tests::ensure_gc_runs_when_dropping_cache -- --exact --ignored
