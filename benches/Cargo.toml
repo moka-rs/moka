@@ -1,0 +1,23 @@
+[package]
+name = "moka-benchmarks"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Benchmarks can use a newer Rust version than the main moka crate
+rust-version = "1.80"
+
+[[bench]]
+name = "cache_ops"
+harness = false
+path = "cache_ops.rs"
+
+[dependencies]
+moka = { path = "..", features = ["sync"] }
+
+[dev-dependencies]
+criterion = "0.8.1"
+
+[profile.bench]
+opt-level = 3
+debug = false
