@@ -398,7 +398,11 @@ impl<K> TimerWheel<K> {
             }
         }
 
-        deque.pop_front()
+        let mut popped = deque.pop_front();
+        if let Some(node) = &mut popped {
+            node.element.unset_position();
+        }
+        popped
     }
 
     /// Reset the positions of the nodes in the queue at the given level and index.
@@ -610,6 +614,8 @@ impl<K> Iterator for TimerEventsIter<'_, K> {
                             return Some(TimerEvent::Descheduled);
                         }
                     }
+                } else {
+                    node.as_ref().element.unset_timer_node_in_deq_nodes();
                 }
             } else {
                 // Done with the current queue. Move to the next index

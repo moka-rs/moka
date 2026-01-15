@@ -1712,8 +1712,11 @@ where
         entry: &MiniArc<ValueEntry<K, V>>,
         timer_wheel: &mut TimerWheel<K>,
     ) {
+        // `expiration_time` is loaded here, and consistently used for
+        // all decisions about the timer wheel update.
+        let expiration_time = entry.entry_info().expiration_time();
         // Enable the timer wheel if needed.
-        if entry.entry_info().expiration_time().is_some() && !timer_wheel.is_enabled() {
+        if expiration_time.is_some() && !timer_wheel.is_enabled() {
             timer_wheel.enable();
         }
 
@@ -1722,7 +1725,7 @@ where
         let current_expiry_gen = entry.entry_info().expiry_gen();
 
         // Update the timer wheel.
-        match (entry.entry_info().expiration_time().is_some(), timer_node) {
+        match (expiration_time.is_some(), timer_node) {
             // Do nothing; the cache entry has no expiration time and not registered
             // to the timer wheel.
             (false, None) => (),
