@@ -9,8 +9,8 @@
 [![license][license-badge]](#license)
 
 > [!NOTE]
-> If you have any questions about Moka's API or internals in deeper detail, visit
-> its DeepWiki page and ask questions there: <https://deepwiki.com/moka-rs/moka>
+> If you have any questions about Moka's APIs or internal design, ask the AI chatbot
+> at DeepWiki in any natural language: <https://deepwiki.com/moka-rs/moka>
 
 > [!NOTE]
 > `v0.12.0` had major breaking changes on the API and internal behavior. Please read

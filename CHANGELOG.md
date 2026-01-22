@@ -1,8 +1,21 @@
 # Moka Cache &mdash; Change Log
 
 > [!NOTE]
-> If you have any questions about Moka's APIs or internals in deeper detail, visit
-> its DeepWiki page and ask questions there: <https://deepwiki.com/moka-rs/moka>
+> If you have any questions about Moka's APIs or internal design, ask the AI chatbot
+> at DeepWiki in any natural language: <https://deepwiki.com/moka-rs/moka>
+
+## Version 0.12.13
+
+### Fixed
+
+- Fixed use-after-free panic in the hierarchical timer wheels when `Expiry` returns
+  `None`. (An additional fix to the one in v0.12.12)
+  (The issue [#565][gh-issue-0565] found by [@sharksforarms][gh-sharksforarms] and
+  fixed in [#566][gh-pull-0566] by [@powergee][gh-powergee])
+- Fixed `Expiry::expire_after_update` not clearing expiration time for expired entries
+  (`future::Cache`: [#549][gh-pull-0549], by [@singulared][gh-singulared],
+  `sync::Cache`: [#564][gh-pull-0564]).
+
 
 ## Version 0.12.12
 
@@ -1027,9 +1040,12 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-nyurik]: https://github.com/nyurik
 [gh-paolobarbolini]: https://github.com/paolobarbolini
 [gh-peter-scholtens]: https://github.com/peter-scholtens
+[gh-powergee]: https://github.com/powergee
 [gh-qti3e]: https://github.com/qti3e
 [gh-quantpoet]: https://github.com/quantpoet
 [gh-saethlin]: https://github.com/saethlin
+[gh-sharksforarms]: https://github.com/sharksforarms
+[gh-singulared]: https://github.com/singulared
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-thomaseizinger]: https://github.com/thomaseizinger
 [gh-tinou98]: https://github.com/tinou98
@@ -1037,6 +1053,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-xuehaonan27]: https://github.com/xuehaonan27
 [gh-zonyitoo]: https://github.com/zonyitoo
 
+[gh-issue-0565]: https://github.com/moka-rs/moka/issues/565/
 [gh-issue-0472]: https://github.com/moka-rs/moka/issues/472/
 [gh-issue-0464]: https://github.com/moka-rs/moka/issues/464/
 [gh-issue-0412]: https://github.com/moka-rs/moka/issues/412/
@@ -1062,9 +1079,12 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0566]: https://github.com/moka-rs/moka/pull/566/
+[gh-pull-0564]: https://github.com/moka-rs/moka/pull/564/
 [gh-pull-0555]: https://github.com/moka-rs/moka/pull/555/
 [gh-pull-0554]: https://github.com/moka-rs/moka/pull/554/
 [gh-pull-0553]: https://github.com/moka-rs/moka/pull/553/
+[gh-pull-0549]: https://github.com/moka-rs/moka/pull/549/
 [gh-pull-0548]: https://github.com/moka-rs/moka/pull/548/
 [gh-pull-0541]: https://github.com/moka-rs/moka/pull/541/
 [gh-pull-0534]: https://github.com/moka-rs/moka/pull/534/
