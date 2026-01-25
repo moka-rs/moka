@@ -20,7 +20,13 @@ pub(crate) struct EntryInfo<K> {
     policy_gen: AtomicU16,
     /// Packed expiration state: contains both `expiration_time` (upper 52 bits) and
     /// `expiry_gen` (lower 12 bits) in a single atomic u64 for consistent reads.
-    /// Special value `u64::MAX` means expiration_time is None.
+    ///
+    /// Encoding:
+    /// - Bits 0-11: 12-bit expiry_gen (wraps from 4095 to 0)
+    /// - Bits 12-63: 52-bit expiration timestamp (nanoseconds since Unix epoch)
+    /// - Sentinel: When time field (bits 12-63) is all 1s (0xFFFF_FFFF_FFFF_F000),
+    ///   represents "None" (no expiration). Gen bits are always preserved.
+    /// - Valid timestamps are clamped to 52-bit range to avoid collisions with sentinel.
     expiration_state: AtomicU64,
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
@@ -39,7 +45,8 @@ impl<K> EntryInfo<K> {
             // `entry_gen` starts at 1 and `policy_gen` start at 0.
             entry_gen: AtomicU16::new(1),
             policy_gen: AtomicU16::new(0),
-            expiration_state: AtomicU64::new(u64::MAX), // Initial state: None, gen=0
+            // Initial state: None (time field all 1s), gen=0
+            expiration_state: AtomicU64::new(0xFFFF_FFFF_FFFF_F000),
             last_accessed: AtomicInstant::new(timestamp),
             last_modified: AtomicInstant::new(timestamp),
             policy_weight: AtomicU32::new(policy_weight),
@@ -129,16 +136,18 @@ impl<K> EntryInfo<K> {
     #[inline]
     pub(crate) fn expiration_state(&self) -> (Option<Instant>, u32) {
         const GEN_MASK: u64 = 0xFFF;
-        const TIME_MASK: u64 = u64::MAX ^ GEN_MASK;
+        const TIME_MASK: u64 = 0xFFFF_FFFF_FFFF_F000;
 
         let packed = self.expiration_state.load(Ordering::Acquire);
 
-        if packed == u64::MAX {
-            // Expiration time is None
-            (None, (packed & GEN_MASK) as u32)
+        // Extract time field and gen bits
+        let time_nanos = packed & TIME_MASK;
+        let gen = (packed & GEN_MASK) as u32;
+
+        // Check if time field (upper 52 bits) is all 1s (sentinel for None)
+        if time_nanos == TIME_MASK {
+            (None, gen)
         } else {
-            let time_nanos = packed & TIME_MASK;
-            let gen = (packed & GEN_MASK) as u32;
             (Some(Instant::from_nanos(time_nanos)), gen)
         }
     }
@@ -146,6 +155,7 @@ impl<K> EntryInfo<K> {
     /// Sets the expiration time and returns the new expiry generation.
     pub(crate) fn set_expiration_time(&self, time: Option<Instant>) -> u32 {
         const GEN_MASK: u64 = 0xFFF;
+        const TIME_MASK: u64 = 0xFFFF_FFFF_FFFF_F000;
 
         // Use compare_exchange to atomically update the expiration state.
         // This prevents race conditions where multiple threads try to update
@@ -153,25 +163,22 @@ impl<K> EntryInfo<K> {
         loop {
             let prev_packed = self.expiration_state.load(Ordering::Acquire);
 
-            // Extract previous generation (handle unset state)
-            let prev_gen = if prev_packed == u64::MAX {
-                0
-            } else {
-                (prev_packed & GEN_MASK) as u32
-            };
+            // Extract previous generation (always preserved, even for None state)
+            let prev_gen = (prev_packed & GEN_MASK) as u32;
             let new_gen = prev_gen.wrapping_add(1) & GEN_MASK as u32;
 
             // Pack the new state
             let new_packed = if let Some(t) = time {
-                let nanos = t.as_nanos();
-                debug_assert!(
-                    nanos != u64::MAX,
-                    "Instant value conflicts with unset marker"
-                );
+                // Clamp timestamp to 52-bit range to avoid collisions with sentinel
+                let nanos = t.as_nanos() & TIME_MASK;
+                // This should never happen in practice (requires timestamp ~292 billion years
+                // in the future), but check in debug builds to catch potential bugs.
+                debug_assert!(nanos != TIME_MASK, "Timestamp value collides with sentinel");
                 // Pack: store nanos in upper 52 bits, gen in lower 12 bits
-                (nanos & !GEN_MASK) | (new_gen as u64)
+                nanos | (new_gen as u64)
             } else {
-                u64::MAX // Special value for None
+                // Sentinel: time field all 1s, gen preserved in lower bits
+                TIME_MASK | (new_gen as u64)
             };
 
             // Try to atomically update if the state hasn't changed
