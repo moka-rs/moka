@@ -172,9 +172,10 @@ impl<K> EntryInfo<K> {
                 // Clamp timestamp to 52-bit range. Ensure it's strictly less than TIME_MASK
                 // to avoid collision with the sentinel (None) value.
                 let mut nanos = t.as_nanos() & TIME_MASK;
-                // If nanos equals TIME_MASK, adjust it down (should never happen in practice).
+                // If nanos equals TIME_MASK, adjust it down by one time unit (4096 nanos)
+                // to avoid corrupting the generation counter bits (should never happen in practice).
                 if nanos == TIME_MASK {
-                    nanos = nanos.saturating_sub(1);
+                    nanos = TIME_MASK - 0x1000; // Subtract one 12-bit unit to keep lower bits clear
                 }
                 debug_assert!(nanos < TIME_MASK, "Timestamp value collides with sentinel");
                 // Pack: store nanos in upper 52 bits, gen in lower 12 bits
