@@ -679,7 +679,7 @@ impl<K, V, S> BaseCache<K, V, S> {
         let ei = &value_entry.entry_info();
 
         // Track the current per-entry expiration time.
-        let current_per_entry_exp_time = ei.expiration_time();
+        let current_per_entry_exp_time = ei.expiration_state().0;
 
         let exp_time = IntoIterator::into_iter([
             current_per_entry_exp_time,
@@ -1719,9 +1719,9 @@ where
         entry: &MiniArc<ValueEntry<K, V>>,
         timer_wheel: &mut TimerWheel<K>,
     ) {
-        // `expiration_time` is loaded here, and consistently used for
-        // all decisions about the timer wheel update.
-        let expiration_time = entry.entry_info().expiration_time();
+        // Atomically read both expiration_time and expiry_gen as a single unit
+        // to ensure consistent state and avoid TOCTOU issues.
+        let (expiration_time, current_expiry_gen) = entry.entry_info().expiration_state();
         // Enable the timer wheel if needed.
         if expiration_time.is_some() && !timer_wheel.is_enabled() {
             timer_wheel.enable();
@@ -1729,7 +1729,6 @@ where
 
         // Get timer_node with its expiry generation to detect stale pointers.
         let (timer_node, expected_expiry_gen) = entry.timer_node_with_expiry_gen();
-        let current_expiry_gen = entry.entry_info().expiry_gen();
 
         // Update the timer wheel.
         match (expiration_time.is_some(), timer_node) {
@@ -2419,7 +2418,7 @@ where
 /// Returns `true` if this entry is expired by its per-entry TTL.
 #[inline]
 fn is_expired_by_per_entry_ttl<K>(entry_info: &MiniArc<EntryInfo<K>>, now: Instant) -> bool {
-    if let Some(ts) = entry_info.expiration_time() {
+    if let Some(ts) = entry_info.expiration_state().0 {
         ts <= now
     } else {
         false
@@ -2811,12 +2810,30 @@ mod tests {
                             "current_time",
                             caller_line
                         );
-                        assert_params_eq!(
+                        // NOTE: Due to precision loss from bit packing (lower 12 bits cleared),
+                        // durations may be off by up to ~4 microseconds. Use approximate comparison.
+                        if let (Some(actual), Some(expected)) = (
                             actual_current_duration,
                             current_duration_secs.map(Duration::from_secs),
-                            "current_duration",
-                            caller_line
-                        );
+                        ) {
+                            let diff = if actual > expected {
+                                actual - expected
+                            } else {
+                                expected - actual
+                            };
+                            assert!(
+                                diff < Duration::from_micros(10),
+                                "Mismatched `current_duration`s. line: {}\n  left: {:?}\n right: {:?}",
+                                caller_line, actual, expected
+                            );
+                        } else {
+                            assert_params_eq!(
+                                actual_current_duration,
+                                current_duration_secs.map(Duration::from_secs),
+                                "current_duration",
+                                caller_line
+                            );
+                        }
                         assert_params_eq!(
                             actual_last_modified_at,
                             last_modified_at,
@@ -2862,12 +2879,30 @@ mod tests {
                             "current_time",
                             caller_line
                         );
-                        assert_params_eq!(
+                        // NOTE: Due to precision loss from bit packing (lower 12 bits cleared),
+                        // durations may be off by up to ~4 microseconds. Use approximate comparison.
+                        if let (Some(actual), Some(expected)) = (
                             actual_current_duration,
                             current_duration_secs.map(Duration::from_secs),
-                            "current_duration",
-                            caller_line
-                        );
+                        ) {
+                            let diff = if actual > expected {
+                                actual - expected
+                            } else {
+                                expected - actual
+                            };
+                            assert!(
+                                diff < Duration::from_micros(10),
+                                "Mismatched `current_duration`s. line: {}\n  left: {:?}\n right: {:?}",
+                                caller_line, actual, expected
+                            );
+                        } else {
+                            assert_params_eq!(
+                                actual_current_duration,
+                                current_duration_secs.map(Duration::from_secs),
+                                "current_duration",
+                                caller_line
+                            );
+                        }
                         new_duration_secs.map(Duration::from_secs)
                     }
                     expected => {

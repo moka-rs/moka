@@ -2,6 +2,7 @@ use std::sync::atomic::{self, AtomicBool, AtomicU16, AtomicU32, Ordering};
 
 use super::{AccessTime, KeyHash};
 use crate::common::time::{AtomicInstant, Instant};
+use portable_atomic::AtomicU64;
 
 #[derive(Debug)]
 pub(crate) struct EntryInfo<K> {
@@ -17,12 +18,12 @@ pub(crate) struct EntryInfo<K> {
     /// is applied to the cache policies including the access-order queue (the LRU
     /// deque).
     policy_gen: AtomicU16,
-    /// `expiry_gen` (expiry generation) is incremented every time the entry's
-    /// expiration time is modified. Used to detect stale timer node pointers.
-    expiry_gen: AtomicU32,
+    /// Packed expiration state: contains both `expiration_time` (upper 52 bits) and
+    /// `expiry_gen` (lower 12 bits) in a single atomic u64 for consistent reads.
+    /// Special value `u64::MAX` means expiration_time is None.
+    expiration_state: AtomicU64,
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
-    expiration_time: AtomicInstant,
     policy_weight: AtomicU32,
 }
 
@@ -38,10 +39,9 @@ impl<K> EntryInfo<K> {
             // `entry_gen` starts at 1 and `policy_gen` start at 0.
             entry_gen: AtomicU16::new(1),
             policy_gen: AtomicU16::new(0),
-            expiry_gen: AtomicU32::new(0),
+            expiration_state: AtomicU64::new(u64::MAX), // Initial state: None, gen=0
             last_accessed: AtomicInstant::new(timestamp),
             last_modified: AtomicInstant::new(timestamp),
-            expiration_time: AtomicInstant::default(),
             policy_weight: AtomicU32::new(policy_weight),
         }
     }
@@ -120,28 +120,71 @@ impl<K> EntryInfo<K> {
         self.policy_weight.store(size, Ordering::Release);
     }
 
+    /// Atomically reads both `expiration_time` and `expiry_gen` as a single unit.
+    /// Returns `(expiration_time, expiry_gen)` where expiration_time is None if unset.
+    ///
+    /// This provides a consistent snapshot of the expiration state, avoiding TOCTOU
+    /// issues where the time and generation could be read separately while being
+    /// modified by another thread.
     #[inline]
-    pub(crate) fn expiration_time(&self) -> Option<Instant> {
-        self.expiration_time.instant()
-    }
+    pub(crate) fn expiration_state(&self) -> (Option<Instant>, u32) {
+        const GEN_MASK: u64 = 0xFFF;
+        const TIME_MASK: u64 = u64::MAX ^ GEN_MASK;
 
-    /// Returns the new expiry generation.
-    pub(crate) fn set_expiration_time(&self, time: Option<Instant>) -> u32 {
-        let new_gen = self
-            .expiry_gen
-            .fetch_add(1, Ordering::AcqRel)
-            .wrapping_add(1);
-        if let Some(t) = time {
-            self.expiration_time.set_instant(t);
+        let packed = self.expiration_state.load(Ordering::Acquire);
+
+        if packed == u64::MAX {
+            // Expiration time is None
+            (None, (packed & GEN_MASK) as u32)
         } else {
-            self.expiration_time.clear();
+            let time_nanos = packed & TIME_MASK;
+            let gen = (packed & GEN_MASK) as u32;
+            (Some(Instant::from_nanos(time_nanos)), gen)
         }
-        new_gen
     }
 
-    #[inline]
-    pub(crate) fn expiry_gen(&self) -> u32 {
-        self.expiry_gen.load(Ordering::Acquire)
+    /// Sets the expiration time and returns the new expiry generation.
+    pub(crate) fn set_expiration_time(&self, time: Option<Instant>) -> u32 {
+        const GEN_MASK: u64 = 0xFFF;
+
+        // Use compare_exchange to atomically update the expiration state.
+        // This prevents race conditions where multiple threads try to update
+        // the expiration time simultaneously.
+        loop {
+            let prev_packed = self.expiration_state.load(Ordering::Acquire);
+
+            // Extract previous generation (handle unset state)
+            let prev_gen = if prev_packed == u64::MAX {
+                0
+            } else {
+                (prev_packed & GEN_MASK) as u32
+            };
+            let new_gen = prev_gen.wrapping_add(1) & GEN_MASK as u32;
+
+            // Pack the new state
+            let new_packed = if let Some(t) = time {
+                let nanos = t.as_nanos();
+                debug_assert!(
+                    nanos != u64::MAX,
+                    "Instant value conflicts with unset marker"
+                );
+                // Pack: store nanos in upper 52 bits, gen in lower 12 bits
+                (nanos & !GEN_MASK) | (new_gen as u64)
+            } else {
+                u64::MAX // Special value for None
+            };
+
+            // Try to atomically update if the state hasn't changed
+            match self.expiration_state.compare_exchange_weak(
+                prev_packed,
+                new_packed,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return new_gen, // Successfully updated
+                Err(_) => continue,      // State changed, retry
+            }
+        }
     }
 }
 
