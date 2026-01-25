@@ -809,7 +809,7 @@ impl<K, V, S> BaseCache<K, V, S> {
         let ei = &value_entry.entry_info();
 
         // Track the current per-entry expiration time
-        let current_per_entry_exp_time = ei.expiration_time();
+        let current_per_entry_exp_time = ei.expiration_state().0;
 
         let exp_time = IntoIterator::into_iter([
             current_per_entry_exp_time,
@@ -1884,9 +1884,9 @@ where
         entry: &MiniArc<ValueEntry<K, V>>,
         timer_wheel: &mut TimerWheel<K>,
     ) {
-        // `expiration_time` is loaded here, and consistently used for
-        // all decisions about the timer wheel update.
-        let expiration_time = entry.entry_info().expiration_time();
+        // Atomically read both expiration_time and expiry_gen as a single unit
+        // to ensure consistent state and avoid TOCTOU issues.
+        let (expiration_time, current_expiry_gen) = entry.entry_info().expiration_state();
         // Enable the timer wheel if needed.
         if expiration_time.is_some() && !timer_wheel.is_enabled() {
             timer_wheel.enable();
@@ -1894,7 +1894,6 @@ where
 
         // Get timer_node with its expiry generation to detect stale pointers.
         let (timer_node, expected_expiry_gen) = entry.timer_node_with_expiry_gen();
-        let current_expiry_gen = entry.entry_info().expiry_gen();
 
         // Update the timer wheel.
         match (expiration_time.is_some(), timer_node) {
@@ -1909,7 +1908,7 @@ where
                     MiniArc::clone(entry.deq_nodes()),
                     current_expiry_gen,
                 );
-                entry.set_timer_node(timer);
+                entry.set_timer_node(timer, current_expiry_gen);
             }
             // Reschedule the cache entry in the timer wheel; the cache entry has an
             // expiration time and already registered to the timer wheel.
@@ -1920,7 +1919,7 @@ where
                         // The timer node was removed from the timer wheel because the
                         // expiration time has been unset by other thread after we
                         // checked.
-                        entry.set_timer_node(None);
+                        entry.set_timer_node(None, current_expiry_gen);
                         drop(removed_tn);
                     }
                     Some(ReschedulingResult::Rescheduled) => {
@@ -1929,14 +1928,14 @@ where
                     None => {
                         // The timer node was invalid (stale - expiry gen mismatch).
                         // Clear the timer_node to prevent further issues.
-                        entry.set_timer_node(None);
+                        entry.set_timer_node(None, current_expiry_gen);
                     }
                 }
             }
             // Unregister the cache entry from the timer wheel; the cache entry has
             // no expiration time but registered to the timer wheel.
             (false, Some(tn)) => {
-                entry.set_timer_node(None);
+                entry.set_timer_node(None, current_expiry_gen);
                 // Returns false if the node was stale, but we've already
                 // cleared timer_node above, so we can ignore the return value.
                 let _ = timer_wheel.deschedule(tn, expected_expiry_gen);
@@ -2649,7 +2648,7 @@ where
 /// Returns `true` if this entry is expired by its per-entry TTL.
 #[inline]
 fn is_expired_by_per_entry_ttl<K>(entry_info: &MiniArc<EntryInfo<K>>, now: Instant) -> bool {
-    if let Some(ts) = entry_info.expiration_time() {
+    if let Some(ts) = entry_info.expiration_state().0 {
         ts <= now
     } else {
         false
@@ -2863,6 +2862,36 @@ mod tests {
             };
         }
 
+        /// Helper function to compare Duration values with tolerance for precision loss.
+        /// Due to precision loss from bit packing (lower 12 bits cleared), durations may be
+        /// off by up to ~4 microseconds.
+        fn assert_duration_approx_eq(
+            actual: Option<Duration>,
+            expected: Option<Duration>,
+            caller_line: u32,
+        ) {
+            const TOLERANCE: Duration = Duration::from_micros(10);
+            match (actual, expected) {
+                (Some(a), Some(e)) => {
+                    let diff = if a > e { a - e } else { e - a };
+                    assert!(
+                        diff < TOLERANCE,
+                        "Mismatched `current_duration`s. line: {}\n  left: {:?}\n right: {:?}",
+                        caller_line,
+                        a,
+                        e
+                    );
+                }
+                _ => {
+                    assert_eq!(
+                        actual, expected,
+                        "Mismatched `current_duration`s. line: {}",
+                        caller_line
+                    );
+                }
+            }
+        }
+
         macro_rules! assert_expiry {
             ($cache:ident, $key:ident, $hash:ident, $mock:ident, $duration_secs:expr) => {
                 // Increment the time.
@@ -3044,11 +3073,10 @@ mod tests {
                             "current_time",
                             caller_line
                         );
-                        assert_params_eq!(
+                        assert_duration_approx_eq(
                             actual_current_duration,
                             current_duration_secs.map(Duration::from_secs),
-                            "current_duration",
-                            caller_line
+                            caller_line,
                         );
                         assert_params_eq!(
                             actual_last_modified_at,
@@ -3095,11 +3123,10 @@ mod tests {
                             "current_time",
                             caller_line
                         );
-                        assert_params_eq!(
+                        assert_duration_approx_eq(
                             actual_current_duration,
                             current_duration_secs.map(Duration::from_secs),
-                            "current_duration",
-                            caller_line
+                            caller_line,
                         );
                         new_duration_secs.map(Duration::from_secs)
                     }

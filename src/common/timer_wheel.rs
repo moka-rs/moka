@@ -225,7 +225,20 @@ impl<K> TimerWheel<K> {
     ) -> Option<NonNull<DeqNode<TimerNode<K>>>> {
         debug_assert!(self.is_enabled());
 
-        if let Some(t) = entry_info.expiration_time() {
+        // Capture a single snapshot of the expiration state to ensure consistency
+        let (opt_time, current_gen) = entry_info.expiration_state();
+
+        // Validate expiry_gen before proceeding to prevent operating on stale entries
+        if current_gen != expiry_gen {
+            // The entry's expiry generation has changed since this method was called
+            #[cfg(feature = "logging")]
+            log::debug!(
+                "schedule: expiry generation mismatch. Expected: {expiry_gen}, Actual: {current_gen}. Entry state changed."
+            );
+            return None;
+        }
+
+        if let Some(t) = opt_time {
             let (level, index) = self.bucket_indices(t);
             let node = Box::new(DeqNode::new(TimerNode::new(
                 entry_info, deq_nodes, expiry_gen, level, index,
@@ -250,7 +263,7 @@ impl<K> TimerWheel<K> {
         // the node, and we have `&mut self` here. We are the only one who can mutate
         // the node.
         if let entry @ TimerNode::Entry { .. } = &mut unsafe { node.as_mut() }.element {
-            if let Some(t) = entry.entry_info().expiration_time() {
+            if let Some(t) = entry.entry_info().expiration_state().0 {
                 let (level, index) = self.bucket_indices(t);
                 entry.set_position(level, index);
                 let node = unsafe { Box::from_raw(node.as_ptr()) };
@@ -582,8 +595,7 @@ impl<K> Iterator for TimerEventsIter<'_, K> {
             // We will repeat processing this level until we see the sentinel.
             // (`pop_timer_node` will return `None` when it sees the sentinel)
             if let Some(node) = self.timer_wheel.pop_timer_node(self.level, i as usize) {
-                let expiration_time = node.as_ref().element.entry_info().expiration_time();
-                if let Some(t) = expiration_time {
+                if let Some(t) = node.as_ref().element.entry_info().expiration_state().0 {
                     if t <= self.current_time {
                         // The cache entry has expired. Unset the timer node from
                         // the ValueEntry and return the node.

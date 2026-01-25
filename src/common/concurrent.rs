@@ -252,8 +252,7 @@ impl<K, V> ValueEntry<K, V> {
         self.nodes.lock().timer_node_with_expiry_gen()
     }
 
-    pub(crate) fn set_timer_node(&self, node: Option<DeqNodeTimer<K>>) {
-        let expiry_gen = self.info.expiry_gen();
+    pub(crate) fn set_timer_node(&self, node: Option<DeqNodeTimer<K>>, expiry_gen: u32) {
         self.nodes.lock().set_timer_node(node, expiry_gen);
     }
 

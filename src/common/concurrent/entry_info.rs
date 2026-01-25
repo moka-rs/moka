@@ -2,6 +2,7 @@ use std::sync::atomic::{self, AtomicBool, AtomicU16, AtomicU32, Ordering};
 
 use super::{AccessTime, KeyHash};
 use crate::common::time::{AtomicInstant, Instant};
+use portable_atomic::AtomicU64;
 
 #[derive(Debug)]
 pub(crate) struct EntryInfo<K> {
@@ -17,12 +18,22 @@ pub(crate) struct EntryInfo<K> {
     /// is applied to the cache policies including the access-order queue (the LRU
     /// deque).
     policy_gen: AtomicU16,
-    /// `expiry_gen` (expiry generation) is incremented every time the entry's
-    /// expiration time is modified. Used to detect stale timer node pointers.
-    expiry_gen: AtomicU32,
+    /// Packed expiration state: contains both `expiration_time` (upper 52 bits) and
+    /// `expiry_gen` (lower 12 bits) in a single atomic u64 for consistent reads.
+    ///
+    /// Encoding:
+    /// - Bits 0-11: 12-bit expiry_gen (wraps from 4095 to 0)
+    /// - Bits 12-63: 52-bit expiration timestamp (nanoseconds from a monotonic clock/Instant)
+    /// - Sentinel: When time field (bits 12-63) is all 1s (0xFFFF_FFFF_FFFF_F000),
+    ///   represents "None" (no expiration). Gen bits are always preserved.
+    /// - Valid timestamps are clamped to 52-bit range to avoid collisions with sentinel.
+    ///
+    /// NOTE: The time value is relative to the runtime's monotonic clock (not Unix epoch).
+    /// It is obtained from `Instant` and should not be interpreted as an absolute time
+    /// suitable for serialization or cross-process comparison.
+    expiration_state: AtomicU64,
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
-    expiration_time: AtomicInstant,
     policy_weight: AtomicU32,
 }
 
@@ -38,10 +49,10 @@ impl<K> EntryInfo<K> {
             // `entry_gen` starts at 1 and `policy_gen` start at 0.
             entry_gen: AtomicU16::new(1),
             policy_gen: AtomicU16::new(0),
-            expiry_gen: AtomicU32::new(0),
+            // Initial state: None (time field all 1s), gen=0
+            expiration_state: AtomicU64::new(0xFFFF_FFFF_FFFF_F000),
             last_accessed: AtomicInstant::new(timestamp),
             last_modified: AtomicInstant::new(timestamp),
-            expiration_time: AtomicInstant::default(),
             policy_weight: AtomicU32::new(policy_weight),
         }
     }
@@ -120,28 +131,75 @@ impl<K> EntryInfo<K> {
         self.policy_weight.store(size, Ordering::Release);
     }
 
+    /// Atomically reads both `expiration_time` and `expiry_gen` as a single unit.
+    /// Returns `(expiration_time, expiry_gen)` where expiration_time is None if unset.
+    ///
+    /// This provides a consistent snapshot of the expiration state, avoiding TOCTOU
+    /// issues where the time and generation could be read separately while being
+    /// modified by another thread.
     #[inline]
-    pub(crate) fn expiration_time(&self) -> Option<Instant> {
-        self.expiration_time.instant()
-    }
+    pub(crate) fn expiration_state(&self) -> (Option<Instant>, u32) {
+        const GEN_MASK: u64 = 0xFFF;
+        const TIME_MASK: u64 = 0xFFFF_FFFF_FFFF_F000;
 
-    /// Returns the new expiry generation.
-    pub(crate) fn set_expiration_time(&self, time: Option<Instant>) -> u32 {
-        let new_gen = self
-            .expiry_gen
-            .fetch_add(1, Ordering::AcqRel)
-            .wrapping_add(1);
-        if let Some(t) = time {
-            self.expiration_time.set_instant(t);
+        let packed = self.expiration_state.load(Ordering::Acquire);
+
+        // Extract time field and gen bits
+        let time_nanos = packed & TIME_MASK;
+        let gen = (packed & GEN_MASK) as u32;
+
+        // Check if time field (upper 52 bits) is all 1s (sentinel for None)
+        if time_nanos == TIME_MASK {
+            (None, gen)
         } else {
-            self.expiration_time.clear();
+            (Some(Instant::from_nanos(time_nanos)), gen)
         }
-        new_gen
     }
 
-    #[inline]
-    pub(crate) fn expiry_gen(&self) -> u32 {
-        self.expiry_gen.load(Ordering::Acquire)
+    /// Sets the expiration time and returns the new expiry generation.
+    pub(crate) fn set_expiration_time(&self, time: Option<Instant>) -> u32 {
+        const GEN_MASK: u64 = 0xFFF;
+        const TIME_MASK: u64 = 0xFFFF_FFFF_FFFF_F000;
+
+        // Use compare_exchange to atomically update the expiration state.
+        // This prevents race conditions where multiple threads try to update
+        // the expiration time simultaneously.
+        loop {
+            let prev_packed = self.expiration_state.load(Ordering::Acquire);
+
+            // Extract previous generation (always preserved, even for None state)
+            let prev_gen = (prev_packed & GEN_MASK) as u32;
+            let new_gen = prev_gen.wrapping_add(1) & GEN_MASK as u32;
+
+            // Pack the new state
+            let new_packed = if let Some(t) = time {
+                // Clamp timestamp to 52-bit range. Ensure it's strictly less than TIME_MASK
+                // to avoid collision with the sentinel (None) value.
+                let mut nanos = t.as_nanos() & TIME_MASK;
+                // If nanos equals TIME_MASK, adjust it down by one time unit (4096 nanos)
+                // to avoid corrupting the generation counter bits (should never happen in practice).
+                if nanos == TIME_MASK {
+                    nanos = TIME_MASK - 0x1000; // Subtract one 12-bit unit to keep lower bits clear
+                }
+                debug_assert!(nanos < TIME_MASK, "Timestamp value collides with sentinel");
+                // Pack: store nanos in upper 52 bits, gen in lower 12 bits
+                nanos | (new_gen as u64)
+            } else {
+                // Sentinel: time field all 1s, gen preserved in lower bits
+                TIME_MASK | (new_gen as u64)
+            };
+
+            // Try to atomically update if the state hasn't changed
+            match self.expiration_state.compare_exchange_weak(
+                prev_packed,
+                new_packed,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return new_gen, // Successfully updated
+                Err(_) => continue,      // State changed, retry
+            }
+        }
     }
 }
 
