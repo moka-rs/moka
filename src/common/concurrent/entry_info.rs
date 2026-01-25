@@ -169,11 +169,14 @@ impl<K> EntryInfo<K> {
 
             // Pack the new state
             let new_packed = if let Some(t) = time {
-                // Clamp timestamp to 52-bit range to avoid collisions with sentinel
-                let nanos = t.as_nanos() & TIME_MASK;
-                // This should never happen in practice (requires timestamp ~292 billion years
-                // in the future), but check in debug builds to catch potential bugs.
-                debug_assert!(nanos != TIME_MASK, "Timestamp value collides with sentinel");
+                // Clamp timestamp to 52-bit range. Ensure it's strictly less than TIME_MASK
+                // to avoid collision with the sentinel (None) value.
+                let mut nanos = t.as_nanos() & TIME_MASK;
+                // If nanos equals TIME_MASK, adjust it down (should never happen in practice).
+                if nanos == TIME_MASK {
+                    nanos = nanos.saturating_sub(1);
+                }
+                debug_assert!(nanos < TIME_MASK, "Timestamp value collides with sentinel");
                 // Pack: store nanos in upper 52 bits, gen in lower 12 bits
                 nanos | (new_gen as u64)
             } else {
