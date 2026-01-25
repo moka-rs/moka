@@ -1743,7 +1743,7 @@ where
                     MiniArc::clone(entry.deq_nodes()),
                     current_expiry_gen,
                 );
-                entry.set_timer_node(timer);
+                entry.set_timer_node(timer, current_expiry_gen);
             }
             // Reschedule the cache entry in the timer wheel; the cache entry has an
             // expiration time and already registered to the timer wheel.
@@ -1754,7 +1754,7 @@ where
                         // The timer node was removed from the timer wheel because the
                         // expiration time has been unset by other thread after we
                         // checked.
-                        entry.set_timer_node(None);
+                        entry.set_timer_node(None, current_expiry_gen);
                         drop(removed_tn);
                     }
                     Some(ReschedulingResult::Rescheduled) => {
@@ -1763,14 +1763,14 @@ where
                     None => {
                         // The timer node was invalid (stale - expiry gen mismatch).
                         // Clear the timer_node to prevent further issues.
-                        entry.set_timer_node(None);
+                        entry.set_timer_node(None, current_expiry_gen);
                     }
                 }
             }
             // Unregister the cache entry from the timer wheel; the cache entry has
             // no expiration time but registered to the timer wheel.
             (false, Some(tn)) => {
-                entry.set_timer_node(None);
+                entry.set_timer_node(None, current_expiry_gen);
                 // Returns false if the node was stale, but we've already
                 // cleared timer_node above, so we can ignore the return value.
                 let _ = timer_wheel.deschedule(tn, expected_expiry_gen);
