@@ -225,8 +225,10 @@ impl<K> TimerWheel<K> {
     ) -> Option<NonNull<DeqNode<TimerNode<K>>>> {
         debug_assert!(self.is_enabled());
 
+        // Capture a single snapshot of the expiration state to ensure consistency
+        let (opt_time, current_gen) = entry_info.expiration_state();
+
         // Validate expiry_gen before proceeding to prevent operating on stale entries
-        let (_, current_gen) = entry_info.expiration_state();
         if current_gen != expiry_gen {
             // The entry's expiry generation has changed since this method was called
             #[cfg(feature = "logging")]
@@ -236,7 +238,7 @@ impl<K> TimerWheel<K> {
             return None;
         }
 
-        if let Some(t) = entry_info.expiration_state().0 {
+        if let Some(t) = opt_time {
             let (level, index) = self.bucket_indices(t);
             let node = Box::new(DeqNode::new(TimerNode::new(
                 entry_info, deq_nodes, expiry_gen, level, index,
