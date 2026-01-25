@@ -2629,6 +2629,36 @@ mod tests {
             };
         }
 
+        /// Helper function to compare Duration values with tolerance for precision loss.
+        /// Due to precision loss from bit packing (lower 12 bits cleared), durations may be
+        /// off by up to ~4 microseconds.
+        fn assert_duration_approx_eq(
+            actual: Option<Duration>,
+            expected: Option<Duration>,
+            caller_line: u32,
+        ) {
+            const TOLERANCE: Duration = Duration::from_micros(10);
+            match (actual, expected) {
+                (Some(a), Some(e)) => {
+                    let diff = if a > e { a - e } else { e - a };
+                    assert!(
+                        diff < TOLERANCE,
+                        "Mismatched `current_duration`s. line: {}\n  left: {:?}\n right: {:?}",
+                        caller_line,
+                        a,
+                        e
+                    );
+                }
+                _ => {
+                    assert_eq!(
+                        actual, expected,
+                        "Mismatched `current_duration`s. line: {}",
+                        caller_line
+                    );
+                }
+            }
+        }
+
         macro_rules! assert_expiry {
             ($cache:ident, $key:ident, $hash:ident, $mock:ident, $duration_secs:expr) => {
                 // Increment the time.
@@ -2810,30 +2840,11 @@ mod tests {
                             "current_time",
                             caller_line
                         );
-                        // NOTE: Due to precision loss from bit packing (lower 12 bits cleared),
-                        // durations may be off by up to ~4 microseconds. Use approximate comparison.
-                        if let (Some(actual), Some(expected)) = (
+                        assert_duration_approx_eq(
                             actual_current_duration,
                             current_duration_secs.map(Duration::from_secs),
-                        ) {
-                            let diff = if actual > expected {
-                                actual - expected
-                            } else {
-                                expected - actual
-                            };
-                            assert!(
-                                diff < Duration::from_micros(10),
-                                "Mismatched `current_duration`s. line: {}\n  left: {:?}\n right: {:?}",
-                                caller_line, actual, expected
-                            );
-                        } else {
-                            assert_params_eq!(
-                                actual_current_duration,
-                                current_duration_secs.map(Duration::from_secs),
-                                "current_duration",
-                                caller_line
-                            );
-                        }
+                            caller_line,
+                        );
                         assert_params_eq!(
                             actual_last_modified_at,
                             last_modified_at,
@@ -2879,30 +2890,11 @@ mod tests {
                             "current_time",
                             caller_line
                         );
-                        // NOTE: Due to precision loss from bit packing (lower 12 bits cleared),
-                        // durations may be off by up to ~4 microseconds. Use approximate comparison.
-                        if let (Some(actual), Some(expected)) = (
+                        assert_duration_approx_eq(
                             actual_current_duration,
                             current_duration_secs.map(Duration::from_secs),
-                        ) {
-                            let diff = if actual > expected {
-                                actual - expected
-                            } else {
-                                expected - actual
-                            };
-                            assert!(
-                                diff < Duration::from_micros(10),
-                                "Mismatched `current_duration`s. line: {}\n  left: {:?}\n right: {:?}",
-                                caller_line, actual, expected
-                            );
-                        } else {
-                            assert_params_eq!(
-                                actual_current_duration,
-                                current_duration_secs.map(Duration::from_secs),
-                                "current_duration",
-                                caller_line
-                            );
-                        }
+                            caller_line,
+                        );
                         new_duration_secs.map(Duration::from_secs)
                     }
                     expected => {
