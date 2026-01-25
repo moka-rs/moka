@@ -8,10 +8,14 @@
 
 ### Fixed
 
-- Fixed use-after-free panic in the hierarchical timer wheels when `Expiry` returns
-  `None`. (An additional fix to the one in v0.12.12)
-  (The issue [#565][gh-issue-0565] found by [@sharksforarms][gh-sharksforarms] and
-  fixed in [#566][gh-pull-0566] by [@powergee][gh-powergee])
+- Fixed/mitigated use-after-free issues in the hierarchical timer wheels when `Expiry`
+  returns `None` (Issue [#565][gh-issue-0565], reported by
+  [@sharksforarms][gh-sharksforarms]).
+    - Fixed a bug that caused freed timer nodes to remain in the timer wheels in
+      some edge cases ([#566][gh-pull-0566] by [@powergee][gh-powergee]).
+    - The mitigation added to v0.12.12 was enhanced by atomically reading the
+      expiration state to prevent rare race conditions that could cause use-after-free
+      issues ([#570][gh-pull-0570]).
 - Fixed `Expiry::expire_after_update` not clearing expiration time for expired entries
   (`future::Cache`: [#549][gh-pull-0549], by [@singulared][gh-singulared],
   `sync::Cache`: [#564][gh-pull-0564]).
@@ -24,9 +28,9 @@ Bumped the minimum supported Rust version (MSRV) to 1.71.1, released on August 3
 
 ### Fixed
 
-- Fixed use-after-free panic in the hierarchical timer wheels when `Expiry` returns
-  `None` ([#548][gh-pull-0548], by [@awarus][gh-awarus]).
-- Fixed a subtle undefined behavior (UB) in the internal `deque::move_to_back` method
+- Mitigated use-after-free issues in the hierarchical timer wheels when `Expiry`
+  returns `None` ([#548][gh-pull-0548], by [@awarus][gh-awarus]).
+- Fixed a subtle undefined behavior in the internal `deque::move_to_back` method
   (found by Miri) ([#553][gh-pull-0553]).
 
 ### Added
@@ -1079,6 +1083,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0570]: https://github.com/moka-rs/moka/pull/570/
 [gh-pull-0566]: https://github.com/moka-rs/moka/pull/566/
 [gh-pull-0564]: https://github.com/moka-rs/moka/pull/564/
 [gh-pull-0555]: https://github.com/moka-rs/moka/pull/555/
