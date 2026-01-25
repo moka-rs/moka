@@ -23,10 +23,14 @@ pub(crate) struct EntryInfo<K> {
     ///
     /// Encoding:
     /// - Bits 0-11: 12-bit expiry_gen (wraps from 4095 to 0)
-    /// - Bits 12-63: 52-bit expiration timestamp (nanoseconds since Unix epoch)
+    /// - Bits 12-63: 52-bit expiration timestamp (nanoseconds from a monotonic clock/Instant)
     /// - Sentinel: When time field (bits 12-63) is all 1s (0xFFFF_FFFF_FFFF_F000),
     ///   represents "None" (no expiration). Gen bits are always preserved.
     /// - Valid timestamps are clamped to 52-bit range to avoid collisions with sentinel.
+    ///
+    /// NOTE: The time value is relative to the runtime's monotonic clock (not Unix epoch).
+    /// It is obtained from `Instant` and should not be interpreted as an absolute time
+    /// suitable for serialization or cross-process comparison.
     expiration_state: AtomicU64,
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
