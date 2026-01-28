@@ -1,7 +1,7 @@
 **/*.rs.bk
 **/*~
 .DS_Store
-/target/
+target/
 Cargo.lock
 
 # intellij cache
