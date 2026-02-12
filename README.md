@@ -89,7 +89,7 @@ The following table shows the trade-offs between the different cache implementat
 | Per-entry variable expiration | ✅ | ❌ | ❌ |
 | Eviction listener | ✅ | ❌ | ✅ (via lifecycle hook) |
 | Lock-free, concurrent iterator | ✅ | ❌ | ❌ |
-| Lock-per-shard, concurrent iterator | ❌ | ✅ | ❌ |
+| Lock-per-shard, concurrent iterator | ❌ | ✅ | ✅ |
 
 | Performance, etc. | Moka v0.12 | Mini Moka v0.10 | Quick Cache v0.6 |
 |:------- |:---- |:--------- |:----------- |
