@@ -34,12 +34,12 @@ default = []
 sync = []
 
 # Enable this feature to use `moka::future::Cache`.
-future = ["async-lock", "event-listener", "futures-util"]
+future = ["dep:async-lock", "dep:event-listener", "dep:futures-util"]
 
 # Enable this feature to activate optional logging from caches.
 # Currently cache will emit log only when it encounters a panic in user provided
 # callback closure.
-logging = ["log"]
+logging = ["dep:log"]
 
 # Enable this feature to use `quanta::Instant` for some performance critical
 # operations in the cache instead of `std::time::Instant`. As of v0.12.10, this
