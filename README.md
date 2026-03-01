@@ -471,8 +471,8 @@ section ([`sync::Cache`][doc-sync-cache-expiration],
 
 Moka's minimum supported Rust versions (MSRV) are the followings:
 
-| Feature  | MSRV                       |
-|:---------|:-----------------------------:|
+| Feature  | MSRV                         |
+|:---------|:----------------------------:|
 | `future` | Rust 1.71.1 (August 3, 2023) |
 | `sync`   | Rust 1.71.1 (August 3, 2023) |
 
@@ -484,7 +484,10 @@ to the latest stable.
 In both cases, increasing MSRV is _not_ considered a semver-breaking change.
 
 <!--
-- quanta v0.12.4 requires 1.70.0.
+> Be conservative with MSRV, dependency versions and semver breaks
+https://rust-team.pages.debian.net/book/upstream.html
+
+https://salsa.debian.org/rust-team/debcargo-conf/-/tree/master/src/moka/debian
 -->
 
 ## Troubleshooting

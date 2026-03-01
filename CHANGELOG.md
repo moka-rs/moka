@@ -4,6 +4,21 @@
 > If you have any questions about Moka's APIs or internal design, ask the AI chatbot
 > at DeepWiki in any natural language: <https://deepwiki.com/moka-rs/moka>
 
+## Version 0.12.14
+
+### Fixed
+
+- Fixed a race condition in the `and_compute_with` method in the `future::Cache`.
+  ([#574][gh-pull-0574] by [@Squadrick][gh-Squadrick]):
+    - When multiple calls are made concurrently for the same key, the `f` closure may
+      read a stale value, causing the first update to be lost when it is overwritten
+      by a later one.
+
+### Changed
+
+- Use `dep:` keyword in the crate features. ([#577][gh-pull-0577] by
+  [@alexanderkjall][gh-alexanderkjall]).
+
 ## Version 0.12.13
 
 ### Fixed
@@ -1026,6 +1041,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [RUSTSEC-2020-0168]: https://rustsec.org/advisories/RUSTSEC-2020-0168.html
 
 [gh-06chaynes]: https://github.com/06chaynes
+[gh-alexanderkjall]: https://github.com/alexanderkjall
 [gh-arcstur]: https://github.com/arcstur
 [gh-aspect]: https://github.com/aspect
 [gh-awarus]: https://github.com/awarus
@@ -1050,6 +1066,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-saethlin]: https://github.com/saethlin
 [gh-sharksforarms]: https://github.com/sharksforarms
 [gh-singulared]: https://github.com/singulared
+[gh-Squadrick]: https://github.com/Squadrick
 [gh-Swatinem]: https://github.com/Swatinem
 [gh-thomaseizinger]: https://github.com/thomaseizinger
 [gh-tinou98]: https://github.com/tinou98
@@ -1083,6 +1100,8 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0577]: https://github.com/moka-rs/moka/pull/577/
+[gh-pull-0574]: https://github.com/moka-rs/moka/pull/574/
 [gh-pull-0570]: https://github.com/moka-rs/moka/pull/570/
 [gh-pull-0566]: https://github.com/moka-rs/moka/pull/566/
 [gh-pull-0564]: https://github.com/moka-rs/moka/pull/564/
