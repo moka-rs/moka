@@ -31,12 +31,14 @@ async fn test_and_compute_with_concurrent_atomicity() {
                 loop {
                     let result = cache
                         .entry_by_ref(&key)
-                        .and_compute_with(async |entry| match entry {
-                            Some(entry) => {
-                                let val: u64 = entry.into_value();
-                                compute::Op::Put(val + 1)
+                        .and_compute_with(|entry| async move {
+                            match entry {
+                                Some(entry) => {
+                                    let val: u64 = entry.into_value();
+                                    compute::Op::Put(val + 1)
+                                }
+                                None => compute::Op::Nop,
                             }
-                            None => compute::Op::Nop,
                         })
                         .await;
 
@@ -56,7 +58,8 @@ async fn test_and_compute_with_concurrent_atomicity() {
     let actual: u64 = cache.get(&key).await.unwrap();
 
     assert_eq!(
-        actual, expected,
+        actual,
+        expected,
         "Lost {} increments out of {expected}. \
          and_compute_with did not properly serialize concurrent calls on the same key.",
         expected.saturating_sub(actual)
