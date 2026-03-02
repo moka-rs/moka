@@ -821,7 +821,7 @@ impl<K, V, S> BaseCache<K, V, S> {
 
         let current_duration = exp_time.and_then(|time| {
             let std_time = clock.to_std_instant(time);
-            std_time.checked_duration_since(current_time)
+            std_time.checked_duration_since(current_time).or_else(|| Some(Duration::new(0,0)))
         });
 
         let duration = expiry(key, &value_entry.value, current_time, current_duration);
