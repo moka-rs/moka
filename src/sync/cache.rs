@@ -5220,4 +5220,80 @@ mod tests {
             break;
         }
     }
+
+    /// Reproduces a bug where `optionally_get_with` on an expired but not yet evicted
+    /// entry causes the new value's expiration to be cleared, making it never expire.
+    ///
+    /// 1. optionally_get_with misses at time 0, inserts value 1 with 2s expr
+    /// 2. Housekeeping will happen at 0.3, 0.6, 0.9, 1.2, 1.5, 1.8s
+    /// 2. optionally_get_with hits (entry not expired yet) at time 1.98s.
+    /// 3. optionally_get_with misses (expired) at 2.01s
+    ///    - Since housekeeping has not happened, the entry is not evicted, meaning that this is
+    ///      an UPDATE operation in do_insert_with_hash.
+    ///    - In do_insert_with_hash, the 'current' time (ts) is _after_ the entry expiration
+    ///    - In expire_after_read_or_update (line 694) called from do_post_update_steps, the
+    ///      expiration time is before the current time, resulting in a None value
+    ///    - None is passed as the current_time to the default expire_after_update, which returns
+    ///      None
+    ///    - duration is now None and current_per_entry_exp_time is Some, resulting in no expiration
+    /// 4. optionally_get_with HITS value 2 at time 12.01s, and indefinitely after that
+    #[test]
+    fn test_optionally_get_with_expired_entry_bug() {
+        use crate::common::time::Clock;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        struct CreateOnlyExpiry;
+
+        impl Expiry<&str, u32> for CreateOnlyExpiry {
+            fn expire_after_create(
+                &self,
+                _key: &&str,
+                _value: &u32,
+                _current_time: StdInstant,
+            ) -> Option<Duration> {
+                Some(Duration::from_secs(2))
+            }
+            // expire_after_update use defaults
+        }
+
+        let (clock, mock) = Clock::mock();
+
+        let mut cache = Cache::builder()
+            .max_capacity(100)
+            .expire_after(CreateOnlyExpiry)
+            .clock(clock)
+            .build();
+        cache.reconfigure_for_testing();
+        let cache = cache;
+
+        // monotonically increasing counter for test values
+        let counter = AtomicU32::new(0);
+        let next_value = || {
+            let v = counter.fetch_add(1, Ordering::SeqCst) + 1;
+            Some(v)
+        };
+
+        // 1 - time 0
+        let value = cache.optionally_get_with("key", || next_value());
+        assert_eq!(value, Some(1), "First access should return 1");
+        cache.run_pending_tasks();
+
+        // 2 - time 1.98s
+        mock.increment(Duration::from_millis(1980));
+        let value = cache.optionally_get_with("key", || next_value());
+        assert_eq!(value, Some(1), "Access at 1.98s should hit and return 1");
+
+        // 3 - time 2.01s Entry is expired but NOT evicted (no housekeeping since expiration)
+        mock.increment(Duration::from_millis(30)); // 2.01s
+        let value = cache.optionally_get_with("key", || next_value());
+        assert_eq!(value, Some(2), "Access at 2.01s should miss and return 2");
+        cache.run_pending_tasks();
+
+        // Step 4: t=12.01s - 10 seconds later, entry should have expired
+        mock.increment(Duration::from_secs(10)); // Now at 12.01s
+        cache.run_pending_tasks();
+
+        let value = cache.optionally_get_with("key", || next_value());
+        assert_ne!(value, Some(2), "Access at 12.01s should not still be 2");
+    }
 }
