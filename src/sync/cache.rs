@@ -2995,6 +2995,114 @@ mod tests {
         );
     }
 
+    // https://github.com/moka-rs/moka/issues/575
+    //
+    // Regression test: with a custom `Expiry` that only overrides
+    // `expire_after_create`, re-inserting an expired key should call
+    // `expire_after_create` (not `expire_after_update`), matching the
+    // documented behavior that `expire_after_create` handles new entries.
+    //
+    // Before the fix, the expired entry in the hash table caused the update
+    // path to run, calling `expire_after_update` (default returns
+    // `duration_until_expiry`). The `else if` branch then cleared per-entry
+    // expiration, making the entry immortal (stale).
+    #[test]
+    fn test_expire_after_create_only_no_stale_entries() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct TestExpiry {
+            should_expire: Arc<AtomicBool>,
+        }
+
+        impl crate::Expiry<String, String> for TestExpiry {
+            fn expire_after_create(
+                &self,
+                _key: &String,
+                _value: &String,
+                _current_time: StdInstant,
+            ) -> Option<Duration> {
+                if self.should_expire.load(Ordering::SeqCst) {
+                    Some(Duration::from_secs(1))
+                } else {
+                    None
+                }
+            }
+            // expire_after_read and expire_after_update use defaults (return
+            // duration_until_expiry unchanged).
+        }
+
+        let (clock, mock) = Clock::mock();
+        let should_expire = Arc::new(AtomicBool::new(true));
+
+        let mut cache: Cache<String, String> = Cache::builder()
+            .max_capacity(100)
+            .expire_after(TestExpiry {
+                should_expire: Arc::clone(&should_expire),
+            })
+            .clock(clock)
+            .build();
+        cache.reconfigure_for_testing();
+
+        let key = "key1".to_string();
+
+        // Insert an entry that expires in 1 second.
+        cache.insert(key.clone(), "value1".to_string());
+        cache.run_pending_tasks();
+        assert_eq!(cache.get(&key), Some("value1".to_string()));
+
+        // Advance time past expiration.
+        mock.increment(Duration::from_secs(2));
+
+        // Entry should be expired but still in the hash table (no
+        // run_pending_tasks to evict it).
+        assert_eq!(cache.get(&key), None, "Entry should be expired");
+
+        // Re-insert with no expiration. The old entry is expired, so this
+        // calls expire_after_create (not expire_after_update).
+        // expire_after_create returns None (no expiry) → entry lives forever.
+        should_expire.store(false, Ordering::SeqCst);
+        cache.insert(key.clone(), "value2".to_string());
+        cache.run_pending_tasks();
+
+        // The entry should be accessible (expire_after_create cleared expiry).
+        assert_eq!(
+            cache.get(&key),
+            Some("value2".to_string()),
+            "Re-inserted entry with no expiry should be accessible"
+        );
+
+        // Now test: re-insert an expired key with expiration enabled.
+        // Verify it gets a fresh TTL from expire_after_create.
+        should_expire.store(true, Ordering::SeqCst);
+
+        // Insert key2 with 1s expiry.
+        let key2 = "key2".to_string();
+        cache.insert(key2.clone(), "v1".to_string());
+        cache.run_pending_tasks();
+        assert_eq!(cache.get(&key2), Some("v1".to_string()));
+
+        // Expire it.
+        mock.increment(Duration::from_secs(2));
+        assert_eq!(cache.get(&key2), None, "key2 should be expired");
+
+        // Re-insert → calls expire_after_create → fresh 1s TTL.
+        cache.insert(key2.clone(), "v2".to_string());
+        cache.run_pending_tasks();
+        assert_eq!(
+            cache.get(&key2),
+            Some("v2".to_string()),
+            "Re-inserted key2 should be accessible with fresh TTL"
+        );
+
+        // Advance past the fresh 1s TTL.
+        mock.increment(Duration::from_secs(2));
+        assert_eq!(
+            cache.get(&key2),
+            None,
+            "key2 should expire with fresh TTL from expire_after_create"
+        );
+    }
+
     // https://github.com/moka-rs/moka/issues/345
     #[test]
     fn test_race_between_updating_entry_and_processing_its_write_ops() {

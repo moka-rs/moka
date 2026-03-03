@@ -572,15 +572,29 @@ where
         if let (Some(expiry), WriteOp::Upsert { value_entry, .. }) =
             (&self.inner.expiration_policy.expiry(), &upd_op)
         {
-            Self::expire_after_read_or_update(
-                |k, v, t, d| expiry.expire_after_update(k, v, t, d),
-                &key,
-                value_entry,
-                self.inner.expiration_policy.time_to_live(),
-                self.inner.expiration_policy.time_to_idle(),
-                ts,
-                self.inner.clock(),
-            );
+            // Check if the old entry was expired by per-entry TTL.
+            // If so, this is semantically a "create" (re-inserting after expiration),
+            // not an "update".
+            let old_expired_by_per_entry_ttl = old_info
+                .entry
+                .entry_info()
+                .expiration_state()
+                .0
+                .is_some_and(|exp_time| exp_time <= ts);
+
+            if old_expired_by_per_entry_ttl {
+                Self::expire_after_create(expiry, &key, value_entry, ts, self.inner.clock());
+            } else {
+                Self::expire_after_read_or_update(
+                    |k, v, t, d| expiry.expire_after_update(k, v, t, d),
+                    &key,
+                    value_entry,
+                    self.inner.expiration_policy.time_to_live(),
+                    self.inner.expiration_policy.time_to_idle(),
+                    ts,
+                    self.inner.clock(),
+                );
+            }
         }
 
         if self.is_removal_notifier_enabled() {
@@ -689,9 +703,9 @@ impl<K, V, S> BaseCache<K, V, S> {
         .flatten()
         .min();
 
-        let current_duration = exp_time.and_then(|time| {
+        let current_duration = exp_time.map(|time| {
             let std_time = clock.to_std_instant(time);
-            std_time.checked_duration_since(current_time)
+            std_time.saturating_duration_since(current_time)
         });
 
         let duration = expiry(key, &value_entry.value, current_time, current_duration);
@@ -702,10 +716,6 @@ impl<K, V, S> BaseCache<K, V, S> {
                 .entry_info()
                 .set_expiration_time(expiration_time);
             // The `expiration_time` has changed from `None` to `Some` or vice versa.
-            true
-        } else if duration.is_none() && current_per_entry_exp_time.is_some() {
-            // Clear the expired per-entry expiration time.
-            value_entry.entry_info().set_expiration_time(None);
             true
         } else {
             false
