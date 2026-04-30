@@ -10,7 +10,72 @@ pub(crate) struct EntryInfo<K> {
     /// `is_admitted` indicates that the entry has been admitted to the cache. When
     /// `false`, it means the entry is _temporary_ admitted to the cache or evicted
     /// from the cache (so it should not have LRU nodes).
+    ///
+    /// This is distinct from [`is_retired`](Self::is_retired): `is_admitted`
+    /// tracks deque membership, while `is_retired` tracks CHT membership. A
+    /// freshly inserted entry is **not retired** and **not admitted** until its
+    /// `WriteOp::Upsert` is drained; a retired entry may still be `is_admitted`
+    /// until `handle_remove*` unlinks it.
     is_admitted: AtomicBool,
+    /// CHT-membership flag: `false` while the entry is alive (still backed by
+    /// the concurrent hash table), `true` once the entry has been removed.
+    ///
+    /// The flag is set by `retire()` at the moment the entry is unlinked from
+    /// the CHT and is never cleared (`false → true`, monotonic). The
+    /// invariant it enforces is:
+    ///
+    /// > If `is_retired == true`, no policy-tier mutation may run against
+    /// > this `EntryInfo`.
+    ///
+    /// Examples of policy-tier mutations:
+    ///
+    /// - admitting the entry to an LRU deque,
+    /// - moving its deque node to the back,
+    /// - scheduling a timer-wheel node,
+    /// - incrementing `weighted_size`.
+    ///
+    /// ### Why we need it
+    ///
+    /// moka stores entries in a lock-free CHT (source of truth) and mirrors
+    /// their ordering into LRU deques updated asynchronously via a bounded
+    /// `WriteOp` channel. Without this flag, a `WriteOp::Upsert` can sit in the
+    /// channel long enough that the backing CHT entry is evicted before the op
+    /// is drained; the drain then pushes an "orphan" deque node that the
+    /// eviction loop cannot reach, blocking progress and stalling eviction
+    /// indefinitely (see <https://github.com/moka-rs/moka/issues/590>). The
+    /// retire store is performed inside the CHT's post-success
+    /// `with_previous_entry` callback so the transition linearises with the
+    /// bucket-pointer CAS that physically unlinked the entry; any consumer
+    /// draining a stale op thereafter observes `is_retired == true` and
+    /// declines to touch policy state.
+    ///
+    /// ### Why a single bit suffices (no `Dead` state)
+    ///
+    /// Caffeine encodes a three-state lifecycle (`Alive → Retired → Dead`)
+    /// because its `makeDead()` can be called twice for the same node: once
+    /// inline from `evictEntry()` during admission, and again later from
+    /// `RemovalTask.run()` draining the write buffer. The `isDead()` guard at
+    /// the top of `makeDead` prevents double-subtraction of `weightedSize`.
+    ///
+    /// moka has no such double-enter path: every CHT removal site gates its
+    /// `handle_remove_*` call on `if let Some(entry) = …`; i.e. on winning
+    /// the CHT bucket CAS. So `handle_remove_*` runs exactly once per
+    /// retirement, structurally.
+    ///
+    /// ### When a third state would become necessary
+    ///
+    /// A third state (`Dead`) earns its keep when there are **multiple
+    /// finalization paths** that may both target the same entry. Currently,
+    /// moka has one at the CAS-gated inline `handle_remove_*`.
+    ///
+    /// If moka ever grows a second finalization path that runs alongside the
+    /// `WriteOp::Remove` drain (e.g., an inline emergency-evict, an
+    /// async load-completion that touches policy state, or any code that
+    /// can re-enter `handle_remove_*` for an already-retired entry), the
+    /// idempotency requirement returns and a third state (or an equivalent
+    /// "weight already subtracted" marker) becomes necessary. Until then, a
+    /// single bit is sufficient.
+    is_retired: AtomicBool,
     /// `entry_gen` (entry generation) is incremented every time the entry is updated
     /// in the concurrent hash table.
     entry_gen: AtomicU16,
@@ -46,6 +111,7 @@ impl<K> EntryInfo<K> {
         Self {
             key_hash,
             is_admitted: AtomicBool::default(),
+            is_retired: AtomicBool::default(),
             // `entry_gen` starts at 1 and `policy_gen` start at 0.
             entry_gen: AtomicU16::new(1),
             policy_gen: AtomicU16::new(0),
@@ -70,6 +136,41 @@ impl<K> EntryInfo<K> {
     #[inline]
     pub(crate) fn set_admitted(&self, value: bool) {
         self.is_admitted.store(value, Ordering::Release);
+    }
+
+    /// Returns `true` iff the entry has been retired (removed from the CHT).
+    #[inline]
+    pub(crate) fn is_retired(&self) -> bool {
+        self.is_retired.load(Ordering::Acquire)
+    }
+
+    /// Returns `true` iff the entry is still alive (not yet retired).
+    /// Consumers of buffered operations (`WriteOp::Upsert`, `ReadOp::Hit`,
+    /// TinyLFU inline victim scans) MUST check this before mutating policy
+    /// state; see the `is_retired` field docs.
+    #[inline]
+    pub(crate) fn is_alive(&self) -> bool {
+        !self.is_retired()
+    }
+
+    /// Transitions the entry to the retired state. Must be called inside the
+    /// post-CAS `with_previous_entry` callback of `cht::remove_entry_if_and`
+    /// (or an equivalent linearisation point) so the transition is atomic
+    /// with the CHT unlink.
+    ///
+    /// The callsite is exclusive: the `with_previous_entry` closure fires at
+    /// most once per `EntryInfo` (it only runs for the thread that won the
+    /// bucket-pointer CAS), so no other thread can be transitioning the same
+    /// field in parallel. A plain `Release` store is therefore sufficient
+    /// (no RMW needed) and matches the `is_admitted` pattern. Double-retire
+    /// would indicate a broken invariant (caught by a debug-mode assertion).
+    #[inline]
+    pub(crate) fn retire(&self) {
+        debug_assert!(
+            !self.is_retired.load(Ordering::Acquire),
+            "retire() called on already-retired entry; lifecycle invariant broken",
+        );
+        self.is_retired.store(true, Ordering::Release);
     }
 
     /// Returns `true` if the `ValueEntry` having this `EntryInfo` is dirty.
@@ -229,5 +330,42 @@ impl<K> AccessTime for EntryInfo<K> {
     #[inline]
     fn set_last_modified(&self, timestamp: Instant) {
         self.last_modified.set_instant(timestamp);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EntryInfo, KeyHash};
+    use crate::common::time::Instant;
+    use std::sync::Arc;
+
+    fn make_entry_info() -> EntryInfo<u64> {
+        let kh = KeyHash::new(Arc::new(42u64), 0xdead_beef);
+        EntryInfo::new(kh, Instant::from_nanos(0), 1)
+    }
+
+    #[test]
+    fn lifecycle_initial_is_alive() {
+        let info = make_entry_info();
+        assert!(info.is_alive());
+        assert!(!info.is_retired());
+    }
+
+    #[test]
+    fn lifecycle_retire_transitions_to_retired() {
+        let info = make_entry_info();
+        info.retire();
+        assert!(!info.is_alive());
+        assert!(info.is_retired());
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "retire() called on already-retired entry")]
+    fn lifecycle_double_retire_debug() {
+        let info = make_entry_info();
+        info.retire();
+        // Second retire violates the exclusive-call invariant; debug-asserted.
+        info.retire();
     }
 }

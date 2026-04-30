@@ -1107,9 +1107,18 @@ where
     where
         Q: Equivalent<K> + Hash + ?Sized,
     {
-        self.cache
-            .remove_entry(hash, |k| key.equivalent(k as &K))
-            .map(|(key, entry)| KvEntry::new(key, entry))
+        // Linearise the CHT unlink with the retire transition via the
+        // post-CAS `with_previous_entry` callback. See `EntryInfo::is_retired`
+        // for why the transition must happen here and not in the caller.
+        self.cache.remove_entry_if_and(
+            hash,
+            |k| key.equivalent(k as &K),
+            |_, _| true,
+            |k, v| {
+                v.entry_info().retire();
+                KvEntry::new(Arc::clone(k), MiniArc::clone(v))
+            },
+        )
     }
 
     fn keys(&self, cht_segment: usize) -> Option<Vec<Arc<K>>> {
@@ -1392,6 +1401,13 @@ where
                 }) => {
                     let kh = value_entry.entry_info().key_hash();
                     freq.increment(kh.hash);
+                    if !value_entry.entry_info().is_alive() {
+                        // Stale ReadOp: the backing CHT entry has been
+                        // retired since the Get was recorded. Policy-tier
+                        // mutations (timer-wheel reschedule, deque move-to-
+                        // back) must not run against a non-Alive entry.
+                        continue;
+                    }
                     if is_expiry_modified {
                         self.update_timer_wheel(&value_entry, timer_wheel);
                     }
@@ -1452,6 +1468,29 @@ where
         }
     }
 
+    /// Removes an entry from the CHT if `condition` is satisfied, flipping its
+    /// `is_retired` flag atomically with the unlink.
+    ///
+    /// This is moka's analogue of Caffeine's `synchronized(node); retire()`
+    /// pattern inside the CHM mutation callback: the `retire()` store runs in
+    /// the post-success `with_previous_entry` closure of
+    /// `cht::remove_entry_if_and`, which fires exactly once after the CHT's
+    /// bucket-pointer CAS has succeeded. Consumers draining a stale `WriteOp`
+    /// for the same entry therefore observe `is_retired == true` via
+    /// `is_alive()` returning `false`, and decline to touch policy state.
+    fn cht_remove_if_and_retire(
+        &self,
+        hash: u64,
+        eq: impl FnMut(&Arc<K>) -> bool,
+        condition: impl FnMut(&Arc<K>, &MiniArc<ValueEntry<K, V>>) -> bool,
+    ) -> Option<MiniArc<ValueEntry<K, V>>> {
+        self.cache
+            .remove_entry_if_and(hash, eq, condition, |_k, v| {
+                v.entry_info().retire();
+                MiniArc::clone(v)
+            })
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn handle_upsert(
         &self,
@@ -1467,6 +1506,17 @@ where
     ) where
         V: Clone,
     {
+        // If the entry has been retired (its CHT slot was unlinked while this
+        // `WriteOp` sat in the channel), admitting it would create an orphan
+        // deque node that the eviction loop cannot reach, stalling eviction
+        // indefinitely. Update `policy_gen` so `is_dirty()` stops firing and
+        // bail. See `EntryInfo::is_retired` and
+        // <https://github.com/moka-rs/moka/issues/590>.
+        if !entry.entry_info().is_alive() {
+            entry.entry_info().set_policy_gen(gen);
+            return;
+        }
+
         {
             let counters = &mut eviction_state.counters;
 
@@ -1498,7 +1548,7 @@ where
                 let kl = self.maybe_key_lock(&kh.key);
                 let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-                let removed = self.cache.remove_if(
+                let removed = self.cht_remove_if_and_retire(
                     kh.hash,
                     |k| k == &kh.key,
                     |_, current_entry| {
@@ -1548,7 +1598,10 @@ where
                         vic_hash,
                         |k| k == &vic_key,
                         |_, entry| entry.entry_info().last_accessed() == vic_la,
-                        |k, v| (k.clone(), v.clone()),
+                        |k, v| {
+                            v.entry_info().retire();
+                            (k.clone(), v.clone())
+                        },
                     ) {
                         if eviction_state.is_notifier_enabled() {
                             eviction_state.notify_entry_removal(
@@ -1595,7 +1648,7 @@ where
                 // Remove the candidate from the cache (hash map) if the entry
                 // generation matches.
                 let key = Arc::clone(&kh.key);
-                let removed = self.cache.remove_if(
+                let removed = self.cht_remove_if_and_retire(
                     kh.hash,
                     |k| k == &key,
                     |_, current_entry| {
@@ -1662,8 +1715,11 @@ where
             next_victim = DeqNode::next_node_ptr(victim);
 
             let vic_elem = &unsafe { victim.as_ref() }.element;
-            if vic_elem.is_dirty() {
-                // Skip this node as its ValueEntry have been updated or invalidated.
+            if vic_elem.is_dirty() || !vic_elem.entry_info().is_alive() {
+                // Skip this node: its `ValueEntry` was updated / invalidated
+                // (dirty) or retired (non-Alive). Retired entries are being
+                // torn down; admitting them would re-link a node that is
+                // about to be unlinked.
                 unsafe { deq.move_to_back(victim) };
                 retries += 1;
                 continue;
@@ -1707,6 +1763,20 @@ where
         timer_wheel: &mut TimerWheel<K>,
         counters: &mut EvictionCounters,
     ) {
+        // Precondition: admission only applies to Alive, not-yet-admitted
+        // entries. Violations indicate a caller failed to guard with
+        // `is_alive()` / `!is_admitted()`. Admitting a retired entry would
+        // produce an orphan deque node unreachable from the CHT, stalling
+        // eviction indefinitely (moka-rs/moka#590).
+        debug_assert!(
+            entry.entry_info().is_alive(),
+            "handle_admit called on non-Alive entry",
+        );
+        debug_assert!(
+            !entry.is_admitted(),
+            "handle_admit called on already-admitted entry",
+        );
+
         counters.saturating_add(1, policy_weight);
 
         self.update_timer_wheel(entry, timer_wheel);
@@ -1811,6 +1881,14 @@ where
         gen: Option<u16>,
         counters: &mut EvictionCounters,
     ) {
+        // Precondition: the caller has already retired the entry (removed it
+        // from the CHT via `cht_remove_if_and_retire` or produced a
+        // `WriteOp::Remove` from `Inner::remove_entry`, which retires).
+        debug_assert!(
+            entry.entry_info().is_retired(),
+            "handle_remove_without_timer_wheel called on an Alive entry",
+        );
+
         if entry.is_admitted() {
             entry.set_admitted(false);
             counters.saturating_sub(1, entry.policy_weight());
@@ -1833,6 +1911,12 @@ where
         entry: MiniArc<ValueEntry<K, V>>,
         counters: &mut EvictionCounters,
     ) {
+        // Precondition: the caller has already retired the entry.
+        debug_assert!(
+            entry.entry_info().is_retired(),
+            "handle_remove_with_deques called on an Alive entry",
+        );
+
         // Take the timer node along with its stored expiry generation for validation.
         let (timer_node, expiry_gen) = entry.take_timer_node();
         if let Some(timer) = timer_node {
@@ -1897,7 +1981,7 @@ where
                 let _klg = &kl.as_ref().map(|kl| kl.lock());
 
                 // Remove the key from the map only when the entry is really expired.
-                let maybe_entry = self.cache.remove_if(
+                let maybe_entry = self.cht_remove_if_and_retire(
                     hash,
                     |k| k == key,
                     |_, v| is_expired_by_per_entry_ttl(v.entry_info(), now),
@@ -2017,7 +2101,7 @@ where
             // expired. This check is needed because it is possible that the entry in
             // the map has been updated or deleted but its deque node we checked
             // above has not been updated yet.
-            let maybe_entry = self.cache.remove_if(
+            let maybe_entry = self.cht_remove_if_and_retire(
                 hash,
                 |k| k == &key,
                 |_, v| is_expired_entry_ao(tti, va, v, now),
@@ -2144,7 +2228,7 @@ where
             let kl = self.maybe_key_lock(&key);
             let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-            let maybe_entry = self.cache.remove_if(
+            let maybe_entry = self.cht_remove_if_and_retire(
                 hash,
                 |k| k == &key,
                 |_, v| is_expired_entry_wo(ttl, va, v, now),
@@ -2287,7 +2371,7 @@ where
             let kl = self.maybe_key_lock(&key);
             let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-            let maybe_entry = self.cache.remove_if(
+            let maybe_entry = self.cht_remove_if_and_retire(
                 hash,
                 |k| k == &key,
                 |_, v| {
