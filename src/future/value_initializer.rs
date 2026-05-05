@@ -328,7 +328,6 @@ where
         } else {
             None
         };
-        let entry_existed = maybe_entry.is_some();
 
         // Evaluate the `f` closure and get a future. Catching panic is safe here as
         // we will not evaluate the closure again.
@@ -372,11 +371,11 @@ where
                 }
             }
             Ok(Op::Put(value)) => {
-                cache
+                let replaced = cache
                     .insert_with_hash(Arc::clone(&c_key), c_hash, value.clone())
                     .await;
                 waiter_guard.set_waiter_value(WaiterValue::ReadyNone);
-                if entry_existed {
+                if replaced {
                     crossbeam_epoch::pin().flush();
                     let entry = Entry::new(Some(c_key), value, true, true);
                     Ok(CompResult::ReplacedWith(entry))
@@ -474,7 +473,6 @@ where
         } else {
             None
         };
-        let entry_existed = maybe_entry.is_some();
 
         // Evaluate the `f` closure and get a future. Catching panic is safe here as
         // we will not evaluate the closure again.
@@ -517,11 +515,11 @@ where
                 }
             }
             Ok(Op::Put(value)) => {
-                cache
+                let replaced = cache
                     .insert_with_hash(Arc::clone(&c_key), c_hash, value.clone())
                     .await;
                 waiter_guard.set_waiter_value(WaiterValue::ReadyNone);
-                if entry_existed {
+                if replaced {
                     crossbeam_epoch::pin().flush();
                     let entry = Entry::new(Some(c_key), value, true, true);
                     Ok(CompResult::ReplacedWith(entry))
