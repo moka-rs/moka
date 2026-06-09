@@ -6,6 +6,10 @@ use parking_lot::Mutex;
 use std::{fmt, ptr::NonNull, sync::Arc};
 use tagptr::TagNonNull;
 
+/// The cost of an entry when no cost closure is set or the eviction policy does not
+/// consult costs. It weights the entry's frequency by `1`, i.e. leaves it as-is.
+pub(crate) const DEFAULT_COST: u32 = 1;
+
 pub(crate) mod arc;
 pub(crate) mod constants;
 pub(crate) mod deques;
@@ -219,6 +223,11 @@ impl<K, V> ValueEntry<K, V> {
     #[inline]
     pub(crate) fn policy_weight(&self) -> u32 {
         self.info.policy_weight()
+    }
+
+    #[inline]
+    pub(crate) fn policy_cost(&self) -> u32 {
+        self.info.policy_cost()
     }
 
     pub(crate) fn deq_nodes(&self) -> &MiniArc<Mutex<DeqNodes<K>>> {

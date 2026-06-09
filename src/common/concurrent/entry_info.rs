@@ -35,11 +35,21 @@ pub(crate) struct EntryInfo<K> {
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
     policy_weight: AtomicU32,
+    /// `policy_cost` is the relative cost of recomputing the entry's value (for
+    /// example, the time it takes to load it). Unlike `policy_weight`, it does not
+    /// affect the cache's capacity accounting. It is only consulted by the
+    /// cost-aware eviction policy. Defaults to `1`.
+    policy_cost: AtomicU32,
 }
 
 impl<K> EntryInfo<K> {
     #[inline]
-    pub(crate) fn new(key_hash: KeyHash<K>, timestamp: Instant, policy_weight: u32) -> Self {
+    pub(crate) fn new(
+        key_hash: KeyHash<K>,
+        timestamp: Instant,
+        policy_weight: u32,
+        policy_cost: u32,
+    ) -> Self {
         #[cfg(feature = "unstable-debug-counters")]
         super::debug_counters::InternalGlobalDebugCounters::entry_info_created();
 
@@ -54,6 +64,7 @@ impl<K> EntryInfo<K> {
             last_accessed: AtomicInstant::new(timestamp),
             last_modified: AtomicInstant::new(timestamp),
             policy_weight: AtomicU32::new(policy_weight),
+            policy_cost: AtomicU32::new(policy_cost),
         }
     }
 
@@ -129,6 +140,15 @@ impl<K> EntryInfo<K> {
 
     pub(crate) fn set_policy_weight(&self, size: u32) {
         self.policy_weight.store(size, Ordering::Release);
+    }
+
+    #[inline]
+    pub(crate) fn policy_cost(&self) -> u32 {
+        self.policy_cost.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn set_policy_cost(&self, cost: u32) {
+        self.policy_cost.store(cost, Ordering::Release);
     }
 
     /// Atomically reads both `expiration_time` and `expiry_gen` as a single unit.

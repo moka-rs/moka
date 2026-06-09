@@ -16,7 +16,7 @@ use crate::{
             entry_info::EntryInfo,
             housekeeper::{Housekeeper, InnerSync},
             AccessTime, EntrySizeAndFrequency, KeyHash, KeyHashDate, KvEntry, OldEntryInfo, ReadOp,
-            ValueEntry, Weigher, WriteOp,
+            ValueEntry, Weigher, WriteOp, DEFAULT_COST,
         },
         deque::{DeqNode, Deque},
         frequency_sketch::FrequencySketch,
@@ -142,6 +142,7 @@ where
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        cost: Option<Weigher<K, V>>,
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<EvictionListener<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
@@ -166,6 +167,7 @@ where
             initial_capacity,
             build_hasher,
             weigher,
+            cost,
             eviction_policy,
             eviction_listener,
             r_rcv,
@@ -486,6 +488,7 @@ where
         value: V,
     ) -> (WriteOp<K, V>, Instant) {
         let weight = self.inner.weigh(&key, &value);
+        let cost = self.inner.cost(&key, &value);
         let op_cnt1 = Rc::new(AtomicU8::new(0));
         let op_cnt2 = Rc::clone(&op_cnt1);
         let mut op1 = None;
@@ -514,7 +517,8 @@ where
             hash,
             // on_insert
             || {
-                let (entry, gen) = self.new_value_entry(&key, hash, value.clone(), ts, weight);
+                let (entry, gen) =
+                    self.new_value_entry(&key, hash, value.clone(), ts, weight, cost);
                 let ins_op = WriteOp::new_upsert(&key, hash, &entry, gen, 0, weight);
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((cnt, ins_op));
@@ -528,7 +532,8 @@ where
                 // that the OldEntryInfo can preserve the old EntryInfo's
                 // last_accessed and last_modified timestamps.
                 let old_info = OldEntryInfo::new(old_entry);
-                let (entry, gen) = self.new_value_entry_from(value.clone(), ts, weight, old_entry);
+                let (entry, gen) =
+                    self.new_value_entry_from(value.clone(), ts, weight, cost, old_entry);
                 let upd_op = WriteOp::new_upsert(&key, hash, &entry, gen, old_weight, weight);
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((cnt, old_info, upd_op));
@@ -640,9 +645,15 @@ impl<K, V, S> BaseCache<K, V, S> {
         value: V,
         timestamp: Instant,
         policy_weight: u32,
+        policy_cost: u32,
     ) -> (MiniArc<ValueEntry<K, V>>, u16) {
         let key_hash = KeyHash::new(Arc::clone(key), hash);
-        let info = MiniArc::new(EntryInfo::new(key_hash, timestamp, policy_weight));
+        let info = MiniArc::new(EntryInfo::new(
+            key_hash,
+            timestamp,
+            policy_weight,
+            policy_cost,
+        ));
         let gen: u16 = info.entry_gen();
         (MiniArc::new(ValueEntry::new(value, info)), gen)
     }
@@ -653,6 +664,7 @@ impl<K, V, S> BaseCache<K, V, S> {
         value: V,
         timestamp: Instant,
         policy_weight: u32,
+        policy_cost: u32,
         other: &ValueEntry<K, V>,
     ) -> (MiniArc<ValueEntry<K, V>>, u16) {
         let info = MiniArc::clone(other.entry_info());
@@ -662,6 +674,7 @@ impl<K, V, S> BaseCache<K, V, S> {
         info.set_last_accessed(timestamp);
         info.set_last_modified(timestamp);
         info.set_policy_weight(policy_weight);
+        info.set_policy_cost(policy_cost);
         (MiniArc::new(ValueEntry::new_from(value, info, other)), gen)
     }
 
@@ -863,6 +876,7 @@ pub(crate) struct Inner<K, V, S> {
     expiration_policy: ExpirationPolicy<K, V>,
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
+    cost: Option<Weigher<K, V>>,
     removal_notifier: Option<RemovalNotifier<K, V>>,
     key_locks: Option<KeyLockMap<K, S>>,
     invalidator: Option<Invalidator<K, V, S>>,
@@ -986,6 +1000,7 @@ where
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        cost: Option<Weigher<K, V>>,
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<EvictionListener<K, V>>,
         read_op_ch: Receiver<ReadOp<K, V>>,
@@ -1044,6 +1059,7 @@ where
             expiration_policy,
             valid_after: AtomicInstant::default(),
             weigher,
+            cost,
             removal_notifier,
             key_locks,
             invalidator,
@@ -1126,6 +1142,11 @@ where
     #[inline]
     fn weigh(&self, key: &K, value: &V) -> u32 {
         self.weigher.as_ref().map_or(1, |w| w(key, value))
+    }
+
+    #[inline]
+    fn cost(&self, key: &K, value: &V) -> u32 {
+        self.cost.as_ref().map_or(DEFAULT_COST, |c| c(key, value))
     }
 }
 
@@ -2535,6 +2556,7 @@ mod tests {
                 None,
                 RandomState::default(),
                 None,
+                None,
                 EvictionPolicy::default(),
                 None,
                 ExpirationPolicy::default(),
@@ -2908,6 +2930,7 @@ mod tests {
             None,
             None,
             RandomState::default(),
+            None,
             None,
             EvictionPolicy::default(),
             None,
