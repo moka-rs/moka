@@ -1288,9 +1288,20 @@ where
         self.weigher.as_ref().map_or(1, |w| w(key, value))
     }
 
+    /// Returns the entry's cost without invoking the cost closure when the
+    /// eviction policy never consults it.
+    ///
+    /// The cost is clamped to a minimum of `1` so that weighting an entry's
+    /// frequency by its cost never zeroes the frequency out.
     #[inline]
     fn cost(&self, key: &K, value: &V) -> u32 {
-        self.cost.as_ref().map_or(DEFAULT_COST, |c| c(key, value))
+        if self.eviction_policy.uses_entry_cost() {
+            self.cost
+                .as_ref()
+                .map_or(DEFAULT_COST, |c| c(key, value).max(1))
+        } else {
+            DEFAULT_COST
+        }
     }
 }
 
@@ -1678,10 +1689,10 @@ where
 
         // Try to admit the candidate.
         let admission_result = match &self.eviction_policy {
-            EvictionPolicyConfig::TinyLfu => {
+            EvictionPolicyConfig::TinyLfu | EvictionPolicyConfig::CostAwareLfu => {
                 let mut candidate = EntrySizeAndFrequency::new(new_weight);
-                candidate.add_frequency(freq, kh.hash);
-                Self::admit(&candidate, &self.cache, deqs, freq)
+                candidate.add_frequency(freq, kh.hash, self.eviction_policy.entry_cost(&entry));
+                Self::admit(&candidate, &self.cache, deqs, freq, &self.eviction_policy)
             }
             EvictionPolicyConfig::Lru => AdmissionResult::Admitted {
                 victim_keys: SmallVec::default(),
@@ -1801,6 +1812,7 @@ where
         cache: &CacheStore<K, V, S>,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
+        policy: &EvictionPolicyConfig,
     ) -> AdmissionResult<K> {
         const MAX_CONSECUTIVE_RETRIES: usize = 5;
         let mut retries = 0;
@@ -1837,8 +1849,7 @@ where
             let last_accessed = vic_elem.entry_info().last_accessed();
 
             if let Some(vic_entry) = cache.get(hash, |k| k == key) {
-                victims.add_policy_weight(vic_entry.policy_weight());
-                victims.add_frequency(freq, hash);
+                policy.add_entry(&mut victims, freq, hash, &vic_entry);
                 victim_keys.push((KeyHash::new(Arc::clone(key), hash), last_accessed));
                 retries = 0;
             } else {
