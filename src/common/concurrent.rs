@@ -1,4 +1,6 @@
-use crate::common::{concurrent::arc::MiniArc, deque::DeqNode, time::Instant};
+use crate::common::{
+    concurrent::arc::MiniArc, deque::DeqNode, frequency_sketch::FrequencySketch, time::Instant,
+};
 
 use parking_lot::Mutex;
 use std::{fmt, ptr::NonNull, sync::Arc};
@@ -275,6 +277,32 @@ impl<K, V> ValueEntry<K, V> {
 impl<K, V> Drop for ValueEntry<K, V> {
     fn drop(&mut self) {
         self::debug_counters::InternalGlobalDebugCounters::value_entry_dropped();
+    }
+}
+
+/// A running aggregate of policy weight and frequency, used by the admission and
+/// eviction logic to compare a candidate entry against its potential victims.
+#[derive(Default)]
+pub(crate) struct EntrySizeAndFrequency {
+    // The total policy weight (size) of the aggregated entries.
+    pub(crate) policy_weight: u64,
+    pub(crate) freq: u32,
+}
+
+impl EntrySizeAndFrequency {
+    pub(crate) fn new(policy_weight: u32) -> Self {
+        Self {
+            policy_weight: policy_weight as u64,
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn add_policy_weight(&mut self, weight: u32) {
+        self.policy_weight += weight as u64;
+    }
+
+    pub(crate) fn add_frequency(&mut self, freq: &FrequencySketch, hash: u64) {
+        self.freq += freq.frequency(hash) as u32;
     }
 }
 

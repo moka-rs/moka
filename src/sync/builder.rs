@@ -411,7 +411,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
-    /// Sets the weigher closure to the cache.
+    /// Sets the weigher closure of the cache.
     ///
     /// The closure should take `&K` and `&V` as the arguments and returns a `u32`
     /// representing the relative size of the entry.
@@ -422,7 +422,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
-    /// Sets the eviction listener closure to the cache.
+    /// Sets the eviction listener closure of the cache.
     ///
     /// The closure should take `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as
     /// the arguments.
@@ -477,7 +477,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         builder
     }
 
-    /// Sets the given `expiry` to the cache.
+    /// Sets the given `expiry` of the cache.
     ///
     /// See [the example][per-entry-expiration-example] for per-entry expiration
     /// policy in the `Cache` documentation.

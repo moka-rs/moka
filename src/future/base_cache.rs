@@ -16,8 +16,8 @@ use crate::{
             },
             deques::Deques,
             entry_info::EntryInfo,
-            AccessTime, KeyHash, KeyHashDate, KvEntry, OldEntryInfo, ReadOp, ValueEntry, Weigher,
-            WriteOp,
+            AccessTime, EntrySizeAndFrequency, KeyHash, KeyHashDate, KvEntry, OldEntryInfo, ReadOp,
+            ValueEntry, Weigher, WriteOp,
         },
         deque::{DeqNode, Deque},
         frequency_sketch::FrequencySketch,
@@ -958,29 +958,6 @@ impl EvictionCounters {
     }
 }
 
-#[derive(Default)]
-struct EntrySizeAndFrequency {
-    policy_weight: u64,
-    freq: u32,
-}
-
-impl EntrySizeAndFrequency {
-    fn new(policy_weight: u32) -> Self {
-        Self {
-            policy_weight: policy_weight as u64,
-            ..Default::default()
-        }
-    }
-
-    fn add_policy_weight(&mut self, weight: u32) {
-        self.policy_weight += weight as u64;
-    }
-
-    fn add_frequency(&mut self, freq: &FrequencySketch, hash: u64) {
-        self.freq += freq.frequency(hash) as u32;
-    }
-}
-
 // NOTE: Clippy found that the `Admitted` variant contains at least a few hundred
 // bytes of data and the `Rejected` variant contains no data at all. It suggested to
 // box the `SmallVec`.
@@ -1342,7 +1319,7 @@ where
                         .await;
                 }
 
-                if self.eviction_policy == EvictionPolicyConfig::TinyLfu
+                if self.eviction_policy.uses_frequency_sketch()
                     && self.should_enable_frequency_sketch(&eviction_state.counters)
                 {
                     self.enable_frequency_sketch(&eviction_state.counters).await;

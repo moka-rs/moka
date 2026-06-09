@@ -133,6 +133,17 @@ pub(crate) enum EvictionPolicyConfig {
     Lru,
 }
 
+impl EvictionPolicyConfig {
+    /// Returns `true` if the policy relies on the frequency sketch to estimate the
+    /// historic popularity of keys (the LFU-based policies).
+    pub(crate) fn uses_frequency_sketch(&self) -> bool {
+        match self {
+            Self::TinyLfu => true,
+            Self::Lru => false,
+        }
+    }
+}
+
 /// Calculates when cache entries expire. A single expiration time is retained on
 /// each entry so that the lifetime of an entry may be extended or reduced by
 /// subsequent evaluations.
