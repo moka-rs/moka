@@ -2100,6 +2100,76 @@ mod tests {
     }
 
     #[test]
+    fn cost_aware_single_thread() {
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| a1.lock().push((k, v, cause));
+
+        // Create a cost-aware cache. "d" is expensive to recompute (cost 2); every
+        // other entry costs 1. The cache is count-based (no weigher), so each entry
+        // has a policy weight of 1 and the capacity is 3 entries.
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .eviction_policy(EvictionPolicy::cost_aware_lfu())
+            .cost(|&k, _v| if k == "d" { 2 } else { 1 })
+            .eviction_listener(listener)
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice");
+        cache.insert("b", "bob");
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        cache.run_pending_tasks();
+        // counts: a -> 1, b -> 1
+
+        cache.insert("c", "cindy");
+        assert_eq!(cache.get(&"c"), Some("cindy"));
+        cache.run_pending_tasks();
+        // counts: a -> 1, b -> 1, c -> 1
+
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        cache.run_pending_tasks();
+        // counts: a -> 2, b -> 2, c -> 1
+
+        // First insert of the expensive "d": its frequency is still 0, so even with a
+        // cost of 2 its priority (0 * 2 = 0) cannot beat the victim "c" (1 * 1 = 1).
+        // Rejected.
+        cache.insert("d", "david"); // count: d -> 0
+        expected.push((Arc::new("d"), "david", RemovalCause::Size));
+        cache.run_pending_tasks();
+        assert!(!cache.contains_key(&"d"));
+        assert_eq!(cache.get(&"d"), None); // d -> 1
+
+        // Second insert: d's frequency is now 1, so its cost-weighted priority is
+        // 1 * 2 = 2, which beats "c" (1 * 1 = 1) and "d" is admitted, evicting "c".
+        // Under the plain TinyLFU policy this insert would still be rejected, because
+        // d's frequency (1) is not greater than c's (1); the cost is what flips it.
+        cache.insert("d", "dennis");
+        expected.push((Arc::new("c"), "cindy", RemovalCause::Size));
+        cache.run_pending_tasks();
+        assert_eq!(cache.get(&"a"), Some("alice"));
+        assert_eq!(cache.get(&"b"), Some("bob"));
+        assert_eq!(cache.get(&"c"), None);
+        assert_eq!(cache.get(&"d"), Some("dennis"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert!(!cache.contains_key(&"c"));
+        assert!(cache.contains_key(&"d"));
+
+        verify_notification_vec(&cache, actual, &expected);
+        assert!(cache.key_locks_map_is_empty());
+    }
+
+    #[test]
     fn size_aware_eviction() {
         let weigher = |_k: &&str, v: &(&str, u32)| v.1;
 
