@@ -304,7 +304,9 @@ where
         let kl = cache.maybe_key_lock(key);
         let _klg = &kl.as_ref().map(|kl| kl.lock());
 
-        let maybe_entry = cache.cache.remove_if(
+        // Retire the entry inside the post-CAS callback so the
+        // `Alive → Retired` transition linearises with the CHT unlink.
+        let maybe_entry = cache.cache.remove_entry_if_and(
             hash,
             |k| k == key,
             |_, v| {
@@ -313,6 +315,10 @@ where
                 } else {
                     false
                 }
+            },
+            |_k, v| {
+                v.entry_info().retire();
+                MiniArc::clone(v)
             },
         );
         if let Some(entry) = &maybe_entry {
