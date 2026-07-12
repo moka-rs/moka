@@ -13,6 +13,10 @@ cargo update -p tokio --precise 1.47.1
 cargo update -p tokio-rustls --precise 0.24.1
 cargo update -p tokio-util --precise 0.7.16
 cargo update -p mio --precise 1.0.4
+# `toml` v1.1.1+ (pulled in by `trybuild` via `toml = "^1"`) requires
+# `indexmap` v2.13.0+, which in turn requires Rust 1.82+. Pin `toml` to v1.1.0,
+# the newest release that still accepts `indexmap` v2.11.4.
+cargo update -p toml --precise 1.1.0
 cargo update -p indexmap --precise 2.11.4
 cargo update -p parking_lot --precise 0.12.4
 cargo update -p parking_lot_core --precise 0.9.11
