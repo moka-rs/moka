@@ -3690,4 +3690,358 @@ mod tests {
 
         assert_expiry!(cache, key, hash, mock, 4);
     }
+
+    // =====================================================================
+    // Reproduction tests for issue #590
+    // (zombie LRU deque node -> permanent eviction stall -> unbounded growth)
+    //
+    // See moka-memo/moka-internals/02-housekeeper.md section 6a for the race
+    // narrative.  These drive `future::BaseCache` internals directly so the
+    // interleaving is deterministic (no threads, no sleeps).
+    // =====================================================================
+    mod gh590 {
+        use super::super::BaseCache;
+        use crate::common::concurrent::WriteOp;
+        use crate::{
+            common::{time::Clock, HousekeeperConfig},
+            policy::{EvictionPolicy, ExpirationPolicy},
+        };
+        use std::collections::hash_map::RandomState;
+        use std::sync::Arc;
+
+        const MAX: u64 = 4;
+
+        async fn new_lru_cache() -> BaseCache<u32, u32> {
+            let mut cache = BaseCache::<u32, u32>::new(
+                None,
+                Some(MAX),
+                None,
+                RandomState::default(),
+                None,
+                EvictionPolicy::lru(),
+                None,
+                ExpirationPolicy::default(),
+                HousekeeperConfig::default(),
+                false,
+                Clock::default(),
+            );
+            // Disable the housekeeper auto-run so this test controls every
+            // maintenance run explicitly.
+            cache.reconfigure_for_testing().await;
+            cache
+        }
+
+        async fn new_tinylfu_cache() -> BaseCache<u32, u32> {
+            let mut cache = BaseCache::<u32, u32>::new(
+                None,
+                Some(MAX),
+                None,
+                RandomState::default(),
+                None,
+                EvictionPolicy::tiny_lfu(),
+                None,
+                ExpirationPolicy::default(),
+                HousekeeperConfig::default(),
+                false,
+                Clock::default(),
+            );
+            cache.reconfigure_for_testing().await;
+            cache
+        }
+
+        /// Insert (or update) a key and queue its `WriteOp` on the write channel,
+        /// WITHOUT running maintenance.
+        async fn insert(cache: &BaseCache<u32, u32>, k: u32, v: u32) {
+            let hash = cache.hash(&k);
+            let (op, _now) = cache.do_insert_with_hash(Arc::new(k), hash, v).await;
+            cache.write_op_ch.send(op).expect("send upsert");
+        }
+
+        /// Run one maintenance pass (drains the write channel, then evicts).
+        async fn run(cache: &BaseCache<u32, u32>) {
+            cache.inner.do_run_pending_tasks(None, 1, 10).await;
+        }
+
+        /// Read the shared `EntryInfo` state carried by an (Upsert) `WriteOp`.
+        /// Returns (is_admitted, is_dirty, entry_gen).  (`policy_gen` has no
+        /// public getter; `is_dirty` already reflects entry_gen != policy_gen.)
+        fn probe(op: &WriteOp<u32, u32>) -> (bool, bool, u16) {
+            match op {
+                WriteOp::Upsert { value_entry, .. } => {
+                    let ei = value_entry.entry_info();
+                    (ei.is_admitted(), ei.is_dirty(), ei.entry_gen())
+                }
+                _ => panic!("expected an Upsert WriteOp"),
+            }
+        }
+
+        /// Explicitly remove `k` from the hash table and queue the resulting
+        /// `WriteOp::Remove` (mirrors `future::Cache::invalidate`'s op building).
+        fn queue_remove(cache: &BaseCache<u32, u32>, k: u32, hash: u64) {
+            let kv = cache.remove_entry(&k, hash).expect("remove_entry");
+            let entry_gen = kv.entry.entry_info().incr_entry_gen();
+            cache
+                .write_op_ch
+                .send(WriteOp::Remove {
+                    kv_entry: kv,
+                    entry_gen,
+                })
+                .expect("send remove");
+        }
+
+        // -----------------------------------------------------------------
+        // PRIMARY REPRO: at 7006d8c this test FAILS with the stall assertion.
+        // -----------------------------------------------------------------
+        #[tokio::test]
+        async fn future_lru_zombie_stall_repro() {
+            let cache = new_lru_cache().await;
+            let k: u32 = 0;
+            let hash_k = cache.hash(&k);
+
+            // t0/t1: insert K and let the housekeeper admit it (EntryInfo_A, an
+            // LRU node N_A pushed, is_admitted(EntryInfo_A) = true).
+            insert(&cache, k, 1).await;
+            run(&cache).await;
+            assert!(cache.contains_key_with_hash(&k, hash_k));
+            assert_eq!(cache.entry_count(), 1);
+
+            // t2: UPDATE K.  Update path shares EntryInfo_A and bumps entry_gen, so
+            // the queued WriteOp (A2) points at EntryInfo_A.  HOLD A2 (do not send).
+            let (a2, _now) = cache.do_insert_with_hash(Arc::new(k), hash_k, 100).await;
+            let (adm, dirty, eg) = probe(&a2);
+            eprintln!("[t2] held A2: is_admitted={adm} is_dirty={dirty} entry_gen={eg}");
+
+            // t3: flip is_admitted(EntryInfo_A) -> false while A2 is still queued.
+            //
+            // NOTE / DEVIATION from doc 6a: the doc uses *capacity eviction* to do
+            // this.  But the held update A2 leaves N_A dirty (entry_gen != policy_gen)
+            // and `evict_lru_entries` SKIPS dirty nodes, so capacity eviction cannot
+            // remove K here (see `future_lru_capacity_eviction_skips_dirty_node_diag`).
+            // An explicit remove reaches `handle_remove`, which sets is_admitted=false
+            // with NO dirty check -- reaching the exact same precondition the race
+            // produces: a stale queued Upsert for a de-admitted EntryInfo.
+            queue_remove(&cache, k, hash_k);
+            run(&cache).await;
+            assert!(
+                !cache.contains_key_with_hash(&k, hash_k),
+                "K must be gone from the hash table after remove"
+            );
+            let (adm, dirty, eg) = probe(&a2);
+            eprintln!(
+                "[t3] after remove drained: is_admitted={adm} is_dirty={dirty} \
+                 entry_gen={eg} entry_count={}",
+                cache.entry_count()
+            );
+            assert!(!adm, "EntryInfo_A must be de-admitted");
+
+            // t4: drain the STALE A2.  handle_upsert sees is_admitted(EntryInfo_A)
+            // == false and calls handle_admit, pushing a BRAND-NEW zombie node for
+            // the defunct EntryInfo_A even though the hash table has no K.
+            cache.write_op_ch.send(a2).expect("send stale A2");
+            run(&cache).await;
+            eprintln!(
+                "[t4] after stale A2 drained: entry_count={} contains(K)={}",
+                cache.entry_count(),
+                cache.contains_key_with_hash(&k, hash_k)
+            );
+
+            // t5: re-insert K -> fresh EntryInfo_B, live node N_B.  Now the hash
+            // table has K again, so `skip_updated_entry_ao` will move N_B (the live
+            // node) to the back and can never reach the zombie N_A2.
+            insert(&cache, k, 2).await;
+            run(&cache).await;
+
+            // Insert many new keys, one maintenance run each.  Each admit inflates
+            // the entry counter; eviction peeks the zombie stuck at the LRU front,
+            // fails remove_if, skips a *different* node, and evicts nothing.
+            for nk in 100u32..150 {
+                insert(&cache, nk, nk).await;
+                run(&cache).await;
+            }
+
+            // Extra maintenance runs with NO pending writes.  A healthy cache
+            // converges to <= MAX; the stalled cache does not shrink at all.
+            let before = cache.entry_count();
+            for _ in 0..20 {
+                run(&cache).await;
+            }
+            let after = cache.entry_count();
+            eprintln!("[final] entry_count before extra drains={before}, after={after}, MAX={MAX}");
+
+            assert_eq!(
+                before, after,
+                "no writes occurred, so the count must be stable across drains"
+            );
+            assert!(
+                after <= MAX,
+                "STALL (issue #590): entry_count={after} stays above max_capacity={MAX}; \
+                 the zombie LRU node blocks all further eviction and the cache grows unboundedly"
+            );
+        }
+
+        // -----------------------------------------------------------------
+        // CONTROL: identical shape but A2 is drained in the CORRECT order
+        // (before the remove), so no stale replay occurs.  Must PASS today,
+        // proving the harness itself is sound.
+        // -----------------------------------------------------------------
+        #[tokio::test]
+        async fn future_lru_zombie_stall_control() {
+            let cache = new_lru_cache().await;
+            let k: u32 = 0;
+            let hash_k = cache.hash(&k);
+
+            insert(&cache, k, 1).await;
+            run(&cache).await;
+
+            // t2: update K, but SEND A2 immediately and drain it as a normal update
+            // (is_admitted stays true, policy_gen catches up -> node not dirty).
+            let (a2, _now) = cache.do_insert_with_hash(Arc::new(k), hash_k, 100).await;
+            cache.write_op_ch.send(a2).expect("send A2");
+            run(&cache).await;
+
+            // Now remove K normally (no stale op left behind).
+            queue_remove(&cache, k, hash_k);
+            run(&cache).await;
+            assert!(!cache.contains_key_with_hash(&k, hash_k));
+
+            // Re-insert K and fill with many keys.
+            insert(&cache, k, 2).await;
+            run(&cache).await;
+            for nk in 100u32..150 {
+                insert(&cache, nk, nk).await;
+                run(&cache).await;
+            }
+
+            let before = cache.entry_count();
+            for _ in 0..20 {
+                run(&cache).await;
+            }
+            let after = cache.entry_count();
+            eprintln!("[control final] before={before} after={after} MAX={MAX}");
+            assert!(
+                after <= MAX,
+                "control must converge but entry_count={after} > max_capacity={MAX}"
+            );
+        }
+
+        // -----------------------------------------------------------------
+        // DIAGNOSTIC: documents the deviation from doc 6a t3.  A held update
+        // makes K's node dirty, and capacity eviction (`evict_lru_entries`)
+        // skips dirty nodes, so it does NOT evict K.  This must PASS today.
+        // -----------------------------------------------------------------
+        #[tokio::test]
+        async fn future_lru_capacity_eviction_skips_dirty_node_diag() {
+            let cache = new_lru_cache().await;
+            let k: u32 = 0;
+            let hash_k = cache.hash(&k);
+
+            insert(&cache, k, 1).await;
+            run(&cache).await;
+
+            // t2: update K, HOLD A2 -> node becomes dirty.
+            let (a2, _now) = cache.do_insert_with_hash(Arc::new(k), hash_k, 100).await;
+            let (_adm, dirty_after_update, _eg) = probe(&a2);
+
+            // t3 (doc): push over capacity with 4 other keys, then run maintenance.
+            // The doc claims K is evicted here; observe that it is not.
+            for nk in 1u32..=4 {
+                insert(&cache, nk, nk).await;
+            }
+            run(&cache).await;
+
+            let still_present = cache.contains_key_with_hash(&k, hash_k);
+            let (adm_after, dirty_after, eg_after) = probe(&a2);
+            eprintln!(
+                "[cap-diag] dirty_after_update={dirty_after_update} K_present={still_present} \
+                 K_is_admitted={adm_after} dirty={dirty_after} entry_gen={eg_after} \
+                 entry_count={}",
+                cache.entry_count()
+            );
+
+            assert!(
+                dirty_after_update,
+                "a held update must leave the node dirty (entry_gen != policy_gen)"
+            );
+            assert!(
+                still_present,
+                "DEVIATION from doc 6a t3: capacity eviction skips the dirty node, so K survives"
+            );
+            assert!(
+                adm_after,
+                "K remains admitted because capacity eviction never removed it"
+            );
+        }
+
+        // -----------------------------------------------------------------
+        // TinyLFU (default policy) variant.  The zombie still forms: at t4 the
+        // stale A2 is replayed and, because the cache is under capacity right
+        // after the remove, handle_upsert takes the `has_enough_capacity`
+        // branch and calls handle_admit WITHOUT consulting the sketch -- so the
+        // zombie is policy-independent (no sketch warming needed).
+        //
+        // Under TinyLFU the symptom differs from LRU: not unbounded growth but a
+        // permanent phantom slot.  The entry counter counts the zombie, but the
+        // hash table never holds it, so `entry_count()` over-reports the number
+        // of live entries forever.  This test asserts the counter equals the
+        // actual number of reachable keys; at 7006d8c it FAILS (off by the
+        // zombie).
+        // -----------------------------------------------------------------
+        #[tokio::test]
+        async fn future_tinylfu_zombie_phantom_slot_repro() {
+            let cache = new_tinylfu_cache().await;
+            let k: u32 = 0;
+            let hash_k = cache.hash(&k);
+
+            // t0/t1
+            insert(&cache, k, 1).await;
+            run(&cache).await;
+            assert!(cache.contains_key_with_hash(&k, hash_k));
+
+            // t2: update K, HOLD the stale A2.
+            let (a2, _now) = cache.do_insert_with_hash(Arc::new(k), hash_k, 100).await;
+            let (_adm, dirty, _eg) = probe(&a2);
+            assert!(dirty, "held update marks the node dirty");
+
+            // t3: remove K -> de-admit EntryInfo_A while A2 waits.
+            queue_remove(&cache, k, hash_k);
+            run(&cache).await;
+            assert!(!cache.contains_key_with_hash(&k, hash_k));
+            let (adm, _d, _e) = probe(&a2);
+            assert!(!adm, "EntryInfo_A must be de-admitted");
+
+            // t4: replay stale A2 -> zombie node for the defunct EntryInfo_A.
+            cache.write_op_ch.send(a2).expect("send stale A2");
+            run(&cache).await;
+
+            // t5: re-insert K -> live EntryInfo_B, and add a few more keys.
+            insert(&cache, k, 2).await;
+            run(&cache).await;
+            for nk in 100u32..120 {
+                insert(&cache, nk, nk).await;
+                run(&cache).await;
+            }
+            for _ in 0..10 {
+                run(&cache).await;
+            }
+
+            // Count keys the hash table actually still holds.
+            let mut live = 0u64;
+            if cache.contains_key_with_hash(&k, hash_k) {
+                live += 1;
+            }
+            for nk in 100u32..120 {
+                if cache.contains_key_with_hash(&nk, cache.hash(&nk)) {
+                    live += 1;
+                }
+            }
+            let count = cache.entry_count();
+            eprintln!("[tinylfu] entry_count={count} actual_live_keys={live} MAX={MAX}");
+
+            assert_eq!(
+                count, live,
+                "TinyLFU zombie (issue #590): entry_count={count} over-reports the \
+                 {live} live keys -- a phantom slot is leaked permanently"
+            );
+        }
+    }
 }
