@@ -1922,15 +1922,28 @@ where
         timer_wheel: &mut TimerWheel<K>,
         counters: &mut EvictionCounters,
     ) {
-        // Precondition: admission only applies to Alive, not-yet-admitted
-        // entries. Violations indicate a caller failed to guard with
-        // `is_alive()` / `!is_admitted()`. Admitting a retired entry would
-        // produce an orphan deque node unreachable from the CHT, stalling
-        // eviction indefinitely (moka-rs/moka#590).
-        debug_assert!(
-            entry.entry_info().is_alive(),
-            "handle_admit called on non-Alive entry",
-        );
+        // The caller checked `is_alive()` before calling us, but a concurrent
+        // `remove`/`invalidate` on a user thread may have retired the entry in
+        // the meantime; retirement is lock-free and does not take the
+        // maintenance locks. Skip the admission in that case: admitting a
+        // retired entry would produce an orphan deque node unreachable from
+        // the CHT (moka-rs/moka#590). The thread that retired the entry has
+        // already recorded a `WriteOp::Remove`, and since this entry is not
+        // admitted, that op will not touch the deques, leaving no dangling
+        // policy state.
+        //
+        // Note this re-check is best-effort, not a guarantee: because we hold
+        // no lock, the entry can still be retired between this check and the
+        // `set_admitted(true)` below. That residual race is benign and
+        // self-healing: the same queued `WriteOp::Remove` will observe
+        // `is_admitted() == true`, unlink the node, and reverse the entry
+        // count/weight updates. A *permanent* orphan (the #590 zombie) cannot
+        // form here, because the only retirement paths that run outside the
+        // maintenance locks are user `remove`/`invalidate`, and both always
+        // enqueue that `WriteOp::Remove`.
+        if !entry.entry_info().is_alive() {
+            return;
+        }
         debug_assert!(
             !entry.is_admitted(),
             "handle_admit called on already-admitted entry",
