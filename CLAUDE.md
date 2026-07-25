@@ -96,6 +96,21 @@ cargo +nightly -Z unstable-options --config 'build.rustdocflags="--cfg docsrs"' 
 
 The `get` method returns `Option<V>` (cloned value) rather than `Option<&V>` because entries can be evicted by other threads at any time.
 
+## Design Documentation
+
+- `docs/adr/` — Architecture Decision Records: the "why" behind non-obvious
+  design decisions. See `docs/adr/README.md` for the index, the template, and
+  the criteria for when to write one.
+
+Rules:
+
+1. If your change makes a non-obvious design decision (public API shape or
+   semantics, concurrency protocol or memory ordering, dependency choice,
+   MSRV/edition/licensing policy), add a new ADR in the same PR.
+2. Never edit an accepted ADR. To revise a decision, write a new ADR that
+   supersedes the old one and change the old ADR's Status line to
+   `Superseded by ADR-NNNN`. Do not renumber ADRs.
+
 ## Important Licensing Notes
 
 `src/common/frequency_sketch.rs` and `src/common/timer_wheel.rs` are ported from Caffeine and are **Apache 2.0 only** (not dual-licensed like the rest of the crate).
