@@ -4,27 +4,31 @@
 > If you have any questions about Moka's APIs or internal design, you can ask the
 > AI chatbot at DeepWiki in a natural language:
 > <https://deepwiki.com/moka-rs/moka>
+>
+> Of course, you can also refer to the [documentation][moka-docs], or ask the human
+> maintainers questions on the [Moka GitHub repository][gh-repo], but asking the
+> chatbot is often faster and more convenient.
 
 ## Version 0.12.16
 
 ### Fixed
 
 - Fixed a bug where cache eviction could stall permanently when the cache was
-  configured with the **non-default** LRU eviction policy
-  (`EvictionPolicy::lru()`): a race between applying a stale write recording
-  and removing the entry from the internal concurrent hash table could leave an
-  orphaned ("zombie") node at the front of the LRU queue. Once present, no
-  entry was ever evicted again and the cache grew unboundedly past
-  `max_capacity`. This bug was introduced in v0.12.0 and affected
-  `sync::Cache`, `sync::SegmentedCache` and `future::Cache`
+  configured with the **non-default** LRU eviction policy (`EvictionPolicy::lru()`)
+  by a race between insert and remove operations on the same key
   ([#592][gh-pull-0592] by [@kim-jhyeon][gh-kim-jhyeon], reported in
   [#590][gh-issue-0590]):
+    - This bug was introduced in v0.12.0 and affected `sync::Cache`,
+      `sync::SegmentedCache` and `future::Cache`.
+    - A race between applying a write recording for an entry and concurrently
+      removing that entry from the internal concurrent hash table could leave an
+      orphaned node at the front of the LRU queue. Once present, no entry was ever
+      evicted again and the cache grew unboundedly past `max_capacity`.
     - The same race also affected the default TinyLFU eviction policy, but with
       a milder symptom: each occurrence permanently leaked one phantom entry
       slot, causing `entry_count` and `weighted_size` to over-report and the
       usable capacity to shrink by one entry per occurrence. Fixed by the same
       change.
-
 
 ## Version 0.12.15
 
@@ -1086,6 +1090,9 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 
 
 <!-- Links -->
+
+[moka-docs]: https://docs.rs/moka/
+[gh-repo]: https://github.com/moka-rs/moka/
 
 [caffeine-git]: https://github.com/ben-manes/caffeine
 [mini-moka-crate]: https://crates.io/crates/mini-moka
