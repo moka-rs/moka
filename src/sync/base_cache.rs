@@ -3458,7 +3458,9 @@ mod tests {
     }
 
     // =====================================================================
-    // Reproduction tests for issue #590 (sync mirror of the future tests).
+    // Reproduction tests for issue #590 (sync mirror of the future tests;
+    // see the race narrative in the `gh590` test module of
+    // `src/future/base_cache.rs`).
     // The issue was reported for `future::Cache`; these verify whether the
     // same structural race reproduces in `sync::Cache` (it does).
     // =====================================================================
@@ -3648,7 +3650,7 @@ mod tests {
             );
             assert!(
                 still_present,
-                "DEVIATION from doc 6a t3: capacity eviction skips the dirty node, K survives"
+                "capacity eviction skips the dirty node, K survives (t3 cannot happen this way)"
             );
             assert!(adm_after, "K remains admitted because it was never evicted");
         }

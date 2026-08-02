@@ -3695,8 +3695,50 @@ mod tests {
     // Reproduction tests for issue #590
     // (zombie LRU deque node -> permanent eviction stall -> unbounded growth)
     //
-    // See moka-memo/moka-internals/02-housekeeper.md section 6a for the race
-    // narrative.  These drive `future::BaseCache` internals directly so the
+    // Two facts enable the race:
+    //
+    // 1. A write is NOT atomic with its policy recording.  A writer first
+    //    mutates the hash table (in `do_insert_with_hash`, which only
+    //    *returns* the `WriteOp`) and then, as a separate step, sends that
+    //    op to `write_op_ch` (`schedule_write_op` in the caller).  A writer
+    //    preempted between the two steps makes the channel order differ
+    //    from the hash-table order: ops later in the channel can describe
+    //    *earlier* hash-table states (a "stale" op).
+    //
+    // 2. The update path (`new_value_entry_from`) clones the existing
+    //    `MiniArc<EntryInfo>`, so an updated `ValueEntry` shares its
+    //    `EntryInfo` with the entry it replaces, while the insert path
+    //    creates a fresh `EntryInfo`.
+    //
+    // With writers racing the housekeeper on one key K:
+    //
+    //   t0 insert(K, v1) -> fresh EntryInfo_A; WriteOp A1 queued.
+    //   t1 housekeeper drains A1 -> `handle_admit` pushes LRU node N_A and
+    //        sets is_admitted(EntryInfo_A) = true.
+    //   t2 Writer-B: update(K, v2) -> the new hash-table entry shares
+    //        EntryInfo_A; Writer-B is preempted BEFORE sending WriteOp A2
+    //        (fact 1), so A2 is not in the channel yet.
+    //   t3 Writer-C: remove(K) -> `remove_entry` deletes K from the hash
+    //        table and `WriteOp::Remove` is sent; the housekeeper drains it
+    //        -> `handle_remove` sets is_admitted(EntryInfo_A) = false and
+    //        unlinks N_A.  Writer-B now resumes and sends the stale A2.
+    //   t4 housekeeper drains the stale A2 -> `handle_upsert` sees
+    //        is_admitted == false and calls `handle_admit`, pushing a
+    //        BRAND-NEW deque node backed by the defunct EntryInfo_A even
+    //        though the hash table has no K.  This node is the "zombie".
+    //   t5 insert(K, v3) -> fresh EntryInfo_B, live node N_B.
+    //
+    // The deque now holds two nodes for K: the zombie (-> EntryInfo_A) and
+    // the live N_B (-> EntryInfo_B); the hash table only knows EntryInfo_B.
+    // When the zombie reaches the LRU front, `evict_lru_entries` calls
+    // `remove_if(K, |v| v.last_accessed() == ts)` with EntryInfo_A's
+    // timestamp, which never matches EntryInfo_B's, and
+    // `skip_updated_entry_ao` moves the *hash entry's* node (N_B) to the
+    // back -- it can never unlink the zombie.  Eviction makes no progress
+    // past the zombie, so under the LRU policy the cache grows unboundedly
+    // past max_capacity and never recovers.
+    //
+    // These tests drive `future::BaseCache` internals directly so the
     // interleaving is deterministic (no threads, no sleeps).
     // =====================================================================
     mod gh590 {
@@ -3813,10 +3855,13 @@ mod tests {
 
             // t3: flip is_admitted(EntryInfo_A) -> false while A2 is still queued.
             //
-            // NOTE / DEVIATION from doc 6a: the doc uses *capacity eviction* to do
-            // this.  But the held update A2 leaves N_A dirty (entry_gen != policy_gen)
-            // and `evict_lru_entries` SKIPS dirty nodes, so capacity eviction cannot
-            // remove K here (see `future_lru_capacity_eviction_skips_dirty_node_diag`).
+            // NOTE: why an explicit remove and not *capacity eviction*?  In the
+            // wild, capacity eviction can also de-admit K (via a TOCTOU on the
+            // dirty check), but not in a deterministic single-threaded schedule:
+            // the held update A2 leaves N_A dirty (entry_gen != policy_gen) and
+            // `evict_lru_entries` SKIPS dirty nodes, so capacity eviction cannot
+            // remove K here (see the
+            // `future_lru_capacity_eviction_skips_dirty_node_diag` test below).
             // An explicit remove reaches `handle_remove`, which sets is_admitted=false
             // with NO dirty check -- reaching the exact same precondition the race
             // produces: a stale queued Upsert for a de-admitted EntryInfo.
@@ -3881,8 +3926,8 @@ mod tests {
 
         // -----------------------------------------------------------------
         // CONTROL: identical shape but A2 is drained in the CORRECT order
-        // (before the remove), so no stale replay occurs.  Must PASS today,
-        // proving the harness itself is sound.
+        // (before the remove), so no stale replay occurs.  Must PASS even
+        // with issue #590 unfixed, proving the harness itself is sound.
         // -----------------------------------------------------------------
         #[tokio::test]
         async fn future_lru_zombie_stall_control() {
@@ -3925,9 +3970,11 @@ mod tests {
         }
 
         // -----------------------------------------------------------------
-        // DIAGNOSTIC: documents the deviation from doc 6a t3.  A held update
-        // makes K's node dirty, and capacity eviction (`evict_lru_entries`)
-        // skips dirty nodes, so it does NOT evict K.  This must PASS today.
+        // DIAGNOSTIC: documents why step t3 of the narrative above uses an
+        // explicit remove rather than capacity eviction.  A held update makes
+        // K's node dirty, and capacity eviction (`evict_lru_entries`) skips
+        // dirty nodes, so it does NOT evict K.  This must PASS even with
+        // issue #590 unfixed.
         // -----------------------------------------------------------------
         #[tokio::test]
         async fn future_lru_capacity_eviction_skips_dirty_node_diag() {
@@ -3942,8 +3989,9 @@ mod tests {
             let (a2, _now) = cache.do_insert_with_hash(Arc::new(k), hash_k, 100).await;
             let (_adm, dirty_after_update, _eg) = probe(&a2);
 
-            // t3 (doc): push over capacity with 4 other keys, then run maintenance.
-            // The doc claims K is evicted here; observe that it is not.
+            // t3 (attempted via capacity eviction): push over capacity with 4
+            // other keys, then run maintenance.  If capacity eviction could
+            // de-admit K, it would be evicted here; observe that it is not.
             for nk in 1u32..=4 {
                 insert(&cache, nk, nk).await;
             }
@@ -3964,7 +4012,7 @@ mod tests {
             );
             assert!(
                 still_present,
-                "DEVIATION from doc 6a t3: capacity eviction skips the dirty node, so K survives"
+                "capacity eviction skips the dirty node, so K survives (t3 cannot happen this way)"
             );
             assert!(
                 adm_after,
