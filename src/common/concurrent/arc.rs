@@ -141,7 +141,15 @@ impl<T: ?Sized> Drop for MiniArc<T> {
         use std::sync::atomic::Ordering::{Acquire, Release};
 
         if self.data().ref_count.fetch_sub(1, Release) == 1 {
-            atomic::fence(Acquire);
+            // A standalone `atomic::fence(Acquire)` would also be correct here,
+            // but ThreadSanitizer does not model standalone fences and would
+            // report the deallocation below as a data race against other
+            // threads' `fetch_sub` calls (a false positive; see issue #600).
+            // Use an `Acquire` load of the reference count instead, like
+            // `std::sync::Arc` does when compiled with
+            // `cfg(sanitize = "thread")` and like `triomphe::Arc` does
+            // unconditionally.
+            self.data().ref_count.load(Acquire);
             unsafe {
                 drop(Box::from_raw(self.ptr.as_ptr()));
             }
@@ -325,6 +333,40 @@ mod loom_tests {
 
             // Now that `y` is dropped too,
             // the object should have been dropped.
+            assert_eq!(num_drops.load(Relaxed), 1);
+        });
+    }
+
+    /// Two threads drop their clones concurrently, so either of them can
+    /// perform the final decrement of the reference count. Verifies that the
+    /// object is dropped exactly once no matter which thread wins the race.
+    /// (The `test_drop` test above joins the other thread before the final
+    /// drop, so it does not exercise a racing final decrement.)
+    #[test]
+    fn test_concurrent_drop() {
+        use loom::sync::atomic::{AtomicUsize, Ordering::Relaxed};
+
+        struct DetectDrop(loom::sync::Arc<AtomicUsize>);
+
+        impl Drop for DetectDrop {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Relaxed);
+            }
+        }
+
+        loom::model(move || {
+            let num_drops = loom::sync::Arc::new(AtomicUsize::new(0));
+
+            let x = MiniArc::new(DetectDrop(loom::sync::Arc::clone(&num_drops)));
+            let y = x.clone();
+
+            let t1 = loom::thread::spawn(move || drop(x));
+            let t2 = loom::thread::spawn(move || drop(y));
+
+            t1.join().unwrap();
+            t2.join().unwrap();
+
+            // The object should have been dropped exactly once.
             assert_eq!(num_drops.load(Relaxed), 1);
         });
     }

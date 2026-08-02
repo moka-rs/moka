@@ -30,6 +30,16 @@
       usable capacity to shrink by one entry per occurrence. Fixed by the same
       change.
 
+### Changed
+
+- Replaced the standalone `fence(Acquire)` in the internal `MiniArc`'s drop path
+  with an `Acquire` load of the reference count, following the same approach as
+  `std::sync::Arc` under ThreadSanitizer and `triomphe::Arc`. The two forms are
+  semantically equivalent, but ThreadSanitizer does not model standalone fences
+  and reported a false-positive data race on every final drop of a shared
+  `MiniArc`. Downstream projects can now run ThreadSanitizer on code using Moka
+  without hitting this false positive. (Reported in [#600][gh-issue-0600])
+
 ## Version 0.12.15
 
 ### Fixed
@@ -1146,6 +1156,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-xuehaonan27]: https://github.com/xuehaonan27
 [gh-zonyitoo]: https://github.com/zonyitoo
 
+[gh-issue-0600]: https://github.com/moka-rs/moka/issues/600/
 [gh-issue-0590]: https://github.com/moka-rs/moka/issues/590/
 [gh-issue-0580]: https://github.com/moka-rs/moka/issues/580/
 [gh-issue-0575]: https://github.com/moka-rs/moka/issues/575/
