@@ -38,6 +38,14 @@
       projects can now run ThreadSanitizer on code using Moka without hitting
       this false positive.
     - `std::sync::Arc` has a similar workaround.
+- Raised the minimum version of the `crossbeam-epoch` crate from `v0.9.18` to
+  `v0.9.20` to avoid the following advisory ([#603][gh-pull-0603]):
+    - [RUSTSEC-2026-0204] crossbeam-epoch: invalid pointer dereference in
+      `fmt::Pointer` for `Atomic` and `Shared`
+    - Moka is _not_ affected by this advisory because it never formats these
+      pointer types. However, raising the minimum version prevents downstream
+      lockfiles from resolving to an affected `crossbeam-epoch` version via
+      Moka.
 
 ## Version 0.12.15
 
@@ -1113,6 +1121,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [ghsa-qc84-gqf4-9926]: https://github.com/advisories/GHSA-qc84-gqf4-9926
 [gh-rust-issue-62958]: https://github.com/rust-lang/rust/issues/62958
 
+[RUSTSEC-2026-0204]: https://rustsec.org/advisories/RUSTSEC-2026-0204.html
 [RUSTSEC-2025-0052]: https://rustsec.org/advisories/RUSTSEC-2025-0052.html
 [RUSTSEC-2025-0024]: https://rustsec.org/advisories/RUSTSEC-2025-0024.html
 [RUSTSEC-2024-0436]: https://rustsec.org/advisories/RUSTSEC-2024-0436.html
@@ -1185,6 +1194,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0603]: https://github.com/moka-rs/moka/pull/603/
 [gh-pull-0602]: https://github.com/moka-rs/moka/pull/602/
 [gh-pull-0592]: https://github.com/moka-rs/moka/pull/592/
 [gh-pull-0586]: https://github.com/moka-rs/moka/pull/586/

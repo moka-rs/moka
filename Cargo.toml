@@ -62,7 +62,7 @@ unstable-debug-counters = ["future"]
 
 [dependencies]
 crossbeam-channel = "0.5.15"
-crossbeam-epoch = "0.9.18"
+crossbeam-epoch = "0.9.20"
 crossbeam-utils = "0.8.21"
 equivalent = "1.0"
 parking_lot = "0.12"
