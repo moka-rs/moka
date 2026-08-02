@@ -4,6 +4,31 @@
 > If you have any questions about Moka's APIs or internal design, you can ask the
 > AI chatbot at DeepWiki in a natural language:
 > <https://deepwiki.com/moka-rs/moka>
+>
+> Of course, you can also refer to the [documentation][moka-docs], or ask the human
+> maintainers questions on the [Moka GitHub repository][gh-repo], but asking the
+> chatbot is often faster and more convenient.
+
+## Version 0.12.16
+
+### Fixed
+
+- Fixed a bug where cache eviction could stall permanently when the cache was
+  configured with the **non-default** LRU eviction policy (`EvictionPolicy::lru()`)
+  by a race between insert and remove operations on the same key
+  ([#592][gh-pull-0592] by [@kim-jhyeon][gh-kim-jhyeon], reported in
+  [#590][gh-issue-0590]):
+    - This bug was introduced in v0.12.0 and affected `sync::Cache`,
+      `sync::SegmentedCache` and `future::Cache`.
+    - A race between applying a write recording for an entry and concurrently
+      removing that entry from the internal concurrent hash table could leave an
+      orphaned node at the front of the LRU queue. Once present, no entry was ever
+      evicted again and the cache grew unboundedly past `max_capacity`.
+    - The same race also affected the default TinyLFU eviction policy, but with
+      a milder symptom: each occurrence permanently leaked one phantom entry
+      slot, causing `entry_count` and `weighted_size` to over-report and the
+      usable capacity to shrink by one entry per occurrence. Fixed by the same
+      change.
 
 ## Version 0.12.15
 
@@ -1066,6 +1091,9 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 
 <!-- Links -->
 
+[moka-docs]: https://docs.rs/moka/
+[gh-repo]: https://github.com/moka-rs/moka/
+
 [caffeine-git]: https://github.com/ben-manes/caffeine
 [mini-moka-crate]: https://crates.io/crates/mini-moka
 [quanta-crate]: https://crates.io/crates/quanta
@@ -1095,6 +1123,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-JoJoDeveloping]: https://github.com/JoJoDeveloping
 [gh-jiangzhe]: https://github.com/jiangzhe
 [gh-karankurbur]: https://github.com/karankurbur
+[gh-kim-jhyeon]: https://github.com/kim-jhyeon
 [gh-koushiro]: https://github.com/koushiro
 [gh-LMJW]: https://github.com/LMJW
 [gh-messense]: https://github.com/messense
@@ -1117,6 +1146,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-xuehaonan27]: https://github.com/xuehaonan27
 [gh-zonyitoo]: https://github.com/zonyitoo
 
+[gh-issue-0590]: https://github.com/moka-rs/moka/issues/590/
 [gh-issue-0580]: https://github.com/moka-rs/moka/issues/580/
 [gh-issue-0575]: https://github.com/moka-rs/moka/issues/575/
 [gh-issue-0565]: https://github.com/moka-rs/moka/issues/565/
@@ -1146,6 +1176,7 @@ The minimum supported Rust version (MSRV) is now 1.51.0 (Mar 25, 2021).
 [gh-issue-0034]: https://github.com/moka-rs/moka/issues/34/
 [gh-issue-0031]: https://github.com/moka-rs/moka/issues/31/
 
+[gh-pull-0592]: https://github.com/moka-rs/moka/pull/592/
 [gh-pull-0586]: https://github.com/moka-rs/moka/pull/586/
 [gh-pull-0584]: https://github.com/moka-rs/moka/pull/584/
 [gh-pull-0582]: https://github.com/moka-rs/moka/pull/582/

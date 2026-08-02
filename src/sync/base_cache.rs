@@ -1763,15 +1763,28 @@ where
         timer_wheel: &mut TimerWheel<K>,
         counters: &mut EvictionCounters,
     ) {
-        // Precondition: admission only applies to Alive, not-yet-admitted
-        // entries. Violations indicate a caller failed to guard with
-        // `is_alive()` / `!is_admitted()`. Admitting a retired entry would
-        // produce an orphan deque node unreachable from the CHT, stalling
-        // eviction indefinitely (moka-rs/moka#590).
-        debug_assert!(
-            entry.entry_info().is_alive(),
-            "handle_admit called on non-Alive entry",
-        );
+        // The caller checked `is_alive()` before calling us, but a concurrent
+        // `remove`/`invalidate` on a user thread may have retired the entry in
+        // the meantime; retirement is lock-free and does not take the
+        // maintenance locks. Skip the admission in that case: admitting a
+        // retired entry would produce an orphan deque node unreachable from
+        // the CHT (moka-rs/moka#590). The thread that retired the entry has
+        // already recorded a `WriteOp::Remove`, and since this entry is not
+        // admitted, that op will not touch the deques, leaving no dangling
+        // policy state.
+        //
+        // Note this re-check is best-effort, not a guarantee: because we hold
+        // no lock, the entry can still be retired between this check and the
+        // `set_admitted(true)` below. That residual race is benign and
+        // self-healing: the same queued `WriteOp::Remove` will observe
+        // `is_admitted() == true`, unlink the node, and reverse the entry
+        // count/weight updates. A *permanent* orphan (the #590 zombie) cannot
+        // form here, because the only retirement paths that run outside the
+        // maintenance locks are user `remove`/`invalidate`, and both always
+        // enqueue that `WriteOp::Remove`.
+        if !entry.entry_info().is_alive() {
+            return;
+        }
         debug_assert!(
             !entry.is_admitted(),
             "handle_admit called on already-admitted entry",
@@ -3442,5 +3455,204 @@ mod tests {
         cache.inner.run_pending_tasks(None, 1, 10);
 
         assert_expiry!(cache, key, hash, mock, 4);
+    }
+
+    // =====================================================================
+    // Reproduction tests for issue #590 (sync mirror of the future tests;
+    // see the race narrative in the `gh590` test module of
+    // `src/future/base_cache.rs`).
+    // The issue was reported for `future::Cache`; these verify whether the
+    // same structural race reproduces in `sync::Cache` (it does).
+    // =====================================================================
+    mod gh590 {
+        use super::super::BaseCache;
+        use crate::common::concurrent::WriteOp;
+        use crate::{
+            common::{time::Clock, HousekeeperConfig},
+            policy::{EvictionPolicy, ExpirationPolicy},
+        };
+        use std::collections::hash_map::RandomState;
+        use std::sync::Arc;
+
+        const MAX: u64 = 4;
+
+        fn new_lru_cache() -> BaseCache<u32, u32> {
+            let mut cache = BaseCache::<u32, u32>::new(
+                None,
+                Some(MAX),
+                None,
+                RandomState::default(),
+                None,
+                EvictionPolicy::lru(),
+                None,
+                ExpirationPolicy::default(),
+                HousekeeperConfig::default(),
+                false,
+                Clock::default(),
+            );
+            cache.reconfigure_for_testing();
+            cache
+        }
+
+        fn insert(cache: &BaseCache<u32, u32>, k: u32, v: u32) {
+            let hash = cache.hash(&k);
+            let (op, _now) = cache.do_insert_with_hash(Arc::new(k), hash, v);
+            cache.write_op_ch.send(op).expect("send upsert");
+        }
+
+        fn run(cache: &BaseCache<u32, u32>) {
+            cache.inner.do_run_pending_tasks(None, 1, 10);
+        }
+
+        fn probe(op: &WriteOp<u32, u32>) -> (bool, bool, u16) {
+            match op {
+                WriteOp::Upsert { value_entry, .. } => {
+                    let ei = value_entry.entry_info();
+                    (ei.is_admitted(), ei.is_dirty(), ei.entry_gen())
+                }
+                _ => panic!("expected an Upsert WriteOp"),
+            }
+        }
+
+        fn queue_remove(cache: &BaseCache<u32, u32>, k: u32, hash: u64) {
+            let kv = cache.remove_entry(&k, hash).expect("remove_entry");
+            let entry_gen = kv.entry.entry_info().incr_entry_gen();
+            cache
+                .write_op_ch
+                .send(WriteOp::Remove {
+                    kv_entry: kv,
+                    entry_gen,
+                })
+                .expect("send remove");
+        }
+
+        // PRIMARY REPRO: at 7006d8c this test FAILS with the stall assertion.
+        #[test]
+        fn sync_lru_zombie_stall_repro() {
+            let cache = new_lru_cache();
+            let k: u32 = 0;
+            let hash_k = cache.hash(&k);
+
+            insert(&cache, k, 1);
+            run(&cache);
+            assert!(cache.contains_key_with_hash(&k, hash_k));
+            assert_eq!(cache.entry_count(), 1);
+
+            // t2: update K, HOLD the stale WriteOp (A2).
+            let (a2, _now) = cache.do_insert_with_hash(Arc::new(k), hash_k, 100);
+            let (adm, dirty, eg) = probe(&a2);
+            eprintln!("[t2] held A2: is_admitted={adm} is_dirty={dirty} entry_gen={eg}");
+
+            // t3: flip is_admitted -> false via an explicit remove while A2 waits.
+            queue_remove(&cache, k, hash_k);
+            run(&cache);
+            assert!(!cache.contains_key_with_hash(&k, hash_k));
+            let (adm, _dirty, _eg) = probe(&a2);
+            assert!(!adm, "EntryInfo_A must be de-admitted");
+
+            // t4: drain the STALE A2 -> zombie node for the defunct EntryInfo_A.
+            cache.write_op_ch.send(a2).expect("send stale A2");
+            run(&cache);
+            eprintln!(
+                "[t4] entry_count={} contains(K)={}",
+                cache.entry_count(),
+                cache.contains_key_with_hash(&k, hash_k)
+            );
+
+            // t5: re-insert K -> live node, so skip_updated_entry_ao can never
+            // reach the zombie.
+            insert(&cache, k, 2);
+            run(&cache);
+
+            for nk in 100u32..150 {
+                insert(&cache, nk, nk);
+                run(&cache);
+            }
+
+            let before = cache.entry_count();
+            for _ in 0..20 {
+                run(&cache);
+            }
+            let after = cache.entry_count();
+            eprintln!("[final] before={before} after={after} MAX={MAX}");
+
+            assert_eq!(before, after, "count must be stable across no-op drains");
+            assert!(
+                after <= MAX,
+                "STALL (issue #590, sync): entry_count={after} stays above max_capacity={MAX}"
+            );
+        }
+
+        // CONTROL: correct ordering, must PASS.
+        #[test]
+        fn sync_lru_zombie_stall_control() {
+            let cache = new_lru_cache();
+            let k: u32 = 0;
+            let hash_k = cache.hash(&k);
+
+            insert(&cache, k, 1);
+            run(&cache);
+
+            let (a2, _now) = cache.do_insert_with_hash(Arc::new(k), hash_k, 100);
+            cache.write_op_ch.send(a2).expect("send A2");
+            run(&cache);
+
+            queue_remove(&cache, k, hash_k);
+            run(&cache);
+            assert!(!cache.contains_key_with_hash(&k, hash_k));
+
+            insert(&cache, k, 2);
+            run(&cache);
+            for nk in 100u32..150 {
+                insert(&cache, nk, nk);
+                run(&cache);
+            }
+            let before = cache.entry_count();
+            for _ in 0..20 {
+                run(&cache);
+            }
+            let after = cache.entry_count();
+            eprintln!("[control final] before={before} after={after} MAX={MAX}");
+            assert!(
+                after <= MAX,
+                "control must converge but entry_count={after} > {MAX}"
+            );
+        }
+
+        // DIAGNOSTIC: capacity eviction skips the dirty node; must PASS.
+        #[test]
+        fn sync_lru_capacity_eviction_skips_dirty_node_diag() {
+            let cache = new_lru_cache();
+            let k: u32 = 0;
+            let hash_k = cache.hash(&k);
+
+            insert(&cache, k, 1);
+            run(&cache);
+
+            let (a2, _now) = cache.do_insert_with_hash(Arc::new(k), hash_k, 100);
+            let (_adm, dirty_after_update, _eg) = probe(&a2);
+
+            for nk in 1u32..=4 {
+                insert(&cache, nk, nk);
+            }
+            run(&cache);
+
+            let still_present = cache.contains_key_with_hash(&k, hash_k);
+            let (adm_after, _d, _e) = probe(&a2);
+            eprintln!(
+                "[cap-diag] dirty_after_update={dirty_after_update} K_present={still_present} \
+                 K_is_admitted={adm_after} entry_count={}",
+                cache.entry_count()
+            );
+            assert!(
+                dirty_after_update,
+                "a held update must leave the node dirty"
+            );
+            assert!(
+                still_present,
+                "capacity eviction skips the dirty node, K survives (t3 cannot happen this way)"
+            );
+            assert!(adm_after, "K remains admitted because it was never evicted");
+        }
     }
 }
