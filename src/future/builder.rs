@@ -60,6 +60,7 @@ pub struct CacheBuilder<K, V, C> {
     max_capacity: Option<u64>,
     initial_capacity: Option<usize>,
     weigher: Option<Weigher<K, V>>,
+    cost: Option<Weigher<K, V>>,
     eviction_policy: EvictionPolicy,
     eviction_listener: Option<AsyncEvictionListener<K, V>>,
     expiration_policy: ExpirationPolicy<K, V>,
@@ -80,6 +81,7 @@ where
             max_capacity: None,
             initial_capacity: None,
             weigher: None,
+            cost: None,
             eviction_policy: EvictionPolicy::default(),
             eviction_listener: None,
             expiration_policy: ExpirationPolicy::default(),
@@ -122,6 +124,7 @@ where
             self.initial_capacity,
             build_hasher,
             self.weigher,
+            self.cost,
             self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
@@ -221,6 +224,7 @@ where
             self.initial_capacity,
             hasher,
             self.weigher,
+            self.cost,
             self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
@@ -277,6 +281,25 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     pub fn weigher(self, weigher: impl Fn(&K, &V) -> u32 + Send + Sync + 'static) -> Self {
         Self {
             weigher: Some(Arc::new(weigher)),
+            ..self
+        }
+    }
+
+    /// Sets the cost closure of the cache.
+    ///
+    /// The closure should take `&K` and `&V` as the arguments and returns a `u32`
+    /// representing the relative cost of recomputing the entry's value (for example,
+    /// the time it takes to load it).
+    ///
+    /// The cost is only consulted by the cost-aware eviction policy
+    /// ([`EvictionPolicy::cost_aware_lfu`][cost-aware-lfu]). Unlike the
+    /// [`weigher`](#method.weigher), the cost does not affect the cache's capacity
+    /// accounting. When no cost closure is set, every entry has a cost of `1`.
+    ///
+    /// [cost-aware-lfu]: ../policy/struct.EvictionPolicy.html#method.cost_aware_lfu
+    pub fn cost(self, cost: impl Fn(&K, &V) -> u32 + Send + Sync + 'static) -> Self {
+        Self {
+            cost: Some(Arc::new(cost)),
             ..self
         }
     }

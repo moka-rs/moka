@@ -1,8 +1,15 @@
-use crate::common::{concurrent::arc::MiniArc, deque::DeqNode, time::Instant};
+use crate::common::{
+    concurrent::arc::MiniArc, deque::DeqNode, frequency_sketch::FrequencySketch, time::Instant,
+};
+use crate::policy::EvictionPolicyConfig;
 
 use parking_lot::Mutex;
 use std::{fmt, ptr::NonNull, sync::Arc};
 use tagptr::TagNonNull;
+
+/// The cost of an entry when no cost closure is set or the eviction policy does not
+/// consult costs. It weights the entry's frequency by `1`, i.e. leaves it as-is.
+pub(crate) const DEFAULT_COST: u32 = 1;
 
 pub(crate) mod arc;
 pub(crate) mod constants;
@@ -219,6 +226,11 @@ impl<K, V> ValueEntry<K, V> {
         self.info.policy_weight()
     }
 
+    #[inline]
+    pub(crate) fn policy_cost(&self) -> u32 {
+        self.info.policy_cost()
+    }
+
     pub(crate) fn deq_nodes(&self) -> &MiniArc<Mutex<DeqNodes<K>>> {
         &self.nodes
     }
@@ -275,6 +287,63 @@ impl<K, V> ValueEntry<K, V> {
 impl<K, V> Drop for ValueEntry<K, V> {
     fn drop(&mut self) {
         self::debug_counters::InternalGlobalDebugCounters::value_entry_dropped();
+    }
+}
+
+/// A running aggregate of policy weight and frequency, used by the admission logic
+/// to compare a candidate entry against its potential victims. For the cost-aware
+/// policy the frequency is weighted by each entry's cost.
+#[derive(Default)]
+pub(crate) struct EntrySizeAndFrequency {
+    // The total policy weight (size) of the aggregated entries.
+    pub(crate) policy_weight: u64,
+    // Accumulated in a `u64` so that the cost-weighted frequency cannot overflow.
+    // (The sketch frequency is capped at 15 and the cost is a `u32`.)
+    pub(crate) freq: u64,
+}
+
+impl EntrySizeAndFrequency {
+    pub(crate) fn new(policy_weight: u32) -> Self {
+        Self {
+            policy_weight: policy_weight as u64,
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn add_policy_weight(&mut self, weight: u32) {
+        self.policy_weight += weight as u64;
+    }
+
+    /// Adds the entry's frequency to the running aggregate. When `cost` is `Some`,
+    /// the frequency is weighted by the cost (for the cost-aware policy); when it is
+    /// `None`, the frequency is added as-is.
+    pub(crate) fn add_frequency(&mut self, freq: &FrequencySketch, hash: u64, cost: Option<u64>) {
+        self.freq += freq.frequency(hash) as u64 * cost.unwrap_or(DEFAULT_COST as u64);
+    }
+}
+
+impl EvictionPolicyConfig {
+    /// Returns the cost to weight an entry's frequency by, or `None` when the policy
+    /// ignores cost (every policy other than the cost-aware one).
+    pub(crate) fn entry_cost<K, V>(&self, entry: &ValueEntry<K, V>) -> Option<u64> {
+        match self {
+            Self::CostAwareLfu => Some(entry.policy_cost() as u64),
+            Self::TinyLfu | Self::Lru => None,
+        }
+    }
+
+    /// Records a potential victim into the running aggregate `esf`, adding both its
+    /// policy weight and its (cost-weighted) frequency. This lets the admission logic
+    /// stay agnostic to which policy is in effect.
+    pub(crate) fn add_entry<K, V>(
+        &self,
+        esf: &mut EntrySizeAndFrequency,
+        freq: &FrequencySketch,
+        hash: u64,
+        entry: &ValueEntry<K, V>,
+    ) {
+        esf.add_policy_weight(entry.policy_weight());
+        esf.add_frequency(freq, hash, self.entry_cost(entry));
     }
 }
 

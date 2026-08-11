@@ -787,6 +787,7 @@ where
             None,
             build_hasher,
             None,
+            None,
             EvictionPolicy::default(),
             None,
             ExpirationPolicy::default(),
@@ -819,6 +820,7 @@ where
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        cost: Option<Weigher<K, V>>,
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<AsyncEvictionListener<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
@@ -833,6 +835,7 @@ where
                 initial_capacity,
                 build_hasher.clone(),
                 weigher,
+                cost,
                 eviction_policy,
                 eviction_listener,
                 expiration_policy,
@@ -2397,6 +2400,82 @@ mod tests {
         assert!(cache.contains_key(&"e"));
         assert!(cache.contains_key(&"f"));
         assert!(cache.contains_key(&"g"));
+
+        verify_notification_vec(&cache, actual, &expected).await;
+        assert!(cache.key_locks_map_is_empty());
+    }
+
+    #[tokio::test]
+    async fn cost_aware_single_thread() {
+        // The following `Vec`s will hold actual and expected notifications.
+        let actual = Arc::new(Mutex::new(Vec::new()));
+        let mut expected = Vec::new();
+
+        // Create an eviction listener.
+        let a1 = Arc::clone(&actual);
+        let listener = move |k, v, cause| -> ListenerFuture {
+            let a2 = Arc::clone(&a1);
+            async move {
+                a2.lock().await.push((k, v, cause));
+            }
+            .boxed()
+        };
+
+        // Create a cost-aware cache. "d" is expensive to recompute (cost 2); every
+        // other entry costs 1. The cache is count-based (no weigher), so each entry
+        // has a policy weight of 1 and the capacity is 3 entries.
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .eviction_policy(EvictionPolicy::cost_aware_lfu())
+            .cost(|&k, _v| if k == "d" { 2 } else { 1 })
+            .async_eviction_listener(listener)
+            .build();
+        cache.reconfigure_for_testing().await;
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", "alice").await;
+        cache.insert("b", "bob").await;
+        assert_eq!(cache.get(&"a").await, Some("alice"));
+        assert_eq!(cache.get(&"b").await, Some("bob"));
+        cache.run_pending_tasks().await;
+        // counts: a -> 1, b -> 1
+
+        cache.insert("c", "cindy").await;
+        assert_eq!(cache.get(&"c").await, Some("cindy"));
+        cache.run_pending_tasks().await;
+        // counts: a -> 1, b -> 1, c -> 1
+
+        assert_eq!(cache.get(&"a").await, Some("alice"));
+        assert_eq!(cache.get(&"b").await, Some("bob"));
+        cache.run_pending_tasks().await;
+        // counts: a -> 2, b -> 2, c -> 1
+
+        // First insert of the expensive "d": its frequency is still 0, so even with a
+        // cost of 2 its priority (0 * 2 = 0) cannot beat the victim "c" (1 * 1 = 1).
+        // Rejected.
+        cache.insert("d", "david").await; // count: d -> 0
+        expected.push((Arc::new("d"), "david", RemovalCause::Size));
+        cache.run_pending_tasks().await;
+        assert!(!cache.contains_key(&"d"));
+        assert_eq!(cache.get(&"d").await, None); // d -> 1
+
+        // Second insert: d's frequency is now 1, so its cost-weighted priority is
+        // 1 * 2 = 2, which beats "c" (1 * 1 = 1) and "d" is admitted, evicting "c".
+        // Under the plain TinyLFU policy this insert would still be rejected, because
+        // d's frequency (1) is not greater than c's (1); the cost is what flips it.
+        cache.insert("d", "dennis").await;
+        expected.push((Arc::new("c"), "cindy", RemovalCause::Size));
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.get(&"a").await, Some("alice"));
+        assert_eq!(cache.get(&"b").await, Some("bob"));
+        assert_eq!(cache.get(&"c").await, None);
+        assert_eq!(cache.get(&"d").await, Some("dennis"));
+        assert!(cache.contains_key(&"a"));
+        assert!(cache.contains_key(&"b"));
+        assert!(!cache.contains_key(&"c"));
+        assert!(cache.contains_key(&"d"));
 
         verify_notification_vec(&cache, actual, &expected).await;
         assert!(cache.key_locks_map_is_empty());

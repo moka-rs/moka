@@ -655,7 +655,7 @@ mod tests {
 
     use super::{TimerEvent, TimerWheel, SPANS};
     use crate::common::{
-        concurrent::{arc::MiniArc, entry_info::EntryInfo, KeyHash},
+        concurrent::{arc::MiniArc, entry_info::EntryInfo, KeyHash, DEFAULT_COST},
         time::{Clock, Instant, Mock},
     };
 
@@ -747,7 +747,9 @@ mod tests {
             let hash = key as u64;
             let key_hash = KeyHash::new(Arc::new(key), hash);
             let policy_weight = 0;
-            let entry_info = MiniArc::new(EntryInfo::new(key_hash, now, policy_weight));
+            let policy_cost = DEFAULT_COST;
+            let entry_info =
+                MiniArc::new(EntryInfo::new(key_hash, now, policy_weight, policy_cost));
             let expiry_gen = entry_info.set_expiration_time(Some(now.saturating_add(ttl)));
             let deq_nodes = Default::default();
             let timer_node = timer.schedule(entry_info, MiniArc::clone(&deq_nodes), expiry_gen);

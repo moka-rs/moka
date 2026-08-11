@@ -53,6 +53,7 @@ pub struct CacheBuilder<K, V, C> {
     initial_capacity: Option<usize>,
     num_segments: Option<usize>,
     weigher: Option<Weigher<K, V>>,
+    cost: Option<Weigher<K, V>>,
     eviction_policy: EvictionPolicy,
     eviction_listener: Option<EvictionListener<K, V>>,
     expiration_policy: ExpirationPolicy<K, V>,
@@ -74,6 +75,7 @@ where
             initial_capacity: None,
             num_segments: None,
             weigher: None,
+            cost: None,
             eviction_listener: None,
             eviction_policy: EvictionPolicy::default(),
             expiration_policy: ExpirationPolicy::default(),
@@ -116,6 +118,7 @@ where
             initial_capacity: self.initial_capacity,
             num_segments: Some(num_segments),
             weigher: self.weigher,
+            cost: self.cost,
             eviction_policy: self.eviction_policy,
             eviction_listener: self.eviction_listener,
             expiration_policy: self.expiration_policy,
@@ -146,6 +149,7 @@ where
             self.initial_capacity,
             build_hasher,
             self.weigher,
+            self.cost,
             self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
@@ -235,6 +239,7 @@ where
             self.initial_capacity,
             hasher,
             self.weigher,
+            self.cost,
             self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
@@ -271,6 +276,7 @@ where
             self.num_segments.unwrap(),
             build_hasher,
             self.weigher,
+            self.cost,
             self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
@@ -362,6 +368,7 @@ where
             self.num_segments.unwrap(),
             hasher,
             self.weigher,
+            self.cost,
             self.eviction_policy,
             self.eviction_listener,
             self.expiration_policy,
@@ -411,7 +418,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
-    /// Sets the weigher closure to the cache.
+    /// Sets the weigher closure of the cache.
     ///
     /// The closure should take `&K` and `&V` as the arguments and returns a `u32`
     /// representing the relative size of the entry.
@@ -422,7 +429,26 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         }
     }
 
-    /// Sets the eviction listener closure to the cache.
+    /// Sets the cost closure of the cache.
+    ///
+    /// The closure should take `&K` and `&V` as the arguments and returns a `u32`
+    /// representing the relative cost of recomputing the entry's value (for example,
+    /// the time it takes to load it).
+    ///
+    /// The cost is only consulted by the cost-aware eviction policy
+    /// ([`EvictionPolicy::cost_aware_lfu`][cost-aware-lfu]). Unlike the
+    /// [`weigher`](#method.weigher), the cost does not affect the cache's capacity
+    /// accounting. When no cost closure is set, every entry has a cost of `1`.
+    ///
+    /// [cost-aware-lfu]: ../policy/struct.EvictionPolicy.html#method.cost_aware_lfu
+    pub fn cost(self, cost: impl Fn(&K, &V) -> u32 + Send + Sync + 'static) -> Self {
+        Self {
+            cost: Some(Arc::new(cost)),
+            ..self
+        }
+    }
+
+    /// Sets the eviction listener closure of the cache.
     ///
     /// The closure should take `Arc<K>`, `V` and [`RemovalCause`][removal-cause] as
     /// the arguments.
@@ -477,7 +503,7 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         builder
     }
 
-    /// Sets the given `expiry` to the cache.
+    /// Sets the given `expiry` of the cache.
     ///
     /// See [the example][per-entry-expiration-example] for per-entry expiration
     /// policy in the `Cache` documentation.

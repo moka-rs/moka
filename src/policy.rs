@@ -80,11 +80,26 @@ impl Policy {
 /// - **LRU**:
 ///   - Suitable for some workloads with strong recency bias, such as streaming data
 ///     processing.
+/// - **Cost-aware TinyLFU**:
+///   - A variant of TinyLFU that, in addition to the historical popularity of keys,
+///     also weighs the relative cost of recomputing each entry's value (configured
+///     by the [`cost`] closure on the cache builder).
+///   - Suitable when entries are not equally expensive to reload. An entry that is
+///     accessed less frequently but is expensive to recompute can be kept in favor
+///     of one that is accessed more frequently but is cheap to recompute.
+///   - The admission decisions compare `frequency * cost` rather than frequency
+///     alone. Unlike the size [`weigher`], `cost` does not affect the cache's
+///     capacity accounting.
+///
+/// [`cost`]: ./struct.CacheBuilder.html#method.cost
+/// [`weigher`]: ./struct.CacheBuilder.html#method.weigher
 ///
 /// LFU stands for Least Frequently Used. LRU stands for Least Recently Used.
 ///
-/// Use associate function [`EvictionPolicy::tiny_lfu`](#method.tiny_lfu) or
-/// [`EvictionPolicy::lru`](#method.lru) to obtain an instance of `EvictionPolicy`.
+/// Use associate function [`EvictionPolicy::tiny_lfu`](#method.tiny_lfu),
+/// [`EvictionPolicy::lru`](#method.lru), or
+/// [`EvictionPolicy::cost_aware_lfu`](#method.cost_aware_lfu) to obtain an instance
+/// of `EvictionPolicy`.
 #[derive(Clone, Default)]
 pub struct EvictionPolicy {
     pub(crate) config: EvictionPolicyConfig,
@@ -115,6 +130,23 @@ impl EvictionPolicy {
             config: EvictionPolicyConfig::Lru,
         }
     }
+
+    /// Returns the cost-aware TinyLFU policy.
+    ///
+    /// This is a variant of [`tiny_lfu`](#method.tiny_lfu) that also weighs the
+    /// relative cost of recomputing each entry's value. The cost is configured by
+    /// the `cost` closure on the cache builder; when no `cost` closure is set, every
+    /// entry has a cost of `1` and this policy behaves like plain TinyLFU.
+    ///
+    /// The admission decisions compare `frequency * cost` rather than frequency
+    /// alone, so an entry that is accessed less frequently but is expensive to
+    /// recompute can be kept in favor of one that is accessed more frequently but
+    /// is cheap to recompute.
+    pub fn cost_aware_lfu() -> Self {
+        Self {
+            config: EvictionPolicyConfig::CostAwareLfu,
+        }
+    }
 }
 
 impl fmt::Debug for EvictionPolicy {
@@ -122,6 +154,7 @@ impl fmt::Debug for EvictionPolicy {
         match self.config {
             EvictionPolicyConfig::TinyLfu => write!(f, "EvictionPolicy::TinyLfu"),
             EvictionPolicyConfig::Lru => write!(f, "EvictionPolicy::Lru"),
+            EvictionPolicyConfig::CostAwareLfu => write!(f, "EvictionPolicy::CostAwareLfu"),
         }
     }
 }
@@ -131,6 +164,27 @@ pub(crate) enum EvictionPolicyConfig {
     #[default]
     TinyLfu,
     Lru,
+    CostAwareLfu,
+}
+
+impl EvictionPolicyConfig {
+    /// Returns `true` if the policy relies on the frequency sketch to estimate the
+    /// historic popularity of keys (the LFU-based policies).
+    pub(crate) fn uses_frequency_sketch(&self) -> bool {
+        match self {
+            Self::TinyLfu | Self::CostAwareLfu => true,
+            Self::Lru => false,
+        }
+    }
+
+    /// Returns `true` if the policy consults the per-entry cost when making
+    /// admission decisions.
+    pub(crate) fn uses_entry_cost(&self) -> bool {
+        match self {
+            Self::CostAwareLfu => true,
+            Self::TinyLfu | Self::Lru => false,
+        }
+    }
 }
 
 /// Calculates when cache entries expire. A single expiration time is retained on

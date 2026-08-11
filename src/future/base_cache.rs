@@ -16,8 +16,8 @@ use crate::{
             },
             deques::Deques,
             entry_info::EntryInfo,
-            AccessTime, KeyHash, KeyHashDate, KvEntry, OldEntryInfo, ReadOp, ValueEntry, Weigher,
-            WriteOp,
+            AccessTime, EntrySizeAndFrequency, KeyHash, KeyHashDate, KvEntry, OldEntryInfo, ReadOp,
+            ValueEntry, Weigher, WriteOp, DEFAULT_COST,
         },
         deque::{DeqNode, Deque},
         frequency_sketch::FrequencySketch,
@@ -165,6 +165,7 @@ where
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        cost: Option<Weigher<K, V>>,
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<AsyncEvictionListener<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
@@ -190,6 +191,7 @@ where
             initial_capacity,
             build_hasher,
             weigher,
+            cost,
             eviction_policy,
             eviction_listener,
             r_rcv,
@@ -482,6 +484,7 @@ where
         self.retry_interrupted_ops().await;
 
         let weight = self.inner.weigh(&key, &value);
+        let cost = self.inner.cost(&key, &value);
         let op_cnt1 = Arc::new(AtomicU8::new(0));
         let op_cnt2 = Arc::clone(&op_cnt1);
         let mut op1 = None;
@@ -514,7 +517,8 @@ where
             hash,
             // on_insert
             || {
-                let (entry, gen) = self.new_value_entry(&key, hash, value.clone(), ts, weight);
+                let (entry, gen) =
+                    self.new_value_entry(&key, hash, value.clone(), ts, weight, cost);
                 let ins_op = WriteOp::new_upsert(&key, hash, &entry, gen, 0, weight);
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((cnt, ins_op));
@@ -528,7 +532,8 @@ where
                 // that the OldEntryInfo can preserve the old EntryInfo's
                 // last_accessed and last_modified timestamps.
                 let old_info = OldEntryInfo::new(old_entry);
-                let (entry, gen) = self.new_value_entry_from(value.clone(), ts, weight, old_entry);
+                let (entry, gen) =
+                    self.new_value_entry_from(value.clone(), ts, weight, cost, old_entry);
                 let upd_op = WriteOp::new_upsert(&key, hash, &entry, gen, old_weight, weight);
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((cnt, old_info, upd_op));
@@ -770,9 +775,15 @@ impl<K, V, S> BaseCache<K, V, S> {
         value: V,
         timestamp: Instant,
         policy_weight: u32,
+        policy_cost: u32,
     ) -> (MiniArc<ValueEntry<K, V>>, u16) {
         let key_hash = KeyHash::new(Arc::clone(key), hash);
-        let info = MiniArc::new(EntryInfo::new(key_hash, timestamp, policy_weight));
+        let info = MiniArc::new(EntryInfo::new(
+            key_hash,
+            timestamp,
+            policy_weight,
+            policy_cost,
+        ));
         let gen: u16 = info.entry_gen();
         (MiniArc::new(ValueEntry::new(value, info)), gen)
     }
@@ -783,6 +794,7 @@ impl<K, V, S> BaseCache<K, V, S> {
         value: V,
         timestamp: Instant,
         policy_weight: u32,
+        policy_cost: u32,
         other: &ValueEntry<K, V>,
     ) -> (MiniArc<ValueEntry<K, V>>, u16) {
         let info = MiniArc::clone(other.entry_info());
@@ -792,6 +804,7 @@ impl<K, V, S> BaseCache<K, V, S> {
         info.set_last_accessed(timestamp);
         info.set_last_modified(timestamp);
         info.set_policy_weight(policy_weight);
+        info.set_policy_cost(policy_cost);
         (MiniArc::new(ValueEntry::new_from(value, info, other)), gen)
     }
 
@@ -958,29 +971,6 @@ impl EvictionCounters {
     }
 }
 
-#[derive(Default)]
-struct EntrySizeAndFrequency {
-    policy_weight: u64,
-    freq: u32,
-}
-
-impl EntrySizeAndFrequency {
-    fn new(policy_weight: u32) -> Self {
-        Self {
-            policy_weight: policy_weight as u64,
-            ..Default::default()
-        }
-    }
-
-    fn add_policy_weight(&mut self, weight: u32) {
-        self.policy_weight += weight as u64;
-    }
-
-    fn add_frequency(&mut self, freq: &FrequencySketch, hash: u64) {
-        self.freq += freq.frequency(hash) as u32;
-    }
-}
-
 // NOTE: Clippy found that the `Admitted` variant contains at least a few hundred
 // bytes of data and the `Rejected` variant contains no data at all. It suggested to
 // box the `SmallVec`.
@@ -1017,6 +1007,7 @@ pub(crate) struct Inner<K, V, S> {
     expiration_policy: ExpirationPolicy<K, V>,
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
+    cost: Option<Weigher<K, V>>,
     removal_notifier: Option<Arc<RemovalNotifier<K, V>>>,
     key_locks: Option<KeyLockMap<K, S>>,
     invalidator: Option<Invalidator<K, V, S>>,
@@ -1153,6 +1144,7 @@ where
         initial_capacity: Option<usize>,
         build_hasher: S,
         weigher: Option<Weigher<K, V>>,
+        cost: Option<Weigher<K, V>>,
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<AsyncEvictionListener<K, V>>,
         read_op_ch: Receiver<ReadOp<K, V>>,
@@ -1211,6 +1203,7 @@ where
             expiration_policy,
             valid_after: AtomicInstant::default(),
             weigher,
+            cost,
             removal_notifier,
             key_locks,
             invalidator,
@@ -1302,6 +1295,22 @@ where
     fn weigh(&self, key: &K, value: &V) -> u32 {
         self.weigher.as_ref().map_or(1, |w| w(key, value))
     }
+
+    /// Returns the entry's cost without invoking the cost closure when the
+    /// eviction policy never consults it.
+    ///
+    /// The cost is clamped to a minimum of `1` so that weighting an entry's
+    /// frequency by its cost never zeroes the frequency out.
+    #[inline]
+    fn cost(&self, key: &K, value: &V) -> u32 {
+        if self.eviction_policy.uses_entry_cost() {
+            self.cost
+                .as_ref()
+                .map_or(DEFAULT_COST, |c| c(key, value).max(1))
+        } else {
+            DEFAULT_COST
+        }
+    }
 }
 
 impl<K, V, S> Inner<K, V, S>
@@ -1350,7 +1359,7 @@ where
                         .await;
                 }
 
-                if self.eviction_policy == EvictionPolicyConfig::TinyLfu
+                if self.eviction_policy.uses_frequency_sketch()
                     && self.should_enable_frequency_sketch(&eviction_state.counters)
                 {
                     self.enable_frequency_sketch(&eviction_state.counters).await;
@@ -1724,10 +1733,10 @@ where
 
         // Try to admit the candidate.
         let admission_result = match &self.eviction_policy {
-            EvictionPolicyConfig::TinyLfu => {
+            EvictionPolicyConfig::TinyLfu | EvictionPolicyConfig::CostAwareLfu => {
                 let mut candidate = EntrySizeAndFrequency::new(new_weight);
-                candidate.add_frequency(freq, kh.hash);
-                Self::admit(&candidate, &self.cache, deqs, freq)
+                candidate.add_frequency(freq, kh.hash, self.eviction_policy.entry_cost(&entry));
+                Self::admit(&candidate, &self.cache, deqs, freq, &self.eviction_policy)
             }
             EvictionPolicyConfig::Lru => AdmissionResult::Admitted {
                 victim_keys: SmallVec::default(),
@@ -1850,6 +1859,7 @@ where
         cache: &CacheStore<K, V, S>,
         deqs: &mut Deques<K>,
         freq: &FrequencySketch,
+        policy: &EvictionPolicyConfig,
     ) -> AdmissionResult<K> {
         const MAX_CONSECUTIVE_RETRIES: usize = 5;
         let mut retries = 0;
@@ -1889,8 +1899,7 @@ where
             let last_accessed = vic_elem.entry_info().last_accessed();
 
             if let Some(vic_entry) = cache.get(hash, |k| k == key) {
-                victims.add_policy_weight(vic_entry.policy_weight());
-                victims.add_frequency(freq, hash);
+                policy.add_entry(&mut victims, freq, hash, &vic_entry);
                 victim_keys.push((KeyHash::new(Arc::clone(key), hash), last_accessed));
                 retries = 0;
             } else {
@@ -2879,6 +2888,7 @@ mod tests {
                 None,
                 RandomState::default(),
                 None,
+                None,
                 EvictionPolicy::default(),
                 None,
                 ExpirationPolicy::default(),
@@ -3254,6 +3264,7 @@ mod tests {
             None,
             None,
             RandomState::default(),
+            None,
             None,
             EvictionPolicy::default(),
             None,
