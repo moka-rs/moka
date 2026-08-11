@@ -1307,12 +1307,29 @@ where
         F: Future<Output = Result<V, E>>,
         E: Send + Sync + 'static,
     {
+        self.try_get_with_entry(key, init).await.map(Entry::into_value)
+    }
+
+    /// Similar to [`try_get_with`](#method.try_get_with), but returns an [`Entry`]
+    /// instead of just the value. The [`Entry::is_fresh`] method returns `true` if
+    /// the value was not cached and was freshly computed (cache miss), or `false` if
+    /// it was already present in the cache (cache hit).
+    ///
+    /// This is useful when callers need to distinguish between a cache hit and a miss
+    /// without performing a separate `get` call before `try_get_with`.
+    ///
+    /// Like `try_get_with`, concurrent calls for the same key are coalesced: only one
+    /// `init` future runs; the rest wait and receive the same result.
+    pub async fn try_get_with_entry<F, E>(&self, key: K, init: F) -> Result<Entry<K, V>, Arc<E>>
+    where
+        F: Future<Output = Result<V, E>>,
+        E: Send + Sync + 'static,
+    {
         futures_util::pin_mut!(init);
         let hash = self.base.hash(&key);
         let key = Arc::new(key);
-        self.get_or_try_insert_with_hash_and_fun(key, hash, init, false)
+        self.get_or_try_insert_with_hash_and_fun(key, hash, init, true)
             .await
-            .map(Entry::into_value)
     }
 
     /// Similar to [`try_get_with`](#method.try_get_with), but instead of passing an
