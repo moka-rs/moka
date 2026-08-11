@@ -1030,7 +1030,9 @@ where
             self.base
                 .get_with_hash_without_recording(&*key, hash, replace_if.as_mut())
         };
-        let insert = |v| self.insert_with_hash(key.clone(), hash, v);
+        let insert = |v| {
+            self.insert_with_hash(key.clone(), hash, v);
+        };
 
         let k = if need_key {
             Some(Arc::clone(&key))
@@ -1251,7 +1253,9 @@ where
             self.base
                 .get_with_hash_without_recording(&*key, hash, ignore_if)
         };
-        let insert = |v| self.insert_with_hash(key.clone(), hash, v);
+        let insert = |v| {
+            self.insert_with_hash(key.clone(), hash, v);
+        };
 
         let k = if need_key {
             Some(Arc::clone(&key))
@@ -1443,7 +1447,9 @@ where
             self.base
                 .get_with_hash_without_recording(&*key, hash, ignore_if)
         };
-        let insert = |v| self.insert_with_hash(key.clone(), hash, v);
+        let insert = |v| {
+            self.insert_with_hash(key.clone(), hash, v);
+        };
 
         let k = if need_key {
             Some(Arc::clone(&key))
@@ -1479,12 +1485,12 @@ where
         self.insert_with_hash(key, hash, value);
     }
 
-    pub(crate) fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
+    pub(crate) fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) -> bool {
         if self.base.is_map_disabled() {
-            return;
+            return false;
         }
 
-        let (op, now) = self.base.do_insert_with_hash(key, hash, value);
+        let (op, now, replaced) = self.base.do_insert_with_hash(key, hash, value);
         let hk = self.base.housekeeper.as_ref();
         Self::schedule_write_op(
             self.base.inner.as_ref(),
@@ -1494,6 +1500,7 @@ where
             hk,
         )
         .expect("Failed to insert");
+        replaced
     }
 
     pub(crate) fn compute_with_hash_and_fun<F>(

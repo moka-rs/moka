@@ -484,7 +484,7 @@ where
         key: Arc<K>,
         hash: u64,
         value: V,
-    ) -> (WriteOp<K, V>, Instant) {
+    ) -> (WriteOp<K, V>, Instant, bool) {
         let weight = self.inner.weigh(&key, &value);
         let op_cnt1 = Rc::new(AtomicU8::new(0));
         let op_cnt2 = Rc::clone(&op_cnt1);
@@ -537,12 +537,17 @@ where
         );
 
         match (op1, op2) {
-            (Some((_cnt, ins_op)), None) => self.do_post_insert_steps(ts, &key, ins_op),
+            (Some((_cnt, ins_op)), None) => {
+                let (op, ts) = self.do_post_insert_steps(ts, &key, ins_op);
+                (op, ts, false)
+            }
             (Some((cnt1, ins_op)), Some((cnt2, ..))) if cnt1 > cnt2 => {
-                self.do_post_insert_steps(ts, &key, ins_op)
+                let (op, ts) = self.do_post_insert_steps(ts, &key, ins_op);
+                (op, ts, false)
             }
             (_, Some((_cnt, old_info, upd_op))) => {
-                self.do_post_update_steps(ts, key, old_info, upd_op)
+                let (op, ts) = self.do_post_update_steps(ts, key, old_info, upd_op);
+                (op, ts, true)
             }
             (None, None) => unreachable!(),
         }
@@ -2722,7 +2727,7 @@ mod tests {
         }
 
         fn insert(cache: &BaseCache<Key, Value>, key: Key, hash: u64, value: Value) {
-            let (op, _now) = cache.do_insert_with_hash(Arc::new(key), hash, value);
+            let (op, _now, _replaced) = cache.do_insert_with_hash(Arc::new(key), hash, value);
             cache.write_op_ch.send(op).expect("Failed to send");
         }
 

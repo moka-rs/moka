@@ -47,6 +47,19 @@
       lockfiles from resolving to an affected `crossbeam-epoch` version via
       Moka.
 
+## Version Next
+
+### Fixed
+
+- Fixed a TOCTOU race in the `and_compute_with`, `and_try_compute_with`,
+  `and_try_compute_if_nobody_else`, and `and_upsert_with` methods where
+  `CompResult::Inserted` / `CompResult::ReplacedWith` and
+  `Entry::is_old_value_replaced()` could report the wrong outcome when a
+  concurrent `insert`, `invalidate`, or eviction raced against the closure.
+  The result is now derived from the actual outcome of the underlying lock-free
+  hash-table operation rather than from the snapshot taken before the closure
+  ran. Affects `sync::Cache`, `sync::SegmentedCache`, and `future::Cache`.
+
 ## Version 0.12.15
 
 ### Fixed

@@ -234,7 +234,6 @@ where
         } else {
             None
         };
-        let entry_existed = maybe_entry.is_some();
 
         // Evaluate the `f` closure. Catching panic is safe here as we will not
         // evaluate the closure again.
@@ -275,8 +274,8 @@ where
                 }
             }
             Op::Put(value) => {
-                cache.insert_with_hash(Arc::clone(&c_key), c_hash, value.clone());
-                if entry_existed {
+                let replaced = cache.insert_with_hash(Arc::clone(&c_key), c_hash, value.clone());
+                if replaced {
                     crossbeam_epoch::pin().flush();
                     let entry = Entry::new(Some(c_key), value, true, true);
                     Ok(CompResult::ReplacedWith(entry))

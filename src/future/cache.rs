@@ -1807,12 +1807,12 @@ where
         }
     }
 
-    pub(crate) async fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) {
+    pub(crate) async fn insert_with_hash(&self, key: Arc<K>, hash: u64, value: V) -> bool {
         if self.base.is_map_disabled() {
-            return;
+            return false;
         }
 
-        let (op, ts) = self.base.do_insert_with_hash(key, hash, value).await;
+        let (op, ts, replaced) = self.base.do_insert_with_hash(key, hash, value).await;
         let mut cancel_guard = CancelGuard::new(&self.base.interrupted_op_ch_snd, ts);
         cancel_guard.set_op(op.clone());
 
@@ -1841,6 +1841,7 @@ where
         .await
         .expect("Failed to schedule write op for insert");
         cancel_guard.clear();
+        replaced
     }
 
     pub(crate) async fn compute_with_hash_and_fun<F, Fut>(
