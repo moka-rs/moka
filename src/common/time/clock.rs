@@ -1,13 +1,24 @@
-use std::time::{Duration, Instant as StdInstant};
-
-#[cfg(test)]
 use std::sync::Arc;
+use std::time::{Duration, Instant as StdInstant};
 
 #[cfg(test)]
 use parking_lot::RwLock;
 
 // This is `moka`'s `Instant` struct.
 use super::Instant;
+
+/// A user-supplied source of time.
+///
+/// Implement this and pass it to [`crate::sync::CacheBuilder::external_clock`]
+/// (or `Clock::external`) to drive all of moka's time-based logic — TTL, TTI and
+/// per-entry expiry — from your own clock instead of `std::time::Instant`. This
+/// makes a cache's notion of time fully controllable, e.g. by a scaled or
+/// mockable clock in tests, without sleeping.
+pub trait ExternalClock: Send + Sync {
+    /// Time elapsed since this clock's origin (the moment the owning `Clock` was
+    /// created). Must be monotonically non-decreasing.
+    fn elapsed_since_origin(&self) -> Duration;
+}
 
 #[derive(Default, Clone)]
 pub(crate) struct Clock {
@@ -28,6 +39,11 @@ enum ClockType {
     #[cfg(test)]
     /// A clock that uses a mocked source of time.
     Mocked { mock: Arc<Mock> },
+    /// A clock backed by a user-supplied [`ExternalClock`].
+    External {
+        std_origin: StdInstant,
+        source: Arc<dyn ExternalClock>,
+    },
 }
 
 impl Default for ClockType {
@@ -64,6 +80,18 @@ impl Clock {
         (clock, mock)
     }
 
+    /// Creates a `Clock` whose time is supplied by a user-provided
+    /// [`ExternalClock`]. Drives moka's TTL/TTI/expiry from an external
+    /// (e.g. scaled or mockable) time source instead of `std::time::Instant`.
+    pub fn external(source: Arc<dyn ExternalClock>) -> Clock {
+        Clock {
+            ty: ClockType::External {
+                std_origin: StdInstant::now(),
+                source,
+            },
+        }
+    }
+
     /// Returns the current time using a reliable source of time.
     ///
     /// When the type is `Standard` or `Hybrid`, the time is based on
@@ -80,6 +108,9 @@ impl Clock {
             }
             #[cfg(test)]
             ClockType::Mocked { mock } => Instant::from_duration_since_clock_start(mock.elapsed()),
+            ClockType::External { source, .. } => {
+                Instant::from_duration_since_clock_start(source.elapsed_since_origin())
+            }
         }
     }
 
@@ -105,6 +136,7 @@ impl Clock {
             ClockType::Standard { .. } => self.now(),
             #[cfg(test)]
             ClockType::Mocked { .. } => self.now(),
+            ClockType::External { .. } => self.now(),
         }
     }
 
@@ -132,6 +164,10 @@ impl Clock {
                 // 1.84.0 for the armv7-unknown-linux-musleabihf target in the
                 // release build of the tests.
                 dbg!(mock.origin + duration)
+            }
+            ClockType::External { std_origin, .. } => {
+                let duration = Duration::from_nanos(instant.as_nanos());
+                *std_origin + duration
             }
         }
     }

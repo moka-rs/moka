@@ -195,3 +195,7 @@ required-features = ["future"]
 [[example]]
 name = "try_append_value_sync"
 required-features = ["sync"]
+
+[[example]]
+name = "external_time"
+required-features = ["sync"]

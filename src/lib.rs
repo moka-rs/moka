@@ -279,6 +279,10 @@ pub use common::entry::Entry;
 
 #[cfg(any(feature = "sync", feature = "future"))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
+pub use common::time::ExternalClock;
+
+#[cfg(any(feature = "sync", feature = "future"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
 pub use policy::{Expiry, Policy};
 
 #[cfg(feature = "unstable-debug-counters")]

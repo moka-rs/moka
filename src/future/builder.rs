@@ -415,6 +415,18 @@ impl<K, V, C> CacheBuilder<K, V, C> {
         Self { clock, ..self }
     }
 
+    /// Sets a user-supplied [`ExternalClock`](crate::ExternalClock) as the cache's
+    /// source of time. All time-based logic — `time_to_live`, `time_to_idle` and
+    /// per-entry expiry — is then measured against it instead of
+    /// `std::time::Instant`, making the cache's clock fully controllable (e.g. a
+    /// scaled or mockable clock in tests).
+    pub fn external_clock(self, source: Arc<dyn crate::common::time::ExternalClock>) -> Self {
+        Self {
+            clock: Clock::external(source),
+            ..self
+        }
+    }
+
     /// Enables support for [`Cache::invalidate_entries_if`][cache-invalidate-if]
     /// method.
     ///
