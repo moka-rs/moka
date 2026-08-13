@@ -140,6 +140,11 @@ impl<K, V, S> SegmentedCache<K, V, S> {
         policy
     }
 
+    /// Sets or clears a new value for the cache's maximum capacity.
+    pub fn set_max_capacity(&self, max_capacity: Option<u64>) {
+        self.inner.set_max_capacity(max_capacity);
+    }
+
     /// Returns an approximate number of entries in this cache.
     ///
     /// The value returned is _an estimate_; the actual count may differ if there are
@@ -692,6 +697,19 @@ struct Inner<K, V, S> {
     segment_shift: u32,
 }
 
+impl<K, V, S> Inner<K, V, S> {
+    fn compute_seg_max_capacity(segments: usize, max_capacity: Option<u64>) -> Option<u64> {
+        max_capacity.map(|n| (n as f64 / segments as f64).ceil() as u64)
+    }
+
+    fn set_max_capacity(&self, max_capacity: Option<u64>) {
+        let seg_max_capacity = Self::compute_seg_max_capacity(self.segments.len(), max_capacity);
+        for segment in self.segments.iter() {
+            segment.set_max_capacity(seg_max_capacity);
+        }
+    }
+}
+
 impl<K, V, S> Inner<K, V, S>
 where
     K: Hash + Eq + Send + Sync + 'static,
@@ -720,8 +738,7 @@ where
 
         let actual_num_segments = num_segments.next_power_of_two();
         let segment_shift = 64 - actual_num_segments.trailing_zeros();
-        let seg_max_capacity =
-            max_capacity.map(|n| (n as f64 / actual_num_segments as f64).ceil() as u64);
+        let seg_max_capacity = Self::compute_seg_max_capacity(actual_num_segments, max_capacity);
         let seg_init_capacity =
             initial_capacity.map(|cap| (cap as f64 / actual_num_segments as f64).ceil() as usize);
         // NOTE: We cannot initialize the segments as `vec![cache; actual_num_segments]`
@@ -799,6 +816,28 @@ mod tests {
         assert!(!cache.contains_key(&0));
         assert!(cache.get(&0).is_none());
         assert_eq!(cache.entry_count(), 0)
+    }
+
+    #[test]
+    fn max_capacity_shrink() {
+        const COUNT: u64 = 16;
+
+        let mut cache = SegmentedCache::new(COUNT, 4);
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        for i in 0..COUNT {
+            cache.insert(i, ());
+        }
+
+        assert_eq!(cache.iter().count(), COUNT as _);
+
+        let small = COUNT / 2;
+        cache.set_max_capacity(Some(small));
+        cache.run_pending_tasks();
+        assert!(cache.iter().count() <= small as _);
     }
 
     #[test]

@@ -635,6 +635,11 @@ impl<K, V, S> Cache<K, V, S> {
         self.base.policy()
     }
 
+    /// Sets or clears a new value for the cache's maximum capacity.
+    pub fn set_max_capacity(&self, max_capacity: Option<u64>) {
+        self.base.set_max_capacity(max_capacity);
+    }
+
     /// Returns an approximate number of entries in this cache.
     ///
     /// The value returned is _an estimate_; the actual count may differ if there are
@@ -1913,6 +1918,28 @@ mod tests {
         assert!(!cache.contains_key(&0));
         assert!(cache.get(&0).is_none());
         assert_eq!(cache.entry_count(), 0)
+    }
+
+    #[test]
+    fn max_capacity_shrink() {
+        const COUNT: u64 = 10;
+
+        let mut cache = Cache::new(COUNT);
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        for i in 0..COUNT {
+            cache.insert(i, ());
+        }
+
+        assert_eq!(cache.iter().count(), COUNT as _);
+
+        let small = COUNT / 2;
+        cache.set_max_capacity(Some(small));
+        cache.run_pending_tasks();
+        assert_eq!(cache.iter().count(), small as _);
     }
 
     #[test]
