@@ -326,7 +326,7 @@ where
             },
         );
         if let Some(entry) = &maybe_entry {
-            if cache.is_removal_notifier_enabled() {
+            if cache.is_removal_notifier_enabled() || cache.is_removal_observer_enabled() {
                 cache
                     .notify_single_removal(Arc::clone(key), entry, RemovalCause::Explicit)
                     .await;

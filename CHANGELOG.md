@@ -9,6 +9,18 @@
 > maintainers questions on the [Moka GitHub repository][gh-repo], but asking the
 > chatbot is often faster and more convenient.
 
+## Unreleased
+
+### Added
+
+- Added an experimental `future::CacheBuilder::post_removal_observer` for short, synchronous,
+  nonblocking observation after logical removal without enabling eviction-listener-only per-key
+  locking or listener futures. Observer calls may overlap, run before a configured eviction
+  listener for the same removal, and are permanently disabled after a contained panic. Deferred
+  work, bounded-queue overload, retry, durability, and shutdown draining remain the caller's
+  responsibility. The API and its interaction with eviction listeners remain subject to
+  maintainer review.
+
 ## Version 0.12.16
 
 ### Fixed

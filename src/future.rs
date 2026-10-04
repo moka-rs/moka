@@ -17,6 +17,7 @@ mod housekeeper;
 mod invalidator;
 mod key_lock;
 mod notifier;
+mod observer;
 mod value_initializer;
 
 pub use {

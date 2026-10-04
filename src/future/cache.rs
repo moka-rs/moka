@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{
     common::{concurrent::Weigher, time::Clock, HousekeeperConfig},
-    notification::AsyncEvictionListener,
+    notification::{AsyncEvictionListener, PostRemovalObserver},
     ops::compute::{self, CompResult},
     policy::{EvictionPolicy, ExpirationPolicy},
     Entry, Policy, PredicateError,
@@ -52,6 +52,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     - [Per-entry expiration policy](#per-entry-expiration-policy)
 /// - [Example: Eviction Listener](#example-eviction-listener)
 ///     - [You should avoid eviction listener to panic](#you-should-avoid-eviction-listener-to-panic)
+/// - [Example: Post-removal Observer](#example-post-removal-observer)
 ///
 /// # Example: `insert`, `get` and `invalidate`
 ///
@@ -630,6 +631,68 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///
 /// [builder-name-method]: ./struct.CacheBuilder.html#method.name
 ///
+/// # Example: Post-removal Observer
+///
+/// A post-removal observer is intended for short, synchronous bookkeeping that
+/// should not enable the asynchronous eviction-listener path. It receives an
+/// `Arc<K>`, a cloned `V`, and the [`RemovalCause`][removal-cause] after an entry is
+/// logically removed. Explicit invalidation, replacement, expiration, and size
+/// eviction are observed; dropping the cache does not emit observer calls.
+///
+/// The callback runs inline and calls for different removals can overlap. It must
+/// not block, perform I/O, wait for queue capacity, or reenter the same cache. If
+/// deferred processing is needed, hand the record to a bounded queue with a
+/// nonblocking operation and make overload visible to the application:
+///
+/// ```rust
+/// use moka::{future::Cache, notification::RemovalCause};
+/// use std::sync::{
+///     atomic::{AtomicUsize, Ordering},
+///     Arc,
+/// };
+/// use tokio::sync::mpsc::{self, error::TrySendError};
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let (sender, mut receiver) = mpsc::channel(16);
+///     let rejected = Arc::new(AtomicUsize::new(0));
+///     let rejected_by_observer = Arc::clone(&rejected);
+///
+///     let cache = Cache::builder()
+///         .post_removal_observer(
+///             move |key: Arc<String>, value: String, cause: RemovalCause| {
+///                 let ticket = (key, value, cause);
+///                 if let Err(TrySendError::Full(_) | TrySendError::Closed(_)) =
+///                     sender.try_send(ticket)
+///                 {
+///                     // Production code can increment a metric, mark state dirty,
+///                     // or arrange reconciliation. The observer must not wait.
+///                     rejected_by_observer.fetch_add(1, Ordering::Relaxed);
+///                 }
+///             },
+///         )
+///         .build();
+///
+///     let key = "alice".to_owned();
+///     cache.insert(key.clone(), "first".to_owned()).await;
+///     cache.insert(key, "second".to_owned()).await;
+///
+///     let (key, value, cause) = receiver.recv().await.expect("replacement ticket");
+///     assert_eq!(key.as_str(), "alice");
+///     assert_eq!(value, "first");
+///     assert_eq!(cause, RemovalCause::Replaced);
+///     assert_eq!(rejected.load(Ordering::Relaxed), 0);
+/// }
+/// ```
+///
+/// When an eviction listener is also configured, the observer runs before that
+/// listener starts for the same removal. [`run_pending_tasks`](Self::run_pending_tasks)
+/// can make pending cache removals observable, but it does not drain application
+/// queues or wait for work published by the observer. A panic is contained and
+/// disables later observer calls; a concurrently running call may still complete.
+///
+/// [removal-cause]: ../notification/enum.RemovalCause.html
+///
 pub struct Cache<K, V, S = RandomState> {
     pub(crate) base: BaseCache<K, V, S>,
     value_initializer: Arc<ValueInitializer<K, V, S>>,
@@ -789,6 +852,7 @@ where
             None,
             EvictionPolicy::default(),
             None,
+            None,
             ExpirationPolicy::default(),
             HousekeeperConfig::default(),
             false,
@@ -821,6 +885,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<AsyncEvictionListener<K, V>>,
+        post_removal_observer: Option<PostRemovalObserver<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
         housekeeper_config: HousekeeperConfig,
         invalidator_enabled: bool,
@@ -835,6 +900,7 @@ where
                 weigher,
                 eviction_policy,
                 eviction_listener,
+                post_removal_observer,
                 expiration_policy,
                 housekeeper_config,
                 invalidator_enabled,
@@ -1983,6 +2049,10 @@ where
                 // so that we can resume/retry later.
                 let mut cancel_guard = CancelGuard::new(&self.base.interrupted_op_ch_snd, now);
 
+                if self.base.is_removal_observer_enabled() {
+                    self.base.observe_invalidate(&kv.key, &kv.entry);
+                }
+
                 if self.base.is_removal_notifier_enabled() {
                     let future = self
                         .base
@@ -2069,6 +2139,10 @@ where
         self.base.key_locks_map_is_empty()
     }
 
+    fn has_key_locks(&self) -> bool {
+        self.base.has_key_locks()
+    }
+
     fn run_pending_tasks_initiation_count(&self) -> usize {
         self.base
             .housekeeper
@@ -2111,8 +2185,8 @@ mod tests {
     use std::{
         convert::Infallible,
         sync::{
-            atomic::{AtomicU32, AtomicU8, Ordering},
-            Arc,
+            atomic::{AtomicU32, AtomicU8, AtomicUsize, Ordering},
+            Arc, Barrier as StdBarrier, Mutex as StdMutex,
         },
         time::{Duration, Instant as StdInstant},
         vec,
@@ -5299,6 +5373,546 @@ mod tests {
         cache.run_pending_tasks().await;
 
         verify_notification_vec(&cache, actual, &expected).await;
+    }
+
+    #[tokio::test]
+    async fn post_removal_observer_reports_all_removal_causes() {
+        let actual = Arc::new(StdMutex::new(Vec::new()));
+        let observed = Arc::clone(&actual);
+        let (clock, mock) = Clock::mock();
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .time_to_live(Duration::from_secs(10))
+            .clock(clock)
+            .post_removal_observer(move |key, value, cause| {
+                observed.lock().unwrap().push((key, value, cause));
+            })
+            .build();
+        cache.reconfigure_for_testing().await;
+        let cache = cache;
+
+        cache.insert('a', "alice").await;
+        cache.invalidate(&'a').await;
+
+        cache.insert('b', "bob").await;
+        cache.insert('c', "cathy").await;
+        cache.insert('d', "david").await;
+        cache.run_pending_tasks().await;
+
+        // This candidate is rejected by the size policy.
+        cache.insert('e', "emily").await;
+        cache.run_pending_tasks().await;
+
+        cache.insert('d', "dennis").await;
+        cache.run_pending_tasks().await;
+
+        mock.increment(Duration::from_secs(10));
+        assert_eq!(cache.get(&'d').await, None);
+        cache.run_pending_tasks().await;
+
+        let actual = actual.lock().unwrap();
+        assert!(actual.contains(&(Arc::new('a'), "alice", RemovalCause::Explicit)));
+        assert!(actual.contains(&(Arc::new('e'), "emily", RemovalCause::Size)));
+        assert!(actual.contains(&(Arc::new('d'), "david", RemovalCause::Replaced)));
+        assert!(actual.contains(&(Arc::new('d'), "dennis", RemovalCause::Expired)));
+    }
+
+    #[tokio::test]
+    async fn post_removal_observer_precedes_eviction_listener() {
+        let calls = Arc::new(StdMutex::new(Vec::new()));
+        let observer_calls = Arc::clone(&calls);
+        let listener_calls = Arc::clone(&calls);
+        let cache = Cache::builder()
+            .post_removal_observer(move |_, _, _| {
+                observer_calls.lock().unwrap().push("observer");
+            })
+            .eviction_listener(move |_, _, _| {
+                listener_calls.lock().unwrap().push("listener");
+            })
+            .build();
+
+        cache.insert("key", "old").await;
+        cache.insert("key", "new").await;
+
+        assert_eq!(*calls.lock().unwrap(), ["observer", "listener"]);
+    }
+
+    #[test]
+    fn post_removal_observer_does_not_enable_listener_key_locks() {
+        let observer_cache = Cache::<u64, u64>::builder()
+            .post_removal_observer(|_, _, _| {})
+            .build();
+        let listener_cache = Cache::<u64, u64>::builder()
+            .eviction_listener(|_, _, _| {})
+            .build();
+
+        assert!(!observer_cache.has_key_locks());
+        assert!(listener_cache.has_key_locks());
+    }
+
+    #[tokio::test]
+    async fn recover_from_panicking_post_removal_observer() {
+        #[cfg(feature = "logging")]
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let call_count = Arc::new(AtomicU32::new(0));
+        let observed = Arc::clone(&call_count);
+        let cache = Cache::builder()
+            .name("My Future Cache")
+            .post_removal_observer(move |_key, _value, _cause| {
+                observed.fetch_add(1, Ordering::AcqRel);
+                panic!("Panic now!");
+            })
+            .build();
+
+        cache.insert("alice", "a0").await;
+        cache.insert("alice", "a1").await;
+        cache.insert("alice", "a2").await;
+        cache.invalidate(&"alice").await;
+        cache.run_pending_tasks().await;
+
+        assert_eq!(call_count.load(Ordering::Acquire), 1);
+        assert!(!cache.contains_key(&"alice"));
+    }
+
+    #[tokio::test]
+    async fn post_removal_observer_remove_returns_value_and_notifies_once() {
+        let actual = Arc::new(StdMutex::new(Vec::new()));
+        let observed = Arc::clone(&actual);
+        let cache = Cache::builder()
+            .post_removal_observer(move |key, value, cause| {
+                observed.lock().unwrap().push((key, value, cause));
+            })
+            .build();
+
+        cache.insert("key", "value").await;
+        assert_eq!(cache.remove(&"key").await, Some("value"));
+        assert_eq!(cache.remove(&"key").await, None);
+
+        assert_eq!(
+            *actual.lock().unwrap(),
+            [(Arc::new("key"), "value", RemovalCause::Explicit)]
+        );
+    }
+
+    #[tokio::test]
+    async fn post_removal_observer_reports_invalidate_all() {
+        let actual = Arc::new(StdMutex::new(Vec::new()));
+        let observed = Arc::clone(&actual);
+        let mut cache = Cache::builder()
+            .max_capacity(100)
+            .post_removal_observer(move |key, value, cause| {
+                observed.lock().unwrap().push((*key, value, cause));
+            })
+            .build();
+        cache.reconfigure_for_testing().await;
+        let cache = cache;
+
+        cache.insert('a', "alice").await;
+        cache.insert('b', "bob").await;
+        cache.insert('c', "cindy").await;
+        cache.invalidate_all();
+        cache.run_pending_tasks().await;
+
+        let mut actual = actual.lock().unwrap().clone();
+        actual.sort_by_key(|event| event.0);
+        assert_eq!(
+            actual,
+            [
+                ('a', "alice", RemovalCause::Explicit),
+                ('b', "bob", RemovalCause::Explicit),
+                ('c', "cindy", RemovalCause::Explicit),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn post_removal_observer_reports_predicate_invalidation() {
+        let actual = Arc::new(StdMutex::new(Vec::new()));
+        let observed = Arc::clone(&actual);
+        let mut cache = Cache::builder()
+            .max_capacity(100)
+            .support_invalidation_closures()
+            .post_removal_observer(move |key, value, cause| {
+                observed.lock().unwrap().push((*key, value, cause));
+            })
+            .build();
+        cache.reconfigure_for_testing().await;
+        let cache = cache;
+
+        cache.insert(0, "alice").await;
+        cache.insert(1, "bob").await;
+        cache.run_pending_tasks().await;
+        cache
+            .invalidate_entries_if(|_, value| value.starts_with('a'))
+            .unwrap();
+        cache.insert(2, "alex").await;
+
+        for _ in 0..50 {
+            cache.run_pending_tasks().await;
+            if cache.invalidation_predicate_count() == 0 {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+
+        assert_eq!(cache.invalidation_predicate_count(), 0);
+        assert_eq!(cache.get(&0).await, None);
+        assert_eq!(cache.get(&1).await, Some("bob"));
+        assert_eq!(cache.get(&2).await, Some("alex"));
+        assert_eq!(
+            *actual.lock().unwrap(),
+            [(0, "alice", RemovalCause::Explicit)]
+        );
+    }
+
+    #[tokio::test]
+    async fn post_removal_observer_reports_tti_expiration() {
+        let actual = Arc::new(StdMutex::new(Vec::new()));
+        let observed = Arc::clone(&actual);
+        let (clock, mock) = Clock::mock();
+        let mut cache = Cache::builder()
+            .time_to_idle(Duration::from_secs(10))
+            .clock(clock)
+            .post_removal_observer(move |key, value, cause| {
+                observed.lock().unwrap().push((*key, value, cause));
+            })
+            .build();
+        cache.reconfigure_for_testing().await;
+        let cache = cache;
+
+        cache.insert('a', "alice").await;
+        cache.run_pending_tasks().await;
+        mock.increment(Duration::from_secs(5));
+        assert_eq!(cache.get(&'a').await, Some("alice"));
+        cache.run_pending_tasks().await;
+        mock.increment(Duration::from_secs(10));
+        assert_eq!(cache.get(&'a').await, None);
+        cache.run_pending_tasks().await;
+
+        assert_eq!(
+            *actual.lock().unwrap(),
+            [('a', "alice", RemovalCause::Expired)]
+        );
+    }
+
+    #[tokio::test]
+    async fn post_removal_observer_classifies_expired_upsert_and_remove() {
+        let actual = Arc::new(StdMutex::new(Vec::new()));
+        let observed = Arc::clone(&actual);
+        let (clock, mock) = Clock::mock();
+        let cache = Cache::builder()
+            .time_to_live(Duration::from_secs(10))
+            .clock(clock)
+            .post_removal_observer(move |key, value, cause| {
+                observed.lock().unwrap().push((*key, value, cause));
+            })
+            .build();
+
+        cache.insert('a', "a0").await;
+        cache.insert('b', "b0").await;
+        mock.increment(Duration::from_secs(10));
+        cache.insert('a', "a1").await;
+        assert_eq!(cache.remove(&'b').await, None);
+
+        let mut actual = actual.lock().unwrap().clone();
+        actual.sort_by_key(|event| event.0);
+        assert_eq!(
+            actual,
+            [
+                ('a', "a0", RemovalCause::Expired),
+                ('b', "b0", RemovalCause::Expired),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn panicking_post_removal_observer_does_not_disable_listener() {
+        let observer_calls = Arc::new(AtomicU32::new(0));
+        let observed = Arc::clone(&observer_calls);
+        let listener_calls = Arc::new(AtomicU32::new(0));
+        let listened = Arc::clone(&listener_calls);
+        let cache = Cache::builder()
+            .post_removal_observer(move |_, _, _| {
+                observed.fetch_add(1, Ordering::AcqRel);
+                std::panic::panic_any(123_u32);
+            })
+            .eviction_listener(move |_, _, _| {
+                listened.fetch_add(1, Ordering::AcqRel);
+            })
+            .build();
+
+        cache.insert("key", "v0").await;
+        cache.insert("key", "v1").await;
+        cache.invalidate(&"key").await;
+
+        assert_eq!(observer_calls.load(Ordering::Acquire), 1);
+        assert_eq!(listener_calls.load(Ordering::Acquire), 2);
+    }
+
+    #[tokio::test]
+    async fn post_removal_observer_precedes_listener_for_explicit_and_expired() {
+        let calls = Arc::new(StdMutex::new(Vec::new()));
+        let observer_calls = Arc::clone(&calls);
+        let listener_calls = Arc::clone(&calls);
+        let (clock, mock) = Clock::mock();
+        let mut cache = Cache::builder()
+            .time_to_live(Duration::from_secs(10))
+            .clock(clock)
+            .post_removal_observer(move |key, _, cause| {
+                observer_calls
+                    .lock()
+                    .unwrap()
+                    .push(("observer", *key, cause));
+            })
+            .eviction_listener(move |key, _, cause| {
+                listener_calls
+                    .lock()
+                    .unwrap()
+                    .push(("listener", *key, cause));
+            })
+            .build();
+        cache.reconfigure_for_testing().await;
+        let cache = cache;
+
+        cache.insert('a', "alice").await;
+        cache.invalidate(&'a').await;
+        cache.insert('b', "bob").await;
+        cache.run_pending_tasks().await;
+        mock.increment(Duration::from_secs(10));
+        assert_eq!(cache.get(&'b').await, None);
+        cache.run_pending_tasks().await;
+
+        assert_eq!(
+            *calls.lock().unwrap(),
+            [
+                ("observer", 'a', RemovalCause::Explicit),
+                ("listener", 'a', RemovalCause::Explicit),
+                ("observer", 'b', RemovalCause::Expired),
+                ("listener", 'b', RemovalCause::Expired),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn post_removal_observer_is_preserved_by_build_with_hasher() {
+        use std::{collections::hash_map::DefaultHasher, hash::BuildHasherDefault};
+
+        let actual = Arc::new(StdMutex::new(Vec::new()));
+        let observed = Arc::clone(&actual);
+        let cache = Cache::builder()
+            .post_removal_observer(move |key, value, cause| {
+                observed.lock().unwrap().push((*key, value, cause));
+            })
+            .build_with_hasher(BuildHasherDefault::<DefaultHasher>::default());
+
+        cache.insert(1, "old").await;
+        cache.insert(1, "new").await;
+
+        assert_eq!(
+            *actual.lock().unwrap(),
+            [(1, "old", RemovalCause::Replaced)]
+        );
+    }
+
+    #[tokio::test]
+    async fn post_removal_observer_reports_weighted_size_eviction() {
+        let actual = Arc::new(StdMutex::new(Vec::new()));
+        let observed = Arc::clone(&actual);
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .weigher(|_, value: &&str| value.len() as u32)
+            .post_removal_observer(move |key, value, cause| {
+                observed.lock().unwrap().push((*key, value, cause));
+            })
+            .build();
+        cache.reconfigure_for_testing().await;
+        let cache = cache;
+
+        cache.insert(1, "aa").await;
+        cache.run_pending_tasks().await;
+        cache.insert(2, "bb").await;
+        cache.run_pending_tasks().await;
+
+        let actual = actual.lock().unwrap();
+        assert_eq!(actual.len(), 1);
+        assert!(matches!(
+            actual[0],
+            (1, "aa", RemovalCause::Size) | (2, "bb", RemovalCause::Size)
+        ));
+    }
+
+    #[tokio::test]
+    async fn post_removal_observer_reports_entry_compute_replacement_and_removal() {
+        let actual = Arc::new(StdMutex::new(Vec::new()));
+        let observed = Arc::clone(&actual);
+        let cache = Cache::builder()
+            .post_removal_observer(move |key, value, cause| {
+                observed.lock().unwrap().push((*key, value, cause));
+            })
+            .build();
+
+        cache.insert(1, "old").await;
+        let replaced = cache
+            .entry(1)
+            .and_compute_with(|entry| async move {
+                assert_eq!(entry.unwrap().value(), &"old");
+                compute::Op::Put("new")
+            })
+            .await;
+        assert!(matches!(replaced, compute::CompResult::ReplacedWith(_)));
+
+        let removed = cache
+            .entry_by_ref(&1)
+            .and_compute_with(|entry| async move {
+                assert_eq!(entry.unwrap().value(), &"new");
+                compute::Op::Remove
+            })
+            .await;
+        assert!(matches!(removed, compute::CompResult::Removed(_)));
+
+        assert_eq!(
+            *actual.lock().unwrap(),
+            [
+                (1, "old", RemovalCause::Replaced),
+                (1, "new", RemovalCause::Explicit),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_does_not_repeat_post_removal_observer() {
+        use futures_util::future::poll_immediate;
+        use tokio::task::yield_now;
+
+        let observer_calls = Arc::new(AtomicU32::new(0));
+        let observed = Arc::clone(&observer_calls);
+        let listener_completions = Arc::new(AtomicU32::new(0));
+        let completed = Arc::clone(&listener_completions);
+        let cache = Cache::builder()
+            .post_removal_observer(move |_, _, _| {
+                observed.fetch_add(1, Ordering::AcqRel);
+            })
+            .async_eviction_listener(move |_, _, _| {
+                let completed = Arc::clone(&completed);
+                async move {
+                    yield_now().await;
+                    completed.fetch_add(1, Ordering::AcqRel);
+                }
+                .boxed()
+            })
+            .build();
+
+        cache.insert(1, "old").await;
+        assert!(poll_immediate(cache.insert(1, "new")).await.is_none());
+        assert_eq!(observer_calls.load(Ordering::Acquire), 1);
+        assert_eq!(listener_completions.load(Ordering::Acquire), 0);
+
+        cache.run_pending_tasks().await;
+        assert_eq!(observer_calls.load(Ordering::Acquire), 1);
+        assert_eq!(listener_completions.load(Ordering::Acquire), 1);
+
+        assert!(poll_immediate(cache.invalidate(&1)).await.is_none());
+        assert_eq!(observer_calls.load(Ordering::Acquire), 2);
+        cache.get(&99).await;
+        assert_eq!(observer_calls.load(Ordering::Acquire), 2);
+        assert_eq!(listener_completions.load(Ordering::Acquire), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn post_removal_observer_can_run_concurrently() {
+        let active = Arc::new(AtomicUsize::new(0));
+        let max_active = Arc::new(AtomicUsize::new(0));
+        let active_in_observer = Arc::clone(&active);
+        let max_in_observer = Arc::clone(&max_active);
+        let rendezvous = Arc::new(StdBarrier::new(2));
+        let rendezvous_in_observer = Arc::clone(&rendezvous);
+        let cache = Cache::builder()
+            .post_removal_observer(move |_, _, _| {
+                let current = active_in_observer.fetch_add(1, Ordering::AcqRel) + 1;
+                max_in_observer.fetch_max(current, Ordering::AcqRel);
+                rendezvous_in_observer.wait();
+                active_in_observer.fetch_sub(1, Ordering::AcqRel);
+            })
+            .build();
+
+        for key in 0..2 {
+            cache.insert(key, key).await;
+        }
+        std::thread::scope(|scope| {
+            for key in 0..2 {
+                let cache = cache.clone();
+                scope.spawn(move || {
+                    tokio::runtime::Builder::new_current_thread()
+                        .build()
+                        .unwrap()
+                        .block_on(cache.invalidate(&key));
+                });
+            }
+        });
+
+        assert_eq!(max_active.load(Ordering::Acquire), 2);
+        assert_eq!(active.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn concurrent_post_removal_observer_panic_disables_only_later_calls() {
+        let entered = Arc::new(AtomicUsize::new(0));
+        let entered_observer = Arc::clone(&entered);
+        let rendezvous = Arc::new(StdBarrier::new(2));
+        let rendezvous_observer = Arc::clone(&rendezvous);
+        let cache = Cache::builder()
+            .post_removal_observer(move |key, _, _| {
+                entered_observer.fetch_add(1, Ordering::AcqRel);
+                rendezvous_observer.wait();
+                if *key == 0 {
+                    panic!("disable observer");
+                }
+            })
+            .build();
+        cache.insert(0, 0).await;
+        cache.insert(1, 1).await;
+
+        let first = {
+            let cache = cache.clone();
+            tokio::spawn(async move { cache.invalidate(&0).await })
+        };
+        let second = {
+            let cache = cache.clone();
+            tokio::spawn(async move { cache.invalidate(&1).await })
+        };
+        first.await.unwrap();
+        second.await.unwrap();
+        assert_eq!(entered.load(Ordering::Acquire), 2);
+
+        cache.insert(2, 2).await;
+        cache.invalidate(&2).await;
+        assert_eq!(entered.load(Ordering::Acquire), 2);
+    }
+
+    #[tokio::test]
+    async fn post_removal_observer_supports_bounded_nonblocking_queue() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let rejected = Arc::new(AtomicU32::new(0));
+        let rejected_in_observer = Arc::clone(&rejected);
+        let cache = Cache::builder()
+            .post_removal_observer(move |key, value, cause| {
+                if sender.try_send((key, value, cause)).is_err() {
+                    rejected_in_observer.fetch_add(1, Ordering::AcqRel);
+                }
+            })
+            .build();
+
+        cache.insert(1, "one").await;
+        cache.insert(2, "two").await;
+        cache.invalidate(&1).await;
+        cache.invalidate(&2).await;
+
+        assert_eq!(
+            receiver.try_recv().unwrap(),
+            (Arc::new(1), "one", RemovalCause::Explicit)
+        );
+        assert_eq!(rejected.load(Ordering::Acquire), 1);
     }
 
     #[tokio::test]

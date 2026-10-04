@@ -3,6 +3,7 @@ use super::{
     invalidator::{Invalidator, KeyDateLite, PredicateFun},
     key_lock::{KeyLock, KeyLockMap},
     notifier::RemovalNotifier,
+    observer::PostRemovalObserver,
     InterruptedOp, PredicateId,
 };
 
@@ -27,7 +28,7 @@ use crate::{
         CacheRegion, HousekeeperConfig,
     },
     future::CancelGuard,
-    notification::{AsyncEvictionListener, RemovalCause},
+    notification::{AsyncEvictionListener, PostRemovalObserver as ObserverFn, RemovalCause},
     policy::{EvictionPolicy, EvictionPolicyConfig, ExpirationPolicy},
     Entry, Expiry, Policy, PredicateError,
 };
@@ -114,6 +115,11 @@ impl<K, V, S> BaseCache<K, V, S> {
     }
 
     #[inline]
+    pub(crate) fn is_removal_observer_enabled(&self) -> bool {
+        self.inner.is_removal_observer_enabled()
+    }
+
+    #[inline]
     pub(crate) fn current_time(&self) -> Instant {
         self.inner.current_time()
     }
@@ -133,6 +139,14 @@ impl<K, V, S> BaseCache<K, V, S> {
         V: Clone + Send + Sync + 'static,
     {
         self.inner.notify_invalidate(key, entry)
+    }
+
+    pub(crate) fn observe_invalidate(&self, key: &Arc<K>, entry: &MiniArc<ValueEntry<K, V>>)
+    where
+        K: Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+    {
+        self.inner.observe_invalidate(key, entry);
     }
 
     #[cfg(feature = "unstable-debug-counters")]
@@ -167,6 +181,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<AsyncEvictionListener<K, V>>,
+        post_removal_observer: Option<ObserverFn<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
         housekeeper_config: HousekeeperConfig,
         invalidator_enabled: bool,
@@ -192,6 +207,7 @@ where
             weigher,
             eviction_policy,
             eviction_listener,
+            post_removal_observer,
             r_rcv,
             w_rcv,
             expiration_policy,
@@ -601,6 +617,15 @@ where
             }
         }
 
+        if self.is_removal_observer_enabled() {
+            self.inner.observe_upsert(
+                Arc::clone(&key),
+                &old_info.entry,
+                old_info.last_accessed,
+                old_info.last_modified,
+            );
+        }
+
         if self.is_removal_notifier_enabled() {
             let future = self
                 .inner
@@ -879,11 +904,16 @@ where
     pub(crate) fn key_locks_map_is_empty(&self) -> bool {
         self.inner.key_locks_map_is_empty()
     }
+
+    pub(crate) fn has_key_locks(&self) -> bool {
+        self.inner.has_key_locks()
+    }
 }
 
 struct EvictionState<'a, K, V> {
     counters: EvictionCounters,
     notifier: Option<&'a Arc<RemovalNotifier<K, V>>>,
+    observer: Option<&'a PostRemovalObserver<K, V>>,
     more_entries_to_evict: bool,
 }
 
@@ -892,16 +922,18 @@ impl<'a, K, V> EvictionState<'a, K, V> {
         entry_count: u64,
         weighted_size: u64,
         notifier: Option<&'a Arc<RemovalNotifier<K, V>>>,
+        observer: Option<&'a PostRemovalObserver<K, V>>,
     ) -> Self {
         Self {
             counters: EvictionCounters::new(entry_count, weighted_size),
             notifier,
+            observer,
             more_entries_to_evict: false,
         }
     }
 
     fn is_notifier_enabled(&self) -> bool {
-        self.notifier.is_some()
+        self.notifier.is_some() || self.observer.is_some_and(PostRemovalObserver::is_enabled)
     }
 
     async fn notify_entry_removal(
@@ -913,10 +945,11 @@ impl<'a, K, V> EvictionState<'a, K, V> {
         K: Send + Sync + 'static,
         V: Clone + Send + Sync + 'static,
     {
+        if let Some(observer) = self.observer {
+            observer.observe(Arc::clone(&key), entry.value.clone(), cause);
+        }
         if let Some(notifier) = self.notifier {
             notifier.notify(key, entry.value.clone(), cause).await;
-        } else {
-            panic!("notify_entry_removal is called when the notification is disabled");
         }
     }
 }
@@ -1018,6 +1051,7 @@ pub(crate) struct Inner<K, V, S> {
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
     removal_notifier: Option<Arc<RemovalNotifier<K, V>>>,
+    removal_observer: Option<PostRemovalObserver<K, V>>,
     key_locks: Option<KeyLockMap<K, S>>,
     invalidator: Option<Invalidator<K, V, S>>,
     clock: Clock,
@@ -1065,6 +1099,13 @@ impl<K, V, S> Inner<K, V, S> {
     #[inline]
     pub(crate) fn is_removal_notifier_enabled(&self) -> bool {
         self.removal_notifier.is_some()
+    }
+
+    #[inline]
+    pub(crate) fn is_removal_observer_enabled(&self) -> bool {
+        self.removal_observer
+            .as_ref()
+            .is_some_and(PostRemovalObserver::is_enabled)
     }
 
     #[cfg(feature = "unstable-debug-counters")]
@@ -1155,6 +1196,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<AsyncEvictionListener<K, V>>,
+        post_removal_observer: Option<ObserverFn<K, V>>,
         read_op_ch: Receiver<ReadOp<K, V>>,
         write_op_ch: Receiver<WriteOp<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
@@ -1192,6 +1234,8 @@ where
         } else {
             None
         };
+        let removal_observer =
+            post_removal_observer.map(|observer| PostRemovalObserver::new(observer, name.clone()));
 
         Self {
             name,
@@ -1212,6 +1256,7 @@ where
             valid_after: AtomicInstant::default(),
             weigher,
             removal_notifier,
+            removal_observer,
             key_locks,
             invalidator,
             clock,
@@ -1334,8 +1379,12 @@ where
         let mut calls = 0u32;
         let current_ec = self.entry_count.load();
         let current_ws = self.weighted_size.load();
-        let mut eviction_state =
-            EvictionState::new(current_ec, current_ws, self.removal_notifier.as_ref());
+        let mut eviction_state = EvictionState::new(
+            current_ec,
+            current_ws,
+            self.removal_notifier.as_ref(),
+            self.removal_observer.as_ref(),
+        );
 
         loop {
             if should_process_logs {
@@ -2628,12 +2677,58 @@ where
     K: Send + Sync + 'static,
     V: Clone + Send + Sync + 'static,
 {
+    fn observe_upsert(
+        &self,
+        key: Arc<K>,
+        entry: &MiniArc<ValueEntry<K, V>>,
+        last_accessed: Option<Instant>,
+        last_modified: Option<Instant>,
+    ) {
+        let now = self.current_time();
+        let exp = &self.expiration_policy;
+        let mut cause = RemovalCause::Replaced;
+        if last_accessed.is_some_and(|value| is_expired_by_tti(&exp.time_to_idle(), value, now)) {
+            cause = RemovalCause::Expired;
+        }
+        if let Some(last_modified) = last_modified {
+            if is_expired_by_ttl(&exp.time_to_live(), last_modified, now) {
+                cause = RemovalCause::Expired;
+            } else if is_invalid_entry(&self.valid_after(), last_modified) {
+                cause = RemovalCause::Explicit;
+            }
+        }
+        if let Some(observer) = &self.removal_observer {
+            observer.observe(key, entry.value.clone(), cause);
+        }
+    }
+
+    fn observe_invalidate(&self, key: &Arc<K>, entry: &MiniArc<ValueEntry<K, V>>) {
+        let now = self.current_time();
+        let exp = &self.expiration_policy;
+        let mut cause = RemovalCause::Explicit;
+        if entry
+            .last_accessed()
+            .is_some_and(|value| is_expired_by_tti(&exp.time_to_idle(), value, now))
+            || entry
+                .last_modified()
+                .is_some_and(|value| is_expired_by_ttl(&exp.time_to_live(), value, now))
+        {
+            cause = RemovalCause::Expired;
+        }
+        if let Some(observer) = &self.removal_observer {
+            observer.observe(Arc::clone(key), entry.value.clone(), cause);
+        }
+    }
+
     pub(crate) async fn notify_single_removal(
         &self,
         key: Arc<K>,
         entry: &MiniArc<ValueEntry<K, V>>,
         cause: RemovalCause,
     ) {
+        if let Some(observer) = &self.removal_observer {
+            observer.observe(Arc::clone(&key), entry.value.clone(), cause);
+        }
         if let Some(notifier) = &self.removal_notifier {
             notifier.notify(key, entry.value.clone(), cause).await;
         }
@@ -2739,6 +2834,10 @@ where
             .map(|m| m.is_empty())
             // If key_locks is None, consider it is empty.
             .unwrap_or(true)
+    }
+
+    fn has_key_locks(&self) -> bool {
+        self.key_locks.is_some()
     }
 }
 
@@ -2880,6 +2979,7 @@ mod tests {
                 RandomState::default(),
                 None,
                 EvictionPolicy::default(),
+                None,
                 None,
                 ExpirationPolicy::default(),
                 HousekeeperConfig::default(),
@@ -3256,6 +3356,7 @@ mod tests {
             RandomState::default(),
             None,
             EvictionPolicy::default(),
+            None,
             None,
             ExpirationPolicy::new(
                 Some(Duration::from_secs(TTL)),
@@ -3762,6 +3863,7 @@ mod tests {
                 None,
                 EvictionPolicy::lru(),
                 None,
+                None,
                 ExpirationPolicy::default(),
                 HousekeeperConfig::default(),
                 false,
@@ -3781,6 +3883,7 @@ mod tests {
                 RandomState::default(),
                 None,
                 EvictionPolicy::tiny_lfu(),
+                None,
                 None,
                 ExpirationPolicy::default(),
                 HousekeeperConfig::default(),

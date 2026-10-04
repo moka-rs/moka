@@ -181,6 +181,10 @@ name = "jittered_expiry_policy_sync"
 required-features = ["sync"]
 
 [[example]]
+name = "post_removal_observer_async"
+required-features = ["future"]
+
+[[example]]
 name = "reinsert_expired_entries_sync"
 required-features = ["sync"]
 

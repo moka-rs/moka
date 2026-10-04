@@ -1,7 +1,7 @@
 use super::{Cache, FutureExt};
 use crate::{
     common::{builder_utils, concurrent::Weigher, time::Clock, HousekeeperConfig},
-    notification::{AsyncEvictionListener, ListenerFuture, RemovalCause},
+    notification::{AsyncEvictionListener, ListenerFuture, PostRemovalObserver, RemovalCause},
     policy::{EvictionPolicy, ExpirationPolicy},
     Expiry,
 };
@@ -62,6 +62,7 @@ pub struct CacheBuilder<K, V, C> {
     weigher: Option<Weigher<K, V>>,
     eviction_policy: EvictionPolicy,
     eviction_listener: Option<AsyncEvictionListener<K, V>>,
+    post_removal_observer: Option<PostRemovalObserver<K, V>>,
     expiration_policy: ExpirationPolicy<K, V>,
     housekeeper_config: HousekeeperConfig,
     invalidator_enabled: bool,
@@ -82,6 +83,7 @@ where
             weigher: None,
             eviction_policy: EvictionPolicy::default(),
             eviction_listener: None,
+            post_removal_observer: None,
             expiration_policy: ExpirationPolicy::default(),
             housekeeper_config: HousekeeperConfig::default(),
             invalidator_enabled: false,
@@ -124,6 +126,7 @@ where
             self.weigher,
             self.eviction_policy,
             self.eviction_listener,
+            self.post_removal_observer,
             self.expiration_policy,
             self.housekeeper_config,
             self.invalidator_enabled,
@@ -223,6 +226,7 @@ where
             self.weigher,
             self.eviction_policy,
             self.eviction_listener,
+            self.post_removal_observer,
             self.expiration_policy,
             self.housekeeper_config,
             self.invalidator_enabled,
@@ -318,7 +322,59 @@ impl<K, V, C> CacheBuilder<K, V, C> {
             .boxed()
         };
 
-        self.async_eviction_listener(async_listener)
+        Self {
+            eviction_listener: Some(Box::new(async_listener)),
+            ..self
+        }
+    }
+
+    /// Sets a synchronous observer that is called after an entry is logically
+    /// removed from the cache.
+    ///
+    /// The observer receives the removed key as an `Arc<K>`, a clone of the removed
+    /// value, and its [`RemovalCause`][removal-cause]. It observes explicit
+    /// removals and invalidations, replacements, expiration, and size eviction. It
+    /// is not called merely because the cache itself is dropped.
+    ///
+    /// Unlike an eviction listener, the observer does not return a future and does
+    /// not enable listener-only per-key locking. When both are configured, Moka
+    /// invokes the observer before starting the eviction listener for the same
+    /// removal.
+    ///
+    /// Observer invocations for different removals can overlap and have no global
+    /// ordering guarantee. The closure runs inline on the thread or task processing
+    /// the removal, so it must finish quickly and must not block, perform I/O, wait
+    /// for backpressure, or reenter the same cache. A caller that needs deferred
+    /// work should use a nonblocking send into its own bounded queue and explicitly
+    /// handle a full or closed queue.
+    ///
+    /// [`Cache::run_pending_tasks`][run-pending-tasks] makes pending cache removals
+    /// observable, but it cannot wait for work that the observer publishes outside
+    /// Moka. The caller owns any external drain, retry, durability, and shutdown
+    /// barrier. The observer should therefore not be used as the sole durable audit
+    /// or change-data-capture channel.
+    ///
+    /// # Panics
+    ///
+    /// If the observer panics, the panic is swallowed and the observer is disabled
+    /// for subsequent removals. A callback already running concurrently may still
+    /// complete. With the `logging` feature enabled, Moka emits an error when it
+    /// disables the observer.
+    ///
+    /// See the [post-removal observer example][observer-example] for a bounded,
+    /// nonblocking handoff.
+    ///
+    /// [removal-cause]: ../notification/enum.RemovalCause.html
+    /// [run-pending-tasks]: ./struct.Cache.html#method.run_pending_tasks
+    /// [observer-example]: ./struct.Cache.html#example-post-removal-observer
+    pub fn post_removal_observer<F>(self, observer: F) -> Self
+    where
+        F: Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static,
+    {
+        Self {
+            post_removal_observer: Some(Box::new(observer)),
+            ..self
+        }
     }
 
     /// Sets the eviction listener closure to the cache. The closure should take

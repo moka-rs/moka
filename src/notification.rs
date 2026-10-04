@@ -21,6 +21,11 @@ pub(crate) type EvictionListener<K, V> =
 pub(crate) type AsyncEvictionListener<K, V> =
     Box<dyn Fn(Arc<K>, V, RemovalCause) -> ListenerFuture + Send + Sync + 'static>;
 
+/// Type-erased synchronous callback used by a future cache after logical removal.
+#[cfg(feature = "future")]
+pub(crate) type PostRemovalObserver<K, V> =
+    Box<dyn Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static>;
+
 // NOTE: Currently, dropping the cache will drop all entries without sending
 // notifications. Calling `invalidate_all` method of the cache will trigger
 // the notifications, but currently there is no way to know when all entries
