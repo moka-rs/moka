@@ -52,6 +52,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///     - [Per-entry expiration policy](#per-entry-expiration-policy)
 /// - [Example: Eviction Listener](#example-eviction-listener)
 ///     - [You should avoid eviction listener to panic](#you-should-avoid-eviction-listener-to-panic)
+/// - [Example: Post-removal Observer](#example-post-removal-observer)
 ///
 /// # Example: `insert`, `get` and `invalidate`
 ///
@@ -629,6 +630,68 @@ use std::sync::atomic::{AtomicBool, Ordering};
 ///    will appear in the log.
 ///
 /// [builder-name-method]: ./struct.CacheBuilder.html#method.name
+///
+/// # Example: Post-removal Observer
+///
+/// A post-removal observer is intended for short, synchronous bookkeeping that
+/// should not enable the asynchronous eviction-listener path. It receives an
+/// `Arc<K>`, a cloned `V`, and the [`RemovalCause`][removal-cause] after an entry is
+/// logically removed. Explicit invalidation, replacement, expiration, and size
+/// eviction are observed; dropping the cache does not emit observer calls.
+///
+/// The callback runs inline and calls for different removals can overlap. It must
+/// not block, perform I/O, wait for queue capacity, or reenter the same cache. If
+/// deferred processing is needed, hand the record to a bounded queue with a
+/// nonblocking operation and make overload visible to the application:
+///
+/// ```rust
+/// use moka::{future::Cache, notification::RemovalCause};
+/// use std::sync::{
+///     atomic::{AtomicUsize, Ordering},
+///     Arc,
+/// };
+/// use tokio::sync::mpsc::{self, error::TrySendError};
+///
+/// #[tokio::main]
+/// async fn main() {
+///     let (sender, mut receiver) = mpsc::channel(16);
+///     let rejected = Arc::new(AtomicUsize::new(0));
+///     let rejected_by_observer = Arc::clone(&rejected);
+///
+///     let cache = Cache::builder()
+///         .post_removal_observer(
+///             move |key: Arc<String>, value: String, cause: RemovalCause| {
+///                 let ticket = (key, value, cause);
+///                 if let Err(TrySendError::Full(_) | TrySendError::Closed(_)) =
+///                     sender.try_send(ticket)
+///                 {
+///                     // Production code can increment a metric, mark state dirty,
+///                     // or arrange reconciliation. The observer must not wait.
+///                     rejected_by_observer.fetch_add(1, Ordering::Relaxed);
+///                 }
+///             },
+///         )
+///         .build();
+///
+///     let key = "alice".to_owned();
+///     cache.insert(key.clone(), "first".to_owned()).await;
+///     cache.insert(key, "second".to_owned()).await;
+///
+///     let (key, value, cause) = receiver.recv().await.expect("replacement ticket");
+///     assert_eq!(key.as_str(), "alice");
+///     assert_eq!(value, "first");
+///     assert_eq!(cause, RemovalCause::Replaced);
+///     assert_eq!(rejected.load(Ordering::Relaxed), 0);
+/// }
+/// ```
+///
+/// When an eviction listener is also configured, the observer runs before that
+/// listener starts for the same removal. [`run_pending_tasks`](Self::run_pending_tasks)
+/// can make pending cache removals observable, but it does not drain application
+/// queues or wait for work published by the observer. A panic is contained and
+/// disables later observer calls; a concurrently running call may still complete.
+///
+/// [removal-cause]: ../notification/enum.RemovalCause.html
 ///
 pub struct Cache<K, V, S = RandomState> {
     pub(crate) base: BaseCache<K, V, S>,

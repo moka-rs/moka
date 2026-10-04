@@ -21,6 +21,7 @@ pub(crate) type EvictionListener<K, V> =
 pub(crate) type AsyncEvictionListener<K, V> =
     Box<dyn Fn(Arc<K>, V, RemovalCause) -> ListenerFuture + Send + Sync + 'static>;
 
+/// Type-erased synchronous callback used by a future cache after logical removal.
 #[cfg(feature = "future")]
 pub(crate) type PostRemovalObserver<K, V> =
     Box<dyn Fn(Arc<K>, V, RemovalCause) + Send + Sync + 'static>;
