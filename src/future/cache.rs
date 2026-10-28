@@ -2656,6 +2656,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalidate_entries_if_across_batches() {
+        for n in [0_u64, 1, 384, 385, 386, 769, 770, 1000] {
+            let cache: Cache<u64, u64> = Cache::builder()
+                .max_capacity(10_000)
+                .support_invalidation_closures()
+                .build();
+            for i in 0..n {
+                cache.insert(i, i).await;
+            }
+            cache.run_pending_tasks().await;
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            cache.invalidate_entries_if(|k, _| *k % 2 == 0).unwrap();
+            cache.run_pending_tasks().await;
+            for i in 0..n {
+                assert_eq!(
+                    cache.get(&i).await,
+                    if i % 2 == 0 { None } else { Some(i) },
+                    "n={n}, key={i}"
+                );
+            }
+            cache.invalidate_entries_if(|_, _| true).unwrap();
+            cache.run_pending_tasks().await;
+            for i in 0..n {
+                assert_eq!(cache.get(&i).await, None, "n={n}, key={i}");
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn invalidate_entries_if() -> Result<(), Box<dyn std::error::Error>> {
         use std::collections::HashSet;
 

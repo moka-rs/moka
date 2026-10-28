@@ -2285,9 +2285,8 @@ where
 
         let mut candidates = Vec::new();
         let mut len = 0;
-        let has_next;
-        {
-            let iter = &mut deqs.write_order.peekable();
+        let is_truncated = {
+            let mut iter = &mut deqs.write_order;
 
             while len < batch_size {
                 if let Some(kd) = iter.next() {
@@ -2304,14 +2303,13 @@ where
                 }
             }
 
-            has_next = iter.peek().is_some();
-        }
+            len == batch_size && iter.cursor_has_next()
+        };
 
         if len == 0 {
             return;
         }
 
-        let is_truncated = len == batch_size && has_next;
         let (invalidated, is_done) =
             invalidator.scan_and_invalidate(self, candidates, is_truncated);
 
