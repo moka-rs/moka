@@ -1,4 +1,5 @@
-use async_lock::{RwLock, RwLockWriteGuard};
+use async_lock::{Mutex, MutexGuard, RwLock, RwLockWriteGuard};
+use equivalent::Equivalent;
 use futures_util::FutureExt;
 use std::{
     any::{Any, TypeId},
@@ -18,6 +19,7 @@ use crate::{
 use super::{Cache, ComputeNone, OptionallyNone};
 
 const WAITER_MAP_NUM_SEGMENTS: usize = 64;
+const FENCE_LOCK_COUNT: usize = 64;
 
 type ErrorObject = Arc<dyn Any + Send + Sync + 'static>;
 
@@ -49,7 +51,27 @@ impl<V> fmt::Debug for WaiterValue<V> {
     }
 }
 
-type Waiter<V> = MiniArc<RwLock<WaiterValue<V>>>;
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum WaiterKind {
+    Initializer,
+    Compute,
+}
+
+struct WaiterState<V> {
+    kind: WaiterKind,
+    value: RwLock<WaiterValue<V>>,
+}
+
+impl<V> WaiterState<V> {
+    fn new(kind: WaiterKind) -> Self {
+        Self {
+            kind,
+            value: RwLock::new(WaiterValue::Computing),
+        }
+    }
+}
+
+type Waiter<V> = MiniArc<WaiterState<V>>;
 type WaiterMap<K, V, S> = crate::cht::SegmentedHashMap<(Arc<K>, TypeId), Waiter<V>, S>;
 
 struct WaiterGuard<'a, K, V, S>
@@ -63,6 +85,7 @@ where
     w_key: Option<(Arc<K>, TypeId)>,
     w_hash: u64,
     waiters: &'a WaiterMap<K, V, S>,
+    waiter: Waiter<V>,
     write_lock: RwLockWriteGuard<'a, WaiterValue<V>>,
 }
 
@@ -76,12 +99,14 @@ where
         w_key: (Arc<K>, TypeId),
         w_hash: u64,
         waiters: &'a WaiterMap<K, V, S>,
+        waiter: &Waiter<V>,
         write_lock: RwLockWriteGuard<'a, WaiterValue<V>>,
     ) -> Self {
         Self {
             w_key: Some(w_key),
             w_hash,
             waiters,
+            waiter: MiniArc::clone(waiter),
             write_lock,
         }
     }
@@ -89,7 +114,7 @@ where
     fn set_waiter_value(mut self, v: WaiterValue<V>) {
         *self.write_lock = v;
         if let Some(w_key) = self.w_key.take() {
-            remove_waiter(self.waiters, w_key, self.w_hash);
+            remove_waiter(self.waiters, w_key, self.w_hash, &self.waiter);
         }
     }
 }
@@ -106,7 +131,7 @@ where
             // has been aborted. Remove our waiter to prevent the issue described in
             // https://github.com/moka-rs/moka/issues/59
             *self.write_lock = WaiterValue::EnclosingFutureAborted;
-            remove_waiter(self.waiters, w_key, self.w_hash);
+            remove_waiter(self.waiters, w_key, self.w_hash, &self.waiter);
         }
     }
 }
@@ -117,6 +142,7 @@ pub(crate) struct ValueInitializer<K, V, S> {
     // can always downcast the trait object ErrorObject (in Waiter<V>) into its
     // concrete type.
     waiters: MiniArc<WaiterMap<K, V, S>>,
+    fence_locks: Box<[Mutex<()>]>,
 }
 
 impl<K, V, S> ValueInitializer<K, V, S>
@@ -131,6 +157,55 @@ where
                 WAITER_MAP_NUM_SEGMENTS,
                 hasher,
             )),
+            fence_locks: (0..FENCE_LOCK_COUNT).map(|_| Mutex::new(())).collect(),
+        }
+    }
+
+    pub(crate) async fn lock_and_remove_initializers<Q>(
+        &self,
+        key: &Q,
+        hash: u64,
+    ) -> MutexGuard<'_, ()>
+    where
+        Q: Equivalent<K> + ?Sized,
+    {
+        let guard = self.lock_fence(hash).await;
+        self.remove_initializers(key);
+        guard
+    }
+
+    async fn lock_fence(&self, hash: u64) -> MutexGuard<'_, ()> {
+        self.fence_locks[hash as usize % self.fence_locks.len()]
+            .lock()
+            .await
+    }
+
+    async fn lock_if_current(
+        &self,
+        hash: u64,
+        w_key: &(Arc<K>, TypeId),
+        w_hash: u64,
+        waiter: &Waiter<V>,
+    ) -> Option<MutexGuard<'_, ()>> {
+        let guard = self.lock_fence(hash).await;
+        is_current_waiter(&self.waiters, w_key, w_hash, waiter).then_some(guard)
+    }
+
+    fn remove_initializers<Q>(&self, key: &Q)
+    where
+        Q: Equivalent<K> + ?Sized,
+    {
+        let waiters: Vec<_> = self
+            .waiters
+            .iter()
+            .filter(|((candidate, _), waiter)| {
+                key.equivalent(candidate.as_ref()) && waiter.kind == WaiterKind::Initializer
+            })
+            .collect();
+
+        for (w_key, waiter) in waiters {
+            let w_hash = self.waiters.hash(&w_key);
+            remove_waiter(&self.waiters, w_key, w_hash, &waiter);
         }
     }
 
@@ -172,21 +247,23 @@ where
 
         let (w_key, w_hash) = waiter_key_hash(&self.waiters, c_key, type_id);
 
-        let waiter = MiniArc::new(RwLock::new(WaiterValue::Computing));
+        let waiter = MiniArc::new(WaiterState::new(WaiterKind::Initializer));
         // NOTE: We have to acquire a write lock before `try_insert_waiter`,
         // so that any concurrent attempt will get our lock and wait on it.
-        let lock = waiter.write().await;
+        let lock = waiter.value.write().await;
 
         loop {
-            let Some(existing_waiter) =
+            let existing_waiter = {
+                let _guard = self.lock_fence(c_hash).await;
                 try_insert_waiter(&self.waiters, w_key.clone(), w_hash, &waiter)
-            else {
+            };
+            let Some(existing_waiter) = existing_waiter else {
                 // Inserted.
                 break;
             };
 
             // Somebody else's waiter already exists, so wait for its result to become available.
-            let waiter_result = existing_waiter.read().await;
+            let waiter_result = existing_waiter.value.read().await;
             match &*waiter_result {
                 WaiterValue::Ready(Ok(value)) => return ReadExisting(value.clone()),
                 WaiterValue::Ready(Err(e)) => return InitErr(Arc::clone(e).downcast().unwrap()),
@@ -218,7 +295,7 @@ where
         // Create a guard. This will ensure to remove our waiter when the
         // enclosing future has been aborted:
         // https://github.com/moka-rs/moka/issues/59
-        let waiter_guard = WaiterGuard::new(w_key, w_hash, &self.waiters, lock);
+        let waiter_guard = WaiterGuard::new(w_key.clone(), w_hash, &self.waiters, &waiter, lock);
 
         // Check if the value has already been inserted by other thread.
         if let Some(value) = cache
@@ -241,7 +318,12 @@ where
             Ok(value) => match post_init(value) {
                 Ok(value) => {
                     cache
-                        .insert_with_hash(Arc::clone(c_key), c_hash, value.clone())
+                        .insert_with_hash_if(
+                            Arc::clone(c_key),
+                            c_hash,
+                            value.clone(),
+                            self.lock_if_current(c_hash, &w_key, w_hash, &waiter),
+                        )
                         .await;
                     waiter_guard.set_waiter_value(WaiterValue::Ready(Ok(value.clone())));
                     Initialized(value)
@@ -281,10 +363,10 @@ where
 
         let type_id = TypeId::of::<ComputeNone>();
         let (w_key, w_hash) = waiter_key_hash(&self.waiters, &c_key, type_id);
-        let waiter = MiniArc::new(RwLock::new(WaiterValue::Computing));
+        let waiter = MiniArc::new(WaiterState::new(WaiterKind::Compute));
         // NOTE: We have to acquire a write lock before `try_insert_waiter`,
         // so that any concurrent attempt will get our lock and wait on it.
-        let lock = waiter.write().await;
+        let lock = waiter.value.write().await;
 
         loop {
             let Some(existing_waiter) =
@@ -296,7 +378,7 @@ where
 
             // Somebody else's waiter already exists, so wait for it to finish
             // (wait for it to release the write lock).
-            let waiter_result = existing_waiter.read().await;
+            let waiter_result = existing_waiter.value.read().await;
             match &*waiter_result {
                 // Unexpected state.
                 WaiterValue::Computing => panic!(
@@ -315,7 +397,7 @@ where
         // Create a guard. This will ensure to remove our waiter when the
         // enclosing future has been aborted:
         // https://github.com/moka-rs/moka/issues/59
-        let waiter_guard = WaiterGuard::new(w_key, w_hash, &self.waiters, lock);
+        let waiter_guard = WaiterGuard::new(w_key, w_hash, &self.waiters, &waiter, lock);
 
         // Get the current value.
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
@@ -423,10 +505,10 @@ where
 
         let type_id = TypeId::of::<ComputeNone>();
         let (w_key, w_hash) = waiter_key_hash(&self.waiters, &c_key, type_id);
-        let waiter = MiniArc::new(RwLock::new(WaiterValue::Computing));
+        let waiter = MiniArc::new(WaiterState::new(WaiterKind::Compute));
         // NOTE: We have to acquire a write lock before `try_insert_waiter`,
         // so that any concurrent attempt will get our lock and wait on it.
-        let lock = waiter.write().await;
+        let lock = waiter.value.write().await;
 
         if let Some(_existing_waiter) =
             try_insert_waiter(&self.waiters, w_key.clone(), w_hash, &waiter)
@@ -461,7 +543,7 @@ where
         // Create a guard. This will ensure to remove our waiter when the
         // enclosing future has been aborted:
         // https://github.com/moka-rs/moka/issues/59
-        let waiter_guard = WaiterGuard::new(w_key, w_hash, &self.waiters, lock);
+        let waiter_guard = WaiterGuard::new(w_key, w_hash, &self.waiters, &waiter, lock);
 
         // Get the current value.
         let ignore_if = None as Option<&mut fn(&V) -> bool>;
@@ -625,12 +707,36 @@ impl<K, V, S> ValueInitializer<K, V, S> {
 }
 
 #[inline]
-fn remove_waiter<K, V, S>(waiter_map: &WaiterMap<K, V, S>, w_key: (Arc<K>, TypeId), w_hash: u64)
-where
+fn remove_waiter<K, V, S>(
+    waiter_map: &WaiterMap<K, V, S>,
+    w_key: (Arc<K>, TypeId),
+    w_hash: u64,
+    waiter: &Waiter<V>,
+) where
     (Arc<K>, TypeId): Eq + Hash,
     S: BuildHasher,
 {
-    waiter_map.remove(w_hash, |k| k == &w_key);
+    waiter_map.remove_if(
+        w_hash,
+        |k| k == &w_key,
+        |_, current| MiniArc::ptr_eq(current, waiter),
+    );
+}
+
+fn is_current_waiter<K, V, S>(
+    waiter_map: &WaiterMap<K, V, S>,
+    w_key: &(Arc<K>, TypeId),
+    w_hash: u64,
+    waiter: &Waiter<V>,
+) -> bool
+where
+    (Arc<K>, TypeId): Eq + Hash,
+    V: Clone,
+    S: BuildHasher,
+{
+    waiter_map
+        .get(w_hash, |key| key == w_key)
+        .is_some_and(|current| MiniArc::ptr_eq(&current, waiter))
 }
 
 #[inline]

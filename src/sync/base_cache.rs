@@ -485,6 +485,17 @@ where
         hash: u64,
         value: V,
     ) -> (WriteOp<K, V>, Instant) {
+        self.do_insert_with_hash_if(key, hash, value, || Some(()))
+            .unwrap()
+    }
+
+    pub(crate) fn do_insert_with_hash_if<G>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        value: V,
+        acquire_guard: impl FnOnce() -> Option<G>,
+    ) -> Option<(WriteOp<K, V>, Instant)> {
         let weight = self.inner.weigh(&key, &value);
         let op_cnt1 = Rc::new(AtomicU8::new(0));
         let op_cnt2 = Rc::clone(&op_cnt1);
@@ -494,6 +505,8 @@ where
         // Lock the key for update if blocking removal notification is enabled.
         let kl = self.maybe_key_lock(&key);
         let _klg = &kl.as_ref().map(|kl| kl.lock());
+
+        let insertion_guard = acquire_guard()?;
 
         let ts = self.current_time();
 
@@ -536,7 +549,9 @@ where
             },
         );
 
-        match (op1, op2) {
+        drop(insertion_guard);
+
+        Some(match (op1, op2) {
             (Some((_cnt, ins_op)), None) => self.do_post_insert_steps(ts, &key, ins_op),
             (Some((cnt1, ins_op)), Some((cnt2, ..))) if cnt1 > cnt2 => {
                 self.do_post_insert_steps(ts, &key, ins_op)
@@ -545,7 +560,7 @@ where
                 self.do_post_update_steps(ts, key, old_info, upd_op)
             }
             (None, None) => unreachable!(),
-        }
+        })
     }
 
     fn do_post_insert_steps(

@@ -482,6 +482,25 @@ where
             .invalidate_with_hash(key, hash, false);
     }
 
+    /// Discards any cached value for the key and prevents an initializer that
+    /// is already in progress from repopulating it.
+    ///
+    /// Initializers that were already sharing a computation may still receive
+    /// its result, but the result will not be cached. Initializers started after
+    /// this method returns form a new single-flight group.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and
+    /// `Eq` on the borrowed form _must_ match those for the key type.
+    pub fn invalidate_and_fence<Q>(&self, key: &Q)
+    where
+        Q: Equivalent<K> + Hash + ?Sized,
+    {
+        let hash = self.inner.hash(key);
+        self.inner
+            .select(hash)
+            .invalidate_and_fence_with_hash(key, hash);
+    }
+
     /// Discards any cached value for the key and returns a clone of the value.
     ///
     /// If you do not need to get the value that has been discarded, use the

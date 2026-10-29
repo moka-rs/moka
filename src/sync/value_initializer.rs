@@ -1,4 +1,5 @@
-use parking_lot::RwLock;
+use equivalent::Equivalent;
+use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::{
     any::{Any, TypeId},
     fmt,
@@ -15,6 +16,7 @@ use crate::{
 use super::{Cache, ComputeNone, OptionallyNone};
 
 const WAITER_MAP_NUM_SEGMENTS: usize = 64;
+const FENCE_LOCK_COUNT: usize = 64;
 
 type ErrorObject = Arc<dyn Any + Send + Sync + 'static>;
 
@@ -38,7 +40,27 @@ impl<V> fmt::Debug for WaiterValue<V> {
     }
 }
 
-type Waiter<V> = MiniArc<RwLock<WaiterValue<V>>>;
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum WaiterKind {
+    Initializer,
+    Compute,
+}
+
+struct WaiterState<V> {
+    kind: WaiterKind,
+    value: RwLock<WaiterValue<V>>,
+}
+
+impl<V> WaiterState<V> {
+    fn new(kind: WaiterKind) -> Self {
+        Self {
+            kind,
+            value: RwLock::new(WaiterValue::Computing),
+        }
+    }
+}
+
+type Waiter<V> = MiniArc<WaiterState<V>>;
 
 pub(crate) enum InitResult<V, E> {
     Initialized(V),
@@ -52,6 +74,7 @@ pub(crate) struct ValueInitializer<K, V, S> {
     // we can always downcast the trait object ErrorObject (in Waiter<V>) into
     // its concrete type.
     waiters: crate::cht::SegmentedHashMap<(Arc<K>, TypeId), Waiter<V>, S>,
+    fence_locks: Box<[Mutex<()>]>,
 }
 
 impl<K, V, S> ValueInitializer<K, V, S>
@@ -66,21 +89,32 @@ where
                 WAITER_MAP_NUM_SEGMENTS,
                 hasher,
             ),
+            fence_locks: (0..FENCE_LOCK_COUNT).map(|_| Mutex::new(())).collect(),
         }
+    }
+
+    pub(crate) fn lock_and_remove_initializers<Q>(&self, key: &Q, hash: u64) -> MutexGuard<'_, ()>
+    where
+        Q: Equivalent<K> + Hash + ?Sized,
+    {
+        let guard = self.lock_fence(hash);
+        self.remove_initializers(key);
+        guard
     }
 
     /// # Panics
     /// Panics if the `init` closure has been panicked.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_init_or_read<O, E>(
         &self,
         key: &Arc<K>,
+        hash: u64,
         type_id: TypeId,
+        cache: &Cache<K, V, S>,
         // Closure to get an existing value from cache.
         mut get: impl FnMut() -> Option<V>,
         // Closure to initialize a new value.
         init: impl FnOnce() -> O,
-        // Closure to insert a new value into cache.
-        mut insert: impl FnMut(V),
         // Function to convert a value O, returned from the init future, into
         // Result<V, E>.
         post_init: fn(O) -> Result<V, E>,
@@ -96,18 +130,21 @@ where
 
         let (w_key, w_hash) = self.waiter_key_hash(key, type_id);
 
-        let waiter = MiniArc::new(RwLock::new(WaiterValue::Computing));
-        let mut lock = waiter.write();
+        let waiter = MiniArc::new(WaiterState::new(WaiterKind::Initializer));
+        let mut lock = waiter.value.write();
 
         loop {
-            let Some(existing_waiter) = self.try_insert_waiter(w_key.clone(), w_hash, &waiter)
-            else {
+            let existing_waiter = {
+                let _guard = self.lock_fence(hash);
+                self.try_insert_waiter(w_key.clone(), w_hash, &waiter)
+            };
+            let Some(existing_waiter) = existing_waiter else {
                 // Inserted.
                 break;
             };
 
             // Somebody else's waiter already exists, so wait for its result to become available.
-            let waiter_result = existing_waiter.read();
+            let waiter_result = existing_waiter.value.read();
             match &*waiter_result {
                 WaiterValue::Ready(Ok(value)) => return ReadExisting(value.clone()),
                 WaiterValue::Ready(Err(e)) => return InitErr(Arc::clone(e).downcast().unwrap()),
@@ -138,7 +175,7 @@ where
             // Yes. Set the waiter value, remove our waiter, and return
             // the existing value.
             *lock = WaiterValue::Ready(Ok(value.clone()));
-            self.remove_waiter(w_key, w_hash);
+            self.remove_waiter(w_key, w_hash, &waiter);
             return InitResult::ReadExisting(value);
         }
 
@@ -150,7 +187,9 @@ where
             Ok(value) => {
                 let init_res = match post_init(value) {
                     Ok(value) => {
-                        insert(value.clone());
+                        cache.insert_with_hash_if(Arc::clone(key), hash, value.clone(), || {
+                            self.lock_if_current(hash, &w_key, w_hash, &waiter)
+                        });
                         *lock = WaiterValue::Ready(Ok(value.clone()));
                         InitResult::Initialized(value)
                     }
@@ -160,14 +199,14 @@ where
                         InitResult::InitErr(err.downcast().unwrap())
                     }
                 };
-                self.remove_waiter(w_key, w_hash);
+                self.remove_waiter(w_key, w_hash, &waiter);
                 init_res
             }
             // Panicked.
             Err(payload) => {
                 *lock = WaiterValue::InitClosurePanicked;
                 // Remove the waiter so that others can retry.
-                self.remove_waiter(w_key, w_hash);
+                self.remove_waiter(w_key, w_hash, &waiter);
                 resume_unwind(payload);
             }
         }
@@ -194,10 +233,10 @@ where
 
         let type_id = TypeId::of::<ComputeNone>();
         let (w_key, w_hash) = self.waiter_key_hash(&c_key, type_id);
-        let waiter = MiniArc::new(RwLock::new(WaiterValue::Computing));
+        let waiter = MiniArc::new(WaiterState::new(WaiterKind::Compute));
         // NOTE: We have to acquire a write lock before `try_insert_waiter`,
         // so that any concurrent attempt will get our lock and wait on it.
-        let mut lock = waiter.write();
+        let mut lock = waiter.value.write();
 
         loop {
             let Some(existing_waiter) = self.try_insert_waiter(w_key.clone(), w_hash, &waiter)
@@ -208,7 +247,7 @@ where
 
             // Somebody else's waiter already exists, so wait for it to finish
             // (wait for it to release the write lock).
-            let waiter_result = existing_waiter.read();
+            let waiter_result = existing_waiter.value.read();
             match &*waiter_result {
                 // Unexpected state.
                 WaiterValue::Computing => panic!(
@@ -248,7 +287,7 @@ where
             Err(payload) => {
                 *lock = WaiterValue::InitClosurePanicked;
                 // Remove the waiter so that others can retry.
-                self.remove_waiter(w_key, w_hash);
+                self.remove_waiter(w_key, w_hash, &waiter);
                 resume_unwind(payload);
             }
         };
@@ -256,7 +295,7 @@ where
         let op = match post_init(output) {
             Ok(op) => op,
             Err(e) => {
-                self.remove_waiter(w_key, w_hash);
+                self.remove_waiter(w_key, w_hash, &waiter);
                 return Err(e);
             }
         };
@@ -296,7 +335,7 @@ where
                 }
             }
         };
-        self.remove_waiter(w_key, w_hash);
+        self.remove_waiter(w_key, w_hash, &waiter);
         result
 
         // The lock will be unlocked here.
@@ -359,8 +398,12 @@ where
     }
 
     #[inline]
-    fn remove_waiter(&self, w_key: (Arc<K>, TypeId), w_hash: u64) {
-        self.waiters.remove(w_hash, |k| k == &w_key);
+    fn remove_waiter(&self, w_key: (Arc<K>, TypeId), w_hash: u64, waiter: &Waiter<V>) {
+        self.waiters.remove_if(
+            w_hash,
+            |k| k == &w_key,
+            |_, current| MiniArc::ptr_eq(current, waiter),
+        );
     }
 
     #[inline]
@@ -379,6 +422,46 @@ where
         let w_key = (Arc::clone(c_key), type_id);
         let w_hash = self.waiters.hash(&w_key);
         (w_key, w_hash)
+    }
+
+    fn lock_fence(&self, hash: u64) -> MutexGuard<'_, ()> {
+        self.fence_locks[hash as usize % self.fence_locks.len()].lock()
+    }
+
+    fn lock_if_current(
+        &self,
+        hash: u64,
+        w_key: &(Arc<K>, TypeId),
+        w_hash: u64,
+        waiter: &Waiter<V>,
+    ) -> Option<MutexGuard<'_, ()>> {
+        let guard = self.lock_fence(hash);
+        self.is_current_waiter(w_key, w_hash, waiter)
+            .then_some(guard)
+    }
+
+    fn is_current_waiter(&self, w_key: &(Arc<K>, TypeId), w_hash: u64, waiter: &Waiter<V>) -> bool {
+        self.waiters
+            .get(w_hash, |key| key == w_key)
+            .is_some_and(|current| MiniArc::ptr_eq(&current, waiter))
+    }
+
+    fn remove_initializers<Q>(&self, key: &Q)
+    where
+        Q: Equivalent<K> + ?Sized,
+    {
+        let waiters: Vec<_> = self
+            .waiters
+            .iter()
+            .filter(|((candidate, _), waiter)| {
+                key.equivalent(candidate.as_ref()) && waiter.kind == WaiterKind::Initializer
+            })
+            .collect();
+
+        for (w_key, waiter) in waiters {
+            let w_hash = self.waiters.hash(&w_key);
+            self.remove_waiter(w_key, w_hash, &waiter);
+        }
     }
 }
 

@@ -7,7 +7,11 @@ use super::{
     WriteOp,
 };
 use crate::{
-    common::{concurrent::Weigher, time::Clock, HousekeeperConfig},
+    common::{
+        concurrent::Weigher,
+        time::{Clock, Instant},
+        HousekeeperConfig,
+    },
     notification::AsyncEvictionListener,
     ops::compute::{self, CompResult},
     policy::{EvictionPolicy, ExpirationPolicy},
@@ -1355,6 +1359,33 @@ where
         self.invalidate_with_hash(key, hash, false).await;
     }
 
+    /// Discards any cached value for the key and prevents an initializer that
+    /// is already in progress from repopulating it.
+    ///
+    /// Initializers that were already sharing a computation may still receive
+    /// its result, but the result will not be cached. Initializers started after
+    /// this method returns form a new single-flight group.
+    /// A removal listener may call back into the cache, including for this key.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and
+    /// `Eq` on the borrowed form _must_ match those for the key type.
+    pub async fn invalidate_and_fence<Q>(&self, key: &Q)
+    where
+        Q: Equivalent<K> + Hash + ?Sized,
+    {
+        let hash = self.base.hash(key);
+        self.base.retry_interrupted_ops().await;
+        self.invalidate_with_hash_and_guard(
+            key,
+            hash,
+            false,
+            true,
+            self.value_initializer
+                .lock_and_remove_initializers(key, hash),
+        )
+        .await;
+    }
+
     /// Discards any cached value for the key and returns a _clone_ of the value.
     ///
     /// If you do not need to get the value that has been discarded, use the
@@ -1813,6 +1844,31 @@ where
         }
 
         let (op, ts) = self.base.do_insert_with_hash(key, hash, value).await;
+        self.schedule_insert(op, ts).await;
+    }
+
+    pub(crate) async fn insert_with_hash_if<G>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        value: V,
+        acquire_guard: impl Future<Output = Option<G>>,
+    ) {
+        if self.base.is_map_disabled() {
+            return;
+        }
+
+        let Some((op, ts)) = self
+            .base
+            .do_insert_with_hash_if(key, hash, value, acquire_guard)
+            .await
+        else {
+            return;
+        };
+        self.schedule_insert(op, ts).await;
+    }
+
+    async fn schedule_insert(&self, op: WriteOp<K, V>, ts: Instant) {
         let mut cancel_guard = CancelGuard::new(&self.base.interrupted_op_ch_snd, ts);
         cancel_guard.set_op(op.clone());
 
@@ -1928,9 +1984,24 @@ where
     where
         Q: Equivalent<K> + Hash + ?Sized,
     {
-        use futures_util::FutureExt;
-
         self.base.retry_interrupted_ops().await;
+        self.invalidate_with_hash_and_guard(key, hash, need_value, false, std::future::ready(()))
+            .await
+    }
+
+    async fn invalidate_with_hash_and_guard<Q, F, G>(
+        &self,
+        key: &Q,
+        hash: u64,
+        need_value: bool,
+        release_key_before_notify: bool,
+        acquire_guard: F,
+    ) -> Option<V>
+    where
+        Q: Equivalent<K> + Hash + ?Sized,
+        F: Future<Output = G>,
+    {
+        use futures_util::FutureExt;
 
         // Lock the key for removal if blocking removal notification is enabled.
         let mut kl = None;
@@ -1956,7 +2027,15 @@ where
             }
         }
 
-        match self.base.remove_entry(key, hash) {
+        let fence_guard = acquire_guard.await;
+        let removed = self.base.remove_entry(key, hash);
+        drop(fence_guard);
+
+        if release_key_before_notify {
+            drop(klg.take());
+        }
+
+        match removed {
             None => None,
             Some(kv) => {
                 let now = self.base.current_time();

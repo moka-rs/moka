@@ -1030,8 +1030,6 @@ where
             self.base
                 .get_with_hash_without_recording(&*key, hash, replace_if.as_mut())
         };
-        let insert = |v| self.insert_with_hash(key.clone(), hash, v);
-
         let k = if need_key {
             Some(Arc::clone(&key))
         } else {
@@ -1043,7 +1041,7 @@ where
 
         match self
             .value_initializer
-            .try_init_or_read(&key, type_id, get, init, insert, post_init)
+            .try_init_or_read(&key, hash, type_id, self, get, init, post_init)
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
@@ -1251,8 +1249,6 @@ where
             self.base
                 .get_with_hash_without_recording(&*key, hash, ignore_if)
         };
-        let insert = |v| self.insert_with_hash(key.clone(), hash, v);
-
         let k = if need_key {
             Some(Arc::clone(&key))
         } else {
@@ -1264,7 +1260,7 @@ where
 
         match self
             .value_initializer
-            .try_init_or_read(&key, type_id, get, init, insert, post_init)
+            .try_init_or_read(&key, hash, type_id, self, get, init, post_init)
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
@@ -1443,8 +1439,6 @@ where
             self.base
                 .get_with_hash_without_recording(&*key, hash, ignore_if)
         };
-        let insert = |v| self.insert_with_hash(key.clone(), hash, v);
-
         let k = if need_key {
             Some(Arc::clone(&key))
         } else {
@@ -1456,7 +1450,7 @@ where
 
         match self
             .value_initializer
-            .try_init_or_read(&key, type_id, get, init, insert, post_init)
+            .try_init_or_read(&key, hash, type_id, self, get, init, post_init)
         {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
@@ -1485,6 +1479,34 @@ where
         }
 
         let (op, now) = self.base.do_insert_with_hash(key, hash, value);
+        let hk = self.base.housekeeper.as_ref();
+        Self::schedule_write_op(
+            self.base.inner.as_ref(),
+            &self.base.write_op_ch,
+            op,
+            now,
+            hk,
+        )
+        .expect("Failed to insert");
+    }
+
+    pub(crate) fn insert_with_hash_if<G>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        value: V,
+        acquire_guard: impl FnOnce() -> Option<G>,
+    ) {
+        if self.base.is_map_disabled() {
+            return;
+        }
+
+        let Some((op, now)) = self
+            .base
+            .do_insert_with_hash_if(key, hash, value, acquire_guard)
+        else {
+            return;
+        };
         let hk = self.base.housekeeper.as_ref();
         Self::schedule_write_op(
             self.base.inner.as_ref(),
@@ -1559,6 +1581,34 @@ where
         self.invalidate_with_hash(key, hash, false);
     }
 
+    /// Discards any cached value for the key and prevents an initializer that
+    /// is already in progress from repopulating it.
+    ///
+    /// Initializers that were already sharing a computation may still receive
+    /// its result, but the result will not be cached. Initializers started after
+    /// this method returns form a new single-flight group.
+    /// A removal listener may call back into the cache, including for this key.
+    ///
+    /// The key may be any borrowed form of the cache's key type, but `Hash` and
+    /// `Eq` on the borrowed form _must_ match those for the key type.
+    pub fn invalidate_and_fence<Q>(&self, key: &Q)
+    where
+        Q: Equivalent<K> + Hash + ?Sized,
+    {
+        let hash = self.base.hash(key);
+        self.invalidate_and_fence_with_hash(key, hash);
+    }
+
+    pub(crate) fn invalidate_and_fence_with_hash<Q>(&self, key: &Q, hash: u64)
+    where
+        Q: Equivalent<K> + Hash + ?Sized,
+    {
+        self.invalidate_with_hash_and_guard(key, hash, false, true, || {
+            self.value_initializer
+                .lock_and_remove_initializers(key, hash)
+        });
+    }
+
     /// Discards any cached value for the key and returns a _clone_ of the value.
     ///
     /// If you do not need to get the value that has been discarded, use the
@@ -1577,6 +1627,21 @@ where
     pub(crate) fn invalidate_with_hash<Q>(&self, key: &Q, hash: u64, need_value: bool) -> Option<V>
     where
         Q: Equivalent<K> + Hash + ?Sized,
+    {
+        self.invalidate_with_hash_and_guard(key, hash, need_value, false, || ())
+    }
+
+    fn invalidate_with_hash_and_guard<Q, F, G>(
+        &self,
+        key: &Q,
+        hash: u64,
+        need_value: bool,
+        release_key_before_notify: bool,
+        acquire_guard: F,
+    ) -> Option<V>
+    where
+        Q: Equivalent<K> + Hash + ?Sized,
+        F: FnOnce() -> G,
     {
         // Lock the key for removal if blocking removal notification is enabled.
         let mut kl = None;
@@ -1598,7 +1663,15 @@ where
             }
         }
 
-        match self.base.remove_entry(key, hash) {
+        let fence_guard = acquire_guard();
+        let removed = self.base.remove_entry(key, hash);
+        drop(fence_guard);
+
+        if release_key_before_notify {
+            drop(klg.take());
+        }
+
+        match removed {
             None => None,
             Some(kv) => {
                 let now = self.base.current_time();

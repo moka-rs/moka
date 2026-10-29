@@ -479,6 +479,18 @@ where
         hash: u64,
         value: V,
     ) -> (WriteOp<K, V>, Instant) {
+        self.do_insert_with_hash_if(key, hash, value, std::future::ready(Some(())))
+            .await
+            .unwrap()
+    }
+
+    pub(crate) async fn do_insert_with_hash_if<G>(
+        &self,
+        key: Arc<K>,
+        hash: u64,
+        value: V,
+        acquire_guard: impl std::future::Future<Output = Option<G>>,
+    ) -> Option<(WriteOp<K, V>, Instant)> {
         self.retry_interrupted_ops().await;
 
         let weight = self.inner.weigh(&key, &value);
@@ -494,6 +506,8 @@ where
         } else {
             None
         };
+
+        let insertion_guard = acquire_guard.await?;
 
         let ts = self.current_time();
 
@@ -536,7 +550,9 @@ where
             },
         );
 
-        match (op1, op2) {
+        drop(insertion_guard);
+
+        Some(match (op1, op2) {
             (Some((_cnt, ins_op)), None) => self.do_post_insert_steps(ts, &key, ins_op),
             (Some((cnt1, ins_op)), Some((cnt2, ..))) if cnt1 > cnt2 => {
                 self.do_post_insert_steps(ts, &key, ins_op)
@@ -546,7 +562,7 @@ where
                     .await
             }
             (None, None) => unreachable!(),
-        }
+        })
     }
 
     fn do_post_insert_steps(
