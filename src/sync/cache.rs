@@ -1588,6 +1588,10 @@ where
     /// its result, but the result will not be cached. Initializers started after
     /// this method returns form a new single-flight group.
     /// A removal listener may call back into the cache, including for this key.
+    /// The key lock is released before the `Explicit` notification to allow this
+    /// reentry. Same-key callbacks may therefore overlap: a concurrent insert
+    /// and replacement can deliver `Replaced` before the `Explicit` callback
+    /// finishes. Listener consumers must not assume notification completion order.
     ///
     /// The key may be any borrowed form of the cache's key type, but `Hash` and
     /// `Eq` on the borrowed form _must_ match those for the key type.

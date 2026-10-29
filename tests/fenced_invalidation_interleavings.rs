@@ -3253,3 +3253,97 @@ async fn cancelling_future_fence_during_listener_preserves_boundary() {
     assert_eq!(stale.await.unwrap(), "stale value");
     assert_eq!(cache.get("key").await.as_deref(), Some("fresh value"));
 }
+
+#[test]
+#[allow(deprecated)]
+fn sync_fenced_notifications_can_complete_out_of_order() {
+    let (entered_tx, entered) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let (notified_tx, notified) = std::sync::mpsc::channel();
+    let cache = SyncCache::<u32, u32>::builder()
+        .max_capacity(100)
+        .eviction_listener(move |_, _, cause| {
+            if cause == RemovalCause::Explicit {
+                entered_tx.send(()).unwrap();
+                release_rx
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .unwrap();
+            }
+            notified_tx.send(cause).unwrap();
+        })
+        .build();
+    cache.insert(1, 1);
+    let other = cache.clone();
+    let fence = thread::spawn(move || other.invalidate_and_fence(&1));
+    entered
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    cache.insert(1, 2);
+    cache.insert(1, 3);
+    assert_eq!(
+        notified
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap(),
+        RemovalCause::Replaced
+    );
+    release.send(()).unwrap();
+    fence.join().unwrap();
+    assert_eq!(
+        notified
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap(),
+        RemovalCause::Explicit
+    );
+    assert_eq!(cache.get(&1), Some(3));
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn future_fenced_notifications_can_complete_out_of_order() {
+    let (entered_tx, entered) = tokio::sync::oneshot::channel();
+    let entered_tx = Arc::new(Mutex::new(Some(entered_tx)));
+    let (release, release_rx) = tokio::sync::oneshot::channel();
+    let release_rx = Arc::new(Mutex::new(Some(release_rx)));
+    let (notified_tx, mut notified) = tokio::sync::mpsc::unbounded_channel();
+    let cache = moka::future::Cache::<u32, u32>::builder()
+        .max_capacity(100)
+        .async_eviction_listener(move |_, _, cause| {
+            let entered_tx = entered_tx.clone();
+            let release_rx = release_rx.clone();
+            let notified_tx = notified_tx.clone();
+            Box::pin(async move {
+                if cause == RemovalCause::Explicit {
+                    entered_tx.lock().unwrap().take().unwrap().send(()).unwrap();
+                    let release = release_rx.lock().unwrap().take().unwrap();
+                    tokio::time::timeout(std::time::Duration::from_secs(5), release)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                }
+                notified_tx.send(cause).unwrap();
+            })
+        })
+        .build();
+    cache.insert(1, 1).await;
+    let other = cache.clone();
+    let fence = tokio::spawn(async move { other.invalidate_and_fence(&1).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), entered)
+        .await
+        .unwrap()
+        .unwrap();
+    cache.insert(1, 2).await;
+    cache.insert(1, 3).await;
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(5), notified.recv())
+            .await
+            .unwrap(),
+        Some(RemovalCause::Replaced)
+    );
+    release.send(()).unwrap();
+    fence.await.unwrap();
+    assert_eq!(notified.recv().await, Some(RemovalCause::Explicit));
+    assert_eq!(cache.get(&1).await, Some(3));
+}
