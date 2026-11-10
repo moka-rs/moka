@@ -2220,6 +2220,109 @@ mod tests {
     }
 
     #[test]
+    fn weighted_removal_with_pending_replacement() {
+        for (initial, replacement) in [(100, 7), (7, 100)] {
+            for maintain_replacement in [false, true] {
+                let mut cache = Cache::builder()
+                    .max_capacity(1_000)
+                    .weigher(|_: &u8, weight: &u32| *weight)
+                    .build();
+                cache.reconfigure_for_testing();
+
+                cache.insert(1, initial);
+                cache.insert(2, 11);
+                cache.run_pending_tasks();
+                assert_eq!(cache.weighted_size(), u64::from(initial) + 11);
+
+                cache.insert(1, replacement);
+                if maintain_replacement {
+                    cache.run_pending_tasks();
+                    assert_eq!(cache.weighted_size(), u64::from(replacement) + 11);
+                }
+                assert_eq!(cache.remove(&1), Some(replacement));
+                cache.run_pending_tasks();
+
+                assert_eq!(cache.get(&1), None);
+                assert_eq!(cache.get(&2), Some(11));
+                assert_eq!(cache.entry_count(), 1);
+                // Removing one entry must not leak weight or subtract the
+                // surviving entry's weight when the replacement grows.
+                assert_eq!(cache.weighted_size(), 11);
+
+                assert_eq!(cache.remove(&2), Some(11));
+                cache.run_pending_tasks();
+                assert_eq!(cache.iter().count(), 0);
+                assert_eq!(cache.entry_count(), 0);
+                assert_eq!(cache.weighted_size(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn weighted_replacements_recorded_out_of_order() {
+        use std::sync::mpsc::{channel, Receiver, Sender};
+
+        struct BlockReplacement {
+            // Sender was not Sync on the crate's Rust 1.71.1 MSRV.
+            entered: Mutex<Sender<()>>,
+            resume: Mutex<Receiver<()>>,
+        }
+
+        impl Expiry<u8, u32> for BlockReplacement {
+            fn expire_after_update(
+                &self,
+                _key: &u8,
+                value: &u32,
+                _current_time: StdInstant,
+                duration_until_expiry: Option<Duration>,
+            ) -> Option<Duration> {
+                if *value == 7 {
+                    // The value is in the map, but its policy recording has not
+                    // been queued yet. Let the next replacement overtake it.
+                    self.entered.lock().send(()).unwrap();
+                    self.resume
+                        .lock()
+                        .recv_timeout(Duration::from_secs(10))
+                        .unwrap();
+                }
+                duration_until_expiry
+            }
+        }
+
+        let (entered_tx, entered_rx) = channel();
+        let (resume_tx, resume_rx) = channel();
+        let mut cache = Cache::builder()
+            .max_capacity(1_000)
+            .weigher(|_: &u8, weight: &u32| *weight)
+            .expire_after(BlockReplacement {
+                entered: Mutex::new(entered_tx),
+                resume: Mutex::new(resume_rx),
+            })
+            .build();
+        cache.reconfigure_for_testing();
+        cache.insert(1, 100);
+        cache.run_pending_tasks();
+
+        let writer_cache = cache.clone();
+        let writer = std::thread::spawn(move || writer_cache.insert(1, 7));
+        entered_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        cache.insert(1, 3);
+        cache.run_pending_tasks();
+        let weight_before_stale_recording = cache.weighted_size();
+        resume_tx.send(()).unwrap();
+        writer.join().unwrap();
+        cache.run_pending_tasks();
+
+        assert_eq!(cache.get(&1), Some(3));
+        assert_eq!(cache.entry_count(), 1);
+        assert_eq!(weight_before_stale_recording, 3);
+        assert_eq!(cache.weighted_size(), 3);
+        assert_eq!(cache.remove(&1), Some(3));
+        cache.run_pending_tasks();
+        assert_eq!(cache.weighted_size(), 0);
+    }
+
+    #[test]
     fn basic_multi_threads() {
         let num_threads = 4;
         let cache = Cache::new(100);

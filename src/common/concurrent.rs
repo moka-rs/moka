@@ -315,7 +315,6 @@ pub(crate) enum WriteOp<K, V> {
         value_entry: MiniArc<ValueEntry<K, V>>,
         /// Entry generation after the operation.
         entry_gen: u16,
-        old_weight: u32,
         new_weight: u32,
     },
     Remove {
@@ -333,13 +332,11 @@ impl<K, V> Clone for WriteOp<K, V> {
                 key_hash,
                 value_entry,
                 entry_gen,
-                old_weight,
                 new_weight,
             } => Self::Upsert {
                 key_hash: key_hash.clone(),
                 value_entry: MiniArc::clone(value_entry),
                 entry_gen: *entry_gen,
-                old_weight: *old_weight,
                 new_weight: *new_weight,
             },
             Self::Remove {
@@ -368,7 +365,6 @@ impl<K, V> WriteOp<K, V> {
         hash: u64,
         value_entry: &MiniArc<ValueEntry<K, V>>,
         entry_generation: u16,
-        old_weight: u32,
         new_weight: u32,
     ) -> Self {
         let key_hash = KeyHash::new(Arc::clone(key), hash);
@@ -377,7 +373,6 @@ impl<K, V> WriteOp<K, V> {
             key_hash,
             value_entry,
             entry_gen: entry_generation,
-            old_weight,
             new_weight,
         }
     }

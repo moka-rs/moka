@@ -2532,6 +2532,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn weighted_removal_with_pending_replacement() {
+        for (initial, replacement) in [(100, 7), (7, 100)] {
+            for maintain_replacement in [false, true] {
+                let mut cache = Cache::builder()
+                    .max_capacity(1_000)
+                    .weigher(|_: &u8, weight: &u32| *weight)
+                    .build();
+                cache.reconfigure_for_testing().await;
+
+                cache.insert(1, initial).await;
+                cache.insert(2, 11).await;
+                cache.run_pending_tasks().await;
+                assert_eq!(cache.weighted_size(), u64::from(initial) + 11);
+
+                cache.insert(1, replacement).await;
+                if maintain_replacement {
+                    cache.run_pending_tasks().await;
+                    assert_eq!(cache.weighted_size(), u64::from(replacement) + 11);
+                }
+                assert_eq!(cache.remove(&1).await, Some(replacement));
+                cache.run_pending_tasks().await;
+
+                assert_eq!(cache.get(&1).await, None);
+                assert_eq!(cache.get(&2).await, Some(11));
+                assert_eq!(cache.entry_count(), 1);
+                // Removing one entry must not leak weight or subtract the
+                // surviving entry's weight when the replacement grows.
+                assert_eq!(cache.weighted_size(), 11);
+
+                assert_eq!(cache.remove(&2).await, Some(11));
+                cache.run_pending_tasks().await;
+                assert_eq!(cache.iter().count(), 0);
+                assert_eq!(cache.entry_count(), 0);
+                assert_eq!(cache.weighted_size(), 0);
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn basic_multi_async_tasks() {
         let num_tasks = 2;
         let num_threads = 2;
