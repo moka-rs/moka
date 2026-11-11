@@ -2219,6 +2219,8 @@ mod tests {
         assert!(cache.key_locks_map_is_empty());
     }
 
+    /// Checks that removing a replaced entry preserves the surviving entry's weight,
+    /// whether the replacement grows or shrinks and whether maintenance runs before removal.
     #[test]
     fn weighted_removal_with_pending_replacement() {
         for (initial, replacement) in [(100, 7), (7, 100)] {
@@ -2258,6 +2260,8 @@ mod tests {
         }
     }
 
+    /// Checks that a delayed replacement recording cannot overwrite the current value's weight.
+    /// Pauses one writer after its map update so a second writer's recording arrives first.
     #[test]
     fn weighted_replacements_recorded_out_of_order() {
         use std::sync::mpsc::{channel, Receiver, Sender};
@@ -2269,6 +2273,7 @@ mod tests {
         }
 
         impl Expiry<u8, u32> for BlockReplacement {
+            /// Pauses the weight-7 replacement until released, without changing expiration.
             fn expire_after_update(
                 &self,
                 _key: &u8,

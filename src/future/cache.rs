@@ -2531,6 +2531,8 @@ mod tests {
         assert!(cache.key_locks_map_is_empty());
     }
 
+    /// Checks that removing a replaced entry preserves the surviving entry's weight,
+    /// whether the replacement grows or shrinks and whether maintenance runs before removal.
     #[tokio::test]
     async fn weighted_removal_with_pending_replacement() {
         for (initial, replacement) in [(100, 7), (7, 100)] {

@@ -326,6 +326,7 @@ pub(crate) enum WriteOp<K, V> {
 /// Cloning a `WriteOp` is safe and cheap because it uses `Arc` and `MiniArc` pointers to
 /// the actual data.
 impl<K, V> Clone for WriteOp<K, V> {
+    /// Copies the recording while sharing its key and entry through reference-counted pointers.
     fn clone(&self) -> Self {
         match self {
             Self::Upsert {
@@ -360,6 +361,8 @@ impl<K, V> fmt::Debug for WriteOp<K, V> {
 }
 
 impl<K, V> WriteOp<K, V> {
+    /// Records an insertion or replacement for later policy maintenance.
+    /// Carries the new weight; maintenance reads the previously accounted weight from the entry.
     pub(crate) fn new_upsert(
         key: &Arc<K>,
         hash: u64,

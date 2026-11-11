@@ -472,6 +472,8 @@ where
         }
     }
 
+    /// Inserts or replaces the value and returns its deferred write recording and timestamp.
+    /// Replacement leaves the accounted weight unchanged until maintenance applies the write.
     #[inline]
     pub(crate) async fn do_insert_with_hash(
         &self,
@@ -775,6 +777,8 @@ impl<K, V, S> BaseCache<K, V, S> {
         (MiniArc::new(ValueEntry::new(value, info)), gen)
     }
 
+    /// Creates a replacement sharing the old entry's policy state and accounted weight.
+    /// Advances the entry generation and refreshes its access and modification timestamps.
     #[inline]
     fn new_value_entry_from(
         &self,
@@ -1562,6 +1566,8 @@ where
         }
     }
 
+    /// Drains up to `count` queued writes into the policy state and eviction counters.
+    /// Stops early if no write is available; upserts and removals use their own handlers.
     async fn apply_writes(
         &self,
         deqs: &mut Deques<K>,
@@ -1630,6 +1636,9 @@ where
             })
     }
 
+    /// Applies a queued insertion or replacement to admission and eviction policy state.
+    /// Skips retired or superseded values. For an admitted entry, replaces the weight
+    /// actually counted by maintenance rather than a possibly unapplied replacement weight.
     #[allow(clippy::too_many_arguments)]
     async fn handle_upsert(
         &self,
@@ -1925,6 +1934,8 @@ where
         }
     }
 
+    /// Admits an entry into the policy queues and expiration timer, unless already retired.
+    /// Charges its count and weight to the counters and records that weight for removal.
     fn handle_admit(
         &self,
         entry: &MiniArc<ValueEntry<K, V>>,
