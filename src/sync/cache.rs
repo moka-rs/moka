@@ -256,20 +256,21 @@ use std::{
 ///
 /// ## Per-entry expiration policy
 ///
-/// `Cache` supports per-entry expiration policy through the `Expiry` trait.
+/// `Cache` supports per-entry expiration policy through the [`Expiry`][exp-trait] trait.
 ///
-/// `Expiry` trait provides three callback methods:
+/// The [`Expiry`][exp-trait] trait provides three callback methods:
 /// [`expire_after_create`][exp-create], [`expire_after_read`][exp-read] and
 /// [`expire_after_update`][exp-update]. When a cache entry is inserted, read or
 /// updated, one of these methods is called. These methods return an
 /// `Option<Duration>`, which is used as the expiration duration of the entry.
 ///
-/// `Expiry` trait provides the default implementations of these methods, so you will
+/// The [`Expiry`][exp-trait] trait provides the default implementations of these methods, so you will
 /// implement only the methods you want to customize.
 ///
-/// [exp-create]: ../trait.Expiry.html#method.expire_after_create
-/// [exp-read]: ../trait.Expiry.html#method.expire_after_read
-/// [exp-update]: ../trait.Expiry.html#method.expire_after_update
+/// [exp-trait]: crate::Expiry
+/// [exp-create]: crate::Expiry::expire_after_create
+/// [exp-read]: crate::Expiry::expire_after_read
+/// [exp-update]: crate::Expiry::expire_after_update
 ///
 /// ```rust
 /// use moka::{sync::Cache, Expiry};
