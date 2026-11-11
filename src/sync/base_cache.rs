@@ -478,6 +478,8 @@ where
         }
     }
 
+    /// Inserts or replaces the value and returns its deferred write recording and timestamp.
+    /// Replacement leaves the accounted weight unchanged until maintenance applies the write.
     #[inline]
     pub(crate) fn do_insert_with_hash(
         &self,
@@ -515,21 +517,19 @@ where
             // on_insert
             || {
                 let (entry, gen) = self.new_value_entry(&key, hash, value.clone(), ts, weight);
-                let ins_op = WriteOp::new_upsert(&key, hash, &entry, gen, 0, weight);
+                let ins_op = WriteOp::new_upsert(&key, hash, &entry, gen, weight);
                 let cnt = op_cnt1.fetch_add(1, Ordering::Relaxed);
                 op1 = Some((cnt, ins_op));
                 entry
             },
             // on_modify
             |_k, old_entry| {
-                let old_weight = old_entry.policy_weight();
-
                 // Create this OldEntryInfo _before_ creating a new ValueEntry, so
                 // that the OldEntryInfo can preserve the old EntryInfo's
                 // last_accessed and last_modified timestamps.
                 let old_info = OldEntryInfo::new(old_entry);
-                let (entry, gen) = self.new_value_entry_from(value.clone(), ts, weight, old_entry);
-                let upd_op = WriteOp::new_upsert(&key, hash, &entry, gen, old_weight, weight);
+                let (entry, gen) = self.new_value_entry_from(value.clone(), ts, old_entry);
+                let upd_op = WriteOp::new_upsert(&key, hash, &entry, gen, weight);
                 let cnt = op_cnt2.fetch_add(1, Ordering::Relaxed);
                 op2 = Some((cnt, old_info, upd_op));
                 entry
@@ -647,12 +647,13 @@ impl<K, V, S> BaseCache<K, V, S> {
         (MiniArc::new(ValueEntry::new(value, info)), gen)
     }
 
+    /// Creates a replacement sharing the old entry's policy state and accounted weight.
+    /// Advances the entry generation and refreshes its access and modification timestamps.
     #[inline]
     fn new_value_entry_from(
         &self,
         value: V,
         timestamp: Instant,
-        policy_weight: u32,
         other: &ValueEntry<K, V>,
     ) -> (MiniArc<ValueEntry<K, V>>, u16) {
         let info = MiniArc::clone(other.entry_info());
@@ -661,7 +662,6 @@ impl<K, V, S> BaseCache<K, V, S> {
         let gen = info.incr_entry_gen();
         info.set_last_accessed(timestamp);
         info.set_last_modified(timestamp);
-        info.set_policy_weight(policy_weight);
         (MiniArc::new(ValueEntry::new_from(value, info, other)), gen)
     }
 
@@ -1419,6 +1419,8 @@ where
         }
     }
 
+    /// Drains up to `count` queued writes into the policy state and eviction counters.
+    /// Stops early if no write is available; upserts and removals use their own handlers.
     fn apply_writes(
         &self,
         deqs: &mut Deques<K>,
@@ -1438,13 +1440,11 @@ where
                     key_hash: kh,
                     value_entry: entry,
                     entry_gen: gen,
-                    old_weight,
                     new_weight,
                 }) => self.handle_upsert(
                     kh,
                     entry,
                     gen,
-                    old_weight,
                     new_weight,
                     deqs,
                     timer_wheel,
@@ -1491,13 +1491,15 @@ where
             })
     }
 
+    /// Applies a queued insertion or replacement to admission and eviction policy state.
+    /// Skips retired or superseded values. For an admitted entry, replaces the weight
+    /// actually counted by maintenance rather than a possibly unapplied replacement weight.
     #[allow(clippy::too_many_arguments)]
     fn handle_upsert(
         &self,
         kh: KeyHash<K>,
         entry: MiniArc<ValueEntry<K, V>>,
         gen: u16,
-        old_weight: u32,
         new_weight: u32,
         deqs: &mut Deques<K>,
         timer_wheel: &mut TimerWheel<K>,
@@ -1517,13 +1519,31 @@ where
             return;
         }
 
+        // Concurrent writers can enqueue their recordings out of order. Do not
+        // replace the accounted weight with that of an obsolete value. Its
+        // replacement has its own recording, which will apply the current weight.
+        let is_current = self
+            .cache
+            .get_key_value_and(
+                kh.hash,
+                |k| k == &kh.key,
+                |_, current| MiniArc::ptr_eq(current, &entry),
+            )
+            .unwrap_or(false);
+        if !is_current {
+            entry.entry_info().set_policy_gen(gen);
+            return;
+        }
+
         {
             let counters = &mut eviction_state.counters;
 
             if entry.is_admitted() {
-                // The entry has been already admitted, so treat this as an update.
-                counters.saturating_sub(0, old_weight);
+                // Subtract the weight actually counted by maintenance, not the
+                // weight of a replacement that may still be pending or skipped.
+                counters.saturating_sub(0, entry.policy_weight());
                 counters.saturating_add(0, new_weight);
+                entry.entry_info().set_policy_weight(new_weight);
                 self.update_timer_wheel(&entry, timer_wheel);
                 deqs.move_to_back_ao(&entry);
                 deqs.move_to_back_wo(&entry);
@@ -1755,6 +1775,8 @@ where
         }
     }
 
+    /// Admits an entry into the policy queues and expiration timer, unless already retired.
+    /// Charges its count and weight to the counters and records that weight for removal.
     fn handle_admit(
         &self,
         entry: &MiniArc<ValueEntry<K, V>>,
@@ -1791,6 +1813,7 @@ where
         );
 
         counters.saturating_add(1, policy_weight);
+        entry.entry_info().set_policy_weight(policy_weight);
 
         self.update_timer_wheel(entry, timer_wheel);
 

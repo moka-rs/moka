@@ -99,6 +99,10 @@ pub(crate) struct EntryInfo<K> {
     expiration_state: AtomicU64,
     last_accessed: AtomicInstant,
     last_modified: AtomicInstant,
+    /// Weight charged to the policy counters while this entry is admitted.
+    /// Only maintenance may update it, together with the counters. A replacement
+    /// must not overwrite it before its write recording is applied: that recording
+    /// can be skipped if the entry is removed first.
     policy_weight: AtomicU32,
 }
 
