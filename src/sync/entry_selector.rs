@@ -198,7 +198,7 @@ where
     ///
     /// # Example
     ///
-    /// See [`try_append_value_async.rs`] in the `examples` directory.
+    /// See [`try_append_value_sync.rs`] in the `examples` directory.
     ///
     /// [`try_append_value_sync.rs`]:
     ///     https://github.com/moka-rs/moka/tree/main/examples/try_append_value_sync.rs
@@ -740,7 +740,7 @@ where
     ///
     /// # Example
     ///
-    /// See [`try_append_value_async.rs`] in the `examples` directory.
+    /// See [`try_append_value_sync.rs`] in the `examples` directory.
     ///
     /// [`try_append_value_sync.rs`]:
     ///     https://github.com/moka-rs/moka/tree/main/examples/try_append_value_sync.rs
