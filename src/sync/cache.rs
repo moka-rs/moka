@@ -1881,7 +1881,7 @@ where
 mod tests {
     use super::Cache;
     use crate::{
-        common::{time::Clock, HousekeeperConfig},
+        common::{concurrent::constants::READ_LOG_CH_SIZE, time::Clock, HousekeeperConfig},
         notification::RemovalCause,
         policy::{test_utils::ExpiryCallCounters, EvictionPolicy},
         Expiry,
@@ -2709,6 +2709,171 @@ mod tests {
 
         expiry_counters.verify();
         verify_notification_vec(&cache, actual, &expected);
+    }
+
+    /// Fills the read channel so that the next `ReadOp`s are discarded.
+    fn fill_read_channel(cache: &Cache<u32, ()>) {
+        for _ in 0..READ_LOG_CH_SIZE {
+            cache.get(&u32::MAX);
+        }
+    }
+
+    #[test]
+    fn time_to_idle_after_discarded_read_ops() {
+        let (clock, mock) = Clock::mock();
+        let mut cache = Cache::builder()
+            .max_capacity(1000)
+            .time_to_idle(Duration::from_secs(10))
+            .clock(clock)
+            .build();
+        cache.reconfigure_for_testing();
+
+        for key in 0..100 {
+            cache.insert(key, ());
+        }
+        cache.run_pending_tasks();
+
+        // Read the first ten entries. They stay at the front of the deque.
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        fill_read_channel(&cache);
+        for key in 0..10 {
+            assert!(cache.get(&key).is_some());
+        }
+        cache.run_pending_tasks();
+
+        mock.increment(Duration::from_secs(1)); // 6 secs.
+        cache.insert(100, ());
+        cache.run_pending_tasks();
+        assert_eq!(cache.entry_count(), 101);
+
+        // The entries behind the ten live ones expire on time.
+        mock.increment(Duration::from_secs(4)); // 10 secs.
+        cache.run_pending_tasks();
+        assert_eq!(cache.entry_count(), 11);
+        assert!((0..10).all(|key| cache.contains_key(&key)));
+
+        mock.increment(Duration::from_secs(6)); // 16 secs.
+        cache.run_pending_tasks();
+        assert_eq!(cache.entry_count(), 0);
+    }
+
+    #[test]
+    fn size_eviction_after_discarded_read_op() {
+        for policy in [EvictionPolicy::tiny_lfu(), EvictionPolicy::lru()] {
+            let (clock, mock) = Clock::mock();
+            let mut cache = Cache::builder()
+                .max_capacity(3)
+                .eviction_policy(policy)
+                .clock(clock)
+                .build();
+            cache.reconfigure_for_testing();
+
+            cache.insert(0, ());
+            for _ in 0..5 {
+                cache.get(&0);
+            }
+            cache.insert(1, ());
+            cache.insert(2, ());
+            cache.run_pending_tasks();
+
+            // 0 is read last, but it stays at the front of the deque.
+            mock.increment(Duration::from_secs(1));
+            fill_read_channel(&cache);
+            assert!(cache.get(&0).is_some());
+            cache.run_pending_tasks();
+
+            // The miss makes the frequency of 3 higher than that of 1.
+            cache.get(&3);
+            cache.insert(3, ());
+            cache.run_pending_tasks();
+
+            // The victim is 1, the least recently used entry.
+            assert!(cache.contains_key(&0));
+            assert!(!cache.contains_key(&1));
+            assert!(cache.contains_key(&2));
+            assert!(cache.contains_key(&3));
+        }
+    }
+
+    #[test]
+    fn lru_keeps_new_entry_after_discarded_read_ops() {
+        let (clock, mock) = Clock::mock();
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .eviction_policy(EvictionPolicy::lru())
+            .clock(clock)
+            .build();
+        cache.reconfigure_for_testing();
+
+        for key in 0..3 {
+            cache.insert(key, ());
+        }
+        cache.run_pending_tasks();
+
+        mock.increment(Duration::from_secs(1));
+        fill_read_channel(&cache);
+        for key in 0..3 {
+            assert!(cache.get(&key).is_some());
+        }
+        cache.run_pending_tasks();
+
+        mock.increment(Duration::from_secs(1));
+        cache.insert(3, ());
+        cache.run_pending_tasks();
+
+        assert!(cache.contains_key(&3));
+        assert_eq!(cache.entry_count(), 3);
+    }
+
+    #[test]
+    fn applied_read_ops_keep_lru_order() {
+        let (clock, mock) = Clock::mock();
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .eviction_policy(EvictionPolicy::lru())
+            .clock(clock)
+            .build();
+        cache.reconfigure_for_testing();
+
+        for key in 0..3 {
+            cache.insert(key, ());
+        }
+        cache.run_pending_tasks();
+
+        for key in 0..3 {
+            mock.increment(Duration::from_secs(1));
+            assert!(cache.get(&key).is_some());
+            cache.run_pending_tasks();
+        }
+
+        mock.increment(Duration::from_secs(1));
+        cache.insert(3, ());
+        cache.run_pending_tasks();
+
+        assert!(!cache.contains_key(&0));
+        assert!((1..4).all(|key| cache.contains_key(&key)));
+    }
+
+    #[test]
+    fn only_entry_is_a_victim_after_discarded_read_op() {
+        let (clock, mock) = Clock::mock();
+        let mut cache = Cache::builder().max_capacity(1).clock(clock).build();
+        cache.reconfigure_for_testing();
+
+        cache.insert(0, ());
+        cache.run_pending_tasks();
+
+        mock.increment(Duration::from_secs(1));
+        fill_read_channel(&cache);
+        assert!(cache.get(&0).is_some());
+        cache.run_pending_tasks();
+
+        // The miss makes the frequency of 1 higher than that of 0.
+        cache.get(&1);
+        cache.insert(1, ());
+        cache.run_pending_tasks();
+
+        assert!(cache.contains_key(&1));
     }
 
     #[test]

@@ -12,7 +12,8 @@ use crate::{
         concurrent::{
             arc::MiniArc,
             constants::{
-                READ_LOG_CH_SIZE, READ_LOG_FLUSH_POINT, WRITE_LOG_CH_SIZE, WRITE_LOG_FLUSH_POINT,
+                MAX_REQUEUES_PER_ADMISSION, READ_LOG_CH_SIZE, READ_LOG_FLUSH_POINT,
+                WRITE_LOG_CH_SIZE, WRITE_LOG_FLUSH_POINT,
             },
             deques::Deques,
             entry_info::EntryInfo,
@@ -1853,6 +1854,7 @@ where
     ) -> AdmissionResult<K> {
         const MAX_CONSECUTIVE_RETRIES: usize = 5;
         let mut retries = 0;
+        let mut requeues = 0;
 
         let mut victims = EntrySizeAndFrequency::default();
         let mut victim_keys = SmallVec::default();
@@ -1881,6 +1883,14 @@ where
                 // about to be unlinked.
                 unsafe { deq.move_to_back(victim) };
                 retries += 1;
+                continue;
+            }
+
+            if requeues < MAX_REQUEUES_PER_ADMISSION
+                && unsafe { victim.as_ref() }.is_out_of_access_order()
+            {
+                unsafe { Deques::requeue_ao(deq, victim) };
+                requeues += 1;
                 continue;
             }
 
@@ -2250,6 +2260,17 @@ where
                         (true, _) => RemovalCause::Expired,
                         (false, true) => RemovalCause::Explicit,
                         (false, false) => {
+                            // The entry is live. If the time stored in its node is
+                            // past the time to idle, the node missed a move to the
+                            // back, and expired entries can be behind it.
+                            if Deques::requeue_front_ao_if(
+                                deqs.select_mut(cache_region).0,
+                                |node| {
+                                    is_expired_by_tti(tti, node.element.queued_last_accessed(), now)
+                                },
+                            ) {
+                                continue;
+                            }
                             more_to_evict = false;
                             break;
                         }
@@ -2532,11 +2553,23 @@ where
         let deq_name = CACHE_REGION.name();
         let mut evicted = 0u64;
         let mut more_to_evict = true;
+        let mut requeues = 0;
 
         for _ in 0..batch_size {
             if evicted >= weights_to_evict {
                 more_to_evict = false;
                 break;
+            }
+
+            // Do not evict an entry that missed a move to the back. The limit
+            // ensures that constant reads cannot stop the eviction.
+            while requeues < batch_size
+                && Deques::requeue_front_ao_if(
+                    deqs.select_mut(CACHE_REGION).0,
+                    DeqNode::is_out_of_access_order,
+                )
+            {
+                requeues += 1;
             }
 
             let maybe_key_hash_ts = deqs.select_mut(CACHE_REGION).0.peek_front().map(|node| {
