@@ -2099,7 +2099,7 @@ fn never_ignore<'a, V>() -> Option<&'a mut fn(&V) -> bool> {
 mod tests {
     use super::Cache;
     use crate::{
-        common::{time::Clock, HousekeeperConfig},
+        common::{concurrent::constants::READ_LOG_CH_SIZE, time::Clock, HousekeeperConfig},
         future::FutureExt,
         notification::{ListenerFuture, RemovalCause},
         ops::compute,
@@ -3086,6 +3086,171 @@ mod tests {
 
         expiry_counters.verify();
         verify_notification_vec(&cache, actual, &expected).await;
+    }
+
+    /// Fills the read channel so that the next `ReadOp`s are discarded.
+    async fn fill_read_channel(cache: &Cache<u32, ()>) {
+        for _ in 0..READ_LOG_CH_SIZE {
+            cache.get(&u32::MAX).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn time_to_idle_after_discarded_read_ops() {
+        let (clock, mock) = Clock::mock();
+        let mut cache = Cache::builder()
+            .max_capacity(1000)
+            .time_to_idle(Duration::from_secs(10))
+            .clock(clock)
+            .build();
+        cache.reconfigure_for_testing().await;
+
+        for key in 0..100 {
+            cache.insert(key, ()).await;
+        }
+        cache.run_pending_tasks().await;
+
+        // Read the first ten entries. They stay at the front of the deque.
+        mock.increment(Duration::from_secs(5)); // 5 secs from the start.
+        fill_read_channel(&cache).await;
+        for key in 0..10 {
+            assert!(cache.get(&key).await.is_some());
+        }
+        cache.run_pending_tasks().await;
+
+        mock.increment(Duration::from_secs(1)); // 6 secs.
+        cache.insert(100, ()).await;
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.entry_count(), 101);
+
+        // The entries behind the ten live ones expire on time.
+        mock.increment(Duration::from_secs(4)); // 10 secs.
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.entry_count(), 11);
+        assert!((0..10).all(|key| cache.contains_key(&key)));
+
+        mock.increment(Duration::from_secs(6)); // 16 secs.
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.entry_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn size_eviction_after_discarded_read_op() {
+        for policy in [EvictionPolicy::tiny_lfu(), EvictionPolicy::lru()] {
+            let (clock, mock) = Clock::mock();
+            let mut cache = Cache::builder()
+                .max_capacity(3)
+                .eviction_policy(policy)
+                .clock(clock)
+                .build();
+            cache.reconfigure_for_testing().await;
+
+            cache.insert(0, ()).await;
+            for _ in 0..5 {
+                cache.get(&0).await;
+            }
+            cache.insert(1, ()).await;
+            cache.insert(2, ()).await;
+            cache.run_pending_tasks().await;
+
+            // 0 is read last, but it stays at the front of the deque.
+            mock.increment(Duration::from_secs(1));
+            fill_read_channel(&cache).await;
+            assert!(cache.get(&0).await.is_some());
+            cache.run_pending_tasks().await;
+
+            // The miss makes the frequency of 3 higher than that of 1.
+            cache.get(&3).await;
+            cache.insert(3, ()).await;
+            cache.run_pending_tasks().await;
+
+            // The victim is 1, the least recently used entry.
+            assert!(cache.contains_key(&0));
+            assert!(!cache.contains_key(&1));
+            assert!(cache.contains_key(&2));
+            assert!(cache.contains_key(&3));
+        }
+    }
+
+    #[tokio::test]
+    async fn lru_keeps_new_entry_after_discarded_read_ops() {
+        let (clock, mock) = Clock::mock();
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .eviction_policy(EvictionPolicy::lru())
+            .clock(clock)
+            .build();
+        cache.reconfigure_for_testing().await;
+
+        for key in 0..3 {
+            cache.insert(key, ()).await;
+        }
+        cache.run_pending_tasks().await;
+
+        mock.increment(Duration::from_secs(1));
+        fill_read_channel(&cache).await;
+        for key in 0..3 {
+            assert!(cache.get(&key).await.is_some());
+        }
+        cache.run_pending_tasks().await;
+
+        mock.increment(Duration::from_secs(1));
+        cache.insert(3, ()).await;
+        cache.run_pending_tasks().await;
+
+        assert!(cache.contains_key(&3));
+        assert_eq!(cache.entry_count(), 3);
+    }
+
+    #[tokio::test]
+    async fn applied_read_ops_keep_lru_order() {
+        let (clock, mock) = Clock::mock();
+        let mut cache = Cache::builder()
+            .max_capacity(3)
+            .eviction_policy(EvictionPolicy::lru())
+            .clock(clock)
+            .build();
+        cache.reconfigure_for_testing().await;
+
+        for key in 0..3 {
+            cache.insert(key, ()).await;
+        }
+        cache.run_pending_tasks().await;
+
+        for key in 0..3 {
+            mock.increment(Duration::from_secs(1));
+            assert!(cache.get(&key).await.is_some());
+            cache.run_pending_tasks().await;
+        }
+
+        mock.increment(Duration::from_secs(1));
+        cache.insert(3, ()).await;
+        cache.run_pending_tasks().await;
+
+        assert!(!cache.contains_key(&0));
+        assert!((1..4).all(|key| cache.contains_key(&key)));
+    }
+
+    #[tokio::test]
+    async fn only_entry_is_a_victim_after_discarded_read_op() {
+        let (clock, mock) = Clock::mock();
+        let mut cache = Cache::builder().max_capacity(1).clock(clock).build();
+        cache.reconfigure_for_testing().await;
+
+        cache.insert(0, ()).await;
+        cache.run_pending_tasks().await;
+
+        mock.increment(Duration::from_secs(1));
+        fill_read_channel(&cache).await;
+        assert!(cache.get(&0).await.is_some());
+        cache.run_pending_tasks().await;
+
+        // The miss makes the frequency of 1 higher than that of 0.
+        cache.get(&1).await;
+        cache.insert(1, ()).await;
+        cache.run_pending_tasks().await;
+
+        assert!(cache.contains_key(&1));
     }
 
     #[tokio::test]

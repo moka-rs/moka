@@ -79,13 +79,13 @@ impl<K> Deques<K> {
             let p = unsafe { node.as_ref() };
             match tag.into() {
                 CacheRegion::Window if self.window.contains(p) => {
-                    unsafe { self.window.move_to_back(node) };
+                    unsafe { Self::requeue_ao(&mut self.window, node) };
                 }
                 CacheRegion::MainProbation if self.probation.contains(p) => {
-                    unsafe { self.probation.move_to_back(node) };
+                    unsafe { Self::requeue_ao(&mut self.probation, node) };
                 }
                 CacheRegion::MainProtected if self.protected.contains(p) => {
-                    unsafe { self.protected.move_to_back(node) };
+                    unsafe { Self::requeue_ao(&mut self.protected, node) };
                 }
                 _ => unreachable!(),
             }
@@ -106,8 +106,37 @@ impl<K> Deques<K> {
                 "move_to_back_ao_in_deque - node is not a member of {deq_name} deque. {p:?}"
             );
             if deq.contains(p) {
-                unsafe { deq.move_to_back(node) };
+                unsafe { Self::requeue_ao(deq, node) };
             }
+        }
+    }
+
+    /// Moves the node to the back of an access-order deque and stores the entry's
+    /// `last_accessed` in the node.
+    ///
+    /// # Safety
+    ///
+    /// `node` must be a member of `deq`.
+    pub(crate) unsafe fn requeue_ao(
+        deq: &mut Deque<KeyHashDate<K>>,
+        node: NonNull<DeqNode<KeyHashDate<K>>>,
+    ) {
+        (*node.as_ptr()).element.mark_queued();
+        deq.move_to_back(node);
+    }
+
+    /// Moves the front node of an access-order deque to the back if `condition`
+    /// holds for it. Returns `true` if it did.
+    pub(crate) fn requeue_front_ao_if(
+        deq: &mut Deque<KeyHashDate<K>>,
+        condition: impl FnOnce(&DeqNode<KeyHashDate<K>>) -> bool,
+    ) -> bool {
+        match deq.peek_front_ptr() {
+            Some(node) if condition(unsafe { node.as_ref() }) => {
+                unsafe { Self::requeue_ao(deq, node) };
+                true
+            }
+            _ => false,
         }
     }
 

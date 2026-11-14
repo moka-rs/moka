@@ -51,12 +51,32 @@ impl<K> Clone for KeyHash<K> {
 
 pub(crate) struct KeyHashDate<K> {
     entry_info: MiniArc<EntryInfo<K>>,
+    /// The entry's `last_accessed` when this node took its current position in an
+    /// access-order deque. Unused in the write-order deque.
+    ///
+    /// A read updates `last_accessed` at once, but it moves the node only when its
+    /// `ReadOp` is applied, and a `ReadOp` can be discarded. A `last_accessed` that
+    /// is later than this value shows that the node has not been moved since.
+    queued_last_accessed: Instant,
 }
 
 impl<K> KeyHashDate<K> {
     pub(crate) fn new(entry_info: &MiniArc<EntryInfo<K>>) -> Self {
-        Self {
+        let mut khd = Self {
             entry_info: MiniArc::clone(entry_info),
+            queued_last_accessed: Instant::from_nanos(0),
+        };
+        khd.mark_queued();
+        khd
+    }
+
+    pub(crate) fn queued_last_accessed(&self) -> Instant {
+        self.queued_last_accessed
+    }
+
+    pub(crate) fn mark_queued(&mut self) {
+        if let Some(ts) = self.entry_info.last_accessed() {
+            self.queued_last_accessed = ts;
         }
     }
 
@@ -102,6 +122,19 @@ impl<K, V> Clone for KvEntry<K, V> {
             key: Arc::clone(&self.key),
             entry: MiniArc::clone(&self.entry),
         }
+    }
+}
+
+impl<K> DeqNode<KeyHashDate<K>> {
+    /// Returns `true` if the entry was accessed after this node took its position,
+    /// and also after the next node took its position. Such an entry is not the
+    /// least recently used one. Only for nodes of an access-order deque.
+    pub(crate) fn is_out_of_access_order(&self) -> bool {
+        let last_accessed = self.element.last_accessed();
+        last_accessed > Some(self.element.queued_last_accessed)
+            && DeqNode::next_node_ptr(NonNull::from(self)).is_some_and(|next| {
+                last_accessed > Some(unsafe { next.as_ref() }.element.queued_last_accessed)
+            })
     }
 }
 
