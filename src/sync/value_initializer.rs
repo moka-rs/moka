@@ -9,6 +9,7 @@ use std::{
 use crate::{
     common::concurrent::arc::MiniArc,
     ops::compute::{CompResult, Op},
+    stats::{LoadTimer, StatsCounter},
     Entry,
 };
 
@@ -71,6 +72,7 @@ where
 
     /// # Panics
     /// Panics if the `init` closure has been panicked.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn try_init_or_read<O, E>(
         &self,
         key: &Arc<K>,
@@ -84,6 +86,7 @@ where
         // Function to convert a value O, returned from the init future, into
         // Result<V, E>.
         post_init: fn(O) -> Result<V, E>,
+        stats_counter: Option<&Arc<dyn StatsCounter>>,
     ) -> InitResult<V, E>
     where
         E: Send + Sync + 'static,
@@ -145,10 +148,15 @@ where
         // The value still does note exist. Let's evaluate the init
         // closure. Catching panic is safe here as we do not try to
         // evaluate the closure again.
+        let load_timer = LoadTimer::start(stats_counter);
         match catch_unwind(AssertUnwindSafe(init)) {
             // Evaluated.
             Ok(value) => {
-                let init_res = match post_init(value) {
+                let value = post_init(value);
+                if let Some(load_timer) = load_timer {
+                    load_timer.finish(value.is_ok());
+                }
+                let init_res = match value {
                     Ok(value) => {
                         insert(value.clone());
                         *lock = WaiterValue::Ready(Ok(value.clone()));

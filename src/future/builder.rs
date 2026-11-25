@@ -3,6 +3,7 @@ use crate::{
     common::{builder_utils, concurrent::Weigher, time::Clock, HousekeeperConfig},
     notification::{AsyncEvictionListener, ListenerFuture, RemovalCause},
     policy::{EvictionPolicy, ExpirationPolicy},
+    stats::{ConcurrentStatsCounter, StatsCounter},
     Expiry,
 };
 
@@ -62,6 +63,7 @@ pub struct CacheBuilder<K, V, C> {
     weigher: Option<Weigher<K, V>>,
     eviction_policy: EvictionPolicy,
     eviction_listener: Option<AsyncEvictionListener<K, V>>,
+    stats_counter: Option<Arc<dyn StatsCounter>>,
     expiration_policy: ExpirationPolicy<K, V>,
     housekeeper_config: HousekeeperConfig,
     invalidator_enabled: bool,
@@ -82,6 +84,7 @@ where
             weigher: None,
             eviction_policy: EvictionPolicy::default(),
             eviction_listener: None,
+            stats_counter: None,
             expiration_policy: ExpirationPolicy::default(),
             housekeeper_config: HousekeeperConfig::default(),
             invalidator_enabled: false,
@@ -124,6 +127,7 @@ where
             self.weigher,
             self.eviction_policy,
             self.eviction_listener,
+            self.stats_counter,
             self.expiration_policy,
             self.housekeeper_config,
             self.invalidator_enabled,
@@ -223,6 +227,7 @@ where
             self.weigher,
             self.eviction_policy,
             self.eviction_listener,
+            self.stats_counter,
             self.expiration_policy,
             self.housekeeper_config,
             self.invalidator_enabled,
@@ -353,6 +358,25 @@ impl<K, V, C> CacheBuilder<K, V, C> {
     {
         Self {
             eviction_listener: Some(Box::new(listener)),
+            ..self
+        }
+    }
+
+    /// Turns on the recording of cache statistics, which the cache's `stats` method
+    /// returns. See the [`stats`](../stats/index.html) module for what is recorded.
+    ///
+    /// Statistics are off by default, because recording them adds a small cost
+    /// to every cache operation.
+    pub fn record_stats(self) -> Self {
+        self.stats_counter(ConcurrentStatsCounter::new())
+    }
+
+    /// Turns on the recording of cache statistics, and records them to the given
+    /// [`StatsCounter`](../stats/trait.StatsCounter.html) instead of the built-in
+    /// one. Use this to forward the events to a metrics library.
+    pub fn stats_counter(self, stats_counter: impl StatsCounter) -> Self {
+        Self {
+            stats_counter: Some(Arc::new(stats_counter)),
             ..self
         }
     }

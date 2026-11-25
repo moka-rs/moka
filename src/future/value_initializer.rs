@@ -12,6 +12,7 @@ use std::{
 use crate::{
     common::concurrent::arc::MiniArc,
     ops::compute::{CompResult, Op},
+    stats::LoadTimer,
     Entry,
 };
 
@@ -236,9 +237,14 @@ where
         // The value still does note exist. Let's resolve the init
         // future. Catching panic is safe here as we do not try to
         // resolve the future again.
-        match AssertUnwindSafe(init).catch_unwind().await {
+        let load_timer = LoadTimer::start(cache.base.stats_counter());
+        let output = AssertUnwindSafe(init).catch_unwind().await.map(post_init);
+        if let (Some(load_timer), Ok(value)) = (load_timer, &output) {
+            load_timer.finish(value.is_ok());
+        }
+        match output {
             // Resolved.
-            Ok(value) => match post_init(value) {
+            Ok(value) => match value {
                 Ok(value) => {
                     cache
                         .insert_with_hash(Arc::clone(c_key), c_hash, value.clone())

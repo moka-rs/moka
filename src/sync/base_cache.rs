@@ -27,6 +27,7 @@ use crate::{
     },
     notification::{notifier::RemovalNotifier, EvictionListener, RemovalCause},
     policy::{EvictionPolicy, EvictionPolicyConfig, ExpirationPolicy},
+    stats::StatsCounter,
     Entry, Expiry, Policy, PredicateError,
 };
 
@@ -105,6 +106,11 @@ impl<K, V, S> BaseCache<K, V, S> {
     }
 
     #[inline]
+    pub(crate) fn stats_counter(&self) -> Option<&Arc<dyn StatsCounter>> {
+        self.inner.stats_counter.as_ref()
+    }
+
+    #[inline]
     pub(crate) fn current_time(&self) -> Instant {
         self.inner.current_time()
     }
@@ -115,6 +121,10 @@ impl<K, V, S> BaseCache<K, V, S> {
         V: Clone + Send + Sync + 'static,
     {
         self.inner.notify_invalidate(key, entry);
+    }
+
+    pub(crate) fn record_eviction_on_invalidate(&self, entry: &MiniArc<ValueEntry<K, V>>) {
+        self.inner.record_eviction_on_invalidate(entry);
     }
 }
 
@@ -144,6 +154,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<EvictionListener<K, V>>,
+        stats_counter: Option<Arc<dyn StatsCounter>>,
         expiration_policy: ExpirationPolicy<K, V>,
         housekeeper_config: HousekeeperConfig,
         invalidator_enabled: bool,
@@ -168,6 +179,7 @@ where
             weigher,
             eviction_policy,
             eviction_listener,
+            stats_counter,
             r_rcv,
             w_rcv,
             expiration_policy,
@@ -218,6 +230,11 @@ where
     where
         Q: Equivalent<K> + Hash + ?Sized,
     {
+        if self.is_map_disabled() {
+            self.record_miss();
+            return None;
+        }
+
         // Define a closure to record a read op.
         let record = |op, now| {
             self.record_read_op(op, now)
@@ -238,6 +255,11 @@ where
         Q: Equivalent<K> + Hash + ?Sized,
         I: FnMut(&V) -> bool,
     {
+        if self.is_map_disabled() {
+            self.record_miss();
+            return None;
+        }
+
         // Define a closure to record a read op.
         let record = |op, now| {
             self.record_read_op(op, now)
@@ -464,11 +486,24 @@ where
     S: BuildHasher + Clone + Send + Sync + 'static,
 {
     #[inline]
+    fn record_miss(&self) {
+        if let Some(stats_counter) = self.stats_counter() {
+            stats_counter.record_misses(1);
+        }
+    }
+
+    #[inline]
     fn record_read_op(
         &self,
         op: ReadOp<K, V>,
         now: Instant,
     ) -> Result<(), TrySendError<ReadOp<K, V>>> {
+        if let Some(stats_counter) = self.stats_counter() {
+            match &op {
+                ReadOp::Hit { .. } => stats_counter.record_hits(1),
+                ReadOp::Miss(_) => stats_counter.record_misses(1),
+            }
+        }
         self.apply_reads_if_needed(&self.inner, now);
         let ch = &self.read_op_ch;
         match ch.try_send(op) {
@@ -597,6 +632,13 @@ where
             }
         }
 
+        if let WriteOp::Upsert { old_weight, .. } = &upd_op {
+            self.inner.record_eviction_on_upsert(
+                *old_weight,
+                old_info.last_accessed,
+                old_info.last_modified,
+            );
+        }
         if self.is_removal_notifier_enabled() {
             self.inner.notify_upsert(
                 key,
@@ -754,6 +796,7 @@ where
 struct EvictionState<'a, K, V> {
     counters: EvictionCounters,
     notifier: Option<&'a RemovalNotifier<K, V>>,
+    stats_counter: Option<&'a dyn StatsCounter>,
     more_entries_to_evict: bool,
 }
 
@@ -762,11 +805,23 @@ impl<'a, K, V> EvictionState<'a, K, V> {
         entry_count: u64,
         weighted_size: u64,
         notifier: Option<&'a RemovalNotifier<K, V>>,
+        stats_counter: Option<&'a dyn StatsCounter>,
     ) -> Self {
         Self {
             counters: EvictionCounters::new(entry_count, weighted_size),
             notifier,
+            stats_counter,
             more_entries_to_evict: false,
+        }
+    }
+
+    /// Counts an entry that the maintenance task has removed from the cache.
+    fn record_removal(&mut self, entry: &ValueEntry<K, V>, cause: RemovalCause) {
+        self.counters.incr_eviction_count();
+        if let Some(stats_counter) = self.stats_counter {
+            if cause.was_evicted() {
+                stats_counter.record_eviction(entry.policy_weight(), cause);
+            }
         }
     }
 
@@ -887,6 +942,7 @@ pub(crate) struct Inner<K, V, S> {
     valid_after: AtomicInstant,
     weigher: Option<Weigher<K, V>>,
     removal_notifier: Option<RemovalNotifier<K, V>>,
+    stats_counter: Option<Arc<dyn StatsCounter>>,
     key_locks: Option<KeyLockMap<K, S>>,
     invalidator: Option<Invalidator<K, V, S>>,
     clock: Clock,
@@ -992,6 +1048,82 @@ impl<K, V, S> Inner<K, V, S> {
     fn has_valid_after(&self) -> bool {
         self.valid_after.is_set()
     }
+
+    /// Returns why the old value of an entry is going away when the entry is
+    /// updated.
+    fn removal_cause_on_upsert(
+        &self,
+        last_accessed: Option<Instant>,
+        last_modified: Option<Instant>,
+    ) -> RemovalCause {
+        let now = self.current_time();
+        let exp = &self.expiration_policy;
+
+        let mut cause = RemovalCause::Replaced;
+
+        if let Some(last_accessed) = last_accessed {
+            if is_expired_by_tti(&exp.time_to_idle(), last_accessed, now) {
+                cause = RemovalCause::Expired;
+            }
+        }
+
+        if let Some(last_modified) = last_modified {
+            if is_expired_by_ttl(&exp.time_to_live(), last_modified, now) {
+                cause = RemovalCause::Expired;
+            } else if is_invalid_entry(&self.valid_after(), last_modified) {
+                cause = RemovalCause::Explicit;
+            }
+        }
+
+        cause
+    }
+
+    /// Returns why an entry is going away when it is invalidated.
+    fn removal_cause_on_invalidate(&self, entry: &MiniArc<ValueEntry<K, V>>) -> RemovalCause {
+        let now = self.current_time();
+        let exp = &self.expiration_policy;
+
+        let mut cause = RemovalCause::Explicit;
+
+        if let Some(last_accessed) = entry.last_accessed() {
+            if is_expired_by_tti(&exp.time_to_idle(), last_accessed, now) {
+                cause = RemovalCause::Expired;
+            }
+        }
+
+        if let Some(last_modified) = entry.last_modified() {
+            if is_expired_by_ttl(&exp.time_to_live(), last_modified, now) {
+                cause = RemovalCause::Expired;
+            }
+        }
+
+        cause
+    }
+
+    /// Records an eviction if the entry being updated had already expired.
+    fn record_eviction_on_upsert(
+        &self,
+        old_weight: u32,
+        last_accessed: Option<Instant>,
+        last_modified: Option<Instant>,
+    ) {
+        if let Some(stats_counter) = &self.stats_counter {
+            let cause = self.removal_cause_on_upsert(last_accessed, last_modified);
+            if cause.was_evicted() {
+                stats_counter.record_eviction(old_weight, cause);
+            }
+        }
+    }
+
+    /// Records an eviction if the entry being invalidated had already expired.
+    fn record_eviction_on_invalidate(&self, entry: &MiniArc<ValueEntry<K, V>>) {
+        if let Some(stats_counter) = &self.stats_counter {
+            let cause = self.removal_cause_on_invalidate(entry);
+            if cause.was_evicted() {
+                stats_counter.record_eviction(entry.policy_weight(), cause);
+            }
+        }
+    }
 }
 
 impl<K, V, S> Inner<K, V, S>
@@ -1011,6 +1143,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<EvictionListener<K, V>>,
+        stats_counter: Option<Arc<dyn StatsCounter>>,
         read_op_ch: Receiver<ReadOp<K, V>>,
         write_op_ch: Receiver<WriteOp<K, V>>,
         expiration_policy: ExpirationPolicy<K, V>,
@@ -1068,6 +1201,7 @@ where
             valid_after: AtomicInstant::default(),
             weigher,
             removal_notifier,
+            stats_counter,
             key_locks,
             invalidator,
             clock,
@@ -1210,8 +1344,12 @@ where
         let mut calls = 0u32;
         let current_ec = self.entry_count.load();
         let current_ws = self.weighted_size.load();
-        let mut eviction_state =
-            EvictionState::new(current_ec, current_ws, self.removal_notifier.as_ref());
+        let mut eviction_state = EvictionState::new(
+            current_ec,
+            current_ws,
+            self.removal_notifier.as_ref(),
+            self.stats_counter.as_deref(),
+        );
 
         loop {
             if should_process_logs {
@@ -1561,7 +1699,7 @@ where
                         let key = Arc::clone(&kh.key);
                         eviction_state.notify_entry_removal(key, &entry, RemovalCause::Size);
                     }
-                    eviction_state.counters.incr_eviction_count();
+                    eviction_state.record_removal(&entry, RemovalCause::Size);
                 }
                 entry.entry_info().set_policy_gen(gen);
                 return;
@@ -1610,7 +1748,7 @@ where
                                 RemovalCause::Size,
                             );
                         }
-                        eviction_state.counters.incr_eviction_count();
+                        eviction_state.record_removal(&vic_entry, RemovalCause::Size);
                         // And then remove the victim from the deques.
                         Self::handle_remove(
                             deqs,
@@ -1662,7 +1800,7 @@ where
                     if eviction_state.is_notifier_enabled() {
                         eviction_state.notify_entry_removal(key, &entry, RemovalCause::Size);
                     }
-                    eviction_state.counters.incr_eviction_count();
+                    eviction_state.record_removal(&entry, RemovalCause::Size);
                 }
             }
         };
@@ -2005,7 +2143,7 @@ where
                         let key = Arc::clone(key);
                         eviction_state.notify_entry_removal(key, &entry, RemovalCause::Expired);
                     }
-                    eviction_state.counters.incr_eviction_count();
+                    eviction_state.record_removal(&entry, RemovalCause::Expired);
                     Self::handle_remove_without_timer_wheel(
                         deqs,
                         entry,
@@ -2124,7 +2262,7 @@ where
                 if eviction_state.is_notifier_enabled() {
                     eviction_state.notify_entry_removal(key, &entry, cause);
                 }
-                eviction_state.counters.incr_eviction_count();
+                eviction_state.record_removal(&entry, cause);
                 Self::handle_remove_with_deques(
                     deq_name,
                     ao_deq,
@@ -2251,7 +2389,7 @@ where
                 if eviction_state.is_notifier_enabled() {
                     eviction_state.notify_entry_removal(key, &entry, cause);
                 }
-                eviction_state.counters.incr_eviction_count();
+                eviction_state.record_removal(&entry, cause);
                 Self::handle_remove(deqs, timer_wheel, entry, None, &mut eviction_state.counters);
             } else {
                 self.skip_updated_entry_wo(&key, hash, deqs);
@@ -2400,7 +2538,7 @@ where
                 if eviction_state.is_notifier_enabled() {
                     eviction_state.notify_entry_removal(key, &entry, RemovalCause::Size);
                 }
-                eviction_state.counters.incr_eviction_count();
+                eviction_state.record_removal(&entry, RemovalCause::Size);
                 let weight = entry.policy_weight();
                 Self::handle_remove_with_deques(
                     deq_name,
@@ -2447,47 +2585,13 @@ where
         last_accessed: Option<Instant>,
         last_modified: Option<Instant>,
     ) {
-        let now = self.current_time();
-        let exp = &self.expiration_policy;
-
-        let mut cause = RemovalCause::Replaced;
-
-        if let Some(last_accessed) = last_accessed {
-            if is_expired_by_tti(&exp.time_to_idle(), last_accessed, now) {
-                cause = RemovalCause::Expired;
-            }
-        }
-
-        if let Some(last_modified) = last_modified {
-            if is_expired_by_ttl(&exp.time_to_live(), last_modified, now) {
-                cause = RemovalCause::Expired;
-            } else if is_invalid_entry(&self.valid_after(), last_modified) {
-                cause = RemovalCause::Explicit;
-            }
-        }
-
+        let cause = self.removal_cause_on_upsert(last_accessed, last_modified);
         self.notify_single_removal(key, entry, cause);
     }
 
     #[inline]
     fn notify_invalidate(&self, key: &Arc<K>, entry: &MiniArc<ValueEntry<K, V>>) {
-        let now = self.current_time();
-        let exp = &self.expiration_policy;
-
-        let mut cause = RemovalCause::Explicit;
-
-        if let Some(last_accessed) = entry.last_accessed() {
-            if is_expired_by_tti(&exp.time_to_idle(), last_accessed, now) {
-                cause = RemovalCause::Expired;
-            }
-        }
-
-        if let Some(last_modified) = entry.last_modified() {
-            if is_expired_by_ttl(&exp.time_to_live(), last_modified, now) {
-                cause = RemovalCause::Expired;
-            }
-        }
-
+        let cause = self.removal_cause_on_invalidate(entry);
         self.notify_single_removal(Arc::clone(key), entry, cause);
     }
 }
@@ -2656,6 +2760,7 @@ mod tests {
                 RandomState::default(),
                 None,
                 EvictionPolicy::default(),
+                None,
                 None,
                 ExpirationPolicy::default(),
                 HousekeeperConfig::default(),
@@ -3030,6 +3135,7 @@ mod tests {
             RandomState::default(),
             None,
             EvictionPolicy::default(),
+            None,
             None,
             ExpirationPolicy::new(
                 Some(Duration::from_secs(TTL)),
@@ -3484,6 +3590,7 @@ mod tests {
                 RandomState::default(),
                 None,
                 EvictionPolicy::lru(),
+                None,
                 None,
                 ExpirationPolicy::default(),
                 HousekeeperConfig::default(),

@@ -10,6 +10,7 @@ use crate::{
     },
     notification::EvictionListener,
     policy::{EvictionPolicy, ExpirationPolicy},
+    stats::{CacheStats, StatsCounter},
     Entry, Policy, PredicateError,
 };
 
@@ -107,6 +108,7 @@ where
             None,
             EvictionPolicy::default(),
             None,
+            None,
             ExpirationPolicy::default(),
             HousekeeperConfig::default(),
             false,
@@ -195,6 +197,20 @@ impl<K, V, S> SegmentedCache<K, V, S> {
             .map(|seg| seg.weighted_size())
             .sum()
     }
+
+    /// Returns a snapshot of the statistics of this cache, over all its segments.
+    ///
+    /// All values are zero unless statistics were turned on with the
+    /// [`record_stats`][builder-record-stats] or
+    /// [`stats_counter`][builder-stats-counter] method of the cache builder. See
+    /// the [`stats`](../stats/index.html) module for what is recorded.
+    ///
+    /// [builder-record-stats]: ./struct.CacheBuilder.html#method.record_stats
+    /// [builder-stats-counter]: ./struct.CacheBuilder.html#method.stats_counter
+    pub fn stats(&self) -> CacheStats {
+        // The segments share one stats counter.
+        self.inner.segments[0].stats()
+    }
 }
 
 impl<K, V, S> SegmentedCache<K, V, S>
@@ -216,6 +232,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<EvictionListener<K, V>>,
+        stats_counter: Option<Arc<dyn StatsCounter>>,
         expiration_policy: ExpirationPolicy<K, V>,
         housekeeper_config: HousekeeperConfig,
         invalidator_enabled: bool,
@@ -231,6 +248,7 @@ where
                 weigher,
                 eviction_policy,
                 eviction_listener,
+                stats_counter,
                 expiration_policy,
                 housekeeper_config,
                 invalidator_enabled,
@@ -711,6 +729,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<EvictionListener<K, V>>,
+        stats_counter: Option<Arc<dyn StatsCounter>>,
         expiration_policy: ExpirationPolicy<K, V>,
         housekeeper_config: HousekeeperConfig,
         invalidator_enabled: bool,
@@ -736,6 +755,7 @@ where
                     weigher.clone(),
                     eviction_policy.clone(),
                     eviction_listener.clone(),
+                    stats_counter.clone(),
                     expiration_policy.clone(),
                     housekeeper_config.clone(),
                     invalidator_enabled,
@@ -1999,5 +2019,24 @@ mod tests {
 
             break;
         }
+    }
+
+    #[test]
+    fn stats_cover_all_segments() {
+        let cache = SegmentedCache::builder(4)
+            .max_capacity(100)
+            .record_stats()
+            .build();
+
+        for key in 0..20 {
+            cache.insert(key, ());
+        }
+        for key in 0..30 {
+            cache.get(&key);
+        }
+
+        let stats = cache.stats();
+        assert_eq!(stats.hit_count(), 20);
+        assert_eq!(stats.miss_count(), 10);
     }
 }
