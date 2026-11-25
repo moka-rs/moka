@@ -11,6 +11,7 @@ use crate::{
     notification::AsyncEvictionListener,
     ops::compute::{self, CompResult},
     policy::{EvictionPolicy, ExpirationPolicy},
+    stats::{CacheStats, StatsCounter},
     Entry, Policy, PredicateError,
 };
 
@@ -761,6 +762,46 @@ impl<K, V, S> Cache<K, V, S> {
         self.base.weighted_size()
     }
 
+    /// Returns a snapshot of the statistics of this cache.
+    ///
+    /// All values are zero unless statistics were turned on with the
+    /// [`record_stats`][builder-record-stats] or
+    /// [`stats_counter`][builder-stats-counter] method of the cache builder. See
+    /// the [`stats`](../stats/index.html) module for what is recorded.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// // Cargo.toml
+    /// //
+    /// // [dependencies]
+    /// // moka = { version = "0.12", features = ["future"] }
+    /// // tokio = { version = "1", features = ["rt-multi-thread", "macros" ] }
+    /// use moka::future::Cache;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let cache = Cache::builder().max_capacity(10).record_stats().build();
+    ///     cache.insert('n', "Netherland Dwarf").await;
+    ///
+    ///     assert!(cache.get(&'n').await.is_some());
+    ///     assert!(cache.get(&'l').await.is_none());
+    ///
+    ///     let stats = cache.stats();
+    ///     assert_eq!(stats.hit_count(), 1);
+    ///     assert_eq!(stats.miss_count(), 1);
+    /// }
+    /// ```
+    ///
+    /// [builder-record-stats]: ./struct.CacheBuilder.html#method.record_stats
+    /// [builder-stats-counter]: ./struct.CacheBuilder.html#method.stats_counter
+    pub fn stats(&self) -> CacheStats {
+        self.base
+            .stats_counter()
+            .map(|stats_counter| stats_counter.snapshot())
+            .unwrap_or_default()
+    }
+
     #[cfg(feature = "unstable-debug-counters")]
     #[cfg_attr(docsrs, doc(cfg(feature = "unstable-debug-counters")))]
     pub async fn debug_stats(&self) -> CacheDebugStats {
@@ -788,6 +829,7 @@ where
             build_hasher,
             None,
             EvictionPolicy::default(),
+            None,
             None,
             ExpirationPolicy::default(),
             HousekeeperConfig::default(),
@@ -821,6 +863,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<AsyncEvictionListener<K, V>>,
+        stats_counter: Option<Arc<dyn StatsCounter>>,
         expiration_policy: ExpirationPolicy<K, V>,
         housekeeper_config: HousekeeperConfig,
         invalidator_enabled: bool,
@@ -835,6 +878,7 @@ where
                 weigher,
                 eviction_policy,
                 eviction_listener,
+                stats_counter,
                 expiration_policy,
                 housekeeper_config,
                 invalidator_enabled,
@@ -1983,6 +2027,7 @@ where
                 // so that we can resume/retry later.
                 let mut cancel_guard = CancelGuard::new(&self.base.interrupted_op_ch_snd, now);
 
+                self.base.record_eviction_on_invalidate(&kv.entry);
                 if self.base.is_removal_notifier_enabled() {
                     let future = self
                         .base
@@ -2104,6 +2149,7 @@ mod tests {
         notification::{ListenerFuture, RemovalCause},
         ops::compute,
         policy::{test_utils::ExpiryCallCounters, EvictionPolicy},
+        stats::{test_utils::EvictionRecorder, CacheStats, StatsCounter},
         Expiry,
     };
 
@@ -5964,5 +6010,147 @@ mod tests {
             None,
             "key2 should expire with fresh TTL from expire_after_create"
         );
+    }
+
+    #[tokio::test]
+    async fn stats_are_zero_without_record_stats() {
+        let cache = Cache::new(10);
+        cache.insert("a", 1).await;
+        assert_eq!(cache.get(&"a").await, Some(1));
+        assert_eq!(cache.get(&"b").await, None);
+        assert_eq!(cache.stats(), CacheStats::default());
+    }
+
+    #[tokio::test]
+    async fn stats_hits_and_misses() {
+        let cache = Cache::builder().max_capacity(10).record_stats().build();
+        cache.insert("a", 1).await;
+
+        assert_eq!(cache.get(&"a").await, Some(1));
+        assert_eq!(cache.get(&"b").await, None);
+        assert_eq!(cache.get_with("a", async { 2 }).await, 1);
+        assert_eq!(cache.get_with("b", async { 2 }).await, 2);
+        assert_eq!(cache.entry("c").or_insert(3).await.into_value(), 3);
+
+        // These are not lookups.
+        assert!(cache.contains_key(&"a"));
+        assert_eq!(cache.iter().count(), 3);
+
+        let stats = cache.stats();
+        assert_eq!(stats.hit_count(), 2);
+        assert_eq!(stats.miss_count(), 3);
+    }
+
+    #[tokio::test]
+    async fn stats_misses_with_max_capacity_zero() {
+        let cache = Cache::builder().max_capacity(0).record_stats().build();
+        cache.insert("a", 1).await;
+        assert_eq!(cache.get(&"a").await, None);
+        assert_eq!(cache.get_with("a", async { 2 }).await, 2);
+
+        let stats = cache.stats();
+        assert_eq!(stats.hit_count(), 0);
+        assert_eq!(stats.miss_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn stats_loads() {
+        const LOAD_TIME: Duration = Duration::from_millis(2);
+
+        async fn load<T>(output: T) -> T {
+            sleep(LOAD_TIME).await;
+            output
+        }
+
+        let cache = Cache::builder().max_capacity(10).record_stats().build();
+
+        assert_eq!(cache.get_with("a", load(1)).await, 1);
+        assert_eq!(cache.optionally_get_with("b", load(None)).await, None);
+        let result = cache.try_get_with("c", load(Err::<i32, _>("error"))).await;
+        assert!(result.is_err());
+        let result = cache.try_get_with("c", load(Ok::<_, Infallible>(3))).await;
+        assert_eq!(result, Ok(3));
+        // The value is cached, so this does not load.
+        assert_eq!(cache.get_with("a", async { unreachable!() }).await, 1);
+
+        let stats = cache.stats();
+        assert_eq!(stats.load_success_count(), 2);
+        assert_eq!(stats.load_failure_count(), 2);
+        assert!(stats.total_load_time() >= LOAD_TIME * 4);
+        assert!(stats.average_load_penalty() >= LOAD_TIME);
+        assert_eq!(stats.hit_count(), 1);
+        assert_eq!(stats.miss_count(), 4);
+    }
+
+    #[tokio::test]
+    async fn stats_evictions_by_size() {
+        let mut cache = Cache::builder()
+            .max_capacity(10)
+            .weigher(|_k, _v| 5)
+            .record_stats()
+            .build();
+        cache.reconfigure_for_testing().await;
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        for key in 0..3 {
+            cache.insert(key, ()).await;
+            cache.run_pending_tasks().await;
+        }
+
+        assert_eq!(cache.entry_count(), 2);
+        let stats = cache.stats();
+        assert_eq!(stats.eviction_count(), 1);
+        assert_eq!(stats.eviction_weight(), 5);
+    }
+
+    #[tokio::test]
+    async fn stats_counter_gets_evictions_with_their_cause() {
+        let recorder = Arc::new(EvictionRecorder::default());
+        let (clock, mock) = Clock::mock();
+
+        let mut cache = Cache::builder()
+            .max_capacity(10)
+            .weigher(|_k, v: &u32| *v)
+            .time_to_live(Duration::from_secs(10))
+            .stats_counter(Arc::clone(&recorder))
+            .clock(clock)
+            .build();
+        cache.reconfigure_for_testing().await;
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", 1).await;
+        cache.insert("b", 2).await;
+        cache.insert("c", 3).await;
+        cache.run_pending_tasks().await;
+
+        // Replacing or invalidating a live entry is not an eviction.
+        cache.insert("a", 1).await;
+        cache.invalidate(&"c").await;
+        cache.run_pending_tasks().await;
+        assert_eq!(*recorder.evictions.lock(), []);
+
+        mock.increment(Duration::from_secs(11));
+
+        // "a" has expired but is still in the cache when it gets replaced, and "b"
+        // is removed by the maintenance task.
+        cache.insert("a", 4).await;
+        cache.run_pending_tasks().await;
+        assert_eq!(
+            *recorder.evictions.lock(),
+            [(1, RemovalCause::Expired), (2, RemovalCause::Expired)]
+        );
+
+        // "a" and "d" do not fit together.
+        cache.insert("d", 8).await;
+        cache.run_pending_tasks().await;
+        assert_eq!(recorder.evictions.lock().len(), 3);
+        assert_eq!(recorder.evictions.lock()[2].1, RemovalCause::Size);
+
+        assert_eq!(cache.stats(), recorder.snapshot());
+        assert_eq!(cache.stats().eviction_count(), 3);
     }
 }

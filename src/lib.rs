@@ -271,6 +271,10 @@ pub mod policy;
 
 #[cfg(any(feature = "sync", feature = "future"))]
 #[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
+pub mod stats;
+
+#[cfg(any(feature = "sync", feature = "future"))]
+#[cfg_attr(docsrs, doc(cfg(any(feature = "sync", feature = "future"))))]
 pub use common::error::PredicateError;
 
 #[cfg(any(feature = "sync", feature = "future"))]

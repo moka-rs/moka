@@ -15,6 +15,7 @@ use crate::{
     notification::EvictionListener,
     ops::compute::{self, CompResult},
     policy::{EvictionPolicy, ExpirationPolicy},
+    stats::{CacheStats, StatsCounter},
     sync::{Iter, PredicateId},
     Entry, Policy, PredicateError,
 };
@@ -682,6 +683,38 @@ impl<K, V, S> Cache<K, V, S> {
     pub fn weighted_size(&self) -> u64 {
         self.base.weighted_size()
     }
+
+    /// Returns a snapshot of the statistics of this cache.
+    ///
+    /// All values are zero unless statistics were turned on with the
+    /// [`record_stats`][builder-record-stats] or
+    /// [`stats_counter`][builder-stats-counter] method of the cache builder. See
+    /// the [`stats`](../stats/index.html) module for what is recorded.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use moka::sync::Cache;
+    ///
+    /// let cache = Cache::builder().max_capacity(10).record_stats().build();
+    /// cache.insert('n', "Netherland Dwarf");
+    ///
+    /// assert!(cache.get(&'n').is_some());
+    /// assert!(cache.get(&'l').is_none());
+    ///
+    /// let stats = cache.stats();
+    /// assert_eq!(stats.hit_count(), 1);
+    /// assert_eq!(stats.miss_count(), 1);
+    /// ```
+    ///
+    /// [builder-record-stats]: ./struct.CacheBuilder.html#method.record_stats
+    /// [builder-stats-counter]: ./struct.CacheBuilder.html#method.stats_counter
+    pub fn stats(&self) -> CacheStats {
+        self.base
+            .stats_counter()
+            .map(|stats_counter| stats_counter.snapshot())
+            .unwrap_or_default()
+    }
 }
 
 impl<K, V> Cache<K, V, RandomState>
@@ -704,6 +737,7 @@ where
             build_hasher,
             None,
             EvictionPolicy::default(),
+            None,
             None,
             ExpirationPolicy::default(),
             HousekeeperConfig::default(),
@@ -737,6 +771,7 @@ where
         weigher: Option<Weigher<K, V>>,
         eviction_policy: EvictionPolicy,
         eviction_listener: Option<EvictionListener<K, V>>,
+        stats_counter: Option<Arc<dyn StatsCounter>>,
         expiration_policy: ExpirationPolicy<K, V>,
         housekeeper_config: HousekeeperConfig,
         invalidator_enabled: bool,
@@ -751,6 +786,7 @@ where
                 weigher,
                 eviction_policy,
                 eviction_listener,
+                stats_counter,
                 expiration_policy,
                 housekeeper_config,
                 invalidator_enabled,
@@ -1041,10 +1077,15 @@ where
         let type_id = ValueInitializer::<K, V, S>::type_id_for_get_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_get_with;
 
-        match self
-            .value_initializer
-            .try_init_or_read(&key, type_id, get, init, insert, post_init)
-        {
+        match self.value_initializer.try_init_or_read(
+            &key,
+            type_id,
+            get,
+            init,
+            insert,
+            post_init,
+            self.base.stats_counter(),
+        ) {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
                 Entry::new(k, v, true, false)
@@ -1262,10 +1303,15 @@ where
         let type_id = ValueInitializer::<K, V, S>::type_id_for_optionally_get_with();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_optionally_get_with;
 
-        match self
-            .value_initializer
-            .try_init_or_read(&key, type_id, get, init, insert, post_init)
-        {
+        match self.value_initializer.try_init_or_read(
+            &key,
+            type_id,
+            get,
+            init,
+            insert,
+            post_init,
+            self.base.stats_counter(),
+        ) {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
                 Some(Entry::new(k, v, true, false))
@@ -1454,10 +1500,15 @@ where
         let type_id = ValueInitializer::<K, V, S>::type_id_for_try_get_with::<E>();
         let post_init = ValueInitializer::<K, V, S>::post_init_for_try_get_with;
 
-        match self
-            .value_initializer
-            .try_init_or_read(&key, type_id, get, init, insert, post_init)
-        {
+        match self.value_initializer.try_init_or_read(
+            &key,
+            type_id,
+            get,
+            init,
+            insert,
+            post_init,
+            self.base.stats_counter(),
+        ) {
             InitResult::Initialized(v) => {
                 crossbeam_epoch::pin().flush();
                 Ok(Entry::new(k, v, true, false))
@@ -1606,6 +1657,7 @@ where
                 let info = kv.entry.entry_info();
                 let entry_gen = info.incr_entry_gen();
 
+                self.base.record_eviction_on_invalidate(&kv.entry);
                 if self.base.is_removal_notifier_enabled() {
                     self.base.notify_invalidate(&kv.key, &kv.entry);
                 }
@@ -1884,6 +1936,7 @@ mod tests {
         common::{time::Clock, HousekeeperConfig},
         notification::RemovalCause,
         policy::{test_utils::ExpiryCallCounters, EvictionPolicy},
+        stats::{test_utils::EvictionRecorder, CacheStats, StatsCounter},
         Expiry,
     };
 
@@ -5393,5 +5446,149 @@ mod tests {
 
         let value = cache.optionally_get_with("key", next_value);
         assert_ne!(value, Some(2), "Access at 12.01s should not still be 2");
+    }
+
+    #[test]
+    fn stats_are_zero_without_record_stats() {
+        let cache = Cache::new(10);
+        cache.insert("a", 1);
+        assert_eq!(cache.get(&"a"), Some(1));
+        assert_eq!(cache.get(&"b"), None);
+        assert_eq!(cache.stats(), CacheStats::default());
+    }
+
+    #[test]
+    fn stats_hits_and_misses() {
+        let cache = Cache::builder().max_capacity(10).record_stats().build();
+        cache.insert("a", 1);
+
+        assert_eq!(cache.get(&"a"), Some(1));
+        assert_eq!(cache.get(&"b"), None);
+        assert_eq!(cache.get_with("a", || 2), 1);
+        assert_eq!(cache.get_with("b", || 2), 2);
+        assert_eq!(cache.entry("c").or_insert(3).into_value(), 3);
+
+        // These are not lookups.
+        assert!(cache.contains_key(&"a"));
+        assert_eq!(cache.iter().count(), 3);
+
+        let stats = cache.stats();
+        assert_eq!(stats.hit_count(), 2);
+        assert_eq!(stats.miss_count(), 3);
+    }
+
+    #[test]
+    fn stats_misses_with_max_capacity_zero() {
+        let cache = Cache::builder().max_capacity(0).record_stats().build();
+        cache.insert("a", 1);
+        assert_eq!(cache.get(&"a"), None);
+        assert_eq!(cache.get_with("a", || 2), 2);
+
+        let stats = cache.stats();
+        assert_eq!(stats.hit_count(), 0);
+        assert_eq!(stats.miss_count(), 2);
+    }
+
+    #[test]
+    fn stats_loads() {
+        const LOAD_TIME: Duration = Duration::from_millis(2);
+
+        fn load<T>(output: T) -> impl FnOnce() -> T {
+            move || {
+                std::thread::sleep(LOAD_TIME);
+                output
+            }
+        }
+
+        let cache = Cache::builder().max_capacity(10).record_stats().build();
+
+        assert_eq!(cache.get_with("a", load(1)), 1);
+        assert_eq!(cache.optionally_get_with("b", load(None)), None);
+        assert!(cache
+            .try_get_with("c", load(Err::<i32, _>("error")))
+            .is_err());
+        assert_eq!(cache.try_get_with("c", load(Ok::<_, Infallible>(3))), Ok(3));
+        // The value is cached, so this does not load.
+        assert_eq!(cache.get_with("a", || unreachable!()), 1);
+
+        let stats = cache.stats();
+        assert_eq!(stats.load_success_count(), 2);
+        assert_eq!(stats.load_failure_count(), 2);
+        assert!(stats.total_load_time() >= LOAD_TIME * 4);
+        assert!(stats.average_load_penalty() >= LOAD_TIME);
+        assert_eq!(stats.hit_count(), 1);
+        assert_eq!(stats.miss_count(), 4);
+    }
+
+    #[test]
+    fn stats_evictions_by_size() {
+        let mut cache = Cache::builder()
+            .max_capacity(10)
+            .weigher(|_k, _v| 5)
+            .record_stats()
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        for key in 0..3 {
+            cache.insert(key, ());
+            cache.run_pending_tasks();
+        }
+
+        assert_eq!(cache.entry_count(), 2);
+        let stats = cache.stats();
+        assert_eq!(stats.eviction_count(), 1);
+        assert_eq!(stats.eviction_weight(), 5);
+    }
+
+    #[test]
+    fn stats_counter_gets_evictions_with_their_cause() {
+        let recorder = Arc::new(EvictionRecorder::default());
+        let (clock, mock) = Clock::mock();
+
+        let mut cache = Cache::builder()
+            .max_capacity(10)
+            .weigher(|_k, v: &u32| *v)
+            .time_to_live(Duration::from_secs(10))
+            .stats_counter(Arc::clone(&recorder))
+            .clock(clock)
+            .build();
+        cache.reconfigure_for_testing();
+
+        // Make the cache exterior immutable.
+        let cache = cache;
+
+        cache.insert("a", 1);
+        cache.insert("b", 2);
+        cache.insert("c", 3);
+        cache.run_pending_tasks();
+
+        // Replacing or invalidating a live entry is not an eviction.
+        cache.insert("a", 1);
+        cache.invalidate(&"c");
+        cache.run_pending_tasks();
+        assert_eq!(*recorder.evictions.lock(), []);
+
+        mock.increment(Duration::from_secs(11));
+
+        // "a" has expired but is still in the cache when it gets replaced, and "b"
+        // is removed by the maintenance task.
+        cache.insert("a", 4);
+        cache.run_pending_tasks();
+        assert_eq!(
+            *recorder.evictions.lock(),
+            [(1, RemovalCause::Expired), (2, RemovalCause::Expired)]
+        );
+
+        // "a" and "d" do not fit together.
+        cache.insert("d", 8);
+        cache.run_pending_tasks();
+        assert_eq!(recorder.evictions.lock().len(), 3);
+        assert_eq!(recorder.evictions.lock()[2].1, RemovalCause::Size);
+
+        assert_eq!(cache.stats(), recorder.snapshot());
+        assert_eq!(cache.stats().eviction_count(), 3);
     }
 }
